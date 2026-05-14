@@ -1,0 +1,238 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:  'Nunito', sans-serif;
+  --font-serif: 'Playfair Display', serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Brand */
+  --color-brand:       #3D5A27;
+  --color-brand-dark:  #263218;
+  --color-brand-hover: #2D4A1E;
+  --color-gold:        #C4A87A;
+  --color-gold-dark:   #9E7D4A;
+
+  /* Surfaces */
+  --color-background: #F8F9FA;
+  --color-surface:    #FFFFFF;
+  --color-surface2:   #F9FAFB;
+  --color-surface3:   #F3F4F6;
+
+  /* Text */
+  --color-ink:  #111827;
+  --color-ink2: #374151;
+  --color-ink3: #9CA3AF;
+
+  /* Semantic — primary */
+  --color-primary:       #3D5A27;
+  --color-primary-dark:  #263218;
+  --color-primary-hover: #2D4A1E;
+
+  /* Semantic — danger */
+  --color-danger:       #DC2626;
+  --color-danger-light: #FEF2F2;
+
+  /* Greens for badges */
+  --color-green-light: #F0FDF4;
+  --color-green-mid:   #86EFAC;
+
+  /* Sidebar */
+  --color-sidebar: #263218;
+
+  /* Radii */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  18px;
+
+  /* Shadows */
+  --shadow-card:   0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-modal:  0 20px 60px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);
+  --shadow-hover:  0 6px 24px rgba(0,0,0,0.08);
+}
+
+/* ─── HTML ──────────────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ─── Global reset + base ────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: 'Nunito', sans-serif;
+  background-color: #F8F9FA;
+  color: #111827;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  line-height: 1.5;
+}
+
+/* ─── Smooth transitions for all interactive elements ────────── */
+a, button, [role="button"] {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 120ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─── Focus-visible ring ─────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid #3D5A27;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* ─── Selection color ────────────────────────────────────────── */
+::selection {
+  background-color: rgba(61, 90, 39, 0.18);
+  color: #111827;
+}
+
+/* ─── Explicit color utilities (cross-page compatibility) ─────── */
+.text-ink    { color: #111827; }
+.text-ink2   { color: #374151; }
+.text-ink3   { color: #9CA3AF; }
+
+.bg-surface  { background-color: #FFFFFF; }
+.bg-surface2 { background-color: #F9FAFB; }
+.bg-surface3 { background-color: #F3F4F6; }
+.bg-background { background-color: #F8F9FA; }
+
+.text-primary      { color: #3D5A27; }
+.text-primary-dark { color: #263218; }
+.bg-primary        { background-color: #3D5A27; }
+.bg-primary-dark   { background-color: #263218; }
+.border-primary    { border-color: #3D5A27; }
+
+.text-gold { color: #C4A87A; }
+.bg-gold   { background-color: #C4A87A; }
+
+.text-danger      { color: #DC2626; }
+.bg-danger-light  { background-color: #FEF2F2; }
+.border-danger    { border-color: #DC2626; }
+
+.bg-green-light   { background-color: #F0FDF4; }
+.border-green-mid { border-color: #86EFAC; }
+
+.font-serif { font-family: 'Playfair Display', serif; }
+
+/* ─── Hover variants ─────────────────────────────────────────── */
+.hover\:bg-surface2:hover { background-color: #F9FAFB; }
+.hover\:bg-surface3:hover { background-color: #F3F4F6; }
+.hover\:text-primary-dark:hover { color: #263218; }
+
+/* ─── Focus utilities ────────────────────────────────────────── */
+.focus\:border-primary:focus { border-color: #3D5A27; }
+
+/* ─── Scrollbar — thin & elegant ─────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+
+/* ─── Spinner ────────────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 20px; height: 20px;
+  border: 2.5px solid #E5E7EB;
+  border-top-color: #3D5A27;
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+/* ─── Pulse skeleton ─────────────────────────────────────────── */
+@keyframes pulse-skeleton {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+.skeleton {
+  background: #E5E7EB;
+  border-radius: 6px;
+  animation: pulse-skeleton 1.6s ease-in-out infinite;
+}
+
+/* ─── Kanban progress bar ────────────────────────────────────── */
+.k-progress-bar {
+  flex: 1; height: 3px;
+  background: #F3F4F6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.k-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3D5A27, #2D7A45);
+  border-radius: 999px;
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─── Production pill states ─────────────────────────────────── */
+.prod-pill-PENDIENTE  { background: #F3F4F6; color: #6B7280; border: 1px solid #E5E7EB; }
+.prod-pill-EN_PROCESO { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+.prod-pill-LISTO      { background: #D1FAE5; color: #065F46; border: 1px solid #6EE7B7; }
+.prod-pill-ENTREGADO  { background: #EDE9FE; color: #5B21B6; border: 1px solid #C4B5FD; }
+
+/* ─── Combobox / searchable dropdown ─────────────────────────── */
+.combobox-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid #E5E7EB;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+  z-index: 50;
+}
+.combobox-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.combobox-item:hover { background: #F9FAFB; }
+.combobox-item.active { background: rgba(61,90,39,0.07); color: #263218; font-weight: 600; }
+
+/* ─── Avatar circle ──────────────────────────────────────────── */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* ─── Section sub-heading accent ─────────────────────────────── */
+.section-sub {
+  font-size: 12px; font-weight: 700;
+  color: #374151;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  padding-left: 10px;
+  border-left: 2.5px solid #3D5A27;
+}
+
+/* ─── Toggle tabs ────────────────────────────────────────────── */
+.toggle-tabs { display: flex; gap: 2px; background: #F3F4F6; border-radius: 10px; padding: 3px; }
+.toggle-tab {
+  flex: 1; text-align: center; padding: 6px 10px;
+  font-size: 12px; font-weight: 600; color: #6B7280;
+  border-radius: 8px; cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.toggle-tab.active { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+/* ─── Numeric / currency values — tabular nums ───────────────── */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ─── Fade-in keyframe for CSS-only cases ────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.22s cubic-bezier(0.4, 0, 0.2, 1) both; }
