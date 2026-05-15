@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { db } from '@/lib/supabase'
 import { petEmoji, fmt } from '@/lib/utils'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   Phone, MapPin, Clock, CheckCircle, LogOut, Bell,
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
@@ -732,7 +733,7 @@ function CardEntrega({ ent, onAction }) {
 
 // ─── MAIN ───────────────────────────────────────────────────────────────
 export default function TecnicoApp() {
-  const [tecnico, setTecnico]     = useState(null)
+  const { personalData: tecnico, logout } = useAuth()
   const [tab, setTab]             = useState('recogidas')
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
@@ -886,8 +887,6 @@ export default function TecnicoApp() {
     await cargar()
   }
 
-  if (!tecnico) return <PINScreen onAuth={setTecnico} />
-
   const TABS = [
     { key: 'recogidas', label: 'Recogidas', Icon: Truck,   count: recogidas.length },
     { key: 'entregas',  label: 'Entregas',  Icon: Package,  count: entregas.length  },
@@ -910,7 +909,7 @@ export default function TecnicoApp() {
             <button onClick={() => cargar()} className="p-2 rounded-full" style={{ color: '#9CA3AF' }}>
               <RefreshCw size={16} />
             </button>
-            <button onClick={() => setTecnico(null)} className="p-2 rounded-full" style={{ color: '#9CA3AF' }}>
+            <button onClick={logout} className="p-2 rounded-full" style={{ color: '#9CA3AF' }}>
               <LogOut size={16} />
             </button>
           </div>

@@ -4,12 +4,14 @@ import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera,
-  Users, Star, Heart, BarChart3, Settings, X,
+  Users, Star, Heart, BarChart3, Settings, X, LogOut,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
+import { useAuth } from '@/contexts/AuthContext'
+import { filterNavGroups } from '@/lib/roles'
 import { SIDEBAR_SPRING } from '@/lib/motion'
 
-const NAV_GROUPS = [
+const ALL_NAV_GROUPS = [
   {
     label: 'OPERACIÓN',
     items: [
@@ -67,8 +69,20 @@ function useIsDesktop() {
 }
 
 export default function Sidebar({ isOpen, onClose }) {
-  const badges    = useBadges()
-  const isDesktop = useIsDesktop()
+  const badges      = useBadges()
+  const isDesktop   = useIsDesktop()
+  const { personalData, logout } = useAuth()
+
+  const rol        = personalData?.rol ?? 'Coordinador'
+  const navGroups  = filterNavGroups(ALL_NAV_GROUPS, rol)
+  const nombreCorto = personalData
+    ? `${personalData.nombre ?? ''} ${personalData.apellido ?? ''}`.trim()
+    : ''
+
+  async function handleLogout() {
+    onClose()
+    await logout()
+  }
 
   return (
     <motion.nav
@@ -114,7 +128,7 @@ export default function Sidebar({ isOpen, onClose }) {
 
       {/* Nav */}
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-5">
-        {NAV_GROUPS.map(group => (
+        {navGroups.map(group => (
           <div key={group.label}>
             <div
               className="text-[9px] font-bold tracking-[0.15em] uppercase px-3 mb-1.5 select-none"
@@ -174,13 +188,38 @@ export default function Sidebar({ isOpen, onClose }) {
         ))}
       </div>
 
-      {/* Footer */}
-      <div
-        className="px-5 py-3.5"
-        style={{ borderTop: `1px solid ${BORDER}` }}
-      >
-        <div className="text-[10px] font-medium" style={{ color: LABEL_CLR }}>
-          v2.0 · Camino al Cielo © 2025
+      {/* Usuario + Logout */}
+      <div style={{ borderTop: `1px solid ${BORDER}` }}>
+        {personalData && (
+          <div className="px-4 py-3 flex items-center gap-3">
+            {/* Avatar */}
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
+              style={{ backgroundColor: '#C4A87A', color: '#1A2E1E' }}
+            >
+              {nombreCorto.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] font-semibold text-white truncate">{nombreCorto}</div>
+              <div className="text-[10px]" style={{ color: LABEL_CLR }}>{rol}</div>
+            </div>
+            <motion.button
+              whileTap={{ scale: 0.88 }}
+              onClick={handleLogout}
+              title="Cerrar sesión"
+              className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors flex-shrink-0"
+              style={{ color: TEXT_OFF }}
+              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(255,60,60,0.15)'; e.currentTarget.style.color = '#FCA5A5' }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = TEXT_OFF }}
+            >
+              <LogOut size={14} />
+            </motion.button>
+          </div>
+        )}
+        <div className="px-5 pb-3">
+          <div className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.15)' }}>
+            v2.0 · Camino al Cielo © 2025
+          </div>
         </div>
       </div>
     </motion.nav>

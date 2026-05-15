@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
+import CargaIA from '@/components/CargaIA'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -10,8 +12,10 @@ import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
-  User, Star, Loader2, MapPin, Clock, CreditCard, Truck
+  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles
 } from 'lucide-react'
+
+const ESPECIE_NOMBRE_A_ID = { 'Perro':1, 'Gato':2, 'Conejo':3, 'Ave':4, 'Hámster':5, 'Pez':6, 'Reptil':7, 'Otro':8 }
 
 // ─── constants ────────────────────────────────────────────────────────────────
 const PASOS = [
@@ -105,6 +109,48 @@ export default function Registro() {
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState(null)
   const [success, setSuccess] = useState(false)
+  const [iaOpen, setIaOpen]       = useState(false)
+  const [iaDatos, setIaDatos]     = useState(false) // true = IA ya aplicó datos
+
+  function aplicarDatosIA(d) {
+    if (!d) return
+    // Pre-llena cliente
+    setFormCliente(prev => ({
+      ...prev,
+      nombre:    d.cliente_nombre    || prev.nombre,
+      apellido:  d.cliente_apellido  || prev.apellido,
+      whatsapp:  d.cliente_whatsapp  || prev.whatsapp,
+      telefono:  d.cliente_telefono  || prev.telefono,
+      email:     d.cliente_email     || prev.email,
+      direccion: d.cliente_direccion || prev.direccion,
+      barrio:    d.cliente_barrio    || prev.barrio,
+      ciudad:    d.cliente_ciudad    || prev.ciudad,
+    }))
+    // Pre-llena mascota
+    setFormMascota(prev => ({
+      ...prev,
+      nombre:     d.mascota_nombre  || prev.nombre,
+      especie_id: ESPECIE_NOMBRE_A_ID[d.mascota_especie] ?? prev.especie_id,
+      sexo:       d.mascota_sexo    || prev.sexo,
+      peso_kg:    d.mascota_peso_kg != null ? String(d.mascota_peso_kg) : prev.peso_kg,
+      tamano:     d.mascota_tamano  || prev.tamano,
+      raza:       d.mascota_raza    || prev.raza,
+      notas:      d.mascota_notas   || prev.notas,
+    }))
+    // Pre-llena recogida
+    setFormRecogida(prev => ({
+      ...prev,
+      direccion_recogida: d.recogida_direccion || d.cliente_direccion || prev.direccion_recogida,
+      barrio_recogida:    d.recogida_barrio    || d.cliente_barrio    || prev.barrio_recogida,
+      ciudad_recogida:    d.recogida_ciudad    || d.cliente_ciudad    || prev.ciudad_recogida,
+      hora_aproximada:    d.recogida_hora      || prev.hora_aproximada,
+      notas:              d.recogida_notas     || prev.notas,
+    }))
+    // Activa modo "nuevo" para que el formulario pre-llenado sea visible
+    setClienteNuevo(true)
+    if (d.mascota_nombre || d.mascota_especie) setMascotaNueva(true)
+    setIaDatos(true)
+  }
 
   // catálogos
   const [especies, setEspecies]           = useState([])
@@ -620,7 +666,31 @@ export default function Registro() {
     <div className="min-h-screen bg-gray-50">
       <Topbar />
       <div className="max-w-2xl mx-auto px-4 py-6">
+        {/* Botón IA — visible solo en paso 0 */}
+        {paso === 0 && (
+          <button
+            onClick={() => setIaOpen(true)}
+            className="w-full flex items-center justify-center gap-2 mb-4 py-3 px-4 rounded-xl font-semibold text-[13px] transition-all hover:opacity-90 active:scale-98"
+            style={{ background: 'linear-gradient(135deg, #263218 0%, #3D5A27 100%)', color: '#C4A87A' }}
+          >
+            <Sparkles size={15} />
+            Cargar con IA — foto o mensaje WhatsApp
+          </button>
+        )}
+
         <Stepper paso={paso} setPaso={setPaso} />
+
+        {iaDatos && (
+          <div className="flex items-center gap-2 mb-4 px-4 py-2.5 rounded-xl text-[13px] font-medium"
+            style={{ background: '#F0FDF4', border: '1px solid #86EFAC', color: '#15803D' }}>
+            <Sparkles size={14} />
+            Datos extraídos por IA — revisa y corrige cada paso antes de confirmar
+            <button onClick={() => setIaDatos(false)} className="ml-auto opacity-50 hover:opacity-100">
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
         {error && <Alert variant="error" className="mb-4">{error}</Alert>}
 
         {/* ══════ PASO 0: CLIENTE ══════ */}
@@ -1382,6 +1452,16 @@ export default function Registro() {
           )}
         </div>
       </div>
+
+      {/* Modal IA */}
+      <AnimatePresence>
+        {iaOpen && (
+          <CargaIA
+            onDatos={aplicarDatosIA}
+            onClose={() => setIaOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

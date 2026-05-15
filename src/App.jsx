@@ -1,37 +1,53 @@
-import { HashRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { HashRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom'
 import { Suspense, lazy } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { BadgesProvider } from '@/contexts/BadgesContext'
+import { AuthProvider, useAuth } from '@/contexts/AuthContext'
+import { getRoleConfig } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
-const TecnicoApp = lazy(() => import('@/pages/TecnicoApp'))
+const TecnicoApp   = lazy(() => import('@/pages/TecnicoApp'))
+const Login        = lazy(() => import('@/pages/Login'))
 
-const Dashboard         = lazy(() => import('@/pages/Dashboard'))
-const Kanban            = lazy(() => import('@/pages/Kanban'))
-const Registro          = lazy(() => import('@/pages/Registro'))
-const Calendario        = lazy(() => import('@/pages/Calendario'))
-const CuartoFrio        = lazy(() => import('@/pages/CuartoFrio'))
-const Tenjo             = lazy(() => import('@/pages/Tenjo'))
-const Produccion        = lazy(() => import('@/pages/Produccion'))
+const Dashboard          = lazy(() => import('@/pages/Dashboard'))
+const Kanban             = lazy(() => import('@/pages/Kanban'))
+const Registro           = lazy(() => import('@/pages/Registro'))
+const Calendario         = lazy(() => import('@/pages/Calendario'))
+const CuartoFrio         = lazy(() => import('@/pages/CuartoFrio'))
+const Tenjo              = lazy(() => import('@/pages/Tenjo'))
+const Produccion         = lazy(() => import('@/pages/Produccion'))
 const SeguimientoImagenes = lazy(() => import('@/pages/SeguimientoImagenes'))
-const Gestion           = lazy(() => import('@/pages/Gestion'))
-const Nps               = lazy(() => import('@/pages/Nps'))
-const Reportes          = lazy(() => import('@/pages/Reportes'))
-const Presequiales      = lazy(() => import('@/pages/Presequiales'))
-const Configuracion     = lazy(() => import('@/pages/Configuracion'))
+const Gestion            = lazy(() => import('@/pages/Gestion'))
+const Nps                = lazy(() => import('@/pages/Nps'))
+const Reportes           = lazy(() => import('@/pages/Reportes'))
+const Presequiales       = lazy(() => import('@/pages/Presequiales'))
+const Configuracion      = lazy(() => import('@/pages/Configuracion'))
 
-function PageLoader() {
+function FullScreenLoader() {
   return (
-    <div className="flex items-center justify-center h-64 gap-3 text-ink3">
+    <div className="flex items-center justify-center min-h-screen gap-3 text-gray-400"
+      style={{ background: '#F8F9FA' }}>
       <div className="spinner" />
       <span className="text-sm font-medium">Cargando...</span>
     </div>
   )
 }
 
-function AppRoutes() {
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-64 gap-3 text-gray-400">
+      <div className="spinner" />
+      <span className="text-sm font-medium">Cargando...</span>
+    </div>
+  )
+}
+
+// Rutas del app shell — solo se renderizan si el rol las tiene permitidas
+function AppRoutes({ rol }) {
+  const { routes, redirectTo } = getRoleConfig(rol)
   const location = useLocation()
+
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
@@ -45,20 +61,20 @@ function AppRoutes() {
       >
         <Suspense fallback={<PageLoader />}>
           <Routes location={location}>
-            <Route path="/"             element={<Dashboard />} />
-            <Route path="/kanban"       element={<Kanban />} />
-            <Route path="/registro"     element={<Registro />} />
-            <Route path="/calendario"   element={<Calendario />} />
-            <Route path="/cuarto-frio"  element={<CuartoFrio />} />
-            <Route path="/tenjo"        element={<Tenjo />} />
-            <Route path="/produccion"   element={<Produccion />} />
-            <Route path="/imagenes"     element={<SeguimientoImagenes />} />
-            <Route path="/gestion"      element={<Gestion />} />
-            <Route path="/nps"          element={<Nps />} />
-            <Route path="/reportes"     element={<Reportes />} />
-            <Route path="/presequiales" element={<Presequiales />} />
-            <Route path="/configuracion" element={<Configuracion />} />
-            <Route path="*"             element={<Dashboard />} />
+            {routes.has('/')             && <Route path="/"             element={<Dashboard />} />}
+            {routes.has('/kanban')       && <Route path="/kanban"       element={<Kanban />} />}
+            {routes.has('/registro')     && <Route path="/registro"     element={<Registro />} />}
+            {routes.has('/calendario')   && <Route path="/calendario"   element={<Calendario />} />}
+            {routes.has('/cuarto-frio')  && <Route path="/cuarto-frio"  element={<CuartoFrio />} />}
+            {routes.has('/tenjo')        && <Route path="/tenjo"        element={<Tenjo />} />}
+            {routes.has('/produccion')   && <Route path="/produccion"   element={<Produccion />} />}
+            {routes.has('/imagenes')     && <Route path="/imagenes"     element={<SeguimientoImagenes />} />}
+            {routes.has('/gestion')      && <Route path="/gestion"      element={<Gestion />} />}
+            {routes.has('/nps')          && <Route path="/nps"          element={<Nps />} />}
+            {routes.has('/reportes')     && <Route path="/reportes"     element={<Reportes />} />}
+            {routes.has('/presequiales') && <Route path="/presequiales" element={<Presequiales />} />}
+            {routes.has('/configuracion') && <Route path="/configuracion" element={<Configuracion />} />}
+            <Route path="*" element={<Navigate to={redirectTo} replace />} />
           </Routes>
         </Suspense>
       </motion.div>
@@ -67,9 +83,39 @@ function AppRoutes() {
 }
 
 function InnerApp() {
-  const location = useLocation()
+  const { session, personalData, loading, logout, debug } = useAuth()
 
-  if (location.pathname === '/tecnico') {
+  if (loading) return <FullScreenLoader />
+
+  // No autenticado → Login
+  if (!session) {
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <Login />
+      </Suspense>
+    )
+  }
+
+  // Autenticado pero aún cargando personal
+  if (personalData === undefined) return <FullScreenLoader />
+
+  // Autenticado pero sin registro en personal
+  if (personalData === null) return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: '#263218' }}>
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center">
+        <div className="text-3xl mb-3">⚠️</div>
+        <h2 className="font-bold text-gray-900 mb-2">Usuario sin perfil</h2>
+        <p className="text-sm text-gray-500 mb-4">Tu correo no tiene un registro en <strong>personal</strong>. Contacta al administrador.</p>
+        {debug && <p className="text-[10px] text-gray-400 break-all mb-3 bg-gray-50 p-2 rounded">{debug}</p>}
+        <button onClick={logout} className="text-sm font-medium text-red-500">Cerrar sesión</button>
+      </div>
+    </div>
+  )
+
+  const config = getRoleConfig(personalData.rol)
+
+  // Técnico / Mensajero → TecnicoApp (vista móvil de campo)
+  if (config.isTecnico) {
     return (
       <Suspense fallback={
         <div style={{ minHeight: '100vh', background: '#263218', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -81,19 +127,22 @@ function InnerApp() {
     )
   }
 
+  // Coordinador / Admin / Productor / Operario → AppShell con módulos permitidos
   return (
-    <AppShell>
-      <AppRoutes />
-    </AppShell>
+    <BadgesProvider>
+      <AppShell>
+        <AppRoutes rol={personalData.rol} />
+      </AppShell>
+    </BadgesProvider>
   )
 }
 
 export default function App() {
   return (
-    <BadgesProvider>
-      <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AuthProvider>
         <InnerApp />
-      </HashRouter>
-    </BadgesProvider>
+      </AuthProvider>
+    </HashRouter>
   )
 }

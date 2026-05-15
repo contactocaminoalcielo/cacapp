@@ -1,13 +1,103 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { LogOut, User } from 'lucide-react'
 import Sidebar from './Sidebar'
+import { useAuth } from '@/contexts/AuthContext'
+
+function ProfileMenu({ personalData, logout }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef()
+
+  const nombre = personalData
+    ? `${personalData.nombre ?? ''} ${personalData.apellido ?? ''}`.trim()
+    : ''
+  const initials = nombre
+    .split(' ')
+    .filter(Boolean)
+    .map(w => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+  const rol = personalData?.rol ?? ''
+  const email = personalData?.email ?? ''
+
+  useEffect(() => {
+    function handleOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [])
+
+  return (
+    <div className="relative" ref={ref}>
+      <motion.button
+        whileTap={{ scale: 0.9 }}
+        onClick={() => setOpen(o => !o)}
+        className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 select-none"
+        style={{ backgroundColor: '#C4A87A', color: '#1A2E1E' }}
+        title={nombre}
+      >
+        {initials || <User size={14} />}
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: -6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: -6 }}
+            transition={{ duration: 0.13, ease: 'easeOut' }}
+            className="absolute right-0 top-11 w-56 bg-white rounded-2xl shadow-xl overflow-hidden z-50"
+            style={{ border: '1px solid #EBEBEB' }}
+          >
+            {/* Info usuario */}
+            <div className="px-4 py-3.5 flex items-center gap-3" style={{ borderBottom: '1px solid #F3F4F6' }}>
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0"
+                style={{ backgroundColor: '#C4A87A', color: '#1A2E1E' }}
+              >
+                {initials || <User size={14} />}
+              </div>
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-gray-900 truncate">{nombre}</div>
+                {email && <div className="text-[11px] text-gray-400 truncate">{email}</div>}
+                {rol && (
+                  <div
+                    className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: '#F0F7EC', color: '#3D5A27' }}
+                  >
+                    {rol}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Cerrar sesión */}
+            <button
+              onClick={() => { setOpen(false); logout() }}
+              className="w-full flex items-center gap-2.5 px-4 py-3 text-[13px] font-medium transition-colors"
+              style={{ color: '#DC2626' }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = '#FEF2F2'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+            >
+              <LogOut size={14} />
+              Cerrar sesión
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
 
 export default function AppShell({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const { personalData, logout } = useAuth()
 
   return (
     <div className="flex min-h-screen bg-[#F8F9FA]">
-      {/* Mobile overlay — animated */}
+      {/* Mobile overlay */}
       <AnimatePresence>
         {sidebarOpen && (
           <motion.div
@@ -26,14 +116,15 @@ export default function AppShell({ children }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-h-screen lg:ml-[240px]">
-        {/* Mobile topbar with hamburger */}
+        {/* Topbar — siempre visible */}
         <div
-          className="sticky top-0 z-30 lg:hidden flex items-center gap-3 bg-white px-4 h-14"
+          className="sticky top-0 z-30 flex items-center gap-3 bg-white px-4 h-14"
           style={{ borderBottom: '1px solid #F0F2F0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
         >
+          {/* Hamburger solo en móvil */}
           <motion.button
             whileTap={{ scale: 0.88 }}
-            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
+            className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
             onClick={() => setSidebarOpen(true)}
             aria-label="Abrir menú"
           >
@@ -43,7 +134,29 @@ export default function AppShell({ children }) {
               <rect x="1" y="13"   width="16" height="1.5" rx="0.75" fill="#374151"/>
             </svg>
           </motion.button>
-          <span className="text-[13px] font-semibold text-gray-900">Camino al Cielo</span>
+
+          {/* Título */}
+          <span className="text-[13px] font-semibold text-gray-900 flex-1 truncate">
+            Camino al Cielo
+          </span>
+
+          {/* Avatar / perfil — siempre visible */}
+          {personalData && (
+            <div className="flex items-center gap-2">
+              <motion.button
+                whileTap={{ scale: 0.88 }}
+                onClick={logout}
+                title="Cerrar sesión"
+                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+                style={{ color: '#9CA3AF' }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#FEF2F2'; e.currentTarget.style.color = '#DC2626' }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#9CA3AF' }}
+              >
+                <LogOut size={16} />
+              </motion.button>
+              <ProfileMenu personalData={personalData} logout={logout} />
+            </div>
+          )}
         </div>
 
         {children}
