@@ -36,7 +36,7 @@ function TabClientes() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'PERSONA_NATURAL',activo:true })
+    setForm(item || { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
   }
   async function guardar() {
     setSaving(true)
@@ -88,6 +88,14 @@ function TabClientes() {
                   <Input value={form[k] || ''} onChange={e => setForm(p => ({ ...p, [k]: e.target.value }))} />
                 </div>
               ))}
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Tipo cliente</label>
+                <Select value={form.tipo_cliente || 'NORMAL'} onChange={e => setForm(p => ({ ...p, tipo_cliente: e.target.value }))}>
+                  <option value="NORMAL">Normal</option>
+                  <option value="VIP">VIP</option>
+                  <option value="RECURRENTE">Recurrente</option>
+                </Select>
+              </div>
             </div>
           </div>
         </Modal>
@@ -119,7 +127,7 @@ function TabMascotas() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item ? { nombre:item.nombre,especie_id:item.especie_id,raza:item.raza||'',sexo:item.sexo||'MACHO',peso_kg:item.peso_kg||'',tamano:item.tamano||'MEDIANO',notas:item.notas||'' } : { nombre:'',especie_id:'',raza:'',sexo:'MACHO',peso_kg:'',tamano:'MEDIANO',notas:'' })
+    setForm(item ? { nombre:item.nombre,especie_id:item.especie_id,raza:item.raza||'',sexo:item.sexo||'Macho',peso_kg:item.peso_kg||'',tamano:item.tamano||'Mediano',notas:item.notas||'' } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'' })
   }
   async function guardar() {
     setSaving(true)
@@ -166,17 +174,17 @@ function TabMascotas() {
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Especie</label>
               <Select value={form.especie_id||''} onChange={e => setForm(p => ({...p,especie_id:e.target.value}))}>
                 <option value="">Seleccionar...</option>
-                {especies.map(e => <option key={e.id_especie} value={e.id_especie}>{e.nombre}</option>)}
+                {especies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
               </Select></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Raza</label><Input value={form.raza||''} onChange={e => setForm(p => ({...p,raza:e.target.value}))} /></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Peso (kg)</label><Input type="number" step="0.1" value={form.peso_kg||''} onChange={e => setForm(p => ({...p,peso_kg:e.target.value}))} /></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Sexo</label>
-              <Select value={form.sexo||'MACHO'} onChange={e => setForm(p => ({...p,sexo:e.target.value}))}>
-                <option value="MACHO">Macho</option><option value="HEMBRA">Hembra</option>
+              <Select value={form.sexo||'Macho'} onChange={e => setForm(p => ({...p,sexo:e.target.value}))}>
+                <option value="Macho">Macho</option><option value="Hembra">Hembra</option>
               </Select></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Tamaño</label>
-              <Select value={form.tamano||'MEDIANO'} onChange={e => setForm(p => ({...p,tamano:e.target.value}))}>
-                <option value="MINI">Mini</option><option value="PEQUENO">Pequeño</option><option value="MEDIANO">Mediano</option><option value="GRANDE">Grande</option><option value="GIGANTE">Gigante</option>
+              <Select value={form.tamano||'Mediano'} onChange={e => setForm(p => ({...p,tamano:e.target.value}))}>
+                <option value="Mini">Mini</option><option value="Pequeño">Pequeño</option><option value="Mediano">Mediano</option><option value="Grande">Grande</option><option value="Gigante">Gigante</option>
               </Select></div>
             <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label><Textarea value={form.notas||''} onChange={e => setForm(p => ({...p,notas:e.target.value}))} /></div>
           </div>
@@ -204,7 +212,7 @@ function TabAliados() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',barrio:'',vip:false,modalidad_comision:'PORCENTAJE',saldo_comision:0,activo:true })
+    setForm(item || { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',barrio:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
   }
   async function guardar() {
     setSaving(true)
@@ -251,6 +259,18 @@ function TabAliados() {
             {[['nombre','Nombre'],['identificacion_nit','NIT/Cédula'],['contacto_nombre','Contacto'],['whatsapp','WhatsApp'],['telefono','Teléfono'],['ciudad','Ciudad'],['barrio','Barrio']].map(([k,l]) => (
               <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} /></div>
             ))}
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Modalidad comisión</label>
+              <Select value={form.modalidad_comision||'FACTURACION_MENSUAL'} onChange={e => setForm(p=>({...p,modalidad_comision:e.target.value}))}>
+                <option value="FACTURACION_MENSUAL">Facturación mensual</option>
+                <option value="DESCUENTO_INMEDIATO">Descuento inmediato</option>
+                <option value="CREDITO_ACUMULADO">Crédito acumulado</option>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 pt-4">
+              <input type="checkbox" id="aliado-vip" checked={!!form.vip} onChange={e => setForm(p=>({...p,vip:e.target.checked}))} className="w-4 h-4 accent-[#3D5A27]" />
+              <label htmlFor="aliado-vip" className="text-[12px] font-semibold text-ink2 cursor-pointer">Aliado VIP</label>
+            </div>
           </div>
         </Modal>
       )}

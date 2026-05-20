@@ -3,10 +3,11 @@ import Topbar from '@/components/layout/Topbar'
 import { EstadoBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { db } from '@/lib/supabase'
 import { petEmoji } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
-import { MessageCircle, RefreshCw, AlertTriangle, Clock } from 'lucide-react'
+import { MessageCircle, RefreshCw, AlertTriangle, Package } from 'lucide-react'
 
 const COLUMNAS = [
   'INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO', 'EN_PROCESO',
@@ -41,8 +42,17 @@ export default function Kanban() {
   const [selected, setSelected]         = useState(null)
   const [recordatorios, setRecordatorios] = useState([])
   const [saving, setSaving]             = useState(false)
+  const [mensajeros, setMensajeros]     = useState([])
+  const [mensajeroId, setMensajeroId]   = useState('')
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    db.from('personal').select('id,nombre,apellido,rol_principal_id')
+      .in('rol_principal_id', [3])  // rol 3 = MENSAJERO
+      .eq('activo', true)
+      .order('nombre')
+      .then(({ data }) => setMensajeros(data || []))
+  }, [])
 
   async function cargar() {
     try {
@@ -77,6 +87,29 @@ export default function Kanban() {
         s.servicio_id === selected.servicio_id ? { ...s, estado: nuevoEstado } : s
       ))
       setSelected(prev => ({ ...prev, estado: nuevoEstado }))
+    } catch (e) {
+      alert('Error: ' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function confirmarEntrega() {
+    if (!selected || saving) return
+    setSaving(true)
+    try {
+      await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', selected.servicio_id)
+      if (mensajeroId) {
+        await db.from('entregas')
+          .update({ mensajero_id: mensajeroId })
+          .eq('servicio_id', selected.servicio_id)
+          .in('estado', ['PENDIENTE'])
+      }
+      setServicios(prev => prev.map(s =>
+        s.servicio_id === selected.servicio_id ? { ...s, estado: 'EN_ENTREGA' } : s
+      ))
+      setSelected(prev => ({ ...prev, estado: 'EN_ENTREGA' }))
+      setMensajeroId('')
     } catch (e) {
       alert('Error: ' + e.message)
     } finally {
@@ -305,27 +338,56 @@ export default function Kanban() {
               </div>
             </div>
 
+            {/* Asignar entrega (solo cuando estado es LISTO) */}
+            {selected.estado === 'LISTO' && (
+              <div className="rounded-xl border-2 p-3 space-y-2.5"
+                style={{ borderColor: '#E0E7FF', background: '#F5F3FF' }}>
+                <div className="flex items-center gap-2">
+                  <Package size={13} style={{ color: '#6366F1' }} />
+                  <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6366F1' }}>
+                    Asignar entrega al mensajero
+                  </div>
+                </div>
+                <Select value={mensajeroId} onChange={e => setMensajeroId(e.target.value)} className="w-full">
+                  <option value="">Sin asignar (queda pendiente)</option>
+                  {mensajeros.map(m => (
+                    <option key={m.id} value={m.id}>{m.nombre} {m.apellido}</option>
+                  ))}
+                </Select>
+                <button
+                  disabled={saving}
+                  onClick={confirmarEntrega}
+                  className="w-full py-2 rounded-lg text-[12px] font-bold transition-all hover:opacity-90 disabled:opacity-50"
+                  style={{ background: '#6366F1', color: '#fff' }}
+                >
+                  {saving ? 'Guardando…' : '🛵 Enviar a entrega'}
+                </button>
+              </div>
+            )}
+
             {/* Cambiar estado */}
             <div>
               <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">
                 Mover a…
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {COLUMNAS.filter(c => c !== selected.estado).map(col => (
-                  <button
-                    key={col}
-                    disabled={saving}
-                    onClick={() => cambiarEstado(col)}
-                    className="text-[11px] font-bold px-2.5 py-1 rounded-full border transition-all hover:opacity-80 disabled:opacity-40"
-                    style={ESTADO_COLOR[col] ? {
-                      background: ESTADO_COLOR[col].bg,
-                      color:      ESTADO_COLOR[col].text,
-                      borderColor:ESTADO_COLOR[col].border,
-                    } : { background: '#F3F4F6', color: '#6B7280' }}
-                  >
-                    {ESTADO_LABEL[col]}
-                  </button>
-                ))}
+                {COLUMNAS
+                  .filter(c => c !== selected.estado && !(selected.estado === 'LISTO' && c === 'EN_ENTREGA'))
+                  .map(col => (
+                    <button
+                      key={col}
+                      disabled={saving}
+                      onClick={() => cambiarEstado(col)}
+                      className="text-[11px] font-bold px-2.5 py-1 rounded-full border transition-all hover:opacity-80 disabled:opacity-40"
+                      style={ESTADO_COLOR[col] ? {
+                        background: ESTADO_COLOR[col].bg,
+                        color:      ESTADO_COLOR[col].text,
+                        borderColor:ESTADO_COLOR[col].border,
+                      } : { background: '#F3F4F6', color: '#6B7280' }}
+                    >
+                      {ESTADO_LABEL[col]}
+                    </button>
+                  ))}
               </div>
             </div>
 

@@ -132,13 +132,23 @@ export default function SeguimientoImagenes() {
                         {s.estado === 'ENVIADA' && (
                           <Button size="sm" onClick={() => actualizarEstado(s.id, 'RECIBIDA')}>✓ Recibida</Button>
                         )}
-                        {c?.whatsapp && (
-                          <a href={`https://wa.me/57${c.whatsapp.replace(/\D/g,'')}?text=Hola, necesitamos las fotos de ${m?.nombre} para continuar con el servicio`}
-                            target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold"
-                            style={{ background: '#25D366', color: 'white' }}>
-                            <MessageCircle size={11} />WA
-                          </a>
+                        {c?.whatsapp && (() => {
+                          const nombre = m?.nombre || 'su mascota'
+                          const item = s.recordatorios?.nombre ? ` (${s.recordatorios.nombre})` : ''
+                          const msg = `Hola ${c.nombre}, le escribe el equipo de *Camino al Cielo* 🐾\n\nEstamos preparando con amor el servicio de *${nombre}*${item}. Para continuar necesitamos que nos comparta algunas fotos de ${nombre} que más atesore.\n\nPuede enviárnoslas aquí mismo por WhatsApp. ¡Gracias por confiar en nosotros! 💚`
+                          return (
+                            <a href={`https://wa.me/57${c.whatsapp.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`}
+                              target="_blank" rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold"
+                              style={{ background: '#25D366', color: 'white' }}>
+                              <MessageCircle size={11} />WA
+                            </a>
+                          )
+                        })()}
+                        {s.estado === 'ENVIADA' && (
+                          <button onClick={() => actualizarEstado(s.id, 'SIN_RESPUESTA')}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
+                            style={{ color: '#C03030' }}>Sin resp.</button>
                         )}
                       </div>
                     </Td>
