@@ -8,7 +8,15 @@ import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
-import { Plus, Search } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
+import { Plus, Search, Trash2 } from 'lucide-react'
+
+// Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
+const nullify = (obj, keys) => {
+  const out = { ...obj }
+  keys.forEach(k => { if (out[k] === '') out[k] = null })
+  return out
+}
 
 function useSearch(data, fields) {
   const [q, setQ] = useState('')
@@ -19,7 +27,7 @@ function useSearch(data, fields) {
 }
 
 // --- CLIENTES TAB ---
-function TabClientes() {
+function TabClientes({ isAdmin }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -36,19 +44,41 @@ function TabClientes() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
+    setForm(item ? {
+      nombre: item.nombre || '', apellido: item.apellido || '',
+      cedula_nit: item.cedula_nit || '', whatsapp: item.whatsapp || '',
+      telefono: item.telefono || '', email: item.email || '',
+      direccion: item.direccion || '', ciudad: item.ciudad || 'Bogotá',
+      tipo_cliente: item.tipo_cliente || 'NORMAL', activo: item.activo !== false,
+    } : { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
   }
   async function guardar() {
+    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
-    try {
-      if (selected?.id_cliente) {
-        await db.from('clientes').update(form).eq('id_cliente', selected.id_cliente)
+    const body = nullify(form, ['tipo_cliente'])
+    const { error } = selected?.id_cliente
+      ? await db.from('clientes').update(body).eq('id_cliente', selected.id_cliente)
+      : await db.from('clientes').insert(body)
+    setSaving(false)
+    if (error) { alert('Error al guardar: ' + error.message); return }
+    await cargar()
+    setSelected(null)
+  }
+  async function eliminar(c) {
+    if (!window.confirm(`¿Eliminar a ${c.nombre} ${c.apellido || ''}?\nEsta acción no se puede deshacer.`)) return
+    const { error } = await db.from('clientes').delete().eq('id_cliente', c.id_cliente)
+    if (error) {
+      if (error.code === '23503') {
+        if (window.confirm(`${c.nombre} tiene servicios o mascotas registradas y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+          await db.from('clientes').update({ activo: false }).eq('id_cliente', c.id_cliente)
+          await cargar()
+        }
       } else {
-        await db.from('clientes').insert(form)
+        alert('Error al eliminar: ' + error.message)
       }
-      await cargar()
-      setSelected(null)
-    } catch (e) { alert('Error: ' + e.message) } finally { setSaving(false) }
+      return
+    }
+    await cargar()
   }
   return (
     <div>
@@ -57,11 +87,11 @@ function TabClientes() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+        {isAdmin && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Cédula</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>Tipo</Th><Th>Activo</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Cédula</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>Tipo</Th><Th>Activo</Th>{isAdmin && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(c => (
               <Tr key={c.id_cliente}>
@@ -71,7 +101,16 @@ function TabClientes() {
                 <Td className="text-ink3">{c.ciudad}</Td>
                 <Td className="text-ink3">{c.tipo_cliente}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${c.activo ? 'bg-green-light text-primary-dark' : 'bg-[#F0F0F0] text-[#555]'}`}>{c.activo ? 'Sí' : 'No'}</span></Td>
-                <Td><Button size="sm" variant="ghost" onClick={() => abrir(c)}>Editar</Button></Td>
+                {isAdmin && (
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => abrir(c)}>Editar</Button>
+                      <button onClick={() => eliminar(c)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>
@@ -105,7 +144,7 @@ function TabClientes() {
 }
 
 // --- MASCOTAS TAB ---
-function TabMascotas() {
+function TabMascotas({ isAdmin }) {
   const [data, setData] = useState([])
   const [especies, setEspecies] = useState([])
   const [loading, setLoading] = useState(true)
@@ -127,19 +166,35 @@ function TabMascotas() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item ? { nombre:item.nombre,especie_id:item.especie_id,raza:item.raza||'',sexo:item.sexo||'Macho',peso_kg:item.peso_kg||'',tamano:item.tamano||'Mediano',notas:item.notas||'' } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'' })
+    setForm(item ? {
+      nombre: item.nombre || '', especie_id: item.especie_id || '',
+      raza: item.raza || '', sexo: item.sexo || 'Macho',
+      peso_kg: item.peso_kg || '', tamano: item.tamano || 'Mediano', notas: item.notas || '',
+    } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'' })
   }
   async function guardar() {
+    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
-    try {
-      const body = { ...form, peso_kg: parseFloat(form.peso_kg) || 0 }
-      if (selected?.id_mascota) {
-        await db.from('mascotas').update(body).eq('id_mascota', selected.id_mascota)
+    const body = nullify({ ...form, peso_kg: parseFloat(form.peso_kg) || 0 }, ['especie_id'])
+    const { error } = selected?.id_mascota
+      ? await db.from('mascotas').update(body).eq('id_mascota', selected.id_mascota)
+      : await db.from('mascotas').insert(body)
+    setSaving(false)
+    if (error) { alert('Error al guardar: ' + error.message); return }
+    await cargar(); setSelected(null)
+  }
+  async function eliminar(m) {
+    if (!window.confirm(`¿Eliminar a ${m.nombre}?\nEsta acción no se puede deshacer.`)) return
+    const { error } = await db.from('mascotas').delete().eq('id_mascota', m.id_mascota)
+    if (error) {
+      if (error.code === '23503') {
+        alert(`${m.nombre} tiene servicios registrados y no se puede eliminar.\nSi necesitas desactivarla, edita el registro del cliente.`)
       } else {
-        await db.from('mascotas').insert(body)
+        alert('Error al eliminar: ' + error.message)
       }
-      await cargar(); setSelected(null)
-    } catch (e) { alert('Error: ' + e.message) } finally { setSaving(false) }
+      return
+    }
+    await cargar()
   }
   return (
     <div>
@@ -151,7 +206,7 @@ function TabMascotas() {
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Cliente</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Cliente</Th>{isAdmin && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(m => (
               <Tr key={m.id_mascota}>
@@ -160,7 +215,16 @@ function TabMascotas() {
                 <Td className="text-ink3">{m.raza || '-'}</Td>
                 <Td className="text-ink3">{m.peso_kg}kg</Td>
                 <Td className="text-ink3">{m.clientes?.nombre} {m.clientes?.apellido}</Td>
-                <Td><Button size="sm" variant="ghost" onClick={() => abrir(m)}>Editar</Button></Td>
+                {isAdmin && (
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => abrir(m)}>Editar</Button>
+                      <button onClick={() => eliminar(m)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>
@@ -177,7 +241,7 @@ function TabMascotas() {
                 {especies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
               </Select></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Raza</label><Input value={form.raza||''} onChange={e => setForm(p => ({...p,raza:e.target.value}))} /></div>
-            <div><label className="text-[11px] font-bold text-ink3 block mb-1">Peso (kg)</label><Input type="number" step="0.1" value={form.peso_kg||''} onChange={e => setForm(p => ({...p,peso_kg:e.target.value}))} /></div>
+            <div><label className="text-[11px] font-bold text-ink3 block mb-1">Peso (kg)</label><Input type="text" inputMode="decimal" placeholder="Ej: 28.5" value={form.peso_kg||''} onChange={e => setForm(p => ({...p,peso_kg:e.target.value.replace(',','.')}))} /></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Sexo</label>
               <Select value={form.sexo||'Macho'} onChange={e => setForm(p => ({...p,sexo:e.target.value}))}>
                 <option value="Macho">Macho</option><option value="Hembra">Hembra</option>
@@ -195,7 +259,7 @@ function TabMascotas() {
 }
 
 // --- ALIADOS TAB ---
-function TabAliados() {
+function TabAliados({ isAdmin }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -212,18 +276,41 @@ function TabAliados() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',barrio:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
+    setForm(item ? {
+      nombre: item.nombre || '', identificacion_nit: item.identificacion_nit || '',
+      contacto_nombre: item.contacto_nombre || '', whatsapp: item.whatsapp || '',
+      telefono: item.telefono || '', ciudad: item.ciudad || 'Bogotá',
+      barrio: item.barrio || '', vip: item.vip || false,
+      modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
+      saldo_comision: item.saldo_comision || 0, activo: item.activo !== false,
+    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',barrio:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
   }
   async function guardar() {
+    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
-    try {
-      if (selected?.id_aliado) {
-        await db.from('aliados').update(form).eq('id_aliado', selected.id_aliado)
+    const body = nullify(form, ['modalidad_comision'])
+    const { error } = selected?.id_aliado
+      ? await db.from('aliados').update(body).eq('id_aliado', selected.id_aliado)
+      : await db.from('aliados').insert(body)
+    setSaving(false)
+    if (error) { alert('Error al guardar: ' + error.message); return }
+    await cargar(); setSelected(null)
+  }
+  async function eliminar(a) {
+    if (!window.confirm(`¿Eliminar a ${a.nombre}?\nEsta acción no se puede deshacer.`)) return
+    const { error } = await db.from('aliados').delete().eq('id_aliado', a.id_aliado)
+    if (error) {
+      if (error.code === '23503') {
+        if (window.confirm(`${a.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+          await db.from('aliados').update({ activo: false }).eq('id_aliado', a.id_aliado)
+          await cargar()
+        }
       } else {
-        await db.from('aliados').insert(form)
+        alert('Error al eliminar: ' + error.message)
       }
-      await cargar(); setSelected(null)
-    } catch (e) { alert('Error: ' + e.message) } finally { setSaving(false) }
+      return
+    }
+    await cargar()
   }
   return (
     <div>
@@ -232,11 +319,11 @@ function TabAliados() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+        {isAdmin && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th>{isAdmin && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(a => (
               <Tr key={a.id_aliado}>
@@ -246,7 +333,16 @@ function TabAliados() {
                 <Td className="text-ink3">{a.ciudad}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${a.vip ? 'bg-[#FFF3DC] text-[#9A5500]' : 'bg-[#F0F0F0] text-[#555]'}`}>{a.vip ? 'VIP' : 'No'}</span></Td>
                 <Td className="font-semibold text-ink">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(a.saldo_comision||0)}</Td>
-                <Td><Button size="sm" variant="ghost" onClick={() => abrir(a)}>Editar</Button></Td>
+                {isAdmin && (
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Editar</Button>
+                      <button onClick={() => eliminar(a)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>
@@ -279,7 +375,7 @@ function TabAliados() {
 }
 
 // --- PERSONAL TAB ---
-function TabPersonal() {
+function TabPersonal({ isAdmin }) {
   const [data, setData] = useState([])
   const [roles, setRoles] = useState([])
   const [loading, setLoading] = useState(true)
@@ -301,18 +397,42 @@ function TabPersonal() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',apellido:'',cedula:'',whatsapp:'',tipo_vehiculo:'',placa_vehiculo:'',activo:true,rol_principal_id:'' })
+    setForm(item ? {
+      nombre: item.nombre || '', apellido: item.apellido || '',
+      cedula: item.cedula || '', whatsapp: item.whatsapp || '',
+      tipo_vehiculo: item.tipo_vehiculo || '', placa_vehiculo: item.placa_vehiculo || '',
+      activo: item.activo !== false, rol_principal_id: item.rol_principal_id || '',
+    } : { nombre:'',apellido:'',cedula:'',whatsapp:'',tipo_vehiculo:'',placa_vehiculo:'',activo:true,rol_principal_id:'' })
   }
   async function guardar() {
+    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
-    try {
-      if (selected?.id) {
-        await db.from('personal').update(form).eq('id', selected.id)
+    const body = nullify(
+      { ...form, rol_principal_id: form.rol_principal_id ? parseInt(form.rol_principal_id) : null },
+      ['tipo_vehiculo', 'placa_vehiculo']
+    )
+    const { error } = selected?.id
+      ? await db.from('personal').update(body).eq('id', selected.id)
+      : await db.from('personal').insert(body)
+    setSaving(false)
+    if (error) { alert('Error al guardar: ' + error.message); return }
+    await cargar(); setSelected(null)
+  }
+  async function eliminar(p) {
+    if (!window.confirm(`¿Eliminar a ${p.nombre} ${p.apellido || ''}?\nEsta acción no se puede deshacer.`)) return
+    const { error } = await db.from('personal').delete().eq('id', p.id)
+    if (error) {
+      if (error.code === '23503') {
+        if (window.confirm(`${p.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+          await db.from('personal').update({ activo: false }).eq('id', p.id)
+          await cargar()
+        }
       } else {
-        await db.from('personal').insert(form)
+        alert('Error al eliminar: ' + error.message)
       }
-      await cargar(); setSelected(null)
-    } catch (e) { alert('Error: ' + e.message) } finally { setSaving(false) }
+      return
+    }
+    await cargar()
   }
   return (
     <div>
@@ -321,11 +441,11 @@ function TabPersonal() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+        {isAdmin && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Cédula</Th><Th>WhatsApp</Th><Th>Rol</Th><Th>Vehículo</Th><Th>Activo</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Cédula</Th><Th>WhatsApp</Th><Th>Rol</Th><Th>Vehículo</Th><Th>Activo</Th>{isAdmin && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(p => (
               <Tr key={p.id}>
@@ -335,7 +455,16 @@ function TabPersonal() {
                 <Td className="text-ink3">{p.roles_personal?.nombre || '-'}</Td>
                 <Td className="text-ink3">{p.tipo_vehiculo} {p.placa_vehiculo}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.activo ? 'bg-green-light text-primary-dark' : 'bg-[#F0F0F0] text-[#555]'}`}>{p.activo ? 'Sí' : 'No'}</span></Td>
-                <Td><Button size="sm" variant="ghost" onClick={() => abrir(p)}>Editar</Button></Td>
+                {isAdmin && (
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => abrir(p)}>Editar</Button>
+                      <button onClick={() => eliminar(p)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>
@@ -361,7 +490,7 @@ function TabPersonal() {
 }
 
 // --- INVENTARIO TAB ---
-function TabInventario() {
+function TabInventario({ isAdmin }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -378,19 +507,30 @@ function TabInventario() {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
-    setForm(item || { nombre:'',descripcion:'',unidad:'',stock_actual:0,stock_minimo:0,proveedor:'',precio_unitario:0,ubicacion:'',activo:true })
+    setForm(item ? {
+      nombre: item.nombre || '', descripcion: item.descripcion || '',
+      unidad: item.unidad || '', stock_actual: item.stock_actual || 0,
+      stock_minimo: item.stock_minimo || 0, proveedor: item.proveedor || '',
+      precio_unitario: item.precio_unitario || 0, ubicacion: item.ubicacion || '',
+      activo: item.activo !== false,
+    } : { nombre:'',descripcion:'',unidad:'',stock_actual:0,stock_minimo:0,proveedor:'',precio_unitario:0,ubicacion:'',activo:true })
   }
   async function guardar() {
+    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
-    try {
-      const body = { ...form, stock_actual: parseFloat(form.stock_actual)||0, stock_minimo: parseFloat(form.stock_minimo)||0, precio_unitario: parseFloat(form.precio_unitario)||0 }
-      if (selected?.id) {
-        await db.from('inventario').update(body).eq('id', selected.id)
-      } else {
-        await db.from('inventario').insert(body)
-      }
-      await cargar(); setSelected(null)
-    } catch (e) { alert('Error: ' + e.message) } finally { setSaving(false) }
+    const body = { ...form, stock_actual: parseFloat(form.stock_actual)||0, stock_minimo: parseFloat(form.stock_minimo)||0, precio_unitario: parseFloat(form.precio_unitario)||0 }
+    const { error } = selected?.id
+      ? await db.from('inventario').update(body).eq('id', selected.id)
+      : await db.from('inventario').insert(body)
+    setSaving(false)
+    if (error) { alert('Error al guardar: ' + error.message); return }
+    await cargar(); setSelected(null)
+  }
+  async function eliminar(i) {
+    if (!window.confirm(`¿Eliminar "${i.nombre}"?\nEsta acción no se puede deshacer.`)) return
+    const { error } = await db.from('inventario').delete().eq('id', i.id)
+    if (error) { alert('Error al eliminar: ' + error.message); return }
+    await cargar()
   }
   return (
     <div>
@@ -399,11 +539,11 @@ function TabInventario() {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+        {isAdmin && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Unidad</Th><Th>Stock actual</Th><Th>Stock mínimo</Th><Th>Proveedor</Th><Th>Precio</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Unidad</Th><Th>Stock actual</Th><Th>Stock mínimo</Th><Th>Proveedor</Th><Th>Precio</Th>{isAdmin && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(i => {
               const bajo = i.stock_actual < i.stock_minimo
@@ -415,7 +555,16 @@ function TabInventario() {
                   <Td className="text-ink3">{i.stock_minimo}</Td>
                   <Td className="text-ink3">{i.proveedor}</Td>
                   <Td className="text-ink2">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(i.precio_unitario||0)}</Td>
-                  <Td><Button size="sm" variant="ghost" onClick={() => abrir(i)}>Editar</Button></Td>
+                  {isAdmin && (
+                    <Td>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => abrir(i)}>Editar</Button>
+                        <button onClick={() => eliminar(i)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </Td>
+                  )}
                 </Tr>
               )
             })}
@@ -439,6 +588,9 @@ function TabInventario() {
 }
 
 export default function Gestion() {
+  const { personalData } = useAuth()
+  const isAdmin = personalData?.rol === 'ADMIN'
+
   return (
     <div>
       <Topbar />
@@ -451,11 +603,11 @@ export default function Gestion() {
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="inventario">Inventario</TabsTrigger>
           </TabsList>
-          <TabsContent value="clientes"><TabClientes /></TabsContent>
-          <TabsContent value="mascotas"><TabMascotas /></TabsContent>
-          <TabsContent value="aliados"><TabAliados /></TabsContent>
-          <TabsContent value="personal"><TabPersonal /></TabsContent>
-          <TabsContent value="inventario"><TabInventario /></TabsContent>
+          <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="personal"><TabPersonal isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="inventario"><TabInventario isAdmin={isAdmin} /></TabsContent>
         </Tabs>
       </div>
     </div>

@@ -115,7 +115,7 @@ export default function AppShell({ children }) {
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-screen lg:ml-[240px]">
+      <div className="flex-1 flex flex-col min-h-screen lg:ml-[240px] overflow-x-hidden">
         {/* Topbar — siempre visible */}
         <div
           className="sticky top-0 z-30 flex items-center gap-3 bg-white px-4 h-14"

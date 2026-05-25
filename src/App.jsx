@@ -88,8 +88,12 @@ function InnerApp() {
   const location = useLocation()
 
   // Ruta pública — no requiere autenticación
-  if (location.pathname.startsWith('/fotos/')) {
-    const codigo = location.pathname.replace('/fotos/', '')
+  // /fotos        → pantalla de entrada (cliente digita el código)
+  // /fotos/CODIGO → carga directa desde link de WhatsApp
+  if (location.pathname === '/fotos' || location.pathname.startsWith('/fotos/')) {
+    const codigo = location.pathname.startsWith('/fotos/')
+      ? location.pathname.replace('/fotos/', '')
+      : ''
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <FotosCliente codigo={codigo} />

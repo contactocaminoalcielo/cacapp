@@ -238,12 +238,14 @@ export default function Registro() {
   const ciudadInfo       = CIUDADES.find(c => c.value === formRecogida.ciudad_recogida)
   const recargoCiudad    = ciudadInfo && ciudadInfo.value !== 'Bogotá'
     ? (ciudadInfo.recargo?.[vehiculoTipo] || 0) : 0
-  const modalidadComision = aliadoSeleccionado?.modalidad_comision
-  const aplicaDescuento   = modalidadComision === 'DESCUENTO_INMEDIATO' &&
-    formRecogida.tipo_lugar === 'CLINICA_ALIADA' && comisionPorcentaje > 0
-  // comisión aplica SOLO sobre el plan base (no sobre adicionales)
-  const comisionMonto     = aplicaDescuento
+  const modalidadComision  = aliadoSeleccionado?.modalidad_comision
+  // La comisión siempre reduce el valor del servicio cuando hay aliado en clínica
+  // La modalidad solo afecta CÓMO se registra/cobra la comisión después
+  const comisionCalculada  = comisionPorcentaje > 0
     ? Math.round(valorBase * comisionPorcentaje / 100) : 0
+  const aplicaDescuento    = !!aliadoSeleccionado &&
+    formRecogida.tipo_lugar === 'CLINICA_ALIADA' && comisionCalculada > 0
+  const comisionMonto      = aplicaDescuento ? comisionCalculada : 0
   const recargoPrioridad  = planSeleccionado?.codigo === 'DESAMPARADO' && desamparadoPrioridad ? 16000 : 0
   const valorCobrado      = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad
 
@@ -396,17 +398,24 @@ export default function Registro() {
         .eq('aliado_origen_id', aliadoSeleccionado.id_aliado)
         .gte('fecha_ingreso', inicioMes)
       const serviciosMes = count || 0
-      // 2. Buscar el tramo de comisión que corresponde al volumen
-      const { data } = await db.from('config_comisiones')
-        .select('porcentaje')
-        .eq('plan_id', planSeleccionado.id)
+      // 2. Traer todas las comisiones del aliado y filtrar en JS (evita problemas con OR doble en PostgREST)
+      const { data: filas } = await db.from('config_comisiones')
+        .select('porcentaje, plan_id, rango_min, rango_max')
         .eq('es_vip', aliadoSeleccionado.vip || false)
-        .lte('rango_min', serviciosMes)
-        .or(`rango_max.gte.${serviciosMes},rango_max.is.null`)
-        .order('rango_min', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      setComisionPorcentaje(data?.porcentaje || 0)
+      const esVip = aliadoSeleccionado.vip || false
+      const match = (filas || [])
+        .filter(c =>
+          (c.plan_id === planSeleccionado.id || c.plan_id === null) &&
+          c.rango_min <= serviciosMes &&
+          (c.rango_max === null || c.rango_max >= serviciosMes)
+        )
+        // plan específico primero, luego genérico (plan_id NULL), dentro de cada grupo el rango más alto
+        .sort((a, b) => {
+          if (a.plan_id && !b.plan_id) return -1
+          if (!a.plan_id && b.plan_id) return 1
+          return b.rango_min - a.rango_min
+        })[0]
+      setComisionPorcentaje(parseFloat(match?.porcentaje) || 0)
     }
     calcularComision()
   }, [aliadoSeleccionado, planSeleccionado])
@@ -489,9 +498,8 @@ export default function Registro() {
     setCanalEntrada('ALIADO')
     setAliadoBusqueda('')
     setAliadoOpen(false)
-    if (a.modalidad_comision === 'DESCUENTO_INMEDIATO') {
-      setFormRecogida(prev => ({ ...prev, tipo_lugar: 'CLINICA_ALIADA' }))
-    }
+    // Siempre marcar CLINICA_ALIADA al seleccionar cualquier aliado
+    setFormRecogida(prev => ({ ...prev, tipo_lugar: 'CLINICA_ALIADA' }))
   }
   function clearAliado() {
     setAliadoSeleccionado(null)
@@ -522,6 +530,10 @@ export default function Registro() {
 
   // ── guardar ──
   async function guardar() {
+    if (!tecnicoSeleccionado) {
+      const ok = window.confirm('No asignaste un técnico de recogida.\n¿Deseas guardar el servicio sin técnico asignado?')
+      if (!ok) return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -614,7 +626,7 @@ export default function Registro() {
         tecnico_id:           tecnicoSeleccionado?.id || null,
         notas:                notasFinales || null,
         tipo_cliente:         clienteSeleccionado?.tipo_cliente || formCliente.tipo_cliente || 'NORMAL',
-        comision_aliado:      comisionMonto || 0,
+        comision_aliado:      comisionCalculada || 0,
         comision_descontada:  aplicaDescuento,
       }).select('id')
       if (svcErr) throw svcErr
@@ -853,10 +865,10 @@ export default function Registro() {
                 </div>
                 <div>
                   <label className={LABEL}>Peso (kg) *</label>
-                  <Input type="number" step="0.1" min="0"
+                  <Input type="text" inputMode="decimal"
                     value={pesoKgOverride !== '' ? pesoKgOverride : (mascotaSeleccionada.peso_kg || '')}
-                    placeholder="Confirmar o corregir peso"
-                    onChange={e => setPesoKgOverride(e.target.value)} />
+                    placeholder="Ej: 28.5"
+                    onChange={e => setPesoKgOverride(e.target.value.replace(',', '.'))} />
                   <p className="text-[10px] text-gray-400 mt-1">El peso determina el precio del plan. Corrígelo si es necesario.</p>
                 </div>
               </div>
@@ -876,8 +888,8 @@ export default function Registro() {
                   <div><label className={LABEL}>Raza</label>
                     <Input value={formMascota.raza} onChange={e => setFormMascota(p => ({ ...p, raza: e.target.value }))} /></div>
                   <div><label className={LABEL}>Peso (kg) *</label>
-                    <Input type="number" step="0.1" min="0" value={formMascota.peso_kg}
-                      onChange={e => setFormMascota(p => ({ ...p, peso_kg: e.target.value }))} /></div>
+                    <Input type="text" inputMode="decimal" placeholder="Ej: 28.5" value={formMascota.peso_kg}
+                      onChange={e => setFormMascota(p => ({ ...p, peso_kg: e.target.value.replace(',', '.') }))} /></div>
                   <div><label className={LABEL}>Sexo</label>
                     <Select value={formMascota.sexo} onChange={e => setFormMascota(p => ({ ...p, sexo: e.target.value }))}>
                       <option value="Macho">Macho</option>
@@ -993,9 +1005,12 @@ export default function Registro() {
                   <div className="flex items-center gap-2 px-3 py-2 border border-[#3D5A27] rounded-lg bg-green-50">
                     {aliadoSeleccionado.vip && <Star size={13} className="text-amber-500 flex-shrink-0" />}
                     <span className="text-[13px] font-medium text-gray-900 flex-1">{aliadoSeleccionado.nombre}</span>
-                    {aliadoSeleccionado.modalidad_comision === 'DESCUENTO_INMEDIATO' && comisionPorcentaje > 0 && (
+                    {comisionPorcentaje > 0 && (
                       <span className="text-[10px] bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">
-                        {comisionPorcentaje}% desc. en clínica
+                        {comisionPorcentaje}%
+                        {aliadoSeleccionado.modalidad_comision === 'DESCUENTO_INMEDIATO' ? ' desc. inmediato'
+                         : aliadoSeleccionado.modalidad_comision === 'CREDITO_ACUMULADO' ? ' crédito'
+                         : ' facturación mensual'}
                       </span>
                     )}
                     <button className="text-gray-400 hover:text-red-500" onClick={clearAliado}><X size={14} /></button>
@@ -1286,7 +1301,9 @@ export default function Registro() {
                   </div>
                   {aplicaDescuento && comisionMonto > 0 && (
                     <div className="flex justify-between text-[12px]">
-                      <span className="text-amber-600">- Comisión aliado {comisionPorcentaje}% (sobre plan base {fmt(valorBase)})</span>
+                      <span className="text-amber-600">
+                        - Comisión {comisionPorcentaje}% · {aliadoSeleccionado?.nombre} (sobre plan base {fmt(valorBase)})
+                      </span>
                       <span className="font-medium text-amber-600">- {fmt(comisionMonto)}</span>
                     </div>
                   )}

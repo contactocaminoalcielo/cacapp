@@ -1,8 +1,17 @@
 import { createClient } from '@supabase/supabase-js'
 
+const SUPABASE_URL = 'https://gfnvrmpcwchqdyozwygd.supabase.co'
+
 export const db = createClient(
-  'https://gfnvrmpcwchqdyozwygd.supabase.co',
+  SUPABASE_URL,
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmbnZybXBjd2NocWR5b3p3eWdkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0NjE0NTIsImV4cCI6MjA5MzAzNzQ1Mn0.wlvaQqka2QOM3mGwUA42JMknTGWhOyLmphSmIBrHitI'
+)
+
+// Cliente admin — solo usar en módulos de administrador (Configuracion)
+export const dbAdmin = createClient(
+  SUPABASE_URL,
+  'REDACTED_SERVICE_ROLE_KEY',
+  { auth: { autoRefreshToken: false, persistSession: false } }
 )
 
 export async function dbGet(table, select = '*', filters = {}, order = null) {

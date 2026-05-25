@@ -55,6 +55,8 @@
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 /* ─── Global reset + base ────────────────────────────────────── */
@@ -65,6 +67,8 @@ body {
   background-color: #F8F9FA;
   color: #111827;
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;

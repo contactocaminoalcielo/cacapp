@@ -26,7 +26,7 @@ export default function Topbar({ actions }) {
 
   return (
     <header
-      className="sticky top-0 z-40 bg-white flex items-center px-6 gap-4"
+      className="sticky top-14 z-40 bg-white flex items-center px-4 sm:px-6 gap-4"
       style={{
         height: 56,
         borderBottom: '1px solid #F0F2F0',
