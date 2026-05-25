@@ -7,8 +7,9 @@ import { getRoleConfig } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
-const TecnicoApp   = lazy(() => import('@/pages/TecnicoApp'))
-const Login        = lazy(() => import('@/pages/Login'))
+const TecnicoApp    = lazy(() => import('@/pages/TecnicoApp'))
+const Login         = lazy(() => import('@/pages/Login'))
+const FotosCliente  = lazy(() => import('@/pages/FotosCliente'))
 
 const Dashboard          = lazy(() => import('@/pages/Dashboard'))
 const Kanban             = lazy(() => import('@/pages/Kanban'))
@@ -84,6 +85,17 @@ function AppRoutes({ rol }) {
 
 function InnerApp() {
   const { session, personalData, loading, logout, debug } = useAuth()
+  const location = useLocation()
+
+  // Ruta pública — no requiere autenticación
+  if (location.pathname.startsWith('/fotos/')) {
+    const codigo = location.pathname.replace('/fotos/', '')
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <FotosCliente codigo={codigo} />
+      </Suspense>
+    )
+  }
 
   if (loading) return <FullScreenLoader />
 

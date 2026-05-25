@@ -8,27 +8,170 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji } from '@/lib/utils'
-import { Snowflake, RefreshCw } from 'lucide-react'
+import { Snowflake, RefreshCw, Edit2, ClipboardList } from 'lucide-react'
 
+// ─── helpers módulo ────────────────────────────────────────────────────────
+function fmtFechaHora(ts) {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  return d.toLocaleDateString('es-CO') + ' ' + d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
+}
+
+const FUNC_COLOR = {
+  SIN_FUNCIONAR: { bg: '#FEE2E2', text: '#991B1B', label: 'Sin funcionar' },
+  MANTENIMIENTO: { bg: '#FEF3C7', text: '#92400E', label: 'Mantenimiento'  },
+  REFRIGERANDO:  { bg: '#DBEAFE', text: '#1E40AF', label: 'Refrigerando'   },
+  CONGELANDO:    { bg: '#E0F2FE', text: '#0E7490', label: 'Congelando'     },
+  CAVA:          { bg: '#D1FAE5', text: '#065F46', label: 'Cava'           },
+}
+
+// ─── ReporteCard ────────────────────────────────────────────────────────────
+function ReporteCard({ reporte, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const neveras = reporte.estado_nevera_reporte || []
+  const p       = reporte.personal
+  const esHoy   = reporte.fecha === new Date().toISOString().split('T')[0]
+
+  const checks = [
+    { key: 'ozonizadores_ok',   emoji: '💨', label: 'Ozonizadores en funcionamiento' },
+    { key: 'control_olores_ok', emoji: '🌿', label: 'Control de olores activo'       },
+    { key: 'sin_olor_novedad',  emoji: '✅', label: 'Sin olor ni novedad'            },
+  ]
+
+  return (
+    <div className="bg-surface border rounded-2xl overflow-hidden shadow-sm"
+      style={{ borderColor: esHoy ? '#C5D8F5' : 'rgba(30,80,40,0.1)' }}>
+
+      {/* Header */}
+      <button className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface2 transition-colors"
+        onClick={() => setOpen(o => !o)}>
+        <div className="flex items-center gap-3">
+          {esHoy && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+              style={{ background: '#EEF3FB', color: '#3B6FBF' }}>Hoy</span>
+          )}
+          <span className="text-[12px] font-semibold text-ink">
+            {new Date(reporte.fecha + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </span>
+          <span className="text-[11px] text-ink3">
+            {p ? `${p.nombre} ${p.apellido}` : 'Técnico'} · {fmtFechaHora(reporte.created_at)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Mini checklist pills */}
+          {checks.map(c => reporte[c.key] && (
+            <span key={c.key} className="text-[10px]">{c.emoji}</span>
+          ))}
+          <span className="text-ink3 text-[11px]">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 border-t" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          {/* Neveras */}
+          {neveras.length > 0 ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3 mb-3">
+              {neveras.map(n => {
+                const f = FUNC_COLOR[n.funcionamiento] || {}
+                return (
+                  <div key={n.id} className="rounded-xl p-2.5 border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Snowflake size={11} className="text-[#3B6FBF]" />
+                      <span className="text-[12px] font-bold text-ink">{n.nevera_codigo}</span>
+                    </div>
+                    {n.capacidad_pct > 0 && (
+                      <div className="mb-1.5">
+                        <div className="flex justify-between text-[10px] text-ink3 mb-0.5">
+                          <span>Capacidad</span><span className="font-semibold">{n.capacidad_pct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{
+                            width: `${n.capacidad_pct}%`,
+                            background: n.capacidad_pct >= 80 ? '#DC2626' : n.capacidad_pct >= 60 ? '#D97706' : '#3B6FBF',
+                          }} />
+                        </div>
+                      </div>
+                    )}
+                    {n.funcionamiento && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                        style={{ background: f.bg, color: f.text }}>
+                        {f.label || n.funcionamiento.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-ink3 mt-3 mb-3">Sin datos de neveras en este reporte.</p>
+          )}
+
+          {/* Checklist */}
+          <div className="flex flex-wrap gap-2 mb-3">
+            {checks.map(c => (
+              <span key={c.key} className="text-[11px] px-2.5 py-1 rounded-full font-medium"
+                style={{
+                  background: reporte[c.key] ? '#D1FAE5' : '#F3F4F6',
+                  color:      reporte[c.key] ? '#065F46' : '#9CA3AF',
+                }}>
+                {c.emoji} {c.label}
+              </span>
+            ))}
+          </div>
+
+          {/* Comentario */}
+          {reporte.comentario && (
+            <div className="text-xs text-ink2 bg-surface2 rounded-lg px-3 py-2">
+              💬 {reporte.comentario}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Componente principal ──────────────────────────────────────────────────
 export default function CuartoFrio() {
+  const { personalData } = useAuth()
+  const isAdmin = personalData?.rol === 'ADMIN'
+
   const [registros, setRegistros] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [selected, setSelected] = useState(null)
-  const [form, setForm] = useState({})
-  const [saving, setSaving] = useState(false)
+  const [reportes,  setReportes]  = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState(null)
+  const [selected,  setSelected]  = useState(null)
+  const [form,      setForm]      = useState({})
+  const [saving,    setSaving]    = useState(false)
+  const [detalle,   setDetalle]   = useState(null)
 
   useEffect(() => { cargar() }, [])
 
   async function cargar() {
     try {
       setLoading(true)
-      const { data, error: err } = await db.from('cuarto_frio')
-        .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),planes(nombre,codigo,tipo_proceso))')
-        .order('fecha_ingreso', { ascending: false })
+      const [{ data, error: err }, { data: rep }] = await Promise.all([
+        db.from('cuarto_frio')
+          .select(`*,
+            servicios(
+              mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),
+              planes(nombre,codigo,tipo_proceso),
+              recogidas(foto_recogida_url),
+              tecnico:tecnico_id(nombre,apellido)
+            )
+          `)
+          .order('fecha_ingreso', { ascending: false }),
+        db.from('estado_cuarto_frio')
+          .select('*, estado_nevera_reporte(*), personal:registrado_por(nombre,apellido)')
+          .order('fecha', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(10),
+      ])
       if (err) throw err
       setRegistros(data || [])
+      setReportes(rep || [])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -36,27 +179,30 @@ export default function CuartoFrio() {
     }
   }
 
-  function abrirEdicion(r) {
+  function abrirEdicion(r, e) {
+    e?.stopPropagation()
     setSelected(r)
     setForm({
       nevera_codigo: r.nevera_codigo || '',
-      posicion: r.posicion || '',
-      peso_registrado_kg: r.peso_registrado_kg || '',
-      estado: r.estado || 'REFRIGERADO',
-      notas: r.notas || '',
+      peso_kg:       r.peso_kg || '',
+      estado:        r.estado || 'PENDIENTE_INGRESO',
+      notas:         r.notas || '',
     })
   }
 
   async function guardar() {
     setSaving(true)
     try {
-      await db.from('cuarto_frio').update({
-        nevera_codigo: form.nevera_codigo,
-        posicion: form.posicion,
-        peso_registrado_kg: parseFloat(form.peso_registrado_kg) || null,
-        estado: form.estado,
-        notas: form.notas,
-      }).eq('id', selected.id)
+      const update = isAdmin
+        ? {
+            nevera_codigo: form.nevera_codigo || null,
+            peso_kg:       parseFloat(form.peso_kg) || null,
+            estado:        form.estado,
+            notas:         form.notas || null,
+          }
+        : { nevera_codigo: form.nevera_codigo || null }
+
+      await db.from('cuarto_frio').update(update).eq('id', selected.id)
       await cargar()
       setSelected(null)
     } catch (e) {
@@ -66,27 +212,37 @@ export default function CuartoFrio() {
     }
   }
 
+  function nombreTecnico(r) {
+    const t = r.servicios?.tecnico
+    if (!t) return '-'
+    return `${t.nombre} ${t.apellido}`
+  }
+
   if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
-  if (error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
+  if (error)   return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
 
+  const pendientes   = registros.filter(r => r.estado === 'PENDIENTE_INGRESO')
   const refrigerados = registros.filter(r => r.estado === 'REFRIGERADO')
-  const enEspera = registros.filter(r => r.estado === 'EN_ESPERA_PROCESO')
-  const activos = registros.filter(r => ['REFRIGERADO','EN_ESPERA_PROCESO'].includes(r.estado))
+  const enEspera     = registros.filter(r => r.estado === 'EN_ESPERA_PROCESO')
+  const activos      = registros.filter(r => ['REFRIGERADO','EN_ESPERA_PROCESO'].includes(r.estado))
 
-  // Agrupar por nevera
   const porNevera = {}
   activos.forEach(r => {
-    const k = r.nevera_codigo || 'Sin nevera'
+    const k = r.nevera_codigo || 'Sin asignar'
     if (!porNevera[k]) porNevera[k] = []
     porNevera[k].push(r)
   })
 
   const estadoColor = {
-    REFRIGERADO: { bg: '#EEF3FB', text: '#3B6FBF', border: '#C5D8F5' },
+    PENDIENTE_INGRESO: { bg: '#FEF3C7', text: '#92400E', border: '#FDE68A' },
+    REFRIGERADO:       { bg: '#EEF3FB', text: '#3B6FBF', border: '#C5D8F5' },
     EN_ESPERA_PROCESO: { bg: '#FFF3DC', text: '#9A5500', border: '#FFD980' },
-    TRASLADADO: { bg: '#EDE9FE', text: '#5B21B6', border: '#C4B5FD' },
-    RETIRADO: { bg: '#F0F0F0', text: '#555', border: '#DDD' },
+    TRASLADADO:        { bg: '#EDE9FE', text: '#5B21B6', border: '#C4B5FD' },
+    RETIRADO:          { bg: '#F0F0F0', text: '#555',    border: '#DDD'    },
   }
+
+  const hoy = new Date().toISOString().split('T')[0]
+  const reporteHoy = reportes.find(r => r.fecha === hoy)
 
   return (
     <div>
@@ -96,13 +252,93 @@ export default function CuartoFrio() {
         </button>
       } />
       <div className="p-7">
+
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
-          <StatCard label="En refrigeración" value={refrigerados.length} valueColor="#3B6FBF" />
-          <StatCard label="En espera proceso" value={enEspera.length} valueColor="#9A5500" />
-          <StatCard label="Total activos" value={activos.length} />
-          <StatCard label="Total registros" value={registros.length} />
+          <StatCard label="Pendientes ingreso" value={pendientes.length} valueColor="#92400E" />
+          <StatCard label="En refrigeración"   value={refrigerados.length} valueColor="#3B6FBF" />
+          <StatCard label="En espera proceso"  value={enEspera.length} valueColor="#9A5500" />
+          <StatCard label="Total activos"      value={pendientes.length + activos.length} />
         </div>
+
+        {/* ── REPORTES DEL TÉCNICO ── */}
+        <div className="mb-7">
+          <div className="font-serif text-lg text-ink mb-3 flex items-center gap-2">
+            <ClipboardList size={18} className="text-ink3" />
+            Estado del cuarto frío
+            {!reporteHoy && (
+              <span className="text-[11px] font-sans font-semibold px-2 py-0.5 rounded-full ml-1"
+                style={{ background: '#FEF3C7', color: '#92400E' }}>
+                ⚠️ Sin reporte hoy
+              </span>
+            )}
+          </div>
+
+          {reportes.length === 0 ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+              <p className="text-sm text-amber-700 font-medium">Sin reportes registrados aún</p>
+              <p className="text-xs text-amber-600 mt-1">El técnico envía el reporte desde la app en la pestaña "C. Frío".</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {reportes.map((r, i) => (
+                <ReporteCard key={r.id} reporte={r} defaultOpen={i === 0} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Pendientes de ingreso */}
+        {pendientes.length > 0 && (
+          <div className="mb-7">
+            <div className="font-serif text-lg text-ink mb-3 flex items-center gap-2">
+              ⚠️ Pendientes de ingreso
+              <span className="text-sm font-sans font-semibold px-2 py-0.5 rounded-full"
+                style={{ background: '#FEF3C7', color: '#92400E' }}>
+                {pendientes.length}
+              </span>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+              <p className="text-xs text-amber-700 mb-3 font-medium">
+                Estos registros llegaron al cuarto frío pero el técnico aún no ha confirmado nevera, peso y foto de báscula.
+              </p>
+              <div className="space-y-2">
+                {pendientes.map(r => {
+                  const m = r.servicios?.mascotas
+                  const c = m?.clientes
+                  const p = r.servicios?.planes
+                  const t = r.servicios?.tecnico
+                  return (
+                    <div key={r.id} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-amber-100 cursor-pointer hover:bg-amber-50"
+                      onClick={() => setDetalle(r)}>
+                      <span className="text-xl">{petEmoji(m?.especies?.nombre)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-semibold text-ink truncate">{m?.nombre || '—'}</div>
+                        <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
+                        {t && <div className="text-[10px] text-ink3">Técnico: {t.nombre} {t.apellido}</div>}
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="text-right">
+                          <div className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
+                            style={{ background: '#FEF3C7', color: '#92400E', borderColor: '#FDE68A' }}>
+                            PENDIENTE INGRESO
+                          </div>
+                          {r.fecha_ingreso && (
+                            <div className="text-[10px] text-ink3 mt-0.5">{fmtFechaHora(r.fecha_ingreso)}</div>
+                          )}
+                        </div>
+                        <button className="p-1 rounded hover:bg-amber-100 text-amber-700"
+                          onClick={e => abrirEdicion(r, e)}>
+                          <Edit2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Grid neveras */}
         {Object.keys(porNevera).length > 0 && (
@@ -123,16 +359,22 @@ export default function CuartoFrio() {
                       const e = estadoColor[r.estado] || {}
                       return (
                         <div key={r.id} className="flex items-center gap-2 p-2 rounded-lg cursor-pointer hover:bg-surface2"
-                          onClick={() => abrirEdicion(r)}>
+                          onClick={() => setDetalle(r)}>
                           <span className="text-lg">{petEmoji(m?.especies?.nombre)}</span>
                           <div className="flex-1 min-w-0">
                             <div className="text-[12px] font-semibold text-ink truncate">{m?.nombre || 'Sin nombre'}</div>
-                            <div className="text-[10px] text-ink3">{c?.nombre} {c?.apellido} · Pos {r.posicion || '-'}</div>
+                            <div className="text-[10px] text-ink3">{c?.nombre} {c?.apellido}</div>
                           </div>
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border flex-shrink-0"
-                            style={{ background: e.bg, color: e.text, borderColor: e.border }}>
-                            {r.estado?.replace(/_/g, ' ')}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border"
+                              style={{ background: e.bg, color: e.text, borderColor: e.border }}>
+                              {r.estado?.replace(/_/g, ' ')}
+                            </span>
+                            <button className="p-0.5 rounded hover:bg-surface text-ink3"
+                              onClick={ev => abrirEdicion(r, ev)}>
+                              <Edit2 size={11} />
+                            </button>
+                          </div>
                         </div>
                       )
                     })}
@@ -156,8 +398,8 @@ export default function CuartoFrio() {
                   <Th>Cliente</Th>
                   <Th>Plan</Th>
                   <Th>Nevera</Th>
-                  <Th>Posición</Th>
                   <Th>Peso (kg)</Th>
+                  <Th>Técnico</Th>
                   <Th>Estado</Th>
                   <Th>Ingreso</Th>
                   <Th></Th>
@@ -170,7 +412,7 @@ export default function CuartoFrio() {
                   const p = r.servicios?.planes
                   const e = estadoColor[r.estado] || {}
                   return (
-                    <Tr key={r.id}>
+                    <Tr key={r.id} className="cursor-pointer" onClick={() => setDetalle(r)}>
                       <Td>
                         <div className="flex items-center gap-2">
                           <span>{petEmoji(m?.especies?.nombre)}</span>
@@ -180,17 +422,19 @@ export default function CuartoFrio() {
                       <Td className="text-ink2">{c?.nombre} {c?.apellido}</Td>
                       <Td className="text-ink3">{p?.nombre}</Td>
                       <Td className="font-mono text-[11px]">{r.nevera_codigo || '-'}</Td>
-                      <Td>{r.posicion || '-'}</Td>
-                      <Td>{r.peso_registrado_kg || m?.peso_kg || '-'}</Td>
+                      <Td>{r.peso_kg || m?.peso_kg || '-'}</Td>
+                      <Td className="text-ink3 text-[12px]">{nombreTecnico(r)}</Td>
                       <Td>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
                           style={{ background: e.bg, color: e.text, borderColor: e.border }}>
                           {r.estado?.replace(/_/g, ' ')}
                         </span>
                       </Td>
-                      <Td className="text-ink3">{r.fecha_ingreso ? new Date(r.fecha_ingreso).toLocaleDateString('es-CO') : '-'}</Td>
+                      <Td className="text-ink3 text-[11px]">{fmtFechaHora(r.fecha_ingreso)}</Td>
                       <Td>
-                        <Button size="sm" variant="ghost" onClick={() => abrirEdicion(r)}>Editar</Button>
+                        <Button size="sm" variant="ghost" onClick={ev => abrirEdicion(r, ev)}>
+                          {isAdmin ? 'Editar' : 'Nevera'}
+                        </Button>
                       </Td>
                     </Tr>
                   )
@@ -206,8 +450,9 @@ export default function CuartoFrio() {
 
       {/* Modal edición */}
       {selected && (
-        <Modal open={!!selected} onClose={() => setSelected(null)} title="Editar registro cuarto frío"
-          maxWidth="max-w-lg"
+        <Modal open={!!selected} onClose={() => setSelected(null)}
+          title={isAdmin ? 'Editar registro cuarto frío' : 'Cambiar nevera'}
+          maxWidth="max-w-md"
           footer={
             <>
               <Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button>
@@ -215,26 +460,166 @@ export default function CuartoFrio() {
             </>
           }>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-[11px] font-bold text-ink3 block mb-1">Nevera</label>
-                <Input value={form.nevera_codigo} onChange={e => setForm(p => ({ ...p, nevera_codigo: e.target.value }))} /></div>
-              <div><label className="text-[11px] font-bold text-ink3 block mb-1">Posición</label>
-                <Input value={form.posicion} onChange={e => setForm(p => ({ ...p, posicion: e.target.value }))} /></div>
-              <div><label className="text-[11px] font-bold text-ink3 block mb-1">Peso registrado (kg)</label>
-                <Input type="number" step="0.1" value={form.peso_registrado_kg} onChange={e => setForm(p => ({ ...p, peso_registrado_kg: e.target.value }))} /></div>
-              <div><label className="text-[11px] font-bold text-ink3 block mb-1">Estado</label>
-                <Select value={form.estado} onChange={e => setForm(p => ({ ...p, estado: e.target.value }))}>
-                  <option value="REFRIGERADO">Refrigerado</option>
-                  <option value="EN_ESPERA_PROCESO">En espera proceso</option>
-                  <option value="TRASLADADO">Trasladado</option>
-                  <option value="RETIRADO">Retirado</option>
-                </Select></div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Nevera</label>
+              <Input value={form.nevera_codigo}
+                onChange={e => setForm(p => ({ ...p, nevera_codigo: e.target.value }))} />
             </div>
-            <div><label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
-              <Textarea value={form.notas} onChange={e => setForm(p => ({ ...p, notas: e.target.value }))} /></div>
+            {isAdmin && (
+              <>
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Peso báscula (kg)</label>
+                  <Input type="text" inputMode="decimal" placeholder="Ej: 28.5"
+                    value={form.peso_kg}
+                    onChange={e => setForm(p => ({ ...p, peso_kg: e.target.value.replace(',', '.') }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Estado</label>
+                  <Select value={form.estado} onChange={e => setForm(p => ({ ...p, estado: e.target.value }))}>
+                    <option value="PENDIENTE_INGRESO">Pendiente ingreso</option>
+                    <option value="REFRIGERADO">Refrigerado</option>
+                    <option value="EN_ESPERA_PROCESO">En espera proceso</option>
+                    <option value="TRASLADADO">Trasladado</option>
+                    <option value="RETIRADO">Retirado</option>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
+                  <Textarea value={form.notas}
+                    onChange={e => setForm(p => ({ ...p, notas: e.target.value }))} />
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       )}
+
+      {/* Modal detalle mascota */}
+      {detalle && (
+        <DetalleModal
+          registro={detalle}
+          onClose={() => setDetalle(null)}
+          onEdit={isAdmin ? r => { setDetalle(null); abrirEdicion(r) } : null}
+          estadoColor={estadoColor}
+        />
+      )}
     </div>
+  )
+}
+
+// ─── DetalleModal ──────────────────────────────────────────────────────────
+function DetalleModal({ registro: r, onClose, onEdit, estadoColor }) {
+  const m            = r.servicios?.mascotas
+  const c            = m?.clientes
+  const p            = r.servicios?.planes
+  const e            = estadoColor[r.estado] || {}
+  const fotoRecogida = r.servicios?.recogidas?.[0]?.foto_recogida_url
+  const fotoPesaje   = r.foto_pesaje_url
+  const t            = r.servicios?.tecnico
+
+  return (
+    <Modal open={true} onClose={onClose}
+      title="Detalle mascota — cuarto frío"
+      maxWidth="max-w-xl"
+      footer={
+        <div className="flex gap-2">
+          {onEdit && (
+            <Button variant="secondary" onClick={() => onEdit(r)}>
+              <Edit2 size={13} className="mr-1.5" />Editar
+            </Button>
+          )}
+          <Button onClick={onClose}>Cerrar</Button>
+        </div>
+      }>
+      <div className="space-y-4">
+
+        {/* Mascota */}
+        <div className="flex items-start gap-3 p-3 bg-surface2 rounded-xl">
+          <span className="text-3xl">{petEmoji(m?.especies?.nombre)}</span>
+          <div>
+            <div className="font-semibold text-ink text-base">{m?.nombre || '-'}</div>
+            <div className="text-[12px] text-ink3">
+              {m?.especies?.nombre} · {m?.peso_kg ? `${m.peso_kg} kg` : 'Peso no registrado'}
+            </div>
+            <div className="text-[12px] text-ink2 mt-0.5">{c?.nombre} {c?.apellido}</div>
+            {c?.whatsapp && (
+              <a href={`https://wa.me/57${c.whatsapp.replace(/\D/g,'')}`}
+                target="_blank" rel="noreferrer"
+                className="text-[11px] text-[#2D7A45] font-medium">
+                📱 {c.whatsapp}
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Detalles operacionales */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">PLAN</div>
+            <div className="text-sm font-semibold text-ink">{p?.nombre || '-'}</div>
+            <div className="text-[11px] text-ink3">{p?.codigo}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">ESTADO</div>
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border"
+              style={{ background: e.bg, color: e.text, borderColor: e.border }}>
+              {r.estado?.replace(/_/g, ' ')}
+            </span>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">NEVERA</div>
+            <div className="text-sm font-mono font-semibold text-ink">{r.nevera_codigo || 'Sin asignar'}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">PESO BÁSCULA</div>
+            <div className="text-sm font-semibold text-ink">{r.peso_kg ? `${r.peso_kg} kg` : 'No registrado'}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">TÉCNICO</div>
+            <div className="text-sm text-ink">{t ? `${t.nombre} ${t.apellido}` : '-'}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">INGRESO C. FRÍO</div>
+            <div className="text-[12px] text-ink">{fmtFechaHora(r.fecha_ingreso)}</div>
+          </div>
+        </div>
+
+        {/* Notas */}
+        {r.notas && (
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-1">NOTAS</div>
+            <div className="text-sm text-ink2 bg-surface2 rounded-lg p-2">{r.notas}</div>
+          </div>
+        )}
+
+        {/* Fotos */}
+        {(fotoRecogida || fotoPesaje) && (
+          <div>
+            <div className="text-[10px] font-bold text-ink3 mb-2">FOTOS EVIDENCIA</div>
+            <div className="grid grid-cols-2 gap-3">
+              {fotoRecogida && (
+                <div>
+                  <div className="text-[10px] text-ink3 mb-1">Recogida</div>
+                  <a href={fotoRecogida} target="_blank" rel="noreferrer">
+                    <img src={fotoRecogida} alt="Foto recogida"
+                      className="w-full h-36 object-cover rounded-xl border border-surface2 hover:opacity-90 transition-opacity" />
+                  </a>
+                </div>
+              )}
+              {fotoPesaje && (
+                <div>
+                  <div className="text-[10px] text-ink3 mb-1">Pesaje báscula</div>
+                  <a href={fotoPesaje} target="_blank" rel="noreferrer">
+                    <img src={fotoPesaje} alt="Foto pesaje"
+                      className="w-full h-36 object-cover rounded-xl border border-surface2 hover:opacity-90 transition-opacity" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </Modal>
   )
 }

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { db } from '@/lib/supabase'
+import { db, dbAdmin } from '@/lib/supabase'
 import { petEmoji, fmt } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   Phone, MapPin, Clock, CheckCircle, LogOut, Bell,
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
-  AlertCircle, X, Snowflake, Weight,
+  AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
 } from 'lucide-react'
 
 const POLL = 30_000
@@ -215,8 +215,8 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
     try {
       const ext  = file.name.split('.').pop() || 'jpg'
       const path = `${storagePath}/${Date.now()}.${ext}`
-      const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, file, { upsert: true, contentType: file.type })
+      const { data, error: upErr } = await dbAdmin.storage
+        .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       if (dbSave) {
@@ -299,6 +299,93 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
   )
 }
 
+// ─── COMENTARIOS DEL PROCESO ───────────────────────────────────────────
+function ComentariosSection({ servicioId, personalId }) {
+  const [lista, setLista]     = useState([])
+  const [texto, setTexto]     = useState('')
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving]   = useState(false)
+
+  useEffect(() => { if (servicioId) cargar() }, [servicioId])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('novedades_servicio')
+      .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+      .eq('servicio_id', servicioId)
+      .in('tipo_novedad', ['NOTA', 'PAGO_RECIBIDO'])
+      .order('created_at', { ascending: true })
+    setLista(data || [])
+    setLoading(false)
+  }
+
+  async function enviar() {
+    if (!texto.trim()) return
+    setSaving(true)
+    try {
+      await db.from('novedades_servicio').insert({
+        servicio_id: servicioId,
+        tipo_novedad: 'NOTA',
+        descripcion: texto.trim(),
+        registrado_por: personalId || null,
+      })
+      setTexto('')
+      await cargar()
+    } finally { setSaving(false) }
+  }
+
+  function fmtFecha(ts) {
+    if (!ts) return ''
+    return new Date(ts).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+  }
+
+  return (
+    <div className="mt-4 pt-3" style={{ borderTop: '1px solid #F0F0F0' }}>
+      <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+        <MessageSquare size={11} /> Comentarios del proceso
+      </div>
+      {loading ? (
+        <p className="text-xs text-gray-400 py-2 text-center">Cargando…</p>
+      ) : lista.length === 0 ? (
+        <p className="text-xs text-gray-400 py-2 text-center">Sin comentarios aún</p>
+      ) : (
+        <div className="space-y-2 mb-3">
+          {lista.map(c => (
+            <div key={c.id} className="rounded-xl px-3 py-2"
+              style={{
+                background: c.tipo_novedad === 'PAGO_RECIBIDO' ? '#F0FDF4' : '#F9FAFB',
+                border: `1px solid ${c.tipo_novedad === 'PAGO_RECIBIDO' ? '#86EFAC' : '#E5E7EB'}`,
+              }}>
+              <div className="flex items-center justify-between gap-2 mb-0.5">
+                <span className="text-[11px] font-semibold text-gray-700">
+                  {c.personal ? `${c.personal.nombre} ${c.personal.apellido}` : 'Sistema'}
+                </span>
+                <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtFecha(c.created_at)}</span>
+              </div>
+              <p className="text-xs text-gray-600 leading-relaxed">{c.descripcion}</p>
+              {c.valor_ajuste != null && (
+                <p className="text-xs font-bold mt-0.5" style={{ color: '#15803D' }}>💰 {fmt(c.valor_ajuste)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <input type="text" value={texto} onChange={e => setTexto(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }}
+          placeholder="Escribe un comentario…"
+          className="flex-1 px-3 py-2 rounded-xl border text-sm outline-none"
+          style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }} />
+        <button onClick={enviar} disabled={saving || !texto.trim()}
+          className="px-3 py-2 rounded-xl font-bold text-sm flex items-center gap-1.5 disabled:opacity-40 transition-all active:scale-95"
+          style={{ background: '#3D5A27', color: '#fff' }}>
+          <Send size={13} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── CHECKLIST RECOGIDA ────────────────────────────────────────────────
 function Checklist({ svc, fotoUrl, checked, onChange }) {
   const items = [
@@ -339,16 +426,28 @@ function Checklist({ svc, fotoUrl, checked, onChange }) {
 }
 
 // ─── REGISTRO CUARTO FRÍO ──────────────────────────────────────────────
-const NEVERAS = ['N1','N2','N3','N4','N5','N6']
+const NEVERAS_DEFAULT = ['N1','N2','N3','N4','N5','N6']
 
 function RegistroCuartoFrio({ svc, onCompletar }) {
   const cf = svc.cuarto_frio_data || null
   const [peso, setPeso]               = useState(String(svc.mascotas?.peso_kg || ''))
   const [nevera, setNevera]           = useState('')
   const [neveraCustom, setNeveraCustom] = useState(false)
+  const [neverasList, setNeverasList] = useState(NEVERAS_DEFAULT)
   const [fotoUrl, setFotoUrl]         = useState(null)
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState('')
+
+  useEffect(() => {
+    db.from('cuarto_frio').select('nevera_codigo').not('nevera_codigo', 'is', null)
+      .then(({ data }) => {
+        const extras = [...new Set((data || []).map(r => r.nevera_codigo).filter(Boolean))]
+        const all = [...new Set([...NEVERAS_DEFAULT, ...extras])].sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true })
+        )
+        setNeverasList(all)
+      })
+  }, [])
 
   const canConfirm = !!fotoUrl && !!nevera.trim() && !!peso
 
@@ -381,9 +480,9 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
         <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
           <Weight size={11} /> Peso real en báscula (kg)
         </div>
-        <input type="number" inputMode="decimal" step="0.1"
-          value={peso} onChange={e => setPeso(e.target.value)}
-          placeholder={svc.mascotas?.peso_kg ? `Registrado: ${svc.mascotas.peso_kg} kg` : 'Ej: 4.5'}
+        <input type="text" inputMode="decimal"
+          value={peso} onChange={e => setPeso(e.target.value.replace(',', '.'))}
+          placeholder={svc.mascotas?.peso_kg ? `Registrado: ${svc.mascotas.peso_kg} kg` : 'Ej: 28.5'}
           className="w-full text-2xl font-extrabold px-4 py-3 rounded-xl border-2 outline-none"
           style={{ borderColor: peso ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
         {svc.mascotas?.peso_kg && (
@@ -397,7 +496,7 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
         {!neveraCustom ? (
           <>
             <div className="grid grid-cols-3 gap-2 mb-2">
-              {NEVERAS.map(n => (
+              {neverasList.map(n => (
                 <button key={n} onClick={() => setNevera(n)}
                   className="py-3.5 rounded-xl text-base font-bold transition-all active:scale-95"
                   style={{
@@ -446,12 +545,13 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
 }
 
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
-function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
+function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio }) {
   const [sheetOpen, setSheetOpen]   = useState(false)
   const [fotoUrl, setFotoUrl]       = useState(
-    svc.recogidas?.[0]?.notas?.startsWith('http') ? svc.recogidas[0].notas : null
+    svc.recogidas?.[0]?.foto_recogida_url || null
   )
   const [checked, setChecked]       = useState([])
+  const [valorCobrado, setValorCobrado] = useState('')
   const [completing, setCompleting] = useState(false)
   const [actErr, setActErr]         = useState('')
 
@@ -466,8 +566,8 @@ function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
   const enCamino     = svc.estado === 'EN_RECOGIDA'
   const enCuartoFrio = svc.estado === 'EN_CUARTO_FRIO' && !cf?.nevera_codigo
 
-  const itemsReq = ['id_ok','rec_ok', ...(svc.estado_pago !== 'COMPLETO' ? ['cobro_ok'] : [])]
-  const checklistListo = itemsReq.every(id => checked.includes(id)) && !!fotoUrl
+  const itemsReq = ['id_ok']
+  const checklistListo = checked.includes('id_ok') && !!fotoUrl
 
   function toggleCheck(id) {
     setChecked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -475,7 +575,7 @@ function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
 
   async function completar() {
     setCompleting(true); setActErr('')
-    try { await onCompletar(svc, recogida?.id) }
+    try { await onCompletar(svc, recogida?.id, parseFloat(valorCobrado) || 0) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompleting(false) }
   }
@@ -620,13 +720,36 @@ function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
             </div>
             <FotoEvidencia
               storagePath={recogida?.id ? `recogidas/${recogida.id}` : `recogidas/temp_${svc.id}`}
-              dbSave={recogida?.id ? { table: 'recogidas', column: 'notas', id: recogida.id } : null}
+              dbSave={recogida?.id ? { table: 'recogidas', column: 'foto_recogida_url', id: recogida.id } : null}
               fotoUrl={fotoUrl}
               onFotoUploaded={setFotoUrl}
               label="Tomar foto de la mascota"
               sublabel="Evidencia de recogida"
             />
             <Checklist svc={svc} fotoUrl={fotoUrl} checked={checked} onChange={toggleCheck} />
+
+            {/* Valor cobrado — opcional */}
+            {svc.estado_pago !== 'COMPLETO' && (
+              <div className="mb-4">
+                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <CreditCard size={11} /> Valor recogido en sitio
+                </div>
+                <div className="rounded-xl px-3 py-2 mb-2 flex items-center justify-between"
+                  style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
+                  <span className="text-[11px] text-amber-700">Pendiente total</span>
+                  <span className="font-bold text-sm" style={{ color: '#92400E' }}>
+                    {fmt((svc.valor_total || 0) - (svc.valor_pagado || 0))}
+                  </span>
+                </div>
+                <input type="number" inputMode="numeric" step="100"
+                  value={valorCobrado} onChange={e => setValorCobrado(e.target.value)}
+                  placeholder="Monto recibido (dejar vacío si no cobró)"
+                  className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
+                  style={{ borderColor: valorCobrado ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
+                <p className="text-[11px] text-gray-400 mt-1 ml-1">Opcional · Dejar vacío si no se cobró</p>
+              </div>
+            )}
+
             {actErr && (
               <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
                 style={{ background: '#FEE2E2', color: '#991B1B' }}>
@@ -638,7 +761,7 @@ function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
               style={{ background: checklistListo ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
               {completing ? 'Completando…'
                 : checklistListo ? '✅ Completar recogida'
-                : `Completa el checklist (${checked.length + (fotoUrl ? 1 : 0)}/${itemsReq.length + 1})`}
+                : `Falta: ${!fotoUrl ? 'foto' : ''}${!fotoUrl && !checked.includes('id_ok') ? ' + ' : ''}${!checked.includes('id_ok') ? 'verificar identidad' : ''}`}
             </button>
           </div>
         )}
@@ -647,6 +770,9 @@ function CardRecogida({ svc, onIniciar, onCompletar, onCuartoFrio }) {
         {enCuartoFrio && (
           <RegistroCuartoFrio svc={svc} onCompletar={onCuartoFrio} />
         )}
+
+        {/* ── COMENTARIOS ── siempre visibles */}
+        <ComentariosSection servicioId={svc.id} personalId={tecnico?.id} />
       </div>
     </>
   )
@@ -731,6 +857,219 @@ function CardEntrega({ ent, onAction }) {
   )
 }
 
+// ─── REPORTE CUARTO FRÍO ────────────────────────────────────────────────
+const FUNCIONAMIENTO_OPTS = [
+  { value: 'SIN_FUNCIONAR', label: '🔴 Sin funcionar'    },
+  { value: 'MANTENIMIENTO', label: '🟡 En mantenimiento' },
+  { value: 'REFRIGERANDO',  label: '🔵 Refrigerando'     },
+  { value: 'CONGELANDO',    label: '🟦 Congelando'       },
+  { value: 'CAVA',          label: '🟢 Cava'             },
+]
+const CAPACIDAD_OPTS = [20, 40, 60, 80, 100]
+
+function ReporteCuartoFrio({ tecnico, neverasActivas, reporteHoy, onGuardado }) {
+  const [neveraData, setNeveraData] = useState(() => {
+    const map = {}
+    ;(reporteHoy?.estado_nevera_reporte || []).forEach(n => {
+      map[n.nevera_codigo] = { capacidad_pct: n.capacidad_pct, funcionamiento: n.funcionamiento }
+    })
+    return map
+  })
+  const [checklist, setChecklist] = useState({
+    ozonizadores_ok:   reporteHoy?.ozonizadores_ok   ?? false,
+    control_olores_ok: reporteHoy?.control_olores_ok ?? false,
+    sin_olor_novedad:  reporteHoy?.sin_olor_novedad  ?? false,
+  })
+  const [comentario, setComentario] = useState(reporteHoy?.comentario || '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr]       = useState('')
+  const [ok, setOk]         = useState(false)
+
+  const today = new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  function setNeveraField(codigo, field, value) {
+    setNeveraData(prev => ({ ...prev, [codigo]: { ...prev[codigo], [field]: value } }))
+  }
+
+  async function guardar() {
+    setSaving(true); setErr('')
+    try {
+      let reporteId
+      if (reporteHoy) {
+        await dbAdmin.from('estado_cuarto_frio').update({
+          ...checklist, comentario: comentario || null,
+        }).eq('id', reporteHoy.id)
+        reporteId = reporteHoy.id
+        await dbAdmin.from('estado_nevera_reporte').delete().eq('reporte_id', reporteId)
+      } else {
+        const { data, error } = await dbAdmin.from('estado_cuarto_frio').insert({
+          registrado_por: tecnico?.id || null,
+          ...checklist,
+          comentario: comentario || null,
+        }).select('id').single()
+        if (error) throw error
+        reporteId = data.id
+      }
+      const neveras = Object.entries(neveraData).filter(([, v]) => v.capacidad_pct || v.funcionamiento)
+      if (neveras.length > 0) {
+        const { error: nErr } = await dbAdmin.from('estado_nevera_reporte').insert(
+          neveras.map(([codigo, v]) => ({
+            reporte_id:    reporteId,
+            nevera_codigo: codigo,
+            capacidad_pct: v.capacidad_pct ? parseInt(v.capacidad_pct) : null,
+            funcionamiento: v.funcionamiento || null,
+          }))
+        )
+        if (nErr) throw nErr
+      }
+      setOk(true)
+      onGuardado()
+    } catch (e) {
+      setErr(e.message || 'Error al guardar')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const checkItems = [
+    { key: 'ozonizadores_ok',   emoji: '💨', label: 'Ozonizadores en funcionamiento' },
+    { key: 'control_olores_ok', emoji: '🌿', label: 'Control de olores activo'       },
+    { key: 'sin_olor_novedad',  emoji: '✅', label: 'Cuarto frío sin olor ni novedad' },
+  ]
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <Snowflake size={17} style={{ color: '#0E7490', flexShrink: 0 }} />
+        <div>
+          <div className="font-bold text-gray-800 text-sm">Estado del cuarto frío</div>
+          <div className="text-[11px] text-gray-400 capitalize">{today}</div>
+        </div>
+        {reporteHoy && (
+          <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full"
+            style={{ background: '#D1FAE5', color: '#065F46' }}>
+            ✓ Reportado hoy
+          </span>
+        )}
+      </div>
+
+      {/* Neveras activas */}
+      {neverasActivas.length > 0 ? (
+        <div className="space-y-3 mb-4">
+          {neverasActivas.map(nevera => {
+            const d = neveraData[nevera] || {}
+            return (
+              <div key={nevera} className="bg-white rounded-2xl border p-3"
+                style={{ borderColor: '#BAE6FD' }}>
+                <div className="flex items-center gap-2 mb-2.5">
+                  <Snowflake size={13} style={{ color: '#0E7490' }} />
+                  <span className="font-bold text-gray-800">{nevera}</span>
+                </div>
+                {/* Capacidad */}
+                <div className="mb-3">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase mb-1.5">Capacidad</div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {CAPACIDAD_OPTS.map(pct => (
+                      <button key={pct} onClick={() => setNeveraField(nevera, 'capacidad_pct', pct)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95"
+                        style={{
+                          background: d.capacidad_pct === pct ? '#0E7490' : '#F0F9FF',
+                          color:      d.capacidad_pct === pct ? '#fff'     : '#0E7490',
+                          border:     `1.5px solid ${d.capacidad_pct === pct ? '#0E7490' : '#BAE6FD'}`,
+                        }}>
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                  {d.capacidad_pct > 0 && (
+                    <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-300"
+                        style={{
+                          width: `${d.capacidad_pct}%`,
+                          background: d.capacidad_pct >= 80 ? '#DC2626' : d.capacidad_pct >= 60 ? '#D97706' : '#0E7490',
+                        }} />
+                    </div>
+                  )}
+                </div>
+                {/* Funcionamiento */}
+                <div>
+                  <div className="text-[10px] font-bold text-gray-400 uppercase mb-1.5">Funcionamiento</div>
+                  <select value={d.funcionamiento || ''}
+                    onChange={e => setNeveraField(nevera, 'funcionamiento', e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border text-sm font-medium outline-none"
+                    style={{ borderColor: '#BAE6FD', background: '#F0F9FF', color: '#0E7490' }}>
+                    <option value="">— Selecciona estado —</option>
+                    {FUNCIONAMIENTO_OPTS.map(o => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4 text-center">
+          <p className="text-sm text-gray-500">No hay mascotas en neveras activas</p>
+        </div>
+      )}
+
+      {/* Checklist */}
+      <div className="mb-4">
+        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Checklist del cuarto frío</div>
+        <div className="space-y-2">
+          {checkItems.map(item => (
+            <button key={item.key}
+              onClick={() => setChecklist(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
+              className="w-full flex items-center gap-3 p-3 rounded-xl transition-all active:scale-98 text-left"
+              style={{
+                background: checklist[item.key] ? '#F0FDF4' : '#FAFAFA',
+                border: `1.5px solid ${checklist[item.key] ? '#86EFAC' : '#E5E7EB'}`,
+              }}>
+              <div className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center"
+                style={{ background: checklist[item.key] ? '#22C55E' : '#E5E7EB' }}>
+                {checklist[item.key] && <Check size={13} className="text-white" />}
+              </div>
+              <span className="text-sm font-medium" style={{ color: checklist[item.key] ? '#166534' : '#374151' }}>
+                {item.emoji} {item.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Comentario general */}
+      <div className="mb-4">
+        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Observaciones generales</div>
+        <textarea value={comentario} onChange={e => setComentario(e.target.value)}
+          rows={3}
+          placeholder="Ej: Se encontró manguera rota en N3, se reportó a coordinación…"
+          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none resize-none"
+          style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }} />
+      </div>
+
+      {err && (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
+          style={{ background: '#FEE2E2', color: '#991B1B' }}>
+          <AlertCircle size={13} /> {err}
+        </div>
+      )}
+      {ok && (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
+          style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #86EFAC' }}>
+          <CheckCircle size={13} /> Reporte guardado correctamente
+        </div>
+      )}
+
+      <button onClick={guardar} disabled={saving}
+        className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-50 mb-6"
+        style={{ background: '#0E7490', color: '#fff' }}>
+        {saving ? 'Guardando…' : reporteHoy ? '🔄 Actualizar reporte' : '❄️ Enviar reporte del cuarto frío'}
+      </button>
+    </div>
+  )
+}
+
 // ─── MAIN ───────────────────────────────────────────────────────────────
 export default function TecnicoApp() {
   const { personalData: tecnico, logout } = useAuth()
@@ -740,7 +1079,9 @@ export default function TecnicoApp() {
   const [loading, setLoading]     = useState(false)
   const [queryErr, setQueryErr]   = useState('')
   const [notif, setNotif]         = useState(null)
-  const prevCountRef              = useRef(null)
+  const prevCountRef               = useRef(null)
+  const [reporteHoy,     setReporteHoy]     = useState(null)
+  const [neverasActivas, setNeverasActivas] = useState([])
 
   const cargar = useCallback(async (silent = false) => {
     if (!tecnico) return
@@ -751,13 +1092,14 @@ export default function TecnicoApp() {
       const { data: svcData, error: svcErr } = await db.from('servicios')
         .select(`
           id, estado, estado_pago, metodo_pago, valor_total, valor_pagado,
+          mascota_id,
           direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
           mascotas:mascota_id (
-            nombre, tamano, especie_id, peso_kg,
+            id_mascota, nombre, tamano, especie_id, peso_kg,
             especies ( nombre ),
             clientes:cliente_id ( nombre, apellido, whatsapp )
           ),
-          recogidas ( id, contacto_nombre, contacto_telefono, fecha_programada, hora_programada, notas )
+          recogidas ( id, contacto_nombre, contacto_telefono, fecha_programada, hora_programada, notas, foto_recogida_url )
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
@@ -771,7 +1113,7 @@ export default function TecnicoApp() {
       let cfMap = {}
       if (idsCF.length > 0) {
         const { data: cfData } = await db.from('cuarto_frio')
-          .select('id, servicio_id, nevera_codigo, posicion, peso_registrado_kg, foto_pesaje_url')
+          .select('id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url')
           .in('servicio_id', idsCF)
         ;(cfData || []).forEach(cf => { cfMap[cf.servicio_id] = cf })
       }
@@ -814,6 +1156,25 @@ export default function TecnicoApp() {
       }
       prevCountRef.current = total
 
+      // ── 5. Reporte del día y neveras activas ──
+      const todayStr = new Date().toISOString().split('T')[0]
+      const [{ data: reporteData }, { data: cfNeveras }] = await Promise.all([
+        dbAdmin.from('estado_cuarto_frio')
+          .select('*, estado_nevera_reporte(*)')
+          .eq('fecha', todayStr)
+          .order('created_at', { ascending: false })
+          .limit(1),
+        db.from('cuarto_frio')
+          .select('nevera_codigo')
+          .not('nevera_codigo', 'is', null),
+      ])
+      setReporteHoy(reporteData?.[0] || null)
+      // Siempre incluir las neveras base + cualquier código extra del historial
+      const dbCodes = (cfNeveras || []).map(r => r.nevera_codigo).filter(Boolean)
+      const todasNeveras = [...new Set([...NEVERAS_DEFAULT, ...dbCodes])]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      setNeverasActivas(todasNeveras)
+
       setRecogidas(nuevasR)
       setEntregas(nuevasE)
     } finally {
@@ -838,9 +1199,30 @@ export default function TecnicoApp() {
     await cargar()
   }
 
-  async function completarRecogida(svc, recogidaId) {
+  async function completarRecogida(svc, recogidaId, valorCobrado = 0) {
     const { error } = await db.from('servicios').update({ estado: 'EN_CUARTO_FRIO' }).eq('id', svc.id)
     if (error) throw new Error(error.message)
+
+    if (valorCobrado > 0) {
+      const nuevoPagado = (svc.valor_pagado || 0) + valorCobrado
+      const total = svc.valor_total || 0
+      const nuevoEstado = nuevoPagado >= total ? 'COMPLETO' : 'PARCIAL'
+      await db.from('servicios').update({
+        valor_pagado: nuevoPagado,
+        estado_pago:  nuevoEstado,
+      }).eq('id', svc.id)
+      const pendienteRestante = total - nuevoPagado
+      await db.from('novedades_servicio').insert({
+        servicio_id:    svc.id,
+        tipo_novedad:   'PAGO_RECIBIDO',
+        descripcion:    nuevoEstado === 'COMPLETO'
+          ? `Técnico recogió ${fmt(valorCobrado)} — pago completo`
+          : `Técnico recogió ${fmt(valorCobrado)}. Queda pendiente: ${fmt(pendienteRestante)}`,
+        valor_ajuste:   valorCobrado,
+        registrado_por: tecnico?.id || null,
+      })
+    }
+
     if (recogidaId) {
       const now = new Date()
       await db.from('recogidas').update({
@@ -852,22 +1234,19 @@ export default function TecnicoApp() {
   }
 
   async function confirmarCuartoFrio(svc, { cfId, peso, nevera, fotoUrl }) {
+    const pesoNum = parseFloat(peso) || null
     if (cfId) {
-      const updateData = {
-        nevera_codigo:        nevera,
-        peso_registrado_kg:   parseFloat(peso) || null,
-        estado:               'REFRIGERADO',
-      }
-      // foto_pesaje_url requiere migración SQL — se guarda solo si la columna existe
-      try {
-        await db.from('cuarto_frio').update({ ...updateData, foto_pesaje_url: fotoUrl }).eq('id', cfId)
-      } catch {
-        // Fallback sin la columna de foto
-        await db.from('cuarto_frio').update({
-          ...updateData,
-          notas: fotoUrl ? `foto_pesaje: ${fotoUrl}` : null,
-        }).eq('id', cfId)
-      }
+      const { error } = await db.from('cuarto_frio').update({
+        nevera_codigo:   nevera,
+        peso_kg:         pesoNum,
+        estado:          'REFRIGERADO',
+        foto_pesaje_url: fotoUrl || null,
+      }).eq('id', cfId)
+      if (error) throw new Error(error.message)
+    }
+    // El peso de báscula pasa a ser el oficial para la mascota
+    if (pesoNum && svc.mascotas?.id_mascota) {
+      await db.from('mascotas').update({ peso_kg: pesoNum }).eq('id_mascota', svc.mascotas.id_mascota)
     }
     await cargar()
   }
@@ -887,9 +1266,11 @@ export default function TecnicoApp() {
     await cargar()
   }
 
+  const sinReporteHoy = !reporteHoy
   const TABS = [
-    { key: 'recogidas', label: 'Recogidas', Icon: Truck,   count: recogidas.length },
-    { key: 'entregas',  label: 'Entregas',  Icon: Package,  count: entregas.length  },
+    { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#3D5A27' },
+    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#3D5A27' },
+    { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: sinReporteHoy ? 1 : 0, color: '#0E7490' },
   ]
 
   return (
@@ -936,17 +1317,17 @@ export default function TecnicoApp() {
       )}
 
       <div className="flex bg-white border-b border-gray-100">
-        {TABS.map(({ key, label, Icon, count }) => (
+        {TABS.map(({ key, label, Icon, count, color }) => (
           <button key={key} onClick={() => setTab(key)}
             className="flex-1 py-3.5 flex items-center justify-center gap-2 text-sm font-semibold transition-colors"
             style={{
-              color: tab === key ? '#3D5A27' : '#9CA3AF',
-              borderBottom: tab === key ? '2px solid #3D5A27' : '2px solid transparent',
+              color: tab === key ? color : '#9CA3AF',
+              borderBottom: tab === key ? `2px solid ${color}` : '2px solid transparent',
             }}>
             <Icon size={15} /> {label}
             {count > 0 && (
               <span className="ml-0.5 text-[10px] font-bold min-w-[18px] h-[18px] rounded-full inline-flex items-center justify-center px-1"
-                style={{ background: '#3D5A27', color: '#fff' }}>
+                style={{ background: color, color: '#fff' }}>
                 {count}
               </span>
             )}
@@ -962,16 +1343,23 @@ export default function TecnicoApp() {
         ) : tab === 'recogidas' ? (
           recogidas.length === 0
             ? <EmptyState icon="🚐" texto="Sin recogidas asignadas" sub="Cuando el coordinador te asigne una recogida, aparecerá aquí." />
-            : recogidas.map(r => (
-              <CardRecogida key={r.id} svc={r}
+            : <RecogidaList
+                recogidas={recogidas} tecnico={tecnico}
                 onIniciar={iniciarRecogida}
                 onCompletar={completarRecogida}
-                onCuartoFrio={confirmarCuartoFrio} />
-            ))
-        ) : (
+                onCuartoFrio={confirmarCuartoFrio}
+              />
+        ) : tab === 'entregas' ? (
           entregas.length === 0
             ? <EmptyState icon="📦" texto="Sin entregas asignadas" sub="Cuando te asignen una entrega, aparecerá aquí." />
             : entregas.map(e => <CardEntrega key={e.id} ent={e} onAction={accionEntrega} />)
+        ) : (
+          <ReporteCuartoFrio
+            tecnico={tecnico}
+            neverasActivas={neverasActivas}
+            reporteHoy={reporteHoy}
+            onGuardado={() => cargar(true)}
+          />
         )}
       </div>
 
@@ -979,6 +1367,53 @@ export default function TecnicoApp() {
         Se actualiza cada 30 s ·{' '}
         <button onClick={() => cargar()} className="underline">Actualizar ahora</button>
       </div>
+    </div>
+  )
+}
+
+// ─── SECCIONES ORDENADAS POR FASE ─────────────────────────────────────
+function SeccionHeader({ color, dot, emoji, titulo, count }) {
+  return (
+    <div className="flex items-center gap-2 mb-2 mt-4 first:mt-0">
+      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+      <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color }}>
+        {emoji} {titulo}
+      </span>
+      <span className="text-[10px] font-bold min-w-[18px] h-[18px] rounded-full inline-flex items-center justify-center px-1"
+        style={{ background: color, color: '#fff' }}>
+        {count}
+      </span>
+    </div>
+  )
+}
+
+function RecogidaList({ recogidas, tecnico, onIniciar, onCompletar, onCuartoFrio }) {
+  const porRecoger   = recogidas.filter(s => s.estado === 'INGRESADO')
+  const enCamino     = recogidas.filter(s => s.estado === 'EN_RECOGIDA')
+  const cuartoFrio   = recogidas.filter(s => s.estado === 'EN_CUARTO_FRIO')
+
+  const cardProps = { tecnico, onIniciar, onCompletar, onCuartoFrio }
+
+  return (
+    <div>
+      {porRecoger.length > 0 && (
+        <div>
+          <SeccionHeader color="#D97706" dot="#FEF3C7" emoji="🕐" titulo="Por recoger" count={porRecoger.length} />
+          {porRecoger.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
+        </div>
+      )}
+      {enCamino.length > 0 && (
+        <div>
+          <SeccionHeader color="#1E40AF" dot="#DBEAFE" emoji="🚐" titulo="En camino" count={enCamino.length} />
+          {enCamino.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
+        </div>
+      )}
+      {cuartoFrio.length > 0 && (
+        <div>
+          <SeccionHeader color="#0E7490" dot="#CFFAFE" emoji="❄️" titulo="Ingresar al cuarto frío" count={cuartoFrio.length} />
+          {cuartoFrio.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
+        </div>
+      )}
     </div>
   )
 }

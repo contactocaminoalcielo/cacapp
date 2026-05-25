@@ -33,8 +33,8 @@ export const ROLE_CONFIG = {
   },
   PRODUCTOR: {
     isTecnico:  false,
-    redirectTo: '/produccion',
-    routes:     new Set(['/produccion', '/imagenes']),
+    redirectTo: '/',
+    routes:     new Set(['/', '/kanban', '/calendario', '/produccion', '/imagenes', '/nps']),
   },
   OPERARIO: {
     isTecnico:  false,
