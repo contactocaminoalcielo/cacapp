@@ -13,12 +13,9 @@ const DIAS_HABILES_PLAN = {
 }
 
 function calcularFechaLimite(s) {
-  if (s.fecha_limite_entrega) return s.fecha_limite_entrega
-  if (!s.fecha_ingreso) return null
-  const dias = DIAS_HABILES_PLAN[s.codigo_plan]
-  if (dias === null || dias === undefined) return null
-  const base = s.fecha_imagenes_recibidas || s.fecha_ingreso
-  return addDiasHabiles(base, dias)
+  // Solo usar fecha_limite_entrega del DB (calculada por trigger a partir de fecha_imagenes_recibidas + días hábiles del plan)
+  // No calcular cliente-side para no mostrar fechas basadas en fecha_ingreso
+  return s.fecha_limite_entrega || null
 }
 
 export default function Calendario() {

@@ -107,6 +107,17 @@ export default function Kanban() {
         setTecnicos(all.filter(p => p.rol_principal_id === 2))
         setMensajeros(all.filter(p => p.rol_principal_id === 3))
       })
+
+    // Realtime: recarga el tablero cuando un servicio cambia de estado
+    // (ej: cliente sube fotos → EN_PROCESO, técnico avanza estado, etc.)
+    const canal = db
+      .channel('kanban-servicios-cambios')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => {
+        cargar()
+      })
+      .subscribe()
+
+    return () => { db.removeChannel(canal) }
   }, [])
 
   async function cargar() {
@@ -188,10 +199,24 @@ export default function Kanban() {
   }
 
   async function ciclarRecordatorio(rec) {
+    if (rec.estado === 'NA') return // No desea — no ciclar
     const ciclo = { PENDIENTE: 'EN_PROCESO', EN_PROCESO: 'LISTO', LISTO: 'ENTREGADO', ENTREGADO: 'PENDIENTE' }
     const next = ciclo[rec.estado] || 'PENDIENTE'
     await db.from('servicio_recordatorios').update({ estado: next }).eq('id', rec.id)
+
+    // 1. Actualizar estado en el modal
     setRecordatorios(prev => prev.map(r => r.id === rec.id ? { ...r, estado: next } : r))
+
+    // 2. Sincronizar items_listos en la tarjeta del kanban
+    const esListo = e => e === 'LISTO' || e === 'ENTREGADO'
+    const cambio = (esListo(next) ? 1 : 0) - (esListo(rec.estado) ? 1 : 0)
+    if (cambio !== 0) {
+      setServicios(prev => prev.map(s =>
+        s.servicio_id === selected?.servicio_id
+          ? { ...s, items_listos: Math.max(0, (s.items_listos || 0) + cambio) }
+          : s
+      ))
+    }
   }
 
   async function agregarComentario() {
@@ -225,13 +250,19 @@ export default function Kanban() {
     setContactarLoadingId(s.servicio_id)
     try {
       const { data: svcRow, error: selErr } = await dbAdmin
-        .from('servicios').select('codigo_fotos').eq('id', s.servicio_id).single()
+        .from('servicios').select('codigo_fotos, fecha_codigo_enviado').eq('id', s.servicio_id).single()
       if (selErr) { alert('Error al leer servicio: ' + selErr.message); return }
       let codigo = svcRow?.codigo_fotos
       if (!codigo) {
         codigo = generateCodigo()
-        const { error: updErr } = await dbAdmin.from('servicios').update({ codigo_fotos: codigo }).eq('id', s.servicio_id)
+        const { error: updErr } = await dbAdmin.from('servicios').update({
+          codigo_fotos: codigo,
+          fecha_codigo_enviado: new Date().toISOString().split('T')[0],
+        }).eq('id', s.servicio_id)
         if (updErr) { alert('Error al generar código: ' + updErr.message); return }
+      } else if (!svcRow?.fecha_codigo_enviado) {
+        // El código ya existía pero no se había registrado la fecha de envío
+        await dbAdmin.from('servicios').update({ fecha_codigo_enviado: new Date().toISOString().split('T')[0] }).eq('id', s.servicio_id)
       }
       const base = window.location.href.split('#')[0]
       const portalUrl = `${base}#/fotos/${codigo}`
@@ -319,6 +350,31 @@ export default function Kanban() {
       } />
 
       <div className={`p-5 flex flex-col gap-4 ${vista === 'kanban' ? 'flex-1 min-h-0' : ''}`}>
+
+        {/* ── Alerta fotos pendientes (3+ días hábiles sin subir) ──────────── */}
+        {(() => {
+          const pendientes = servicios.filter(s => s.alerta_fotos_pendientes)
+          if (!pendientes.length) return null
+          return (
+            <div className="rounded-xl border-2 px-4 py-3 flex items-start gap-3" style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+              <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-bold text-amber-800 mb-1">
+                  {pendientes.length} servicio{pendientes.length > 1 ? 's' : ''} sin fotos ({'>'}3 días hábiles)
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {pendientes.map(s => (
+                    <button key={s.servicio_id} onClick={() => { const item = servicios.find(x => x.servicio_id === s.servicio_id); if (item) abrirModal(item) }}
+                      className="text-[11px] font-semibold px-2 py-0.5 rounded-full border transition-all hover:opacity-80"
+                      style={{ background: '#FEF3C7', color: '#92400E', borderColor: '#FDE68A' }}>
+                      {s.mascota} · {s.cliente.split(' ')[0]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* ── Selector de tablero (solo ADMIN) ─────────────────────────────── */}
         {esAdmin && (
@@ -619,6 +675,40 @@ export default function Kanban() {
               </div>
             )}
 
+            {/* ── Frases y textos del cliente (productor y admin) ── */}
+            {puedeVerImagenes && (() => {
+              const conTextos = recordatorios.filter(r => r.datos_cliente && Object.keys(r.datos_cliente).length > 0)
+              if (!conTextos.length) return null
+              return (
+                <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#BBF7D0', background: '#F0FFF4' }}>
+                  <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#15803D' }}>
+                    <MessageSquare size={12} /> Textos del cliente
+                  </div>
+                  <div className="space-y-3">
+                    {conTextos.map(r => (
+                      <div key={r.id}>
+                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+                          {r.recordatorios?.nombre || 'Recordatorio'}
+                        </div>
+                        <div className="space-y-1.5">
+                          {Object.entries(r.datos_cliente).map(([label, valores]) => (
+                            <div key={label}>
+                              <div className="text-[10px] font-semibold mb-1" style={{ color: '#166534' }}>{label}</div>
+                              {(Array.isArray(valores) ? valores : [valores]).filter(v => v?.trim()).map((v, i) => (
+                                <div key={i} className="text-[12px] bg-white rounded-lg px-3 py-1.5 border mb-1" style={{ borderColor: '#BBF7D0' }}>
+                                  "{v}"
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Columna izquierda */}
               <div className="space-y-4">
@@ -727,15 +817,48 @@ export default function Kanban() {
               </div>
             </div>
 
+            {/* ── Opción anticipados compostaje ── */}
+            {selected.tipo_proceso?.startsWith('COMPOSTAJE') && selected.recordatorios_anticipados !== null && selected.recordatorios_anticipados !== undefined && (
+              <div className="rounded-xl border-2 px-3 py-2.5 flex items-center gap-2"
+                style={{ borderColor: selected.recordatorios_anticipados ? '#86EFAC' : '#FDE68A', background: selected.recordatorios_anticipados ? '#F0FFF4' : '#FFFBEB' }}>
+                <span className="text-base">{selected.recordatorios_anticipados ? '⚡' : '⏳'}</span>
+                <div>
+                  <div className="text-[11px] font-bold" style={{ color: selected.recordatorios_anticipados ? '#15803D' : '#92400E' }}>
+                    {selected.recordatorios_anticipados ? 'Cliente quiere recordatorios ANTICIPADOS' : 'Cliente prefiere ESPERAR al proceso completo'}
+                  </div>
+                  <div className="text-[10px]" style={{ color: selected.recordatorios_anticipados ? '#166534' : '#78350F' }}>
+                    {selected.recordatorios_anticipados ? 'Producir mientras el compostaje avanza.' : 'No producir hasta terminar el compostaje (~2 meses).'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Indicaciones de diseño del cliente ── */}
+            {selected.comentarios_cliente && (
+              <div className="rounded-xl border-2 p-3 space-y-1" style={{ borderColor: '#93C5FD', background: '#EFF6FF' }}>
+                <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#1D4ED8' }}>
+                  💬 Indicaciones del cliente
+                </div>
+                <p className="text-[12px] text-blue-800 leading-relaxed">"{selected.comentarios_cliente}"</p>
+              </div>
+            )}
+
             {/* Ítems del servicio */}
             {recordatorios.length > 0 && (
               <div>
-                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Ítems del servicio ({recordatorios.filter(r => r.estado === 'LISTO' || r.estado === 'ENTREGADO').length}/{recordatorios.length} listos)</div>
+                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">
+                  Ítems del servicio ({recordatorios.filter(r => r.estado === 'LISTO' || r.estado === 'ENTREGADO').length}/{recordatorios.filter(r => r.estado !== 'NA' && r.origen !== 'REMOVIDO').length} listos)
+                </div>
                 <div className="flex flex-wrap gap-1.5">
                   {recordatorios.map(r => (
-                    <button key={r.id} className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition-all prod-pill-${r.estado}`} onClick={() => ciclarRecordatorio(r)}>
-                      {r.recordatorios?.nombre || 'Ítem'} · {r.estado.replace(/_/g, ' ')}
-                    </button>
+                    r.estado === 'NA'
+                      ? <span key={r.id} className="text-[11px] px-2.5 py-1.5 rounded-full line-through opacity-50"
+                          style={{ background: '#F3F4F6', color: '#9CA3AF' }} title="Cliente no desea este recordatorio">
+                          {r.recordatorios?.nombre || 'Ítem'} · No desea
+                        </span>
+                      : <button key={r.id} className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition-all prod-pill-${r.estado}`} onClick={() => ciclarRecordatorio(r)}>
+                          {r.recordatorios?.nombre || 'Ítem'} · {r.estado.replace(/_/g, ' ')}
+                        </button>
                   ))}
                 </div>
               </div>

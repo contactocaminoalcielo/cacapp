@@ -1005,7 +1005,7 @@ function TabRecordatorios() {
     const body = nullify({
       ...form,
       precio_base: parseFloat(form.precio_base) || 0,
-      max_fotos: Math.max(1, parseInt(form.max_fotos) || 1),
+      max_fotos: Math.max(0, parseInt(form.max_fotos) ?? 0),
       campos_texto: (form.campos_texto || []).filter(c => c.label?.trim()),
       tiempo_produccion_dias: parseInt(form.tiempo_produccion_dias) || 1,
       maquina_id: form.maquina_id ? parseInt(form.maquina_id) : null,
@@ -1096,12 +1096,12 @@ function TabRecordatorios() {
               <div>
                 <label className={LABEL}>N° de fotos que pide al cliente</label>
                 <Input
-                  type="number" min="1" max="6"
-                  value={form.max_fotos ?? 1}
+                  type="number" min="0" max="6"
+                  value={form.max_fotos ?? 0}
                   onChange={e => setForm(p => ({ ...p, max_fotos: e.target.value }))}
                 />
                 <p className="text-[11px] text-gray-400 mt-1">
-                  Ej: postales = 2, cuadro = 1, álbum = 4
+                  0 = sin fotos · Ej: postales = 2, cuadro = 1, álbum = 4
                 </p>
               </div>
             </div>
