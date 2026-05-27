@@ -1700,6 +1700,173 @@ function TabCatalogos() {
   )
 }
 
+// ─── PRECIOS POR PESO ─────────────────────────────────────────────────────────
+const RANGOS = ['PETIT','FELINO','1-10KG','11-20KG','21-35KG','36-60KG']
+const LABEL_CF = 'text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
+
+function TabPreciosPlanes() {
+  const [planes,   setPlanes]   = useState([])
+  const [precios,  setPrecios]  = useState([]) // [{plan_id, rango_nombre, precio, id}]
+  const [loading,  setLoading]  = useState(true)
+  const [planSel,  setPlanSel]  = useState(null)
+  const [editForm, setEditForm] = useState({}) // { rango: precio_string }
+  const [saving,   setSaving]   = useState(false)
+  const [msg,      setMsg]      = useState('')
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const [{ data: pls }, { data: prs }] = await Promise.all([
+      db.from('planes').select('id,codigo,nombre').order('nombre'),
+      db.from('planes_precios').select('id,plan_id,rango_nombre,precio').order('plan_id'),
+    ])
+    setPlanes(pls || [])
+    setPrecios(prs || [])
+    setLoading(false)
+  }
+
+  function seleccionarPlan(plan) {
+    setPlanSel(plan)
+    setMsg('')
+    const map = {}
+    const planPrices = precios.filter(p => p.plan_id === plan.id)
+    planPrices.forEach(p => { map[p.rango_nombre] = String(p.precio) })
+    setEditForm(map)
+  }
+
+  async function guardarPrecios() {
+    if (!planSel) return
+    setSaving(true); setMsg('')
+    try {
+      for (const rango of RANGOS) {
+        const precio = parseFloat(editForm[rango])
+        if (isNaN(precio)) continue
+        const existing = precios.find(p => p.plan_id === planSel.id && p.rango_nombre === rango)
+        if (existing) {
+          await dbAdmin.from('planes_precios').update({ precio }).eq('id', existing.id)
+        } else {
+          await dbAdmin.from('planes_precios').insert({
+            plan_id:    planSel.id,
+            rango_nombre: rango,
+            precio,
+            peso_min_gr: 0,
+            peso_max_gr: 999999,
+          })
+        }
+      }
+      await cargar()
+      seleccionarPlan({ ...planSel })
+      setMsg('✅ Precios guardados correctamente')
+    } catch (e) { setMsg('Error: ' + e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function eliminarPrecio(rango) {
+    if (!planSel) return
+    const existing = precios.find(p => p.plan_id === planSel.id && p.rango_nombre === rango)
+    if (!existing) return
+    await dbAdmin.from('planes_precios').delete().eq('id', existing.id)
+    setEditForm(prev => { const n = {...prev}; delete n[rango]; return n })
+    await cargar()
+  }
+
+  if (loading) return <div className="text-center py-10 text-gray-400">Cargando...</div>
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Lista de planes */}
+      <div>
+        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3">Seleccionar plan</div>
+        <div className="space-y-1.5">
+          {planes.map(plan => {
+            const count = precios.filter(p => p.plan_id === plan.id).length
+            return (
+              <button key={plan.id}
+                onClick={() => seleccionarPlan(plan)}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-left transition-all"
+                style={{
+                  borderColor: planSel?.id === plan.id ? '#3D5A27' : '#E5E7EB',
+                  background:  planSel?.id === plan.id ? '#F0FDF4' : '#fff',
+                }}>
+                <div>
+                  <div className="text-[13px] font-semibold text-gray-900">{plan.nombre}</div>
+                  <div className="text-[10px] font-mono text-gray-400">{plan.codigo}</div>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ background: count > 0 ? '#D1FAE5' : '#FEF3C7', color: count > 0 ? '#065F46' : '#92400E' }}>
+                  {count} rango{count !== 1 ? 's' : ''}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Editor de precios */}
+      {planSel ? (
+        <div className="lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <div className="text-lg font-bold text-gray-900">{planSel.nombre}</div>
+              <div className="text-[11px] font-mono text-gray-400">{planSel.codigo}</div>
+            </div>
+            <Button size="sm" onClick={guardarPrecios} disabled={saving}>
+              {saving ? 'Guardando...' : 'Guardar precios'}
+            </Button>
+          </div>
+
+          {msg && (
+            <div className={`mb-4 px-3 py-2 rounded-lg text-[12px] font-medium ${msg.startsWith('✅') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+              {msg}
+            </div>
+          )}
+
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4 text-[12px] text-amber-700">
+            💡 <strong>PETIT</strong>: &lt;1 kg · <strong>FELINO</strong>: solo gatos ≥1 kg · Los rangos KG son para otros animales.
+            Deja vacío los rangos que no apliquen al plan.
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {RANGOS.map(rango => (
+              <div key={rango} className="bg-white rounded-xl border border-gray-100 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[12px] font-bold text-gray-700">{rango}</label>
+                  {editForm[rango] && (
+                    <button onClick={() => eliminarPrecio(rango)} className="text-[10px] text-red-400 hover:text-red-600">
+                      Eliminar
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">$</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    className="pl-7"
+                    placeholder="Sin precio"
+                    value={editForm[rango] || ''}
+                    onChange={e => setEditForm(prev => ({ ...prev, [rango]: e.target.value }))}
+                  />
+                </div>
+                {editForm[rango] && !isNaN(parseFloat(editForm[rango])) && (
+                  <div className="text-[11px] text-[#3D5A27] font-semibold mt-1">
+                    {fmt(parseFloat(editForm[rango]))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="lg:col-span-2 flex items-center justify-center text-gray-400 text-sm py-20">
+          Selecciona un plan para editar sus precios por rango de peso
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -1732,6 +1899,9 @@ export default function Configuracion() {
             <TabsTrigger value="catalogos">
               <Tag size={13} className="mr-1.5" /> Catálogos
             </TabsTrigger>
+            <TabsTrigger value="precios">
+              <DollarSign size={13} className="mr-1.5" /> Precios por peso
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -1742,6 +1912,7 @@ export default function Configuracion() {
           <TabsContent value="plan-items"><TabPlanItems /></TabsContent>
           <TabsContent value="comisiones"><TabComisiones /></TabsContent>
           <TabsContent value="catalogos"><TabCatalogos /></TabsContent>
+          <TabsContent value="precios"><TabPreciosPlanes /></TabsContent>
         </Tabs>
       </div>
     </div>

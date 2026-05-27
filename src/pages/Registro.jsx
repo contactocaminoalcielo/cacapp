@@ -362,6 +362,13 @@ export default function Registro() {
         map[basicoSinRecP.id] = Math.round(map[basicoP.id] * 0.8)
       }
 
+      // Compets sin recordatorios = Compets Evidencia × 80 %
+      const competsSinRecP = planByCode['COMPETS_SIN_REC']
+      const competsEvidP   = planByCode['COMPETS_EVIDENCIA']
+      if (competsSinRecP && map[competsSinRecP.id] === undefined && competsEvidP && map[competsEvidP.id] !== undefined) {
+        map[competsSinRecP.id] = Math.round(map[competsEvidP.id] * 0.8)
+      }
+
       // Desamparado: ≤10 kg → $46 000 fijo, >10 kg → $44 000 + $4 000/kg extra
       const desamparadoP = planByCode['DESAMPARADO']
       if (desamparadoP && map[desamparadoP.id] === undefined) {

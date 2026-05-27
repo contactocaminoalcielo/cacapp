@@ -10,7 +10,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji } from '@/lib/utils'
-import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package, History } from 'lucide-react'
+import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package, History, ChevronDown, ChevronUp } from 'lucide-react'
 
 // ─── helpers módulo ────────────────────────────────────────────────────────
 function fmtFechaHora(ts) {
@@ -136,16 +136,17 @@ function ReporteCard({ reporte, defaultOpen = false }) {
 // ─── Componente principal ──────────────────────────────────────────────────
 export default function CuartoFrio() {
   const { personalData } = useAuth()
-  const isAdmin = personalData?.rol === 'ADMIN'
+  const canEdit = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
 
-  const [registros, setRegistros] = useState([])
-  const [reportes,  setReportes]  = useState([])
-  const [loading,   setLoading]   = useState(true)
-  const [error,     setError]     = useState(null)
-  const [selected,  setSelected]  = useState(null)
-  const [form,      setForm]      = useState({})
-  const [saving,    setSaving]    = useState(false)
-  const [detalle,   setDetalle]   = useState(null)
+  const [registros,    setRegistros]    = useState([])
+  const [reportes,     setReportes]     = useState([])
+  const [loading,      setLoading]      = useState(true)
+  const [error,        setError]        = useState(null)
+  const [selected,     setSelected]     = useState(null)
+  const [form,         setForm]         = useState({})
+  const [saving,       setSaving]       = useState(false)
+  const [detalle,      setDetalle]      = useState(null)
+  const [movimientos,  setMovimientos]  = useState([])
 
   useEffect(() => { cargar() }, [])
 
@@ -190,10 +191,19 @@ export default function CuartoFrio() {
     })
   }
 
+  async function verDetalle(r) {
+    setDetalle(r)
+    const { data } = await db.from('cuarto_frio_movimientos')
+      .select('*, personal:personal_id(nombre,apellido)')
+      .eq('cuarto_frio_id', r.id)
+      .order('created_at', { ascending: false })
+    setMovimientos(data || [])
+  }
+
   async function guardar() {
     setSaving(true)
     try {
-      const update = isAdmin
+      const update = canEdit
         ? {
             nevera_codigo: form.nevera_codigo || null,
             peso_kg:       parseFloat(form.peso_kg) || null,
@@ -207,7 +217,7 @@ export default function CuartoFrio() {
       // Registrar movimiento si cambia nevera o estado
       const cambios = []
       if (form.nevera_codigo !== (selected.nevera_codigo || '')) cambios.push('nevera')
-      if (isAdmin && form.estado !== selected.estado) cambios.push('estado')
+      if (canEdit && form.estado !== selected.estado) cambios.push('estado')
 
       if (cambios.length > 0) {
         await db.from('cuarto_frio_movimientos').insert({
@@ -460,7 +470,7 @@ export default function CuartoFrio() {
                   const t = r.servicios?.tecnico
                   return (
                     <div key={r.id} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-amber-100 cursor-pointer hover:bg-amber-50"
-                      onClick={() => setDetalle(r)}>
+                      onClick={() => verDetalle(r)}>
                       <span className="text-xl">{petEmoji(m?.especies?.nombre)}</span>
                       <div className="flex-1 min-w-0">
                         <div className="text-[13px] font-semibold text-ink truncate">{m?.nombre || '—'}</div>
@@ -509,7 +519,7 @@ export default function CuartoFrio() {
                       const e = estadoColor[r.estado] || {}
                       return (
                         <div key={r.id} className="flex items-center gap-2 p-2 rounded-lg cursor-pointer hover:bg-surface2"
-                          onClick={() => setDetalle(r)}>
+                          onClick={() => verDetalle(r)}>
                           <span className="text-lg">{petEmoji(m?.especies?.nombre)}</span>
                           <div className="flex-1 min-w-0">
                             <div className="text-[12px] font-semibold text-ink truncate">{m?.nombre || 'Sin nombre'}</div>
@@ -562,7 +572,7 @@ export default function CuartoFrio() {
                   const p = r.servicios?.planes
                   const e = estadoColor[r.estado] || {}
                   return (
-                    <Tr key={r.id} className="cursor-pointer" onClick={() => setDetalle(r)}>
+                    <Tr key={r.id} className="cursor-pointer" onClick={() => verDetalle(r)}>
                       <Td>
                         <div className="flex items-center gap-2">
                           <span>{petEmoji(m?.especies?.nombre)}</span>
@@ -590,7 +600,7 @@ export default function CuartoFrio() {
                       <Td className="text-ink3 text-[11px]">{fmtFechaHora(r.fecha_ingreso)}</Td>
                       <Td>
                         <Button size="sm" variant="ghost" onClick={ev => abrirEdicion(r, ev)}>
-                          {isAdmin ? 'Editar' : 'Nevera'}
+                          {canEdit ? 'Editar' : 'Nevera'}
                         </Button>
                       </Td>
                     </Tr>
@@ -608,7 +618,7 @@ export default function CuartoFrio() {
       {/* Modal edición */}
       {selected && (
         <Modal open={!!selected} onClose={() => setSelected(null)}
-          title={isAdmin ? 'Editar registro cuarto frío' : 'Cambiar nevera'}
+          title={canEdit ? 'Editar registro cuarto frío' : 'Cambiar nevera'}
           maxWidth="max-w-md"
           footer={
             <>
@@ -622,7 +632,7 @@ export default function CuartoFrio() {
               <Input value={form.nevera_codigo}
                 onChange={e => setForm(p => ({ ...p, nevera_codigo: e.target.value }))} />
             </div>
-            {isAdmin && (
+            {canEdit && (
               <>
                 <div>
                   <label className="text-[11px] font-bold text-ink3 block mb-1">Peso báscula (kg)</label>
@@ -655,8 +665,9 @@ export default function CuartoFrio() {
       {detalle && (
         <DetalleModal
           registro={detalle}
-          onClose={() => setDetalle(null)}
-          onEdit={isAdmin ? r => { setDetalle(null); abrirEdicion(r) } : null}
+          onClose={() => { setDetalle(null); setMovimientos([]) }}
+          onEdit={canEdit ? r => { setDetalle(null); abrirEdicion(r) } : null}
+          movimientos={movimientos}
           estadoColor={estadoColor}
         />
       )}
@@ -664,8 +675,55 @@ export default function CuartoFrio() {
   )
 }
 
+// ─── LogMovimientos ────────────────────────────────────────────────────────
+function LogMovimientos({ movimientos }) {
+  const [open, setOpen] = useState(false)
+  if (!movimientos.length) return null
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 text-[11px] font-bold text-ink3 uppercase tracking-wide mb-2 hover:text-ink transition-colors">
+        <History size={13} />
+        Historial de movimientos ({movimientos.length})
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          {movimientos.map(m => {
+            const quien = m.personal ? `${m.personal.nombre} ${m.personal.apellido}` : 'Sistema'
+            const fecha = new Date(m.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+            const tipoLabel = m.tipo === 'CAMBIO_NEVERA' ? '❄️ Cambio de nevera'
+              : m.tipo === 'CAMBIO_ESTADO' ? '📋 Cambio de estado'
+              : m.tipo
+            return (
+              <div key={m.id} className="text-[11px] bg-surface2 rounded-lg px-3 py-2">
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="font-semibold text-ink">{tipoLabel}</span>
+                  <span className="text-ink3">{fecha}</span>
+                </div>
+                {m.nevera_anterior !== m.nevera_nueva && m.nevera_nueva && (
+                  <span className="text-ink2">
+                    Nevera: <span className="font-mono">{m.nevera_anterior || '—'}</span> → <span className="font-mono font-bold">{m.nevera_nueva}</span>
+                  </span>
+                )}
+                {m.estado_anterior !== m.estado_nuevo && m.estado_nuevo && (
+                  <span className="text-ink2 block">
+                    Estado: {m.estado_anterior?.replace(/_/g,' ') || '—'} → <span className="font-semibold">{m.estado_nuevo?.replace(/_/g,' ')}</span>
+                  </span>
+                )}
+                <div className="text-ink3 mt-0.5">Por: {quien}</div>
+                {m.notas && <div className="text-ink3 italic mt-0.5">"{m.notas}"</div>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── DetalleModal ──────────────────────────────────────────────────────────
-function DetalleModal({ registro: r, onClose, onEdit, estadoColor }) {
+function DetalleModal({ registro: r, onClose, onEdit, movimientos, estadoColor }) {
   const m            = r.servicios?.mascotas
   const c            = m?.clientes
   const p            = r.servicios?.planes
@@ -775,6 +833,9 @@ function DetalleModal({ registro: r, onClose, onEdit, estadoColor }) {
             </div>
           </div>
         )}
+
+        {/* Log de movimientos */}
+        <LogMovimientos movimientos={movimientos || []} />
 
       </div>
     </Modal>

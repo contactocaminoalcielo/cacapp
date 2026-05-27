@@ -7,6 +7,7 @@ import {
   Phone, MapPin, Clock, CheckCircle, LogOut, Bell,
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
   AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
+  FileText, ChevronDown, ChevronUp, History, Download, Pen,
 } from 'lucide-react'
 
 const POLL = 30_000
@@ -1122,6 +1123,8 @@ export default function TecnicoApp() {
   const prevCountRef               = useRef(null)
   const [reporteHoy,     setReporteHoy]     = useState(null)
   const [neverasActivas, setNeverasActivas] = useState([])
+  const [misCF,          setMisCF]          = useState([])
+  const [reciboSvc,      setReciboSvc]      = useState(null)
 
   const cargar = useCallback(async (silent = false) => {
     if (!tecnico) return
@@ -1137,9 +1140,11 @@ export default function TecnicoApp() {
           mascotas:mascota_id (
             id_mascota, nombre, tamano, especie_id, peso_kg,
             especies ( nombre ),
-            clientes:cliente_id ( nombre, apellido, whatsapp )
+            clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono )
           ),
-          recogidas ( id, contacto_nombre, contacto_telefono, fecha_programada, hora_programada, notas, foto_recogida_url )
+          recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas, foto_recogida_url ),
+          planes:plan_id ( nombre, codigo ),
+          aliados:aliado_origen_id ( nombre )
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
@@ -1215,6 +1220,12 @@ export default function TecnicoApp() {
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       setNeverasActivas(todasNeveras)
 
+      // Mis registros en cuarto frío (ya registrados con nevera)
+      const misCFArr = serviciosConCF.filter(s =>
+        s.estado === 'EN_CUARTO_FRIO' && s.cuarto_frio_data?.nevera_codigo
+      )
+      setMisCF(misCFArr)
+
       setRecogidas(nuevasR)
       setEntregas(nuevasE)
     } finally {
@@ -1248,7 +1259,11 @@ export default function TecnicoApp() {
     // Notificar a todos los coordinadores
     const coords = await getCoordinadores()
     const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
-    const lugar = svc.lugar_recogida_nombre || svc.direccion_recogida || 'destino'
+    const recogida = svc.recogidas?.[0]
+    const tipoLugar = recogida?.tipo_lugar
+    const lugar = recogida?.contacto_nombre || svc.direccion_recogida || 'destino'
+    const waCliente = svc.mascotas?.clientes?.whatsapp
+    const waTelContacto = recogida?.contacto_telefono
     await Promise.all(coords.map(c => crearNotificacion({
       para_personal_id: c.id,
       de_personal_id:   tecnico?.id,
@@ -1256,7 +1271,14 @@ export default function TecnicoApp() {
       titulo:           `${tecnico?.nombre} inició ruta`,
       mensaje:          `Sale a recoger a ${mascotaNombre}. Hora estimada: ${hora}. Destino: ${lugar}`,
       servicio_id:      svc.id,
-      datos:            { hora_llegada: hora, mascota: mascotaNombre, lugar, tipo_lugar: svc.tipo_lugar },
+      datos: {
+        hora_llegada: hora,
+        mascota:      mascotaNombre,
+        lugar,
+        tipo_lugar:   tipoLugar,
+        wa_cliente:   tipoLugar !== 'CLINICA_ALIADA' ? waCliente : null,
+        wa_aliado:    tipoLugar === 'CLINICA_ALIADA'  ? (waTelContacto || waCliente) : null,
+      },
     })))
     await cargar()
   }
@@ -1348,6 +1370,7 @@ export default function TecnicoApp() {
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#3D5A27' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#3D5A27' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: sinReporteHoy ? 1 : 0, color: '#0E7490' },
+    { key: 'recibo',      label: 'Recibo',    Icon: CreditCard, count: 0,                    color: '#7C3AED' },
   ]
 
   return (
@@ -1431,14 +1454,26 @@ export default function TecnicoApp() {
           entregas.length === 0
             ? <EmptyState icon="📦" texto="Sin entregas asignadas" sub="Cuando te asignen una entrega, aparecerá aquí." />
             : entregas.map(e => <CardEntrega key={e.id} ent={e} onAction={accionEntrega} />)
-        ) : (
-          <ReporteCuartoFrio
+        ) : tab === 'cuarto_frio' ? (
+          <div className="space-y-5">
+            <ReporteCuartoFrio
+              tecnico={tecnico}
+              neverasActivas={neverasActivas}
+              reporteHoy={reporteHoy}
+              onGuardado={() => cargar(true)}
+            />
+            <MisCuartoFrioSection
+              misCF={misCF}
+              tecnico={tecnico}
+              onRefresh={() => cargar(true)}
+            />
+          </div>
+        ) : tab === 'recibo' ? (
+          <ReciboTab
+            recogidas={[...recogidas, ...misCF]}
             tecnico={tecnico}
-            neverasActivas={neverasActivas}
-            reporteHoy={reporteHoy}
-            onGuardado={() => cargar(true)}
           />
-        )}
+        ) : null}
       </div>
 
       <div className="text-center pb-6 pt-2 text-[11px] text-gray-400">
@@ -1503,5 +1538,708 @@ function EmptyState({ icon, texto, sub }) {
       <p className="font-semibold text-gray-700 text-base mb-1">{texto}</p>
       <p className="text-gray-400 text-xs leading-relaxed">{sub}</p>
     </div>
+  )
+}
+
+// ─── MIS MASCOTAS EN CUARTO FRÍO ───────────────────────────────────────────
+function MisCuartoFrioSection({ misCF, tecnico, onRefresh }) {
+  const [editando,    setEditando]    = useState(null)
+  const [nuevaNevera, setNuevaNevera] = useState('')
+  const [saving,      setSaving]      = useState(false)
+  const [movLog,      setMovLog]      = useState([])
+  const [logOpenId,   setLogOpenId]   = useState(null)
+
+  if (!misCF.length) return null
+
+  async function abrirLog(cfId) {
+    if (logOpenId === cfId) { setLogOpenId(null); return }
+    const { data } = await db.from('cuarto_frio_movimientos')
+      .select('*, personal:personal_id(nombre,apellido)')
+      .eq('cuarto_frio_id', cfId)
+      .order('created_at', { ascending: false })
+    setMovLog(data || [])
+    setLogOpenId(cfId)
+  }
+
+  async function guardarCambioNevera() {
+    if (!editando || !nuevaNevera.trim()) return
+    setSaving(true)
+    try {
+      const cf = editando.cuarto_frio_data
+      await db.from('cuarto_frio').update({ nevera_codigo: nuevaNevera.trim() }).eq('id', cf.id)
+      await db.from('cuarto_frio_movimientos').insert({
+        cuarto_frio_id: cf.id,
+        personal_id:    tecnico?.id || null,
+        tipo:           'CAMBIO_NEVERA',
+        nevera_anterior: cf.nevera_codigo || null,
+        nevera_nueva:    nuevaNevera.trim(),
+        notas:          'Movimiento registrado por técnico',
+      })
+      setEditando(null)
+      setNuevaNevera('')
+      onRefresh()
+    } catch (e) { alert('Error: ' + e.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div>
+      <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+        <Snowflake size={13} className="text-[#0E7490]" />
+        Mis mascotas registradas en C. Frío ({misCF.length})
+      </div>
+      <div className="space-y-2">
+        {misCF.map(svc => {
+          const cf      = svc.cuarto_frio_data
+          const mascota = svc.mascotas
+          const emoji   = petEmoji(mascota?.especies?.nombre)
+          const logOpen = logOpenId === cf?.id
+          return (
+            <div key={svc.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+              <div className="p-3">
+                <div className="flex items-center gap-3">
+                  <span style={{ fontSize: 26 }}>{emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-gray-900 text-sm">{mascota?.nombre || '—'}</div>
+                    <div className="text-[11px] text-gray-500">
+                      {cf?.nevera_codigo
+                        ? <span className="font-mono font-bold text-[#0E7490]">Nevera {cf.nevera_codigo}</span>
+                        : <span className="text-gray-400">Sin nevera asignada</span>
+                      }
+                      {cf?.peso_kg ? ` · ${cf.peso_kg} kg` : ''}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => { setEditando(svc); setNuevaNevera(cf?.nevera_codigo || '') }}
+                      className="px-3 py-2 rounded-xl text-xs font-bold transition-all active:scale-95"
+                      style={{ background: '#EEF3FB', color: '#1D4ED8' }}>
+                      🔄 Mover
+                    </button>
+                    <button
+                      onClick={() => abrirLog(cf?.id)}
+                      className="px-2 py-2 rounded-xl text-xs transition-all active:scale-95"
+                      style={{ background: '#F3F4F6', color: '#6B7280' }}>
+                      <History size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Log de movimientos */}
+              {logOpen && (
+                <div className="border-t border-gray-100 px-3 pb-3 pt-2">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Historial de movimientos</div>
+                  {movLog.length === 0 ? (
+                    <p className="text-[11px] text-gray-400">Sin movimientos registrados</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {movLog.map(m => {
+                        const quien = m.personal ? `${m.personal.nombre}` : 'Sistema'
+                        const fecha = new Date(m.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                        return (
+                          <div key={m.id} className="text-[11px] bg-gray-50 rounded-lg px-2.5 py-2">
+                            <div className="flex justify-between mb-0.5">
+                              <span className="font-semibold text-gray-700">
+                                {m.tipo === 'CAMBIO_NEVERA' ? '❄️ Cambio nevera' : '📋 Cambio estado'}
+                              </span>
+                              <span className="text-gray-400">{fecha}</span>
+                            </div>
+                            {m.nevera_nueva && (
+                              <span className="text-gray-600">
+                                <span className="font-mono">{m.nevera_anterior || '—'}</span>
+                                {' → '}
+                                <span className="font-mono font-bold text-[#0E7490]">{m.nevera_nueva}</span>
+                              </span>
+                            )}
+                            <div className="text-gray-400 mt-0.5">Por: {quien}</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Bottom sheet cambiar nevera */}
+      {editando && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+          onClick={() => setEditando(null)}>
+          <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+            <div className="flex items-center gap-2 mb-4">
+              <span style={{ fontSize: 24 }}>{petEmoji(editando.mascotas?.especies?.nombre)}</span>
+              <div>
+                <p className="font-bold text-gray-900 text-base">{editando.mascotas?.nombre}</p>
+                <p className="text-xs text-gray-500">
+                  Nevera actual: <span className="font-mono font-bold text-[#0E7490]">{editando.cuarto_frio_data?.nevera_codigo || 'Sin asignar'}</span>
+                </p>
+              </div>
+            </div>
+            <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Nueva nevera</div>
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {NEVERAS_DEFAULT.map(n => (
+                <button key={n} onClick={() => setNuevaNevera(n)}
+                  className="py-3 rounded-xl text-sm font-bold transition-all active:scale-95"
+                  style={{
+                    background: nuevaNevera === n ? '#1D4ED8' : '#F9FAFB',
+                    color: nuevaNevera === n ? '#fff' : '#374151',
+                    border: `1.5px solid ${nuevaNevera === n ? '#1D4ED8' : '#E5E7EB'}`,
+                  }}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            <input type="text" value={nuevaNevera} onChange={e => setNuevaNevera(e.target.value)}
+              placeholder="Código personalizado…"
+              className="w-full px-4 py-3 rounded-xl border-2 outline-none font-mono font-bold mb-4"
+              style={{ borderColor: nuevaNevera ? '#1D4ED8' : '#E5E7EB', color: '#111827', fontSize: 18 }} />
+            <button onClick={guardarCambioNevera} disabled={!nuevaNevera.trim() || saving}
+              className="w-full py-4 rounded-2xl text-base font-bold disabled:opacity-50"
+              style={{ background: '#1D4ED8', color: '#fff' }}>
+              {saving ? 'Guardando…' : '❄️ Confirmar cambio de nevera'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── FIRMA DIGITAL ─────────────────────────────────────────────────────────
+function SignaturePad({ onSigned, firmaDataUrl }) {
+  const canvasRef  = useRef(null)
+  const drawing    = useRef(false)
+  const lastPos    = useRef(null)
+
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect()
+    const src  = e.touches?.[0] || e
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top }
+  }
+
+  function start(e) {
+    e.preventDefault()
+    drawing.current = true
+    const pos = getPos(e, canvasRef.current)
+    lastPos.current = pos
+    const ctx = canvasRef.current.getContext('2d')
+    ctx.beginPath()
+    ctx.moveTo(pos.x, pos.y)
+  }
+
+  function move(e) {
+    e.preventDefault()
+    if (!drawing.current) return
+    const pos = getPos(e, canvasRef.current)
+    const ctx = canvasRef.current.getContext('2d')
+    ctx.lineWidth   = 2.5
+    ctx.lineCap     = 'round'
+    ctx.strokeStyle = '#111827'
+    ctx.lineTo(pos.x, pos.y)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(pos.x, pos.y)
+    lastPos.current = pos
+  }
+
+  function end(e) {
+    e.preventDefault()
+    drawing.current = false
+    onSigned(canvasRef.current.toDataURL('image/png'))
+  }
+
+  function limpiar() {
+    const ctx = canvasRef.current.getContext('2d')
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+    onSigned(null)
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Pen size={11} />Firma del cliente</span>
+        {firmaDataUrl && (
+          <button onClick={limpiar} style={{ fontSize: '10px', color: '#EF4444', fontWeight: '600', textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer' }}>Borrar y firmar de nuevo</button>
+        )}
+      </div>
+      <div style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden', border: '2px dashed #E5E7EB', background: '#FAFAFA' }}>
+        <canvas
+          ref={canvasRef}
+          width={340} height={130}
+          style={{ width: '100%', display: 'block', touchAction: 'none' }}
+          onMouseDown={start}  onMouseMove={move}  onMouseUp={end}
+          onTouchStart={start} onTouchMove={move}  onTouchEnd={end}
+        />
+        {!firmaDataUrl && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <p style={{ color: '#D1D5DB', fontSize: '14px' }}>Firmar aquí</p>
+          </div>
+        )}
+      </div>
+      <p style={{ fontSize: '10px', color: '#9CA3AF', marginTop: '4px' }}>Dibuja la firma con el dedo o el mouse</p>
+    </div>
+  )
+}
+
+// ─── RECIBO TAB ────────────────────────────────────────────────────────────
+function ReciboTab({ recogidas, tecnico }) {
+  const [servicioSel, setServicioSel] = useState(null)
+  const [svcData,     setSvcData]     = useState(null)
+  const [loading,     setLoading]     = useState(false)
+
+  // Combinar servicios para mostrar: recogidas en camino/cuarto frío + ya en CF
+  const opciones = recogidas.filter(s => ['EN_RECOGIDA','EN_CUARTO_FRIO','INGRESADO'].includes(s.estado))
+
+  async function seleccionar(svc) {
+    setServicioSel(svc)
+    setLoading(true)
+    try {
+      const { data } = await db.from('servicios')
+        .select(`
+          id, valor_total, valor_pagado, tipo_acompanamiento,
+          mascotas:mascota_id (
+            nombre, peso_kg, especie_id, sexo,
+            especies(nombre),
+            clientes:cliente_id(nombre,apellido,email,telefono,whatsapp,direccion,ciudad)
+          ),
+          planes:plan_id(nombre,codigo),
+          aliados:aliado_origen_id(nombre)
+        `)
+        .eq('id', svc.id)
+        .single()
+      const { data: cf } = await db.from('cuarto_frio')
+        .select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
+      setSvcData({ ...data, peso_confirmado: cf?.peso_kg || null })
+    } catch { setSvcData(null) }
+    finally { setLoading(false) }
+  }
+
+  if (!servicioSel || !svcData) {
+    return (
+      <div>
+        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-3">
+          📄 Selecciona un servicio para generar el recibo
+        </div>
+        {opciones.length === 0 ? (
+          <EmptyState icon="📄" texto="Sin servicios activos" sub="Los servicios asignados aparecerán aquí." />
+        ) : (
+          <div className="space-y-2">
+            {opciones.map(svc => {
+              const m = svc.mascotas
+              return (
+                <button key={svc.id}
+                  onClick={() => seleccionar(svc)}
+                  disabled={loading}
+                  className="w-full flex items-center gap-3 bg-white rounded-2xl p-4 border border-gray-100 text-left transition-all active:scale-98 shadow-sm">
+                  <span style={{ fontSize: 28 }}>{petEmoji(m?.especies?.nombre)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-gray-900">{m?.nombre || '—'}</div>
+                    <div className="text-[11px] text-gray-500">{m?.clientes?.nombre} {m?.clientes?.apellido}</div>
+                  </div>
+                  <span className="text-xs font-semibold text-[#7C3AED]">Generar →</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <ReciboForm
+      svcData={svcData}
+      servicioSel={servicioSel}
+      tecnico={tecnico}
+      onVolver={() => { setServicioSel(null); setSvcData(null) }}
+    />
+  )
+}
+
+// ─── RECIBO FORM ────────────────────────────────────────────────────────────
+function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
+  const mascota = svcData.mascotas
+  const cliente = mascota?.clientes
+  const plan    = svcData.planes
+  const aliado  = svcData.aliados
+
+  const numeroRecibo = `CAC-${new Date().getFullYear()}${String(new Date().getMonth()+1).padStart(2,'0')}-${servicioSel.id.slice(0,6).toUpperCase()}`
+
+  const [form, setForm] = useState({
+    fecha:              new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' }),
+    numero_recibo:      numeroRecibo,
+    mascota_nombre:     mascota?.nombre || '',
+    peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
+    especie:            mascota?.especies?.nombre || '',
+    veterinaria:        aliado?.nombre || '',
+    propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
+    email:              cliente?.email || '',
+    telefono:           cliente?.telefono || cliente?.whatsapp || '',
+    casa:               servicioSel.direccion_recogida || '',
+    servicio:           plan?.nombre || '',
+    valor_servicio:     svcData.valor_total || 0,
+    total_recibido:     (svcData.valor_total || 0) - (svcData.valor_pagado || 0),
+    toma_huella:        false,
+    toma_mechon:        false,
+    entrega_rec_basicos: false,
+    nombre_recibe:      '',
+    confirmacion_foto:  false,
+    observaciones:      '',
+  })
+  const [firma, setFirma] = useState(null)
+  const [generando, setGenerando] = useState(false)
+  const reciboRef = useRef(null)
+
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  async function descargarPDF() {
+    setGenerando(true)
+    try {
+      const { default: jsPDF } = await import('jspdf')
+      const pdf = new jsPDF('p', 'mm', 'a4')
+      const W = 210, M = 15, CW = W - M * 2
+      let y = 0
+
+      // ── Helpers ──────────────────────────────────────────
+      const t = (text, x, yy, opts = {}) => pdf.text(String(text ?? ''), x, yy, opts)
+      const sec = (label, yy) => {
+        pdf.setFillColor(232, 243, 235)
+        pdf.rect(M, yy, CW, 6, 'F')
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(7.5)
+        pdf.setTextColor(31, 90, 50)
+        t(label, M + 2, yy + 4.2)
+        return yy + 8
+      }
+      const field = (label, value, x, yy, w = CW / 2 - 3) => {
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(6.5)
+        pdf.setTextColor(140, 140, 140)
+        t(label.toUpperCase(), x, yy)
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(9)
+        pdf.setTextColor(25, 25, 25)
+        const lines = pdf.splitTextToSize(value || '—', w)
+        pdf.text(lines, x, yy + 4.5)
+        return yy + 4.5 + lines.length * 4.5
+      }
+      const hr = (yy) => {
+        pdf.setDrawColor(210, 225, 215)
+        pdf.setLineWidth(0.25)
+        pdf.line(M, yy, W - M, yy)
+        return yy + 4
+      }
+
+      // ── Cabecera verde ────────────────────────────────────
+      pdf.setFillColor(31, 90, 50)
+      pdf.rect(0, 0, W, 30, 'F')
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(20)
+      pdf.setTextColor(255, 255, 255)
+      t('CAMINO AL CIELO', W / 2, 13, { align: 'center' })
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(8.5)
+      pdf.setTextColor(190, 220, 200)
+      t('Funeraria para mascotas  ·  Bogotá, Colombia', W / 2, 20, { align: 'center' })
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(8)
+      pdf.setTextColor(196, 168, 122)
+      t('RECIBO DE SERVICIO', W / 2, 27, { align: 'center' })
+
+      // ── Número y fecha ────────────────────────────────────
+      pdf.setFillColor(244, 247, 244)
+      pdf.rect(0, 30, W, 11, 'F')
+      pdf.setFont('helvetica', 'bold')
+      pdf.setFontSize(9)
+      pdf.setTextColor(31, 90, 50)
+      t(`No. ${form.numero_recibo}`, M, 37.5)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(9)
+      pdf.setTextColor(80, 80, 80)
+      t(`Fecha: ${form.fecha}`, W - M, 37.5, { align: 'right' })
+
+      y = 46
+
+      // ── Mascota ───────────────────────────────────────────
+      y = sec('DATOS DE LA MASCOTA', y)
+      const yMasc = y
+      field('Mascota', form.mascota_nombre, M, y)
+      field('Especie', form.especie, M + CW / 2, y)
+      y = yMasc + 12
+      field('Peso', form.peso ? `${form.peso} kg` : '—', M, y)
+      field('Veterinaria / Aliado', form.veterinaria, M + CW / 2, y)
+      y += 13
+      y = hr(y)
+
+      // ── Propietario ───────────────────────────────────────
+      y = sec('DATOS DEL PROPIETARIO', y)
+      const yProp = y
+      y = Math.max(field('Nombre completo', form.propietario, M, yProp, CW), yProp + 10)
+      const yProp2 = y
+      field('Correo electrónico', form.email, M, yProp2)
+      field('Teléfono', form.telefono, M + CW / 2, yProp2)
+      y = yProp2 + 12
+      y = Math.max(field('Dirección de recogida', form.casa, M, y, CW), y + 10)
+      y = hr(y)
+
+      // ── Servicio ──────────────────────────────────────────
+      y = sec('SERVICIO CONTRATADO', y)
+      y = Math.max(field('Plan / Servicio', form.servicio, M, y, CW), y + 10)
+      // Cajas de valor
+      const bw = (CW - 4) / 2
+      const drawValBox = (label, value, x, yy) => {
+        pdf.setDrawColor(196, 168, 122)
+        pdf.setLineWidth(0.4)
+        pdf.setFillColor(255, 253, 248)
+        pdf.rect(x, yy, bw, 14, 'FD')
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(6.5)
+        pdf.setTextColor(140, 110, 60)
+        t(label.toUpperCase(), x + bw / 2, yy + 4.5, { align: 'center' })
+        pdf.setFont('helvetica', 'bold')
+        pdf.setFontSize(13)
+        pdf.setTextColor(31, 90, 50)
+        t(fmt(Number(value) || 0), x + bw / 2, yy + 11, { align: 'center' })
+      }
+      drawValBox('Valor del servicio', form.valor_servicio, M, y)
+      drawValBox('Total recibido', form.total_recibido, M + bw + 4, y)
+      y += 18
+      y = hr(y)
+
+      // ── Elementos recibidos ───────────────────────────────
+      y = sec('ELEMENTOS RECIBIDOS / ENTREGADOS', y)
+      const items = [
+        { label: 'Se toma huella', checked: form.toma_huella },
+        { label: 'Se toma mechón de pelo', checked: form.toma_mechon },
+        { label: 'Entrega de recordatorios básicos', checked: form.entrega_rec_basicos },
+        { label: 'Confirmación de foto', checked: form.confirmacion_foto },
+      ]
+      items.forEach(item => {
+        pdf.setDrawColor(item.checked ? 31 : 180, item.checked ? 90 : 180, item.checked ? 50 : 180)
+        pdf.setLineWidth(0.35)
+        pdf.rect(M, y - 3.2, 3.8, 3.8, 'D')
+        if (item.checked) {
+          pdf.setDrawColor(31, 90, 50)
+          pdf.setLineWidth(0.7)
+          pdf.line(M + 0.7, y - 1.2, M + 1.7, y + 0.1)
+          pdf.line(M + 1.7, y + 0.1, M + 3.3, y - 2.8)
+        }
+        pdf.setFont('helvetica', item.checked ? 'bold' : 'normal')
+        pdf.setFontSize(9)
+        pdf.setTextColor(item.checked ? 25 : 130, item.checked ? 25 : 130, item.checked ? 25 : 130)
+        t(item.label, M + 6, y)
+        y += 6
+      })
+      if (form.nombre_recibe) {
+        y += 1
+        field('Recibido / firmado por', form.nombre_recibe, M, y, CW)
+        y += 11
+      } else {
+        y += 3
+      }
+
+      // ── Observaciones ─────────────────────────────────────
+      if (form.observaciones?.trim()) {
+        y = hr(y)
+        y = sec('OBSERVACIONES', y)
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(9)
+        pdf.setTextColor(50, 50, 50)
+        const lines = pdf.splitTextToSize(form.observaciones, CW)
+        pdf.text(lines, M, y)
+        y += lines.length * 4.8 + 5
+      }
+
+      // ── Firma ─────────────────────────────────────────────
+      y = hr(y)
+      y = sec('FIRMA DEL CLIENTE', y)
+      if (firma) {
+        pdf.setDrawColor(200, 215, 205)
+        pdf.setLineWidth(0.3)
+        pdf.setFillColor(252, 254, 252)
+        pdf.rect(M, y, CW, 28, 'FD')
+        pdf.addImage(firma, 'PNG', M + 5, y + 2, CW - 10, 24)
+        y += 32
+      } else {
+        pdf.setDrawColor(200, 215, 205)
+        pdf.setLineWidth(0.3)
+        pdf.rect(M, y, CW, 22, 'D')
+        pdf.setFont('helvetica', 'normal')
+        pdf.setFontSize(8)
+        pdf.setTextColor(180, 180, 180)
+        t('Sin firma registrada', W / 2, y + 13, { align: 'center' })
+        y += 26
+      }
+
+      // ── Pie de página ─────────────────────────────────────
+      pdf.setFillColor(31, 90, 50)
+      pdf.rect(0, 285, W, 12, 'F')
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(7)
+      pdf.setTextColor(190, 220, 200)
+      t(`Técnico: ${tecnico?.nombre || ''} ${tecnico?.apellido || ''}  ·  Camino al Cielo  ·  contacto@caminoalcielo.com.co  ·  ${new Date().getFullYear()}`, W / 2, 292, { align: 'center' })
+
+      pdf.save(`Recibo_${form.mascota_nombre}_${form.numero_recibo}.pdf`)
+    } catch (e) { alert('Error al generar PDF: ' + e.message) }
+    finally { setGenerando(false) }
+  }
+
+  function enviarWhatsApp() {
+    const wa = cliente?.whatsapp || cliente?.telefono
+    if (!wa) { alert('No hay número WhatsApp del cliente'); return }
+    const msg = [
+      `Recibo de servicio — Camino al Cielo 🐾`,
+      `No. recibo: *${form.numero_recibo}*`,
+      `Fecha: ${form.fecha}`,
+      `Mascota: *${form.mascota_nombre}* (${form.especie})`,
+      `Propietario: ${form.propietario}`,
+      `Plan: ${form.servicio}`,
+      `Valor: $${Number(form.valor_servicio).toLocaleString('es-CO')}`,
+      `Total recibido: $${Number(form.total_recibido).toLocaleString('es-CO')}`,
+      form.toma_huella ? '✅ Se tomó huella' : '',
+      form.toma_mechon ? '✅ Se tomó mechón' : '',
+      form.entrega_rec_basicos ? `✅ Recordatorios básicos entregados a: ${form.nombre_recibe}` : '',
+      form.observaciones ? `Obs: ${form.observaciones}` : '',
+    ].filter(Boolean).join('\n')
+    window.open(`https://wa.me/57${wa.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`, '_blank')
+  }
+
+  const FIELD = 'mb-1'
+  const LBL   = 'text-[9px] font-bold text-gray-400 uppercase tracking-wider'
+  const VAL   = 'text-[12px] text-gray-800'
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <button onClick={onVolver} className="text-[11px] text-[#3D5A27] font-semibold underline">← Volver</button>
+        <span className="text-gray-400">|</span>
+        <span className="text-[12px] font-semibold text-gray-600">Recibo — {form.mascota_nombre}</span>
+      </div>
+
+      {/* ── RECIBO IMPRIMIBLE — solo inline styles (sin Tailwind) para html2canvas ── */}
+      <div ref={reciboRef} style={{
+        background: '#ffffff', padding: '20px', borderRadius: '16px',
+        border: '1px solid #F3F4F6', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+        marginBottom: '16px', fontFamily: 'system-ui, sans-serif',
+      }}>
+        {/* Encabezado */}
+        <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #3D5A27' }}>
+          <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#263218' }}>CAMINO AL CIELO</div>
+          <div style={{ fontSize: '11px', color: '#6B7280' }}>Funeraria para mascotas · Bogotá, Colombia</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '11px', fontWeight: '600', color: '#6B7280' }}>
+            <span>No. Recibo: <span style={{ color: '#3D5A27', fontWeight: 'bold' }}>{form.numero_recibo}</span></span>
+            <span>{form.fecha}</span>
+          </div>
+        </div>
+
+        {/* Campos en grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '16px', rowGap: '8px', marginBottom: '12px', fontSize: '12px' }}>
+          <RField label="Mascota" value={form.mascota_nombre} onChange={v => f('mascota_nombre',v)} />
+          <RField label="Peso (kg)" value={form.peso} onChange={v => f('peso',v)} />
+          <RField label="Especie" value={form.especie} onChange={v => f('especie',v)} />
+          <RField label="Veterinaria / Aliado" value={form.veterinaria} onChange={v => f('veterinaria',v)} />
+          <RField label="Propietario" value={form.propietario} onChange={v => f('propietario',v)} span2 />
+          <RField label="Correo" value={form.email} onChange={v => f('email',v)} span2 />
+          <RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} />
+          <RField label="Dirección recogida" value={form.casa} onChange={v => f('casa',v)} />
+          <RField label="Plan / Servicio" value={form.servicio} onChange={v => f('servicio',v)} span2 />
+          <RField label="Valor del servicio ($)" value={String(form.valor_servicio)} onChange={v => f('valor_servicio', Number(v)||0)} type="number" />
+          <RField label="Total recibido ($)" value={String(form.total_recibido)} onChange={v => f('total_recibido', Number(v)||0)} type="number" highlight />
+        </div>
+
+        {/* Checkboxes */}
+        <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <RCheck label="Se toma huella" checked={form.toma_huella} onChange={v => f('toma_huella',v)} />
+          <RCheck label="Se toma mechón de pelo" checked={form.toma_mechon} onChange={v => f('toma_mechon',v)} />
+          <RCheck label="Entrega de recordatorios básicos" checked={form.entrega_rec_basicos} onChange={v => f('entrega_rec_basicos',v)} />
+          <RCheck label="Confirmación de foto" checked={form.confirmacion_foto} onChange={v => f('confirmacion_foto',v)} />
+        </div>
+
+        {/* Nombre quien recibe */}
+        {(form.toma_huella || form.toma_mechon || form.entrega_rec_basicos) && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+              Nombre de quien recibe huella / mechón / recordatorios
+            </div>
+            <input type="text" value={form.nombre_recibe}
+              onChange={e => f('nombre_recibe', e.target.value)}
+              placeholder="Nombre completo…"
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '12px', outline: 'none', boxSizing: 'border-box', color: '#111827' }} />
+          </div>
+        )}
+
+        {/* Observaciones */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Observaciones</div>
+          <textarea value={form.observaciones} onChange={e => f('observaciones', e.target.value)}
+            placeholder="Observaciones, novedades, acuerdos de pago…"
+            rows={2}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '12px', outline: 'none', resize: 'none', boxSizing: 'border-box', color: '#111827' }} />
+        </div>
+
+        {/* Firma */}
+        <SignaturePad onSigned={setFirma} firmaDataUrl={firma} />
+        {firma && (
+          <img src={firma} alt="Firma" style={{ marginTop: '8px', maxHeight: '64px', border: '1px solid #E5E7EB', borderRadius: '8px' }} />
+        )}
+
+        {/* Footer */}
+        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #E5E7EB', fontSize: '10px', color: '#9CA3AF', textAlign: 'center' }}>
+          Técnico: {tecnico?.nombre} {tecnico?.apellido} · Camino al Cielo © {new Date().getFullYear()}
+        </div>
+      </div>
+
+      {/* Botones de acción */}
+      <div className="space-y-2">
+        <button onClick={descargarPDF} disabled={generando}
+          className="w-full py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+          style={{ background: '#7C3AED', color: '#fff' }}>
+          <Download size={18} />
+          {generando ? 'Generando PDF…' : 'Descargar recibo PDF'}
+        </button>
+        <button onClick={enviarWhatsApp}
+          className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2"
+          style={{ background: '#25D366', color: '#fff' }}>
+          <MessageSquare size={16} /> Enviar resumen por WhatsApp
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── RECIBO FIELD — solo inline styles para html2canvas (sin Tailwind/oklch) ─
+function RField({ label, value, onChange, type = 'text', highlight, span2 }) {
+  return (
+    <div style={span2 ? { gridColumn: 'span 2' } : {}}>
+      <div style={{ fontSize: '9px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '2px' }}>{label}</div>
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          width: '100%', padding: '6px 8px', borderRadius: '8px',
+          border: `1px solid ${highlight ? '#3D5A27' : '#E5E7EB'}`,
+          background: highlight ? '#F0FDF4' : '#FAFAFA',
+          fontSize: '12px', fontWeight: '600', color: '#111827',
+          outline: 'none', boxSizing: 'border-box',
+        }}
+      />
+    </div>
+  )
+}
+
+// ─── RECIBO CHECK ROW — solo inline styles ──────────────────────────────────
+function RCheck({ label, checked, onChange }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)}
+        style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#3D5A27' }} />
+      <span style={{ fontSize: '12px', color: '#374151' }}>{label}</span>
+    </label>
   )
 }
