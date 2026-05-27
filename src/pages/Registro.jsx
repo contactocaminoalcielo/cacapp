@@ -165,6 +165,7 @@ export default function Registro() {
   const [clienteSeleccionado, setClienteSeleccionado]   = useState(null)
   const [clienteNuevo, setClienteNuevo]                 = useState(false)
   const [buscandoCliente, setBuscandoCliente]           = useState(false)
+  const [cedulaDuplicada, setCedulaDuplicada]           = useState(null) // cliente existente con esa cédula
   const [formCliente, setFormCliente] = useState({
     nombre: '', apellido: '', cedula_nit: '', whatsapp: '',
     telefono: '', email: '', direccion: '', barrio: '',
@@ -277,6 +278,20 @@ export default function Registro() {
     debounceRef.current = setTimeout(() => buscarCliente(clienteBusqueda.trim()), 350)
     return () => clearTimeout(debounceRef.current)
   }, [clienteBusqueda])
+
+  // Verificar si la cédula ya existe mientras el usuario escribe (en formulario nuevo cliente)
+  useEffect(() => {
+    const cedula = formCliente.cedula_nit.trim()
+    if (!clienteNuevo || !cedula) { setCedulaDuplicada(null); return }
+    const t = setTimeout(async () => {
+      const { data } = await db.from('clientes')
+        .select('id_cliente, nombre, apellido, whatsapp')
+        .eq('cedula_nit', cedula)
+        .maybeSingle()
+      setCedulaDuplicada(data || null)
+    }, 400)
+    return () => clearTimeout(t)
+  }, [formCliente.cedula_nit, clienteNuevo])
 
   async function buscarCliente(q) {
     setBuscandoCliente(true)
@@ -540,25 +555,39 @@ export default function Registro() {
       let clienteId = clienteSeleccionado?.id_cliente
 
       if (clienteNuevo) {
-        const notasCliente = [
-          formCliente.barrio    ? `Barrio: ${formCliente.barrio}`       : '',
-          formCliente.localidad ? `Localidad: ${formCliente.localidad}` : '',
-        ].filter(Boolean).join('. ') || null
-        const { data, error: err } = await db.from('clientes').insert({
-          nombre:       formCliente.nombre,
-          apellido:     formCliente.apellido,
-          cedula_nit:   formCliente.cedula_nit  || null,
-          whatsapp:     formCliente.whatsapp,
-          telefono:     formCliente.telefono    || null,
-          email:        formCliente.email       || null,
-          direccion:    formCliente.direccion   || null,
-          ciudad:       formCliente.ciudad      || 'Bogotá',
-          tipo_cliente: formCliente.tipo_cliente,
-          notas:        notasCliente,
-        }).select()
-        if (err) throw err
-        if (!data || data.length === 0) throw new Error('No se pudo crear el cliente')
-        clienteId = data[0].id_cliente
+        // Verificar si ya existe un cliente con esa cédula antes de insertar
+        if (formCliente.cedula_nit?.trim()) {
+          const { data: existe } = await db.from('clientes')
+            .select('id_cliente')
+            .eq('cedula_nit', formCliente.cedula_nit.trim())
+            .maybeSingle()
+          if (existe) {
+            clienteId = existe.id_cliente
+            // Saltar el INSERT — reusar cliente existente
+          }
+        }
+
+        if (!clienteId) {
+          const notasCliente = [
+            formCliente.barrio    ? `Barrio: ${formCliente.barrio}`       : '',
+            formCliente.localidad ? `Localidad: ${formCliente.localidad}` : '',
+          ].filter(Boolean).join('. ') || null
+          const { data, error: err } = await db.from('clientes').insert({
+            nombre:       formCliente.nombre,
+            apellido:     formCliente.apellido,
+            cedula_nit:   formCliente.cedula_nit  || null,
+            whatsapp:     formCliente.whatsapp,
+            telefono:     formCliente.telefono    || null,
+            email:        formCliente.email       || null,
+            direccion:    formCliente.direccion   || null,
+            ciudad:       formCliente.ciudad      || 'Bogotá',
+            tipo_cliente: formCliente.tipo_cliente,
+            notas:        notasCliente,
+          }).select()
+          if (err) throw err
+          if (!data || data.length === 0) throw new Error('No se pudo crear el cliente')
+          clienteId = data[0].id_cliente
+        }
       }
 
       // actualizar dirección cliente si cambió en DOMICILIO
@@ -775,8 +804,35 @@ export default function Registro() {
                     <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value }))} /></div>
                   <div><label className={LABEL}>Apellido *</label>
                     <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value }))} /></div>
-                  <div><label className={LABEL}>Cédula / NIT</label>
-                    <Input value={formCliente.cedula_nit} onChange={e => setFormCliente(p => ({ ...p, cedula_nit: e.target.value }))} /></div>
+                  <div>
+                    <label className={LABEL}>Cédula / NIT</label>
+                    <Input
+                      value={formCliente.cedula_nit}
+                      onChange={e => setFormCliente(p => ({ ...p, cedula_nit: e.target.value }))}
+                      className={cedulaDuplicada ? 'border-amber-400 bg-amber-50' : ''}
+                    />
+                    {cedulaDuplicada && (
+                      <div className="mt-1.5 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        <span className="text-amber-500 text-sm mt-0.5">⚠️</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[12px] font-semibold text-amber-800">
+                            Esta cédula ya está registrada: {cedulaDuplicada.nombre} {cedulaDuplicada.apellido}
+                          </p>
+                          <p className="text-[11px] text-amber-600">Al confirmar el servicio se usará ese cliente existente.</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-[11px] font-bold text-[#3D5A27] underline flex-shrink-0"
+                          onClick={() => {
+                            setClienteSeleccionado(cedulaDuplicada)
+                            setClienteNuevo(false)
+                            setCedulaDuplicada(null)
+                          }}>
+                          Usar este cliente
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div><label className={LABEL}>WhatsApp *</label>
                     <Input value={formCliente.whatsapp} placeholder="3001234567"
                       onChange={e => setFormCliente(p => ({ ...p, whatsapp: e.target.value }))} /></div>
