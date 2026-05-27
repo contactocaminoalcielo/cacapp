@@ -8,6 +8,7 @@ import { db, dbAdmin } from '@/lib/supabase'
 import { petEmoji, fmt } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
+import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
@@ -82,6 +83,9 @@ export default function Kanban() {
   const [draggingId, setDraggingId]       = useState(null)
   const [dragOverCol, setDragOverCol]     = useState(null)
 
+  // ── Alertas inicio ruta ───────────────────────────────────────────────────
+  const [alertaRuta, setAlertaRuta]       = useState(null) // notificación TECNICO_INICIO_RUTA activa
+
   // ── Modal ─────────────────────────────────────────────────────────────────
   const [selected, setSelected]           = useState(null)
   const [detalle, setDetalle]             = useState(null)
@@ -119,6 +123,21 @@ export default function Kanban() {
 
     return () => { db.removeChannel(canal) }
   }, [])
+
+  // Polling alertas de inicio de ruta para coordinador/admin
+  useEffect(() => {
+    if (!personalData?.id) return
+    const esCoord = ['COORDINADOR','ADMIN'].includes(personalData?.rol)
+    if (!esCoord) return
+    const verificar = async () => {
+      const notifs = await obtenerNoLeidas(personalData.id)
+      const rutaNotif = notifs.find(n => n.tipo === 'TECNICO_INICIO_RUTA')
+      if (rutaNotif && !alertaRuta) setAlertaRuta(rutaNotif)
+    }
+    verificar()
+    const iv = setInterval(verificar, 20_000)
+    return () => clearInterval(iv)
+  }, [personalData?.id, personalData?.rol])
 
   async function cargar() {
     setLoading(true); setError(null)
@@ -170,8 +189,35 @@ export default function Kanban() {
     if (Object.keys(updates).length > 0) {
       const { error } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
       if (error) { alert('Error: ' + error.message); setGuardando(false); return }
-      if ('tecnico_id' in updates)
+
+      if ('tecnico_id' in updates) {
         await db.from('recogidas').update({ tecnico_id: updates.tecnico_id }).eq('servicio_id', selected.servicio_id)
+
+        const mascotaNombre = selected.mascota_nombre || 'la mascota'
+        // Notificar al técnico anterior que fue removido
+        if (selected.tecnico_id && selected.tecnico_id !== updates.tecnico_id) {
+          await crearNotificacion({
+            para_personal_id: selected.tecnico_id,
+            de_personal_id:   personalData?.id,
+            tipo:             'REASIGNACION_REMOVIDO',
+            titulo:           'Te reasignaron una recogida',
+            mensaje:          `Ya no estás asignado a la recogida de ${mascotaNombre}. Otro técnico tomará el servicio.`,
+            servicio_id:      selected.servicio_id,
+          })
+        }
+        // Notificar al nuevo técnico
+        if (updates.tecnico_id) {
+          await crearNotificacion({
+            para_personal_id: updates.tecnico_id,
+            de_personal_id:   personalData?.id,
+            tipo:             'REASIGNACION_TECNICO',
+            titulo:           'Nueva recogida asignada',
+            mensaje:          `Se te asignó la recogida de ${mascotaNombre}. Revisa los detalles en tu app.`,
+            servicio_id:      selected.servicio_id,
+          })
+        }
+      }
+
       setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...updates } : s))
       setSelected(prev => ({ ...prev, ...updates }))
     }
@@ -341,7 +387,66 @@ export default function Kanban() {
       return urls.map((url, i) => ({ url, nombre: r.recordatorios?.nombre || 'Foto', idx: i, total: urls.length, recId: r.id }))
     })
 
+  // ── WhatsApp message según tipo_lugar ────────────────────────────────────
+  function generarMsgRuta(notif) {
+    const d = notif.datos || {}
+    const mascota = d.mascota || 'su mascota'
+    const hora    = d.hora_llegada || '(hora confirmada)'
+    if (d.tipo_lugar === 'CLINICA_ALIADA') {
+      return `Buenas, somos Camino al Cielo 🐾. Le informamos que nuestro técnico está en camino a recoger a *${mascota}*. Hora estimada de llegada: *${hora}*. Cualquier novedad nos escribe. Gracias.`
+    }
+    return `Hola 🐾, somos Camino al Cielo. Nuestro técnico está en camino para recoger a *${mascota}*. Llegará aproximadamente a las *${hora}*. Si necesita comunicarse con él, por favor escríbanos. Gracias.`
+  }
+
   return (
+    <>
+    {/* ── ALERTA INICIO RUTA (popup coordinador) ── */}
+    {alertaRuta && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+          <div className="px-5 py-4 border-b" style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
+            <div className="flex items-center gap-2">
+              <span className="text-xl">🚗</span>
+              <div>
+                <p className="font-bold text-gray-900 text-sm">{alertaRuta.titulo}</p>
+                <p className="text-[11px] text-gray-500">{alertaRuta.mensaje}</p>
+              </div>
+            </div>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-[12px] text-gray-600 mb-3">¿Confirmar y notificar al cliente por WhatsApp?</p>
+            {(() => {
+              const d = alertaRuta.datos || {}
+              const waNum = d.wa_cliente || d.wa_aliado || ''
+              const msg   = generarMsgRuta(alertaRuta)
+              return (
+                <div className="space-y-2">
+                  {waNum ? (
+                    <a href={`https://wa.me/57${waNum.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`}
+                      target="_blank" rel="noreferrer"
+                      onClick={async () => { await marcarLeida(alertaRuta.id); setAlertaRuta(null) }}
+                      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold"
+                      style={{ background: '#25D366', color: '#fff' }}>
+                      <MessageCircle size={16} /> Enviar WhatsApp al cliente
+                    </a>
+                  ) : (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                      ⚠️ No hay número WhatsApp registrado para este servicio.
+                    </p>
+                  )}
+                  <button
+                    onClick={async () => { await marcarLeida(alertaRuta.id); setAlertaRuta(null) }}
+                    className="w-full py-2.5 rounded-xl text-sm font-semibold border"
+                    style={{ borderColor: '#E5E7EB', color: '#374151' }}>
+                    Marcar visto sin enviar
+                  </button>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      </div>
+    )}
     <div className="flex flex-col flex-1 min-h-0">
       <Topbar actions={
         <button className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors" onClick={cargar} title="Actualizar">
@@ -915,5 +1020,6 @@ export default function Kanban() {
         </Modal>
       )}
     </div>
+    </>
   )
 }

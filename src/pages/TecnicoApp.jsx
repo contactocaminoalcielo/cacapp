@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { db, dbAdmin } from '@/lib/supabase'
 import { petEmoji, fmt } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
+import { crearNotificacion } from '@/lib/notificaciones'
 import {
   Phone, MapPin, Clock, CheckCircle, LogOut, Bell,
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
@@ -545,15 +546,17 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
 }
 
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
-function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio }) {
-  const [sheetOpen, setSheetOpen]   = useState(false)
-  const [fotoUrl, setFotoUrl]       = useState(
+function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+  const [sheetOpen, setSheetOpen]     = useState(false)
+  const [declinarOpen, setDeclinarOpen] = useState(false)
+  const [motivoDeclina, setMotivoDeclina] = useState('')
+  const [fotoUrl, setFotoUrl]         = useState(
     svc.recogidas?.[0]?.foto_recogida_url || null
   )
-  const [checked, setChecked]       = useState([])
+  const [checked, setChecked]         = useState([])
   const [valorCobrado, setValorCobrado] = useState('')
-  const [completing, setCompleting] = useState(false)
-  const [actErr, setActErr]         = useState('')
+  const [completing, setCompleting]   = useState(false)
+  const [actErr, setActErr]           = useState('')
 
   const mascota  = svc.mascotas
   const especie  = mascota?.especies?.nombre || ''
@@ -704,11 +707,48 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio }) {
 
         {/* ── FASE 1: INICIAR RUTA ── */}
         {pendiente && (
-          <button onClick={() => setSheetOpen(true)}
-            className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98"
-            style={{ background: '#3D5A27', color: '#fff' }}>
-            🚐 Iniciar ruta
-          </button>
+          <div className="space-y-2">
+            <button onClick={() => setSheetOpen(true)}
+              className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98"
+              style={{ background: '#3D5A27', color: '#fff' }}>
+              🚐 Iniciar ruta
+            </button>
+            <button onClick={() => setDeclinarOpen(true)}
+              className="w-full py-3 rounded-2xl text-sm font-semibold transition-all active:scale-98 border"
+              style={{ background: '#FEF2F2', color: '#DC2626', borderColor: '#FECACA' }}>
+              ❌ No puedo aceptar este servicio
+            </button>
+          </div>
+        )}
+
+        {/* Modal declinar */}
+        {declinarOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+            onClick={() => setDeclinarOpen(false)}>
+            <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+              <h3 className="text-base font-bold text-gray-900 mb-1">¿Por qué no puedes aceptar?</h3>
+              <p className="text-xs text-gray-500 mb-4">El coordinador recibirá una alerta para reasignar.</p>
+              <textarea
+                value={motivoDeclina}
+                onChange={e => setMotivoDeclina(e.target.value)}
+                placeholder="Ej: No tengo disponibilidad, problema con el vehículo..."
+                className="w-full border rounded-xl px-4 py-3 text-sm outline-none mb-4 resize-none"
+                rows={3}
+                style={{ borderColor: '#E5E7EB' }}
+              />
+              <button
+                onClick={async () => {
+                  await onDeclinar(svc, motivoDeclina)
+                  setDeclinarOpen(false)
+                  setMotivoDeclina('')
+                }}
+                className="w-full py-4 rounded-2xl text-base font-bold"
+                style={{ background: '#DC2626', color: '#fff' }}>
+                Enviar aviso al coordinador
+              </button>
+            </div>
+          </div>
         )}
 
         {/* ── FASE 2: EN CAMINO ── */}
@@ -1189,6 +1229,15 @@ export default function TecnicoApp() {
     return () => clearInterval(id)
   }, [tecnico, cargar])
 
+  // Obtener IDs de coordinadores/admins para notificarlos
+  async function getCoordinadores() {
+    const { data } = await db.from('personal')
+      .select('id, nombre, apellido')
+      .in('rol_principal_id', [1, 6]) // COORDINADOR=1, ADMIN=6
+      .eq('activo', true)
+    return data || []
+  }
+
   async function iniciarRecogida(svc, hora) {
     const { error } = await db.from('servicios').update({ estado: 'EN_RECOGIDA' }).eq('id', svc.id)
     if (error) throw new Error(error.message)
@@ -1196,7 +1245,35 @@ export default function TecnicoApp() {
     if (recogidaId && hora) {
       await db.from('recogidas').update({ hora_programada: hora }).eq('id', recogidaId)
     }
+    // Notificar a todos los coordinadores
+    const coords = await getCoordinadores()
+    const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+    const lugar = svc.lugar_recogida_nombre || svc.direccion_recogida || 'destino'
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'TECNICO_INICIO_RUTA',
+      titulo:           `${tecnico?.nombre} inició ruta`,
+      mensaje:          `Sale a recoger a ${mascotaNombre}. Hora estimada: ${hora}. Destino: ${lugar}`,
+      servicio_id:      svc.id,
+      datos:            { hora_llegada: hora, mascota: mascotaNombre, lugar, tipo_lugar: svc.tipo_lugar },
+    })))
     await cargar()
+  }
+
+  async function declinarRecogida(svc, motivo) {
+    // Notificar a coordinadores
+    const coords = await getCoordinadores()
+    const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'TECNICO_DECLINA',
+      titulo:           `${tecnico?.nombre} no puede aceptar`,
+      mensaje:          `No puede recoger a ${mascotaNombre}. ${motivo ? `Motivo: ${motivo}` : ''} Reasignar técnico.`,
+      servicio_id:      svc.id,
+      datos:            { motivo },
+    })))
   }
 
   async function completarRecogida(svc, recogidaId, valorCobrado = 0) {
@@ -1348,6 +1425,7 @@ export default function TecnicoApp() {
                 onIniciar={iniciarRecogida}
                 onCompletar={completarRecogida}
                 onCuartoFrio={confirmarCuartoFrio}
+                onDeclinar={declinarRecogida}
               />
         ) : tab === 'entregas' ? (
           entregas.length === 0
@@ -1387,12 +1465,12 @@ function SeccionHeader({ color, dot, emoji, titulo, count }) {
   )
 }
 
-function RecogidaList({ recogidas, tecnico, onIniciar, onCompletar, onCuartoFrio }) {
+function RecogidaList({ recogidas, tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
   const porRecoger   = recogidas.filter(s => s.estado === 'INGRESADO')
   const enCamino     = recogidas.filter(s => s.estado === 'EN_RECOGIDA')
   const cuartoFrio   = recogidas.filter(s => s.estado === 'EN_CUARTO_FRIO')
 
-  const cardProps = { tecnico, onIniciar, onCompletar, onCuartoFrio }
+  const cardProps = { tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }
 
   return (
     <div>

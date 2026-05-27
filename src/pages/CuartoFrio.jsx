@@ -10,7 +10,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji } from '@/lib/utils'
-import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package } from 'lucide-react'
+import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package, History } from 'lucide-react'
 
 // ─── helpers módulo ────────────────────────────────────────────────────────
 function fmtFechaHora(ts) {
@@ -203,6 +203,25 @@ export default function CuartoFrio() {
         : { nevera_codigo: form.nevera_codigo || null }
 
       await db.from('cuarto_frio').update(update).eq('id', selected.id)
+
+      // Registrar movimiento si cambia nevera o estado
+      const cambios = []
+      if (form.nevera_codigo !== (selected.nevera_codigo || '')) cambios.push('nevera')
+      if (isAdmin && form.estado !== selected.estado) cambios.push('estado')
+
+      if (cambios.length > 0) {
+        await db.from('cuarto_frio_movimientos').insert({
+          cuarto_frio_id:   selected.id,
+          personal_id:      personalData?.id || null,
+          tipo:             cambios.includes('nevera') ? 'CAMBIO_NEVERA' : 'CAMBIO_ESTADO',
+          nevera_anterior:  selected.nevera_codigo || null,
+          nevera_nueva:     form.nevera_codigo || null,
+          estado_anterior:  selected.estado || null,
+          estado_nuevo:     form.estado || null,
+          notas:            form.notas || null,
+        })
+      }
+
       await cargar()
       setSelected(null)
     } catch (e) {
