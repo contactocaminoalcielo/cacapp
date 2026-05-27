@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
-  Snowflake, Leaf, Layers, Camera,
+  Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
@@ -24,10 +24,11 @@ const ALL_NAV_GROUPS = [
   {
     label: 'PRODUCCIÓN',
     items: [
-      { path: '/cuarto-frio', label: 'Cuarto frío',    icon: Snowflake },
-      { path: '/tenjo',       label: 'Planta Tenjo',   icon: Leaf },
-      { path: '/produccion',  label: 'Producción',     icon: Layers,  badge: 'produccion' },
-      { path: '/imagenes',    label: 'Imágenes',       icon: Camera,  badge: 'imagenes' },
+      { path: '/cuarto-frio',    label: 'Cuarto frío',    icon: Snowflake },
+      { path: '/lotes-grupales', label: 'Lotes grupales', icon: Package2 },
+      { path: '/tenjo',          label: 'Planta Tenjo',   icon: Leaf },
+      { path: '/produccion',     label: 'Producción',     icon: Layers,  badge: 'produccion' },
+      { path: '/imagenes',       label: 'Imágenes',       icon: Camera,  badge: 'imagenes' },
     ],
   },
   {

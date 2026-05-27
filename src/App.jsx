@@ -24,6 +24,7 @@ const Nps                = lazy(() => import('@/pages/Nps'))
 const Reportes           = lazy(() => import('@/pages/Reportes'))
 const Presequiales       = lazy(() => import('@/pages/Presequiales'))
 const Configuracion      = lazy(() => import('@/pages/Configuracion'))
+const LotesGrupales      = lazy(() => import('@/pages/LotesGrupales'))
 
 function FullScreenLoader() {
   return (
@@ -74,7 +75,8 @@ function AppRoutes({ rol }) {
             {routes.has('/nps')          && <Route path="/nps"          element={<Nps />} />}
             {routes.has('/reportes')     && <Route path="/reportes"     element={<Reportes />} />}
             {routes.has('/presequiales') && <Route path="/presequiales" element={<Presequiales />} />}
-            {routes.has('/configuracion') && <Route path="/configuracion" element={<Configuracion />} />}
+            {routes.has('/configuracion')   && <Route path="/configuracion"   element={<Configuracion />} />}
+            {routes.has('/lotes-grupales') && <Route path="/lotes-grupales" element={<LotesGrupales />} />}
             <Route path="*" element={<Navigate to={redirectTo} replace />} />
           </Routes>
         </Suspense>

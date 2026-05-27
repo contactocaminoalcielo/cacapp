@@ -13,7 +13,8 @@ const PAGE_META = {
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
   '/reportes':     { title: 'Reportes',               sub: 'Análisis operacional y financiero' },
   '/presequiales': { title: 'Planes presequiales',    sub: 'Afiliaciones anticipadas' },
-  '/configuracion':{ title: 'Configuración',          sub: 'Planes, recordatorios y catálogos' },
+  '/configuracion':  { title: 'Configuración',           sub: 'Planes, recordatorios y catálogos' },
+  '/lotes-grupales': { title: 'Lotes Grupales',          sub: 'Cremación y compostaje grupal' },
 }
 
 export default function Topbar({ actions }) {

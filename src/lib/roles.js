@@ -9,7 +9,7 @@ export const ROLE_CONFIG = {
     routes: new Set([
       '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
       '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
-      '/presequiales', '/reportes', '/configuracion',
+      '/presequiales', '/reportes', '/configuracion', '/lotes-grupales',
     ]),
   },
   COORDINADOR: {
@@ -18,7 +18,7 @@ export const ROLE_CONFIG = {
     routes: new Set([
       '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
       '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
-      '/presequiales', '/reportes',
+      '/presequiales', '/reportes', '/lotes-grupales',
     ]),
   },
   TECNICO: {

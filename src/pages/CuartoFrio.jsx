@@ -10,7 +10,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji } from '@/lib/utils'
-import { Snowflake, RefreshCw, Edit2, ClipboardList } from 'lucide-react'
+import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package } from 'lucide-react'
 
 // ─── helpers módulo ────────────────────────────────────────────────────────
 function fmtFechaHora(ts) {
@@ -221,10 +221,30 @@ export default function CuartoFrio() {
   if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
   if (error)   return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
 
+  const META_LOTE_KG = 2500
+
   const pendientes   = registros.filter(r => r.estado === 'PENDIENTE_INGRESO')
   const refrigerados = registros.filter(r => r.estado === 'REFRIGERADO')
   const enEspera     = registros.filter(r => r.estado === 'EN_ESPERA_PROCESO')
   const activos      = registros.filter(r => ['REFRIGERADO','EN_ESPERA_PROCESO'].includes(r.estado))
+
+  // ── Cálculos de peso ──────────────────────────────────────────────────────
+  // Peso confirmado = cuarto_frio.peso_kg (báscula técnico). Si no, peso mascota como estimado.
+  const activosConPesoConfirmado = activos.filter(r => r.peso_kg != null && r.peso_kg > 0)
+  const activosSinPeso           = activos.filter(r => !r.peso_kg || r.peso_kg === 0)
+  const pesoConfirmado = activosConPesoConfirmado.reduce((s, r) => s + parseFloat(r.peso_kg), 0)
+  // Estimado para los que no tienen peso confirmado (usa el peso registrado de la mascota)
+  const pesoEstimado   = activosSinPeso.reduce((s, r) => {
+    const pk = r.servicios?.mascotas?.peso_kg
+    return s + (pk ? parseFloat(pk) : 0)
+  }, 0)
+  const pesoTotal   = pesoConfirmado + pesoEstimado
+  const pctLote     = Math.min(100, (pesoTotal / META_LOTE_KG) * 100)
+  const pctConfirm  = pesoTotal > 0 ? Math.round((pesoConfirmado / pesoTotal) * 100) : 0
+
+  // Color barra según % del lote
+  const barColor = pctLote >= 90 ? '#16A34A' : pctLote >= 60 ? '#D97706' : '#3B6FBF'
+  const barLabel = pctLote >= 100 ? '🟢 Listo para lote' : pctLote >= 75 ? '🟡 Casi listo' : '🔵 Acumulando'
 
   const porNevera = {}
   activos.forEach(r => {
@@ -254,11 +274,122 @@ export default function CuartoFrio() {
       <div className="p-7">
 
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
           <StatCard label="Pendientes ingreso" value={pendientes.length} valueColor="#92400E" />
           <StatCard label="En refrigeración"   value={refrigerados.length} valueColor="#3B6FBF" />
           <StatCard label="En espera proceso"  value={enEspera.length} valueColor="#9A5500" />
           <StatCard label="Total activos"      value={pendientes.length + activos.length} />
+        </div>
+
+        {/* ── Panel capacidad / peso acumulado ── */}
+        <div className="bg-surface border rounded-2xl shadow-sm mb-7 overflow-hidden"
+          style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+
+          {/* Header */}
+          <div className="px-5 py-3.5 border-b flex items-center justify-between"
+            style={{ borderColor: 'rgba(30,80,40,0.08)', background: 'rgba(59,111,191,0.04)' }}>
+            <div className="flex items-center gap-2">
+              <Scale size={16} className="text-[#3B6FBF]" />
+              <span className="font-serif text-base text-ink">Capacidad del cuarto frío</span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full ml-1"
+                style={{ background: barColor + '22', color: barColor }}>
+                {barLabel}
+              </span>
+            </div>
+            <span className="text-[11px] text-ink3">Meta lote grupal ≈ {META_LOTE_KG.toLocaleString('es-CO')} kg</span>
+          </div>
+
+          <div className="px-5 py-4">
+            {/* Barra de progreso */}
+            <div className="mb-4">
+              <div className="flex items-end justify-between mb-1.5">
+                <div>
+                  <span className="text-2xl font-bold" style={{ color: barColor }}>
+                    {pesoTotal.toFixed(1)}
+                  </span>
+                  <span className="text-sm text-ink3 ml-1.5">
+                    / {META_LOTE_KG.toLocaleString('es-CO')} kg
+                  </span>
+                </div>
+                <span className="text-sm font-bold" style={{ color: barColor }}>
+                  {pctLote.toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-3 rounded-full bg-gray-100 overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${pctLote}%`, background: barColor }} />
+              </div>
+              {pctLote >= 100 && (
+                <p className="text-[11px] font-semibold mt-1" style={{ color: '#16A34A' }}>
+                  ✅ Se alcanzó la capacidad para enviar lote grupal
+                </p>
+              )}
+            </div>
+
+            {/* Desglose en 3 columnas */}
+            <div className="grid grid-cols-3 gap-3">
+
+              {/* Peso confirmado */}
+              <div className="rounded-xl p-3 border" style={{ borderColor: 'rgba(59,111,191,0.2)', background: '#EEF3FB' }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Scale size={11} className="text-[#3B6FBF]" />
+                  <span className="text-[10px] font-bold text-[#3B6FBF] uppercase tracking-wide">Confirmado</span>
+                </div>
+                <div className="text-xl font-bold text-ink">{pesoConfirmado.toFixed(1)} <span className="text-sm font-normal text-ink3">kg</span></div>
+                <div className="text-[10px] text-ink3 mt-0.5">
+                  {activosConPesoConfirmado.length} {activosConPesoConfirmado.length === 1 ? 'mascota' : 'mascotas'} con báscula
+                </div>
+                <div className="text-[10px] font-semibold mt-1" style={{ color: '#3B6FBF' }}>
+                  {pctConfirm}% del peso total
+                </div>
+              </div>
+
+              {/* Peso estimado */}
+              <div className="rounded-xl p-3 border" style={{ borderColor: 'rgba(217,119,6,0.2)', background: '#FFFBEB' }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Scale size={11} className="text-[#D97706]" />
+                  <span className="text-[10px] font-bold text-[#D97706] uppercase tracking-wide">Estimado</span>
+                </div>
+                <div className="text-xl font-bold text-ink">{pesoEstimado.toFixed(1)} <span className="text-sm font-normal text-ink3">kg</span></div>
+                <div className="text-[10px] text-ink3 mt-0.5">
+                  {activosSinPeso.length} {activosSinPeso.length === 1 ? 'mascota' : 'mascotas'} sin báscula
+                </div>
+                <div className="text-[10px] font-semibold mt-1 text-[#D97706]">Peso registro mascota</div>
+              </div>
+
+              {/* Faltan para lote */}
+              <div className="rounded-xl p-3 border" style={{
+                borderColor: pctLote >= 100 ? 'rgba(22,163,74,0.3)' : 'rgba(30,80,40,0.12)',
+                background:  pctLote >= 100 ? '#F0FDF4' : '#F8F9FA',
+              }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Package size={11} style={{ color: pctLote >= 100 ? '#16A34A' : '#6B7280' }} />
+                  <span className="text-[10px] font-bold uppercase tracking-wide"
+                    style={{ color: pctLote >= 100 ? '#16A34A' : '#6B7280' }}>
+                    {pctLote >= 100 ? 'Lote listo' : 'Faltan'}
+                  </span>
+                </div>
+                {pctLote >= 100 ? (
+                  <>
+                    <div className="text-xl font-bold" style={{ color: '#16A34A' }}>✅</div>
+                    <div className="text-[10px] text-ink3 mt-0.5">
+                      {(pesoTotal - META_LOTE_KG).toFixed(1)} kg excedente
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-xl font-bold text-ink">
+                      {(META_LOTE_KG - pesoTotal).toFixed(1)} <span className="text-sm font-normal text-ink3">kg</span>
+                    </div>
+                    <div className="text-[10px] text-ink3 mt-0.5">para completar el lote</div>
+                  </>
+                )}
+                <div className="text-[10px] font-semibold mt-1 text-ink3">
+                  Total mascotas: {activos.length}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* ── REPORTES DEL TÉCNICO ── */}
@@ -422,7 +553,14 @@ export default function CuartoFrio() {
                       <Td className="text-ink2">{c?.nombre} {c?.apellido}</Td>
                       <Td className="text-ink3">{p?.nombre}</Td>
                       <Td className="font-mono text-[11px]">{r.nevera_codigo || '-'}</Td>
-                      <Td>{r.peso_kg || m?.peso_kg || '-'}</Td>
+                      <Td>
+                        {r.peso_kg
+                          ? <span className="font-semibold text-[#3B6FBF]">{r.peso_kg} kg ✓</span>
+                          : m?.peso_kg
+                            ? <span className="text-[#D97706]">{m.peso_kg} kg ~</span>
+                            : <span className="text-ink3">-</span>
+                        }
+                      </Td>
                       <Td className="text-ink3 text-[12px]">{nombreTecnico(r)}</Td>
                       <Td>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
