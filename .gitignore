@@ -27,3 +27,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Herramientas internas de desarrollo (Claude Code, Codex, agentes)
+.claude/
+.agents/
+.codex/
+
+# Python cache
+__pycache__/
+*.pyc
