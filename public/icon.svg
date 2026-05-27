@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fondo verde oscuro -->
+  <rect width="512" height="512" rx="96" fill="#263218"/>
+
+  <!-- Huella de pata — Camino al Cielo -->
+  <!-- Almohadilla central grande -->
+  <ellipse cx="256" cy="310" rx="72" ry="58" fill="#C4A87A"/>
+
+  <!-- 4 deditos superiores -->
+  <ellipse cx="168" cy="238" rx="34" ry="42" fill="#C4A87A"/>
+  <ellipse cx="222" cy="206" rx="34" ry="42" fill="#C4A87A"/>
+  <ellipse cx="290" cy="206" rx="34" ry="42" fill="#C4A87A"/>
+  <ellipse cx="344" cy="238" rx="34" ry="42" fill="#C4A87A"/>
+
+  <!-- Brillo sutil sobre la almohadilla central -->
+  <ellipse cx="240" cy="295" rx="28" ry="18" fill="#D4BA90" opacity="0.4"/>
+</svg>
