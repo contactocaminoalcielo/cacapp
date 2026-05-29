@@ -7,18 +7,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { db } from '@/lib/supabase'
 import { petEmoji } from '@/lib/utils'
-import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle } from 'lucide-react'
+import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck } from 'lucide-react'
+import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
-const ESTADO_CICLO  = { PENDIENTE: 'EN_PROCESO', EN_PROCESO: 'LISTO', LISTO: 'ENTREGADO', ENTREGADO: 'PENDIENTE' }
-const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', ENTREGADO: 'Entregado', NA: 'N/A' }
+const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A' }
 const ESTADO_COLOR  = {
   PENDIENTE:  { bg: '#FEF3C7', text: '#92400E', border: '#FDE68A' },
   EN_PROCESO: { bg: '#DBEAFE', text: '#1E40AF', border: '#BFDBFE' },
   LISTO:      { bg: '#D1FAE5', text: '#065F46', border: '#6EE7B7' },
-  ENTREGADO:  { bg: '#F3F4F6', text: '#374151', border: '#D1D5DB' },
   NA:         { bg: '#F3F4F6', text: '#9CA3AF', border: '#E5E7EB' },
 }
-const ESTADOS_PROD = ['PENDIENTE', 'EN_PROCESO', 'LISTO', 'ENTREGADO']
+const ESTADOS_PROD = ['PENDIENTE', 'EN_PROCESO', 'LISTO']
 
 function initials(p) {
   if (!p) return '?'
@@ -98,12 +97,39 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
       notas:      notas    || null,
       fecha_inicio_prod: estado !== 'PENDIENTE' && !item.fecha_inicio_prod
         ? new Date().toISOString().slice(0, 10) : item.fecha_inicio_prod,
-      fecha_fin_prod: estado === 'LISTO' || estado === 'ENTREGADO'
+      fecha_fin_prod: estado === 'LISTO'
         ? (item.fecha_fin_prod || new Date().toISOString().slice(0, 10)) : null,
     }
     const { error } = await db.from('servicio_recordatorios').update(patch).eq('id', item.id)
+    if (error) { setSaving(false); alert('Error: ' + error.message); return }
+
+    // ── Recalcular estado del servicio dinámicamente ─────────────────────────
+    const svcId = item.servicio_id
+    try {
+      const [{ data: todosItems }, { data: svc }] = await Promise.all([
+        db.from('servicio_recordatorios')
+          .select('id, estado')
+          .eq('servicio_id', svcId)
+          .neq('origen', 'REMOVIDO')
+          .neq('estado', 'NA'),
+        db.from('servicios').select('estado').eq('id', svcId).maybeSingle(),
+      ])
+      const todos = todosItems || []
+      const estadoActual = svc?.estado
+      if (!todos.length || ['EN_ENTREGA', 'ENTREGADO', 'CANCELADO'].includes(estadoActual)) return
+      const esTerminado = e => e === 'LISTO' || e === 'ENTREGADO'
+      const todosTerminados = todos.every(i => esTerminado(i.estado))
+      const algunoEnProceso = todos.some(i => i.estado === 'EN_PROCESO')
+      if (todosTerminados && estadoActual !== 'LISTO') {
+        await db.from('servicios').update({ estado: 'LISTO' }).eq('id', svcId)
+      } else if (!todosTerminados && estadoActual === 'LISTO') {
+        await db.from('servicios').update({ estado: 'EN_PRODUCCION' }).eq('id', svcId)
+      } else if (algunoEnProceso && ['INGRESADO', 'EN_CUARTO_FRIO', 'EN_PROCESO'].includes(estadoActual)) {
+        await db.from('servicios').update({ estado: 'EN_PRODUCCION' }).eq('id', svcId)
+      }
+    } catch (_) { /* silencioso — no bloquear el flujo de ítems */ }
+
     setSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
     onSaved({ ...item, ...patch })
     onClose()
   }
@@ -209,10 +235,12 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, onClickItem }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, onClickItem, onPrepararEntrega }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
+    // Servicios en LISTO siempre visibles en cualquier filtro (botón de entrega)
+    if (r.servicios?.estado === 'LISTO') return true
     if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
     if (filtroEstado === 'en_proceso') return r.estado === 'EN_PROCESO'
     if (filtroEstado === 'listos')     return r.estado === 'LISTO'
@@ -248,8 +276,12 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
           i.recordatorios?.solo_nombre && i.estado === 'PENDIENTE'
         ).length
 
+        const svcEstado = servicio?.estado
+        const todoListo = svcEstado === 'LISTO'
+
         return (
-          <div key={sId} className="bg-surface border rounded-2xl p-4 shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div key={sId} className="bg-surface border rounded-2xl p-4 shadow-sm"
+            style={{ borderColor: todoListo ? '#6EE7B7' : 'rgba(30,80,40,0.1)', borderWidth: todoListo ? 2 : 1 }}>
             {/* Header */}
             <div className="flex items-start gap-2 mb-2.5">
               <span className="text-xl mt-0.5">{petEmoji(mascota?.especies?.nombre)}</span>
@@ -257,7 +289,13 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
                 <div className="font-bold text-ink text-[13px] truncate">{mascota?.nombre || 'Sin nombre'}</div>
                 <div className="text-[11px] text-ink3 truncate">{plan?.nombre}</div>
               </div>
-              <div className="text-right flex-shrink-0">
+              <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
+                {todoListo && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                    style={{ background: '#D1FAE5', color: '#065F46' }}>
+                    ✓ LISTO
+                  </span>
+                )}
                 <div className="text-[11px] font-bold text-ink3">{listosCnt}/{items.length}</div>
               </div>
             </div>
@@ -300,6 +338,16 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
                   maquinas={maquinas} fotos_ok={fotos_ok} onClick={onClickItem} />
               ))}
             </div>
+
+            {/* Botón preparar entrega cuando está LISTO */}
+            {todoListo && onPrepararEntrega && (
+              <button
+                onClick={() => onPrepararEntrega(sId)}
+                className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+                style={{ background: '#4F46E5' }}>
+                <Truck size={13} /> Preparar entrega
+              </button>
+            )}
           </div>
         )
       })}
@@ -468,6 +516,7 @@ export default function Produccion() {
   const [filtroEstado,  setFiltroEstado]  = useState('pendientes')
   const [filtroPersona, setFiltroPersona] = useState('')
   const [modalItem,     setModalItem]     = useState(null)
+  const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
 
   useEffect(() => { cargar() }, [])
 
@@ -481,7 +530,7 @@ export default function Produccion() {
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                             tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
-            servicios ( id, fecha_imagenes_recibidas,
+            servicios ( id, fecha_imagenes_recibidas, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
                         planes ( nombre, codigo ) )
           `)
@@ -494,11 +543,55 @@ export default function Produccion() {
       setRecordatorios(recs || [])
       setPersonal(per || [])
       setMaquinas(maq || [])
+      // Sincronizar servicios cuyo estado no refleja el estado real de sus ítems
+      await autoCorregirEstados(recs || [])
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
+  }
+
+  async function autoCorregirEstados(recs) {
+    const porServicio = {}
+    recs.forEach(r => {
+      if (!porServicio[r.servicio_id]) porServicio[r.servicio_id] = { svc: r.servicios, items: [] }
+      porServicio[r.servicio_id].items.push(r)
+    })
+    const fijarListo = []
+    const fijarEnProduccion = []
+    for (const [svcId, { svc, items }] of Object.entries(porServicio)) {
+      if (!items.length) continue
+      const estado = svc?.estado
+      if (['LISTO', 'EN_ENTREGA', 'ENTREGADO', 'CANCELADO'].includes(estado)) continue
+      const todosListos = items.every(i => i.estado === 'LISTO')
+      const algunoEnProceso = items.some(i => i.estado === 'EN_PROCESO')
+      if (todosListos) {
+        fijarListo.push(svcId)
+      } else if (algunoEnProceso && ['INGRESADO', 'EN_CUARTO_FRIO', 'EN_PROCESO'].includes(estado)) {
+        fijarEnProduccion.push(svcId)
+      }
+    }
+    if (!fijarListo.length && !fijarEnProduccion.length) return
+    const ops = []
+    if (fijarListo.length)        ops.push(db.from('servicios').update({ estado: 'LISTO'          }).in('id', fijarListo))
+    if (fijarEnProduccion.length) ops.push(db.from('servicios').update({ estado: 'EN_PRODUCCION' }).in('id', fijarEnProduccion))
+    await Promise.all(ops)
+    // Recargar para que las tarjetas reflejen el nuevo estado del servicio
+    const { data: recsNuevos } = await db.from('servicio_recordatorios')
+      .select(`
+        *,
+        recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
+                        tiempo_produccion_dias, maquina_id,
+                        maquinas_produccion ( id, nombre ) ),
+        servicios ( id, fecha_imagenes_recibidas, estado,
+                    mascotas ( nombre, especie_id, especies ( nombre ) ),
+                    planes ( nombre, codigo ) )
+      `)
+      .neq('origen', 'REMOVIDO')
+      .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])
+      .order('created_at', { ascending: false })
+    setRecordatorios(recsNuevos || [])
   }
 
   function handleSaved(updatedItem) {
@@ -597,6 +690,7 @@ export default function Produccion() {
             recordatorios={recordatorios} personal={personal} maquinas={maquinas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona}
             onClickItem={setModalItem}
+            onPrepararEntrega={id => setModalEntrega(id)}
           />
         )}
         {vista === 'maquina' && (
@@ -623,6 +717,15 @@ export default function Produccion() {
           fotos_ok={!!modalItem.servicios?.fecha_imagenes_recibidas}
           onClose={() => setModalItem(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {/* Modal preparar entrega */}
+      {modalEntrega && (
+        <ModalPreparaEntrega
+          servicioId={modalEntrega}
+          onClose={() => setModalEntrega(null)}
+          onGuardado={() => { setModalEntrega(null); cargar() }}
         />
       )}
     </div>

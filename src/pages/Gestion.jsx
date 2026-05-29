@@ -9,7 +9,8 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { Plus, Search, Trash2 } from 'lucide-react'
+import { fmt } from '@/lib/utils'
+import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History } from 'lucide-react'
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
 const nullify = (obj, keys) => {
@@ -280,10 +281,11 @@ function TabAliados({ isAdmin }) {
       nombre: item.nombre || '', identificacion_nit: item.identificacion_nit || '',
       contacto_nombre: item.contacto_nombre || '', whatsapp: item.whatsapp || '',
       telefono: item.telefono || '', ciudad: item.ciudad || 'Bogotá',
-      barrio: item.barrio || '', vip: item.vip || false,
+      localidad: item.localidad || '', barrio: item.barrio || '',
+      direccion: item.direccion || '', vip: item.vip || false,
       modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
       saldo_comision: item.saldo_comision || 0, activo: item.activo !== false,
-    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',barrio:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
+    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
   }
   async function guardar() {
     if (!form.nombre?.trim()) return alert('El nombre es requerido.')
@@ -352,9 +354,13 @@ function TabAliados({ isAdmin }) {
         <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.id_aliado ? 'Editar aliado' : 'Nuevo aliado'} maxWidth="max-w-lg"
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="grid grid-cols-2 gap-3">
-            {[['nombre','Nombre'],['identificacion_nit','NIT/Cédula'],['contacto_nombre','Contacto'],['whatsapp','WhatsApp'],['telefono','Teléfono'],['ciudad','Ciudad'],['barrio','Barrio']].map(([k,l]) => (
+            {[['nombre','Nombre'],['identificacion_nit','NIT/Cédula'],['contacto_nombre','Contacto'],['whatsapp','WhatsApp'],['telefono','Teléfono'],['ciudad','Ciudad'],['localidad','Localidad'],['barrio','Barrio']].map(([k,l]) => (
               <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} /></div>
             ))}
+            <div className="col-span-2">
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Dirección</label>
+              <Input value={form.direccion||''} onChange={e => setForm(p=>({...p,direccion:e.target.value}))} placeholder="Calle, carrera, número…" />
+            </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Modalidad comisión</label>
               <Select value={form.modalidad_comision||'FACTURACION_MENSUAL'} onChange={e => setForm(p=>({...p,modalidad_comision:e.target.value}))}>
@@ -491,11 +497,17 @@ function TabPersonal({ isAdmin }) {
 
 // --- INVENTARIO TAB ---
 function TabInventario({ isAdmin }) {
+  const { personalData } = useAuth()
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
+  const [movItem, setMovItem] = useState(null)       // ítem para registrar movimiento
+  const [movForm, setMovForm] = useState({ tipo: 'ENTRADA', cantidad: '', motivo: '' })
+  const [movSaving, setMovSaving] = useState(false)
+  const [histItem, setHistItem] = useState(null)     // ítem para ver historial
+  const [histData, setHistData] = useState([])
   const { q, setQ, filtered } = useSearch(data, ['nombre','descripcion','proveedor','ubicacion'])
 
   useEffect(() => { cargar() }, [])
@@ -505,6 +517,7 @@ function TabInventario({ isAdmin }) {
     setData(d || [])
     setLoading(false)
   }
+
   function abrir(item) {
     setSelected(item || { nuevo: true })
     setForm(item ? {
@@ -515,6 +528,7 @@ function TabInventario({ isAdmin }) {
       activo: item.activo !== false,
     } : { nombre:'',descripcion:'',unidad:'',stock_actual:0,stock_minimo:0,proveedor:'',precio_unitario:0,ubicacion:'',activo:true })
   }
+
   async function guardar() {
     if (!form.nombre?.trim()) return alert('El nombre es requerido.')
     setSaving(true)
@@ -526,12 +540,50 @@ function TabInventario({ isAdmin }) {
     if (error) { alert('Error al guardar: ' + error.message); return }
     await cargar(); setSelected(null)
   }
+
   async function eliminar(i) {
     if (!window.confirm(`¿Eliminar "${i.nombre}"?\nEsta acción no se puede deshacer.`)) return
     const { error } = await db.from('inventario').delete().eq('id', i.id)
     if (error) { alert('Error al eliminar: ' + error.message); return }
     await cargar()
   }
+
+  async function registrarMovimiento() {
+    if (!movForm.cantidad || parseFloat(movForm.cantidad) <= 0) return alert('Ingrese una cantidad válida.')
+    setMovSaving(true)
+    try {
+      const cant = parseFloat(movForm.cantidad)
+      const delta = movForm.tipo === 'ENTRADA' ? cant : -cant
+      const nuevoStock = (movItem.stock_actual || 0) + delta
+      if (nuevoStock < 0) { alert('El stock no puede quedar negativo.'); setMovSaving(false); return }
+      await db.from('movimientos_inventario').insert({
+        inventario_id: movItem.id,
+        tipo: movForm.tipo,
+        cantidad: cant,
+        motivo: movForm.motivo || null,
+        registrado_por: personalData?.id || null,
+      })
+      await db.from('inventario').update({ stock_actual: nuevoStock }).eq('id', movItem.id)
+      await cargar()
+      setMovItem(null)
+      setMovForm({ tipo: 'ENTRADA', cantidad: '', motivo: '' })
+    } catch (e) {
+      alert('Error: ' + e.message)
+    } finally {
+      setMovSaving(false)
+    }
+  }
+
+  async function verHistorial(item) {
+    setHistItem(item)
+    const { data: d } = await db.from('movimientos_inventario')
+      .select('*, personal(nombre,apellido)')
+      .eq('inventario_id', item.id)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    setHistData(d || [])
+  }
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
@@ -543,34 +595,50 @@ function TabInventario({ isAdmin }) {
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Unidad</Th><Th>Stock actual</Th><Th>Stock mínimo</Th><Th>Proveedor</Th><Th>Precio</Th>{isAdmin && <Th></Th>}</tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Unidad</Th><Th>Stock actual</Th><Th>Stock mínimo</Th><Th>Proveedor</Th><Th>Precio</Th><Th></Th></tr></thead>
           <tbody>
             {filtered.map(i => {
               const bajo = i.stock_actual < i.stock_minimo
               return (
                 <Tr key={i.id} className={bajo ? 'bg-danger-light/50' : ''}>
-                  <Td><div className="font-semibold text-ink">{i.nombre}</div><div className="text-[10px] text-ink3">{i.descripcion}</div></Td>
+                  <Td>
+                    <div className="font-semibold text-ink">{i.nombre}</div>
+                    <div className="text-[10px] text-ink3">{i.descripcion}</div>
+                    {bajo && <span className="text-[9px] font-bold text-danger bg-danger-light px-1.5 py-0.5 rounded-full">STOCK BAJO</span>}
+                  </Td>
                   <Td className="text-ink3">{i.unidad}</Td>
-                  <Td><span className={`font-bold ${bajo ? 'text-danger' : 'text-ink'}`}>{i.stock_actual}</span></Td>
+                  <Td><span className={`font-bold text-lg ${bajo ? 'text-danger' : 'text-ink'}`}>{i.stock_actual}</span></Td>
                   <Td className="text-ink3">{i.stock_minimo}</Td>
                   <Td className="text-ink3">{i.proveedor}</Td>
                   <Td className="text-ink2">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(i.precio_unitario||0)}</Td>
-                  {isAdmin && (
-                    <Td>
-                      <div className="flex items-center gap-1">
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => { setMovItem(i); setMovForm({ tipo: 'ENTRADA', cantidad: '', motivo: '' }) }}
+                        title="Registrar movimiento"
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-[#1D8A55] hover:bg-green-light transition-colors">
+                        <ArrowUpCircle size={15} />
+                      </button>
+                      <button onClick={() => verHistorial(i)}
+                        title="Ver historial"
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink3 hover:bg-surface2 transition-colors">
+                        <History size={14} />
+                      </button>
+                      {isAdmin && <>
                         <Button size="sm" variant="ghost" onClick={() => abrir(i)}>Editar</Button>
                         <button onClick={() => eliminar(i)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
                           <Trash2 size={13} />
                         </button>
-                      </div>
-                    </Td>
-                  )}
+                      </>}
+                    </div>
+                  </Td>
                 </Tr>
               )
             })}
           </tbody>
         </Table></TableWrap>
       )}
+
+      {/* Modal editar/nuevo ítem */}
       {selected && (
         <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.id ? 'Editar ítem' : 'Nuevo ítem'} maxWidth="max-w-lg"
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
@@ -581,6 +649,75 @@ function TabInventario({ isAdmin }) {
             ))}
             <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Descripción</label><Textarea value={form.descripcion||''} onChange={e => setForm(p=>({...p,descripcion:e.target.value}))} /></div>
           </div>
+        </Modal>
+      )}
+
+      {/* Modal registrar movimiento */}
+      {movItem && (
+        <Modal open={!!movItem} onClose={() => setMovItem(null)}
+          title={`Movimiento — ${movItem.nombre}`} maxWidth="max-w-sm"
+          footer={<><Button variant="secondary" onClick={() => setMovItem(null)}>Cancelar</Button><Button onClick={registrarMovimiento} disabled={movSaving}>{movSaving ? 'Guardando...' : 'Registrar'}</Button></>}>
+          <div className="space-y-3">
+            <div className="flex gap-2 bg-surface2 rounded-xl p-1">
+              {['ENTRADA','SALIDA'].map(t => (
+                <button key={t}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[12px] font-bold transition-all ${movForm.tipo === t ? (t === 'ENTRADA' ? 'bg-[#1D8A55] text-white' : 'bg-danger text-white') : 'text-ink2 hover:bg-surface3'}`}
+                  onClick={() => setMovForm(p => ({ ...p, tipo: t }))}>
+                  {t === 'ENTRADA' ? <ArrowUpCircle size={13} /> : <ArrowDownCircle size={13} />}
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="text-center text-[12px] text-ink3">
+              Stock actual: <strong className="text-ink">{movItem.stock_actual}</strong> {movItem.unidad}
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Cantidad</label>
+              <Input type="number" min="1" value={movForm.cantidad} onChange={e => setMovForm(p => ({ ...p, cantidad: e.target.value }))} placeholder="0" />
+              {movForm.cantidad && (
+                <div className={`text-[11px] font-semibold mt-1 ${movForm.tipo === 'ENTRADA' ? 'text-[#1D8A55]' : 'text-danger'}`}>
+                  Stock resultante: {(movItem.stock_actual || 0) + (movForm.tipo === 'ENTRADA' ? 1 : -1) * parseFloat(movForm.cantidad||0)} {movItem.unidad}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Motivo (opcional)</label>
+              <Input value={movForm.motivo} onChange={e => setMovForm(p => ({ ...p, motivo: e.target.value }))} placeholder="Ej: Compra proveedor, Uso producción..." />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal historial */}
+      {histItem && (
+        <Modal open={!!histItem} onClose={() => setHistItem(null)}
+          title={`Historial — ${histItem.nombre}`} maxWidth="max-w-lg"
+          footer={<Button variant="secondary" onClick={() => setHistItem(null)}>Cerrar</Button>}>
+          {histData.length === 0 ? (
+            <div className="text-center py-8 text-ink3 text-sm">Sin movimientos registrados</div>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {histData.map(m => (
+                <div key={m.id} className="flex items-center gap-3 p-2.5 rounded-xl border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                  {m.tipo === 'ENTRADA'
+                    ? <ArrowUpCircle size={16} className="text-[#1D8A55] flex-shrink-0" />
+                    : <ArrowDownCircle size={16} className="text-danger flex-shrink-0" />
+                  }
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[12px] font-bold ${m.tipo === 'ENTRADA' ? 'text-[#1D8A55]' : 'text-danger'}`}>
+                        {m.tipo === 'ENTRADA' ? '+' : '-'}{m.cantidad}
+                      </span>
+                      {m.motivo && <span className="text-[11px] text-ink2">{m.motivo}</span>}
+                    </div>
+                    <div className="text-[10px] text-ink3">
+                      {m.personal ? `${m.personal.nombre} ${m.personal.apellido || ''}` : 'Sin registrar'} · {new Date(m.created_at).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
     </div>

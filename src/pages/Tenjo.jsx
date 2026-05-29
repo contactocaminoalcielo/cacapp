@@ -10,11 +10,12 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { EstadoBadge } from '@/components/ui/badge'
 import { db } from '@/lib/supabase'
 import { petEmoji, today } from '@/lib/utils'
-import { Truck, RefreshCw, Plus } from 'lucide-react'
+import { Truck, RefreshCw, Plus, CheckCircle2, Flame } from 'lucide-react'
 
 export default function Tenjo() {
   const [traslados, setTraslados] = useState([])
   const [aptosTraslado, setAptosTraslado] = useState([])
+  const [cenizasPendientes, setCenizasPendientes] = useState([])
   const [compostajes, setCompostajes] = useState([])
   const [personal, setPersonal] = useState([])
   const [loading, setLoading] = useState(true)
@@ -29,11 +30,17 @@ export default function Tenjo() {
   async function cargar() {
     try {
       setLoading(true)
-      const [{ data: tras }, { data: cuarto }, { data: comp }, { data: per }] = await Promise.all([
+      const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: comp }, { data: per }] = await Promise.all([
         db.from('traslados_tenjo')
           .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), personal(nombre,apellido)')
           .in('estado', ['PROGRAMADO','EN_CAMINO'])
           .order('fecha_programada', { ascending: true }),
+        // Traslados completados donde servicio aún está EN_PROCESO → cenizas pendientes de confirmar
+        db.from('traslados_tenjo')
+          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), personal(nombre,apellido)')
+          .eq('estado', 'COMPLETADO')
+          .eq('servicios.estado', 'EN_PROCESO')
+          .order('fecha_completado', { ascending: true }),
         db.from('cuarto_frio')
           .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
           .eq('estado', 'REFRIGERADO'),
@@ -41,6 +48,8 @@ export default function Tenjo() {
         db.from('personal').select('*').eq('activo', true).order('nombre'),
       ])
       setTraslados(tras || [])
+      // filtro extra client-side: solo cremaciones donde el servicio aún está EN_PROCESO
+      setCenizasPendientes((cenizas || []).filter(t => t.servicios?.estado === 'EN_PROCESO'))
       setAptosTraslado((cuarto || []).filter(r => {
         const tipo = r.servicios?.planes?.tipo_proceso
         return tipo === 'CREMACION_INDIVIDUAL' || tipo === 'COMPOSTAJE_INDIVIDUAL'
@@ -60,6 +69,16 @@ export default function Tenjo() {
       if (estado === 'COMPLETADO' && servicioId) {
         await db.from('servicios').update({ estado: 'EN_PROCESO' }).eq('id', servicioId)
       }
+      await cargar()
+    } catch (e) {
+      alert('Error: ' + e.message)
+    }
+  }
+
+  async function confirmarCenizas(servicioId) {
+    if (!confirm('¿Confirmar que las cenizas están listas? El servicio pasará a EN_PRODUCCION.')) return
+    try {
+      await db.from('servicios').update({ estado: 'EN_PRODUCCION' }).eq('id', servicioId)
       await cargar()
     } catch (e) {
       alert('Error: ' + e.message)
@@ -102,7 +121,7 @@ export default function Tenjo() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="Traslados programados" value={traslados.filter(t => t.estado === 'PROGRAMADO').length} valueColor="#3B6FBF" />
           <StatCard label="En camino" value={traslados.filter(t => t.estado === 'EN_CAMINO').length} valueColor="#9A5500" />
-          <StatCard label="Aptos para traslado" value={aptosTraslado.length} />
+          <StatCard label="Cenizas por confirmar" value={cenizasPendientes.length} valueColor={cenizasPendientes.length > 0 ? '#C03030' : '#9CA3AF'} />
           <StatCard label="Compostajes activos" value={compostajes.length} valueColor="#1D8A55" />
         </div>
 
@@ -154,6 +173,43 @@ export default function Tenjo() {
             </div>
           )}
         </div>
+
+        {/* Cenizas por confirmar */}
+        {cenizasPendientes.length > 0 && (
+          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C03030' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(192,48,48,0.2)' }}>
+              <Flame size={16} className="text-danger" />
+              <div className="font-serif text-lg text-ink flex-1">Cenizas por confirmar</div>
+              <span className="text-[11px] font-bold text-danger bg-danger-light px-2 py-0.5 rounded-full">
+                {cenizasPendientes.length} pendiente{cenizasPendientes.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="p-5 space-y-3">
+              {cenizasPendientes.map(t => {
+                const m = t.servicios?.mascotas
+                const c = m?.clientes
+                const p = t.servicios?.planes
+                return (
+                  <div key={t.id} className="flex items-center gap-4 p-4 rounded-xl border hover:bg-surface2 transition-all"
+                    style={{ borderColor: 'rgba(192,48,48,0.15)', background: '#FFF8F8' }}>
+                    <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
+                    <div className="flex-1">
+                      <div className="font-semibold text-ink">{m?.nombre}</div>
+                      <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
+                      <div className="text-[11px] text-ink2 mt-0.5">
+                        Completado: {t.fecha_completado ? new Date(t.fecha_completado).toLocaleDateString('es-CO') : '-'}
+                      </div>
+                    </div>
+                    <Button size="sm" variant="primary"
+                      onClick={() => confirmarCenizas(t.servicios?.id)}>
+                      <CheckCircle2 size={13} /> Confirmar cenizas
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Aptos para traslado */}
         <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>

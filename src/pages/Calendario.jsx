@@ -3,7 +3,7 @@ import Topbar from '@/components/layout/Topbar'
 import { EstadoBadge } from '@/components/ui/badge'
 import { db } from '@/lib/supabase'
 import { petEmoji, addDiasHabiles } from '@/lib/utils'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Clock, AlertTriangle } from 'lucide-react'
 
 const DIAS_HABILES_PLAN = {
   DESAMPARADO: 3, ANGEL: 3, ECO_GRUPAL: 3,
@@ -109,17 +109,19 @@ export default function Calendario() {
                 const seleccionado = diaSeleccionado === fechaStr
                 return (
                   <div key={dia}
-                    className={`min-h-[60px] p-1.5 rounded-lg cursor-pointer transition-all border ${seleccionado ? 'border-primary-dark bg-green-light' : esHoy ? 'border-primary bg-green-light/50' : 'border-transparent hover:bg-surface2'}`}
+                    className={`min-h-[60px] p-1.5 rounded-lg cursor-pointer transition-all border ${seleccionado ? 'border-primary-dark bg-green-light' : esHoy ? 'border-primary bg-green-light/50' : svsHoy.length > 0 ? 'border-transparent hover:bg-surface2' : 'border-transparent hover:bg-surface2'}`}
                     onClick={() => setDiaSeleccionado(fechaStr === diaSeleccionado ? null : fechaStr)}>
                     <div className={`text-[11px] font-bold mb-1 ${esHoy ? 'text-primary-dark' : 'text-ink2'}`}>{dia}</div>
-                    <div className="flex flex-wrap gap-0.5">
-                      {svsHoy.slice(0, 3).map((s, idx) => (
-                        <div key={idx} className="w-2 h-2 rounded-full" style={{ background: getColorDia(s) }} title={s.mascota} />
-                      ))}
-                      {svsHoy.length > 3 && (
-                        <div className="text-[8px] font-bold text-ink3">+{svsHoy.length - 3}</div>
-                      )}
-                    </div>
+                    {svsHoy.length > 0 && (
+                      <div className="flex flex-wrap gap-0.5 items-center">
+                        {svsHoy.slice(0, 3).map((s, idx) => (
+                          <div key={idx} className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: getColorDia(s) }} title={s.mascota} />
+                        ))}
+                        <div className="w-full text-[8px] font-bold text-ink3 mt-0.5 leading-tight">
+                          {svsHoy.length > 3 ? `+${svsHoy.length - 3} más` : `${svsHoy.length}`}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -142,13 +144,68 @@ export default function Calendario() {
             </div>
           </div>
 
-          {/* Panel detalle */}
-          <div className="bg-surface border rounded-2xl p-5 shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          {/* Panel detalle / próximos */}
+          <div className="bg-surface border rounded-2xl p-5 shadow-sm overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             {!diaSeleccionado ? (
-              <div className="text-center py-12 text-ink3">
-                <div className="text-4xl mb-3">📅</div>
-                <div className="text-sm font-medium">Selecciona un día para ver los servicios</div>
-              </div>
+              // Próximos vencimientos (14 días)
+              (() => {
+                const hoyDate = new Date()
+                const limite  = new Date(hoyDate); limite.setDate(limite.getDate() + 14)
+                const proximos = servicios
+                  .filter(s => {
+                    if (!s.fecha_limite_entrega) return false
+                    if (s.estado === 'ENTREGADO' || s.estado === 'CANCELADO') return false
+                    const d = new Date(s.fecha_limite_entrega)
+                    return d >= hoyDate && d <= limite
+                  })
+                  .sort((a, b) => new Date(a.fecha_limite_entrega) - new Date(b.fecha_limite_entrega))
+                  .slice(0, 15)
+
+                const vencidos = servicios.filter(s =>
+                  s.estado !== 'ENTREGADO' && s.estado !== 'CANCELADO' &&
+                  s.dias_para_vencer !== null && s.dias_para_vencer < 0
+                )
+
+                return (
+                  <div>
+                    {vencidos.length > 0 && (
+                      <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl bg-danger-light border border-danger/20">
+                        <AlertTriangle size={13} className="text-danger flex-shrink-0" />
+                        <span className="text-[12px] font-bold text-danger">{vencidos.length} servicio{vencidos.length !== 1 ? 's' : ''} vencido{vencidos.length !== 1 ? 's' : ''}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 mb-3">
+                      <Clock size={13} className="text-ink3" />
+                      <span className="text-[12px] font-bold text-ink2">Próximos 14 días</span>
+                    </div>
+                    {proximos.length === 0 ? (
+                      <div className="text-center py-8 text-ink3 text-sm">Sin vencimientos próximos</div>
+                    ) : (
+                      <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                        {proximos.map(s => (
+                          <div key={s.servicio_id} className="flex items-center gap-2 p-2.5 rounded-xl border hover:bg-surface2 transition-all"
+                            style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                            <span className="text-base leading-none flex-shrink-0">{petEmoji(s.especie)}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-ink text-[12px] truncate">{s.mascota}</div>
+                              <div className="text-[10px] text-ink3 truncate">{s.cliente}</div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <div className={`text-[11px] font-bold ${s.dias_para_vencer === 0 ? 'text-danger' : s.dias_para_vencer <= 3 ? 'text-[#9A5500]' : 'text-ink2'}`}>
+                                {s.dias_para_vencer === 0 ? 'Hoy' : `${s.dias_para_vencer}d`}
+                              </div>
+                              <div className="text-[9px] text-ink3">{new Date(s.fecha_limite_entrega + 'T12:00:00').toLocaleDateString('es-CO', { day:'numeric', month:'short' })}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-4 pt-3 border-t text-center text-[11px] text-ink3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                      Haz clic en un día para ver sus servicios
+                    </div>
+                  </div>
+                )
+              })()
             ) : (
               <>
                 <div className="font-serif text-lg text-ink mb-4">

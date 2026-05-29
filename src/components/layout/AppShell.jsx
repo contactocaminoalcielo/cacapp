@@ -118,7 +118,7 @@ export default function AppShell({ children }) {
       <div className="flex-1 flex flex-col min-h-screen lg:ml-[240px] overflow-x-hidden">
         {/* Topbar — siempre visible */}
         <div
-          className="sticky top-0 z-30 flex items-center gap-3 bg-white px-4 h-14"
+          className="sticky top-0 z-50 flex items-center gap-3 bg-white px-4 h-14"
           style={{ borderBottom: '1px solid #F0F2F0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
         >
           {/* Hamburger solo en móvil */}

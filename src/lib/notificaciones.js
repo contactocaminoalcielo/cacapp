@@ -2,10 +2,13 @@
 import { db } from '@/lib/supabase'
 
 export const TIPOS = {
-  TECNICO_INICIO_RUTA:  'TECNICO_INICIO_RUTA',   // técnico → coordinador
-  TECNICO_DECLINA:      'TECNICO_DECLINA',         // técnico → coordinador
-  REASIGNACION_TECNICO: 'REASIGNACION_TECNICO',    // coordinador → técnico nuevo
-  REASIGNACION_REMOVIDO:'REASIGNACION_REMOVIDO',   // coordinador → técnico anterior
+  TECNICO_INICIO_RUTA:  'TECNICO_INICIO_RUTA',    // técnico → coordinador
+  TECNICO_DECLINA:      'TECNICO_DECLINA',          // técnico → coordinador
+  REASIGNACION_TECNICO: 'REASIGNACION_TECNICO',     // coordinador → técnico nuevo
+  REASIGNACION_REMOVIDO:'REASIGNACION_REMOVIDO',    // coordinador → técnico anterior
+  ENTREGA_ASIGNADA:     'ENTREGA_ASIGNADA',         // coordinador → mensajero
+  ENTREGA_EN_CAMINO:    'ENTREGA_EN_CAMINO',        // mensajero → coordinador
+  ENTREGA_COMPLETADA:   'ENTREGA_COMPLETADA',       // mensajero → coordinador
 }
 
 /** Crear una notificación para un usuario */

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import CargaIA from '@/components/CargaIA'
@@ -105,6 +105,7 @@ function Spinner({ size = 16 }) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function Registro() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [paso, setPaso]       = useState(0)
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState(null)
@@ -269,6 +270,34 @@ export default function Registro() {
     setAliados(als || [])
     setPersonal(per || [])
     setRecordatoriosAdic(rec || [])
+
+    // Auto-cargar desde plan presequial activado
+    const pre = location.state?.presequial
+    if (pre) {
+      const [{ data: cli }, { data: msc }, { data: pl }] = await Promise.all([
+        pre.cliente_id ? db.from('clientes').select('*').eq('id_cliente', pre.cliente_id).maybeSingle() : { data: null },
+        pre.mascota_id ? db.from('mascotas').select('*, especies(nombre)').eq('id_mascota', pre.mascota_id).maybeSingle() : { data: null },
+        pre.plan_id    ? db.from('planes').select('*').eq('id', pre.plan_id).maybeSingle()                   : { data: null },
+      ])
+      if (cli) {
+        setClienteSeleccionado(cli)
+        setClienteNuevo(false)
+        if (cli.direccion) {
+          setFormRecogida(prev => ({
+            ...prev,
+            direccion_recogida: cli.direccion,
+            ciudad_recogida: cli.ciudad || 'Bogotá',
+          }))
+        }
+        if (msc) {
+          setMascotasCliente([msc])
+          setMascotaSeleccionada(msc)
+        }
+      }
+      if (pl) {
+        setPlanSeleccionado(pl)
+      }
+    }
   }
 
   // ── búsqueda cliente debounced ──
@@ -476,7 +505,10 @@ export default function Registro() {
       setFormRecogida(prev => ({
         ...prev,
         direccion_recogida:         a.direccion       || prev.direccion_recogida,
-        ciudad_recogida:            a.ciudad          || prev.ciudad_recogida,
+        // Solo sobreescribir ciudad si el aliado está en un municipio fuera de Bogotá;
+        // si está en Bogotá o no tiene ciudad, preservar la ciudad ya seleccionada
+        // (puede haber recargo de transporte independientemente de si el punto es domicilio o clínica)
+        ciudad_recogida:            (a.ciudad && a.ciudad !== 'Bogotá') ? a.ciudad : prev.ciudad_recogida,
         barrio_recogida:            a.barrio          || prev.barrio_recogida,
         nombre_contacto_recogida:   a.contacto_nombre || prev.nombre_contacto_recogida,
         telefono_contacto_recogida: a.telefono        || a.whatsapp || prev.telefono_contacto_recogida,
@@ -727,6 +759,14 @@ export default function Registro() {
         )}
 
         <Stepper paso={paso} setPaso={setPaso} />
+
+        {location.state?.presequial && (
+          <div className="flex items-center gap-2 mb-4 px-4 py-2.5 rounded-xl text-[13px] font-medium"
+            style={{ background: '#EDE9FE', border: '1px solid #C4B5FD', color: '#5B21B6' }}>
+            <Star size={14} />
+            Activando plan presequial — cliente, mascota y plan precargados
+          </div>
+        )}
 
         {iaDatos && (
           <div className="flex items-center gap-2 mb-4 px-4 py-2.5 rounded-xl text-[13px] font-medium"

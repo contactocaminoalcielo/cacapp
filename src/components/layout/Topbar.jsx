@@ -19,6 +19,7 @@ const PAGE_META = {
   '/presequiales': { title: 'Planes presequiales',    sub: 'Afiliaciones anticipadas' },
   '/configuracion':  { title: 'Configuración',        sub: 'Planes, recordatorios y catálogos' },
   '/lotes-grupales': { title: 'Lotes Grupales',       sub: 'Cremación y compostaje grupal' },
+  '/finanzas':       { title: 'Finanzas',             sub: 'Cartera, comisiones y pagos' },
 }
 
 const TIPO_ICON = {
@@ -70,7 +71,7 @@ export default function Topbar({ actions }) {
 
   return (
     <header
-      className="sticky top-14 z-40 bg-white flex items-center px-4 sm:px-6 gap-4"
+      className="sticky top-14 z-30 bg-white flex items-center px-4 sm:px-6 gap-4"
       style={{ height: 56, borderBottom: '1px solid #F0F2F0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
     >
       <div className="flex flex-col justify-center">

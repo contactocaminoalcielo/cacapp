@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { db, dbAdmin } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package } from 'lucide-react'
 
 const nullify = (obj, keys) => {
   const out = { ...obj }
@@ -1174,161 +1174,296 @@ function TabRecordatorios() {
 
 // ─── PLAN → ÍTEMS ─────────────────────────────────────────────────────────────
 function TabPlanItems() {
-  const [planes, setPlanes]             = useState([])
+  const [planes, setPlanes]               = useState([])
   const [recordatorios, setRecordatorios] = useState([])
-  const [items, setItems]               = useState([])
-  const [planId, setPlanId]             = useState('')
-  const [loading, setLoading]           = useState(true)
-  const [loadingItems, setLoadingItems] = useState(false)
-  const [editingId, setEditingId]       = useState(null)
-  const [editCantidad, setEditCantidad] = useState(1)
-  const [addRecId, setAddRecId]         = useState('')
-  const [addCantidad, setAddCantidad]   = useState(1)
-  const [addIncluido, setAddIncluido]   = useState(true)
-  const [saving, setSaving]             = useState(false)
+  // conteo de ítems por plan para mostrar en la lista izquierda
+  const [countsByPlan, setCountsByPlan]   = useState({})
+  const [planId, setPlanId]               = useState(null)
+  const [items, setItems]                 = useState([])
+  const [loading, setLoading]             = useState(true)
+  const [loadingItems, setLoadingItems]   = useState(false)
+  const [editingId, setEditingId]         = useState(null)
+  const [editCantidad, setEditCantidad]   = useState(1)
+  const [addRecId, setAddRecId]           = useState('')
+  const [addCantidad, setAddCantidad]     = useState(1)
+  const [addIncluido, setAddIncluido]     = useState(true)
+  const [saving, setSaving]               = useState(false)
+  const [busqueda, setBusqueda]           = useState('')
 
   useEffect(() => {
-    Promise.all([
-      db.from('planes').select('id,nombre,codigo').order('nombre'),
-      db.from('recordatorios').select('id,nombre,categoria').eq('activo', true).order('nombre'),
-    ]).then(([{ data: pl }, { data: rc }]) => {
+    async function cargarTodo() {
+      const [{ data: pl }, { data: rc }, { data: todos }] = await Promise.all([
+        db.from('planes').select('id,nombre,codigo').order('nombre'),
+        db.from('recordatorios').select('id,nombre,categoria').eq('activo', true).order('nombre'),
+        db.from('plan_recordatorios').select('plan_id'),
+      ])
       setPlanes(pl || [])
       setRecordatorios(rc || [])
+      // contar ítems por plan
+      const counts = {}
+      ;(todos || []).forEach(r => { counts[r.plan_id] = (counts[r.plan_id] || 0) + 1 })
+      setCountsByPlan(counts)
       setLoading(false)
-    })
+    }
+    cargarTodo()
   }, [])
 
-  useEffect(() => {
-    if (!planId) { setItems([]); return }
-    setAddRecId('')
-    setItems([])
-    cargarItems()
-  }, [planId])
-
-  async function cargarItems() {
+  async function cargarItems(id) {
     setLoadingItems(true)
-    const { data: d } = await db.from('plan_recordatorios')
-      .select('*, recordatorios(nombre, categoria)')
-      .eq('plan_id', planId)
-      .order('created_at')
-    setItems(d || [])
+    setItems([])
+    const { data: d, error } = await db.from('plan_recordatorios')
+      .select('*, recordatorios(nombre, categoria, solo_nombre)')
+      .eq('plan_id', id)
+    if (error) console.error('plan_recordatorios error:', error)
+    const sorted = (d || []).slice().sort((a, b) =>
+      (a.recordatorios?.nombre || '').localeCompare(b.recordatorios?.nombre || '')
+    )
+    setItems(sorted)
     setLoadingItems(false)
   }
 
+  function seleccionarPlan(id) {
+    setPlanId(id)
+    setEditingId(null)
+    setAddRecId('')
+    setAddCantidad(1)
+    setAddIncluido(true)
+    cargarItems(id)
+  }
+
   async function agregar() {
-    if (!addRecId) return
-    const yaExiste = items.find(i => i.recordatorio_id === addRecId)
-    if (yaExiste) return alert('Este ítem ya está en el plan.')
+    if (!addRecId || !planId) return
+    if (items.find(i => i.recordatorio_id === addRecId)) {
+      alert('Este ítem ya está en el plan.'); return
+    }
     setSaving(true)
     const { error } = await db.from('plan_recordatorios').insert({
-      plan_id: planId, recordatorio_id: addRecId,
-      cantidad: parseInt(addCantidad) || 1, incluido_en_precio: addIncluido,
+      plan_id: planId,
+      recordatorio_id: addRecId,
+      cantidad: parseInt(addCantidad) || 1,
+      incluido_en_precio: addIncluido,
     })
     setSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { alert('Error al agregar: ' + error.message); return }
     setAddRecId(''); setAddCantidad(1); setAddIncluido(true)
-    await cargarItems()
+    setCountsByPlan(prev => ({ ...prev, [planId]: (prev[planId] || 0) + 1 }))
+    await cargarItems(planId)
   }
 
   async function guardarEdicion(id) {
-    await db.from('plan_recordatorios').update({ cantidad: parseInt(editCantidad) || 1 }).eq('id', id)
+    const { error } = await db.from('plan_recordatorios')
+      .update({ cantidad: parseInt(editCantidad) || 1 })
+      .eq('id', id)
+    if (error) { alert('Error: ' + error.message); return }
     setEditingId(null)
-    await cargarItems()
+    await cargarItems(planId)
+  }
+
+  async function toggleIncluido(id, actual) {
+    await db.from('plan_recordatorios').update({ incluido_en_precio: !actual }).eq('id', id)
+    await cargarItems(planId)
   }
 
   async function eliminar(id, nombre) {
-    if (!window.confirm(`¿Quitar "${nombre}" de este plan?`)) return
+    if (!window.confirm(`¿Quitar "${nombre}" del plan?`)) return
     const { error } = await db.from('plan_recordatorios').delete().eq('id', id)
     if (error) { alert('Error: ' + error.message); return }
-    await cargarItems()
+    setCountsByPlan(prev => ({ ...prev, [planId]: Math.max(0, (prev[planId] || 1) - 1) }))
+    await cargarItems(planId)
   }
 
-  const disponibles = recordatorios.filter(r => !items.find(i => i.recordatorio_id === r.id))
+  const planActual     = planes.find(p => p.id === planId)
+  const disponibles    = recordatorios.filter(r => !items.find(i => i.recordatorio_id === r.id))
+  const dispFiltrados  = disponibles.filter(r => r.nombre.toLowerCase().includes(busqueda.toLowerCase()))
 
   if (loading) return <div className="text-center py-10 text-gray-400">Cargando...</div>
 
   return (
-    <div className="space-y-5">
-      {/* Selector de plan */}
-      <div className="flex items-center gap-3">
-        <div className="flex-1 max-w-xs">
-          <label className={LABEL}>Seleccionar plan</label>
-          <Select value={planId} onChange={e => setPlanId(e.target.value)}>
-            <option value="">— Elige un plan —</option>
-            {planes.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.codigo})</option>)}
-          </Select>
+    <div className="flex gap-5 min-h-[520px]">
+
+      {/* ── LISTA DE PLANES (izquierda) ── */}
+      <div className="w-56 flex-shrink-0">
+        <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2 px-1">Planes</div>
+        <div className="space-y-1">
+          {planes.map(p => {
+            const n = countsByPlan[p.id] || 0
+            const activo = planId === p.id
+            return (
+              <button key={p.id}
+                className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center justify-between gap-2 ${
+                  activo
+                    ? 'bg-[#3D5A27] text-white shadow-sm'
+                    : 'hover:bg-gray-100 text-gray-700'
+                }`}
+                onClick={() => seleccionarPlan(p.id)}
+              >
+                <div className="min-w-0">
+                  <div className={`text-[12px] font-semibold truncate ${activo ? 'text-white' : 'text-gray-800'}`}>{p.nombre}</div>
+                  <div className={`text-[10px] truncate ${activo ? 'text-green-200' : 'text-gray-400'}`}>{p.codigo}</div>
+                </div>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                  activo ? 'bg-white/20 text-white' : n > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
+                }`}>
+                  {n}
+                </span>
+              </button>
+            )
+          })}
         </div>
-        {planId && <div className="text-[12px] text-gray-400 mt-4">{items.length} ítems</div>}
       </div>
 
-      {planId && (
-        <>
-          {/* Tabla de ítems del plan */}
-          {loadingItems ? <div className="text-center py-6 text-gray-400">Cargando...</div> : (
-            <TableWrap><Table>
-              <thead><tr><Th>Ítem</Th><Th>Categoría</Th><Th>Cantidad</Th><Th>Incluido precio</Th><Th></Th></tr></thead>
-              <tbody>
-                {items.map(item => (
-                  <Tr key={item.id}>
-                    <Td className="font-semibold text-gray-900">{item.recordatorios?.nombre}</Td>
-                    <Td><span className="text-[11px] capitalize bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{item.recordatorios?.categoria || '—'}</span></Td>
-                    <Td>
-                      {editingId === item.id ? (
-                        <div className="flex items-center gap-2">
-                          <Input type="number" min="1" value={editCantidad} onChange={e => setEditCantidad(e.target.value)} className="w-20 h-7 text-[12px]" />
-                          <Button size="sm" onClick={() => guardarEdicion(item.id)}>OK</Button>
-                          <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
-                        </div>
-                      ) : (
-                        <button className="text-[13px] font-semibold text-gray-700 hover:underline" onClick={() => { setEditingId(item.id); setEditCantidad(item.cantidad || 1) }}>
-                          {item.cantidad || 1}
-                        </button>
-                      )}
-                    </Td>
-                    <Td>
-                      <button onClick={async () => {
-                        await db.from('plan_recordatorios').update({ incluido_en_precio: !item.incluido_en_precio }).eq('id', item.id)
-                        await cargarItems()
-                      }}>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${item.incluido_en_precio ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                          {item.incluido_en_precio ? 'Incluido' : 'Extra'}
-                        </span>
-                      </button>
-                    </Td>
-                    <Td>
-                      <button onClick={() => eliminar(item.id, item.recordatorios?.nombre)} className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={13} /></button>
-                    </Td>
-                  </Tr>
-                ))}
-                {items.length === 0 && <tr><td colSpan={5} className="text-center py-8 text-gray-400 text-sm">Este plan no tiene ítems. Agrega uno abajo.</td></tr>}
-              </tbody>
-            </Table></TableWrap>
-          )}
+      {/* ── PANEL DERECHO ── */}
+      <div className="flex-1 min-w-0">
+        {!planId ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-gray-400 py-20">
+            <Package size={32} className="mb-3 opacity-30" />
+            <div className="text-[13px] font-medium">Selecciona un plan para ver y gestionar sus ítems</div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Cabecera */}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[16px] font-bold text-gray-900">{planActual?.nombre}</div>
+                <div className="text-[11px] text-gray-400">{items.length} ítem{items.length !== 1 ? 's' : ''} configurados</div>
+              </div>
+            </div>
 
-          {/* Agregar nuevo ítem */}
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-            <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3">Agregar ítem al plan</div>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex-1 min-w-[200px]">
-                <label className={LABEL}>Recordatorio</label>
-                <Select value={addRecId} onChange={e => setAddRecId(e.target.value)}>
-                  <option value="">— Seleccionar —</option>
-                  {disponibles.map(r => <option key={r.id} value={r.id}>{r.nombre} {r.categoria ? `(${r.categoria})` : ''}</option>)}
-                </Select>
+            {/* Tabla de ítems */}
+            {loadingItems ? (
+              <div className="text-center py-10 text-gray-400 text-[13px]">Cargando ítems...</div>
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Ítem / Recordatorio</Th>
+                      <Th>Categoría</Th>
+                      <Th>Cant.</Th>
+                      <Th>En precio</Th>
+                      <Th>Solo nombre</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(item => (
+                      <Tr key={item.id}>
+                        <Td className="font-semibold text-gray-900">{item.recordatorios?.nombre || '—'}</Td>
+                        <Td>
+                          <span className="text-[10px] capitalize bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                            {item.recordatorios?.categoria || '—'}
+                          </span>
+                        </Td>
+                        <Td>
+                          {editingId === item.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <Input type="number" min="1" value={editCantidad}
+                                onChange={e => setEditCantidad(e.target.value)}
+                                className="w-16 h-7 text-[12px]" />
+                              <Button size="sm" onClick={() => guardarEdicion(item.id)}>OK</Button>
+                              <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600">
+                                <X size={12} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              className="text-[13px] font-bold text-gray-700 hover:text-[#3D5A27] hover:underline px-1"
+                              onClick={() => { setEditingId(item.id); setEditCantidad(item.cantidad || 1) }}
+                              title="Clic para editar"
+                            >
+                              {item.cantidad || 1}
+                            </button>
+                          )}
+                        </Td>
+                        <Td>
+                          <button onClick={() => toggleIncluido(item.id, item.incluido_en_precio)}>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer ${
+                              item.incluido_en_precio ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {item.incluido_en_precio ? '✓ Incluido' : 'Extra'}
+                            </span>
+                          </button>
+                        </Td>
+                        <Td>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                            item.recordatorios?.solo_nombre ? 'bg-purple-100 text-purple-700 font-semibold' : 'text-gray-300'
+                          }`}>
+                            {item.recordatorios?.solo_nombre ? 'Solo nombre' : '—'}
+                          </span>
+                        </Td>
+                        <Td>
+                          <button
+                            onClick={() => eliminar(item.id, item.recordatorios?.nombre)}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </Td>
+                      </Tr>
+                    ))}
+                    {items.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="text-center py-10 text-gray-400 text-[13px]">
+                          Este plan aún no tiene ítems. Agrega el primero abajo.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+
+            {/* Formulario agregar ítem */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <Plus size={11} /> Agregar ítem a este plan
               </div>
-              <div className="w-24">
-                <label className={LABEL}>Cantidad</label>
-                <Input type="number" min="1" value={addCantidad} onChange={e => setAddCantidad(e.target.value)} />
+              <div className="space-y-3">
+                <div>
+                  <label className={LABEL}>Buscar recordatorio</label>
+                  <Input
+                    placeholder="Escribe para filtrar..."
+                    value={busqueda}
+                    onChange={e => setBusqueda(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex-1 min-w-[200px]">
+                    <label className={LABEL}>Recordatorio</label>
+                    <Select value={addRecId} onChange={e => setAddRecId(e.target.value)}>
+                      <option value="">— Seleccionar —</option>
+                      {dispFiltrados.map(r => (
+                        <option key={r.id} value={r.id}>
+                          {r.nombre}{r.categoria ? ` · ${r.categoria}` : ''}
+                        </option>
+                      ))}
+                    </Select>
+                    {disponibles.length === 0 && (
+                      <p className="text-[10px] text-gray-400 mt-1">Todos los recordatorios activos ya están en este plan.</p>
+                    )}
+                  </div>
+                  <div className="w-20">
+                    <label className={LABEL}>Cantidad</label>
+                    <Input type="number" min="1" value={addCantidad}
+                      onChange={e => setAddCantidad(e.target.value)} />
+                  </div>
+                  <div className="flex items-center gap-2 pb-1">
+                    <input type="checkbox" id="addIncluido" checked={addIncluido}
+                      onChange={e => setAddIncluido(e.target.checked)}
+                      className="w-4 h-4 accent-[#3D5A27]" />
+                    <label htmlFor="addIncluido" className="text-[12px] font-semibold text-gray-700 cursor-pointer">
+                      Incluido en precio
+                    </label>
+                  </div>
+                  <Button onClick={agregar} disabled={saving || !addRecId || loadingItems}>
+                    <Plus size={13} /> {saving ? 'Guardando...' : 'Agregar'}
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-2 pb-1">
-                <input type="checkbox" id="incluido" checked={addIncluido} onChange={e => setAddIncluido(e.target.checked)} className="w-4 h-4 accent-[#3D5A27]" />
-                <label htmlFor="incluido" className="text-[13px] font-semibold text-gray-700 cursor-pointer">Incluido en precio</label>
-              </div>
-              <Button onClick={agregar} disabled={saving || !addRecId || loadingItems}><Plus size={14} /> Agregar</Button>
             </div>
           </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   )
 }

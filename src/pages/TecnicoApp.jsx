@@ -820,43 +820,80 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
 }
 
 // ─── CARD ENTREGA ───────────────────────────────────────────────────────
-function CardEntrega({ ent, onAction }) {
-  const [acting, setActing] = useState(false)
-  const [actErr, setActErr] = useState('')
+function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
+  const [actErr,         setActErr]         = useState('')
+  const [aceptando,      setAceptando]      = useState(false)
+  const [completando,    setCompletando]    = useState(false)
+  const [fotoUrl,        setFotoUrl]        = useState(ent.foto_entrega_url || null)
+  const [firmaDataUrl,   setFirmaDataUrl]   = useState(null)
+  const [nombreCliente,  setNombreCliente]  = useState('')
+  const [valorCobrado,   setValorCobrado]   = useState('')
+  const [genCert,        setGenCert]        = useState(false)
 
   const mascota = ent.servicios?.mascotas
   const especie = mascota?.especies?.nombre || ''
   const emoji   = petEmoji(especie)
   const cliente = mascota?.clientes
+  const saldo   = Math.max(0, (ent.servicios?.valor_total || 0) - (ent.servicios?.valor_pagado || 0))
 
   const BADGE = {
-    PENDIENTE:  { bg: '#FEF3C7', color: '#92400E', label: 'Pendiente' },
-    EN_PROCESO: { bg: '#DBEAFE', color: '#1E40AF', label: 'En camino' },
+    ASIGNADA:   { bg: '#EDE9FE', color: '#5B21B6', label: 'Asignada' },
+    EN_CAMINO:  { bg: '#DBEAFE', color: '#1E40AF', label: 'En camino' },
     ENTREGADA:  { bg: '#D1FAE5', color: '#065F46', label: 'Entregada' },
   }
   const badge = BADGE[ent.estado] || { bg: '#F3F4F6', color: '#374151', label: ent.estado }
-  const nextLabel = ent.estado === 'PENDIENTE' ? '🛵 Salir a entregar' : ent.estado === 'EN_PROCESO' ? '✅ Confirmar entrega' : null
 
-  async function accion() {
-    setActing(true); setActErr('')
-    try { await onAction(ent) }
-    catch (e) { setActErr(e.message || 'Error al actualizar') }
-    finally { setActing(false) }
+  const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim())
+
+  async function aceptar() {
+    setAceptando(true); setActErr('')
+    try { await onAceptar(ent) }
+    catch (e) { setActErr(e.message || 'Error al aceptar') }
+    finally { setAceptando(false) }
+  }
+
+  async function completar() {
+    setCompletando(true); setActErr('')
+    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente, valorCobrado }) }
+    catch (e) { setActErr(e.message || 'Error al completar') }
+    finally { setCompletando(false) }
+  }
+
+  async function descargarCertificado() {
+    setGenCert(true)
+    try {
+      const { generarCertificadoEntrega } = await import('@/lib/certificadoEntrega')
+      const { data: itemsData } = await db.from('servicio_recordatorios')
+        .select('id, estado, origen, recordatorios(nombre)')
+        .eq('servicio_id', ent.servicio_id).neq('origen', 'REMOVIDO')
+      const mensajero = { nombre: tecnico?.nombre || '', apellido: tecnico?.apellido || '' }
+      await generarCertificadoEntrega({
+        svc: { ...ent.servicios, id: ent.servicio_id },
+        entrega: ent, mensajero, items: itemsData || [],
+        firmaDataUrl,
+      })
+    } catch (e) { alert('Error al generar certificado: ' + e.message) }
+    finally { setGenCert(false) }
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-3 shadow-sm">
+    <div className="bg-white rounded-2xl border p-4 mb-3 shadow-sm"
+      style={{ borderColor: ent.estado === 'EN_CAMINO' ? '#93C5FD' : '#F0F0F0', borderWidth: ent.estado === 'EN_CAMINO' ? 2 : 1 }}>
+
+      {/* Header mascota */}
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
           <span style={{ fontSize: 30 }}>{emoji}</span>
           <div>
             <div className="font-bold text-gray-900 text-base leading-tight">{mascota?.nombre || '—'}</div>
-            <div className="text-xs text-gray-500">{especie}</div>
+            <div className="text-xs text-gray-500">{especie} · {ent.servicios?.planes?.nombre || ''}</div>
           </div>
         </div>
         <span className="text-[10px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
           style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
+
+      {/* Cliente */}
       {cliente && (
         <div className="flex items-center gap-2.5 mb-2.5">
           <div className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white"
@@ -875,25 +912,126 @@ function CardEntrega({ ent, onAction }) {
           </div>
         </div>
       )}
-      <div className="mb-3">
-        <DireccionLink
-          direccion={ent.direccion_entrega || ent.direccion_recogida}
-          ciudad={ent.ciudad}
-        />
+
+      {/* Dirección */}
+      <div className="mb-2.5">
+        <DireccionLink direccion={ent.direccion_entrega} barrio={ent.barrio} ciudad={ent.ciudad} />
       </div>
+
+      {/* Indicaciones */}
+      {ent.indicaciones && (
+        <div className="rounded-xl px-3 py-2 text-xs mb-3"
+          style={{ background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
+          📋 {ent.indicaciones}
+        </div>
+      )}
+
+      {/* Notas del coordinador */}
+      {ent.notas && (
+        <div className="rounded-xl px-3 py-2 text-xs mb-3"
+          style={{ background: '#EEF2FF', color: '#3730A3', border: '1px solid #C7D2FE' }}>
+          💬 {ent.notas}
+        </div>
+      )}
+
+      {/* Saldo a cobrar */}
+      {saldo > 0 ? (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 mb-3"
+          style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
+          <CreditCard size={15} style={{ color: '#D97706', flexShrink: 0 }} />
+          <div>
+            <div className="text-[11px] text-amber-700 font-medium">Cobrar al entregar</div>
+            <div className="text-xl font-extrabold" style={{ color: '#92400E' }}>{fmt(saldo)}</div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3 text-xs font-semibold"
+          style={{ background: '#D1FAE5', color: '#065F46' }}>
+          <CheckCircle size={13} /> Pagado completo — sin cobro en entrega
+        </div>
+      )}
+
+      {/* Botón certificado */}
+      <button onClick={descargarCertificado} disabled={genCert}
+        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[12px] font-bold mb-3 transition-all active:scale-98 disabled:opacity-60"
+        style={{ background: '#EDE9FE', color: '#5B21B6' }}>
+        {genCert ? <div className="w-3.5 h-3.5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" /> : <FileText size={13} />}
+        Descargar certificado de entrega
+      </button>
+
       {actErr && (
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-2"
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
           style={{ background: '#FEE2E2', color: '#991B1B' }}>
           <AlertCircle size={13} /> {actErr}
         </div>
       )}
-      {nextLabel && (
-        <button onClick={accion} disabled={acting}
-          className="w-full py-3.5 rounded-xl text-sm font-bold transition-all active:scale-98 disabled:opacity-60"
-          style={{ background: ent.estado === 'PENDIENTE' ? '#C4A87A' : '#22C55E', color: '#fff' }}>
-          {acting ? 'Actualizando…' : nextLabel}
+
+      {/* ── FASE 1: ASIGNADA → aceptar ── */}
+      {ent.estado === 'ASIGNADA' && (
+        <button onClick={aceptar} disabled={aceptando}
+          className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-60"
+          style={{ background: '#4F46E5', color: '#fff' }}>
+          {aceptando ? 'Aceptando…' : '🛵 Acepto y salgo a entregar'}
         </button>
       )}
+
+      {/* ── FASE 2: EN_CAMINO → completar entrega ── */}
+      {ent.estado === 'EN_CAMINO' && (
+        <div className="space-y-4 mt-2">
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold"
+            style={{ background: '#DBEAFE', color: '#1E40AF' }}>
+            🛵 En camino — completa la entrega al llegar
+          </div>
+
+          {/* Foto evidencia entrega */}
+          <FotoEvidencia
+            storagePath={`entregas/${ent.id}`}
+            dbSave={{ table: 'entregas', column: 'foto_entrega_url', id: ent.id }}
+            fotoUrl={fotoUrl}
+            onFotoUploaded={url => setFotoUrl(url)}
+            label="Foto de la entrega"
+            sublabel="Evidencia de que el cliente recibió los recordatorios"
+          />
+
+          {/* Firma del cliente */}
+          <SignaturePad onSigned={setFirmaDataUrl} firmaDataUrl={firmaDataUrl} />
+
+          {/* Nombre del cliente */}
+          <div>
+            <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <Pen size={11} /> Nombre del cliente (confirmar recibido)
+            </div>
+            <input type="text" value={nombreCliente} onChange={e => setNombreCliente(e.target.value)}
+              placeholder={cliente ? `${cliente.nombre} ${cliente.apellido}` : 'Nombre completo'}
+              className="w-full px-4 py-3 rounded-xl border-2 outline-none font-semibold text-sm"
+              style={{ borderColor: nombreCliente ? '#3D5A27' : '#E5E7EB' }} />
+          </div>
+
+          {/* Cobro en entrega (si hay saldo) */}
+          {saldo > 0 && (
+            <div>
+              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <CreditCard size={11} /> Valor cobrado en entrega
+              </div>
+              <input type="number" inputMode="numeric" step="100" value={valorCobrado}
+                onChange={e => setValorCobrado(e.target.value)}
+                placeholder={`Máx. ${fmt(saldo)}`}
+                className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
+                style={{ borderColor: valorCobrado ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
+            </div>
+          )}
+
+          <button onClick={completar} disabled={!puedeCompletar || completando}
+            className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-50"
+            style={{ background: puedeCompletar ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
+            {completando ? 'Guardando…'
+              : puedeCompletar ? '✅ Confirmar entrega completada'
+              : `Falta: ${!fotoUrl ? 'foto' : ''}${!fotoUrl && !firmaDataUrl && !nombreCliente ? ' + ' : ''}${!firmaDataUrl && !nombreCliente ? 'firma o nombre del cliente' : ''}`}
+          </button>
+        </div>
+      )}
+
+      <ComentariosSection servicioId={ent.servicio_id} personalId={tecnico?.id} />
     </div>
   )
 }
@@ -1173,17 +1311,18 @@ export default function TecnicoApp() {
       const { data: entData } = await db.from('entregas')
         .select(`
           *,
-          servicios (
-            id, estado,
+          servicios:servicio_id (
+            id, estado, valor_total, valor_pagado, estado_pago,
             mascotas:mascota_id (
               nombre, especie_id,
               especies ( nombre ),
               clientes:cliente_id ( nombre, apellido, whatsapp )
-            )
+            ),
+            planes:plan_id ( nombre )
           )
         `)
         .eq('mensajero_id', tecnico.id)
-        .in('estado', ['PENDIENTE', 'EN_PROCESO'])
+        .in('estado', ['ASIGNADA', 'EN_CAMINO'])
         .order('fecha_programada', { ascending: true, nullsFirst: true })
 
       // Filtrar EN_CUARTO_FRIO ya registrados
@@ -1350,18 +1489,80 @@ export default function TecnicoApp() {
     await cargar()
   }
 
-  async function accionEntrega(ent) {
-    if (ent.estado === 'PENDIENTE') {
-      const { error } = await db.from('entregas').update({ estado: 'EN_PROCESO' }).eq('id', ent.id)
-      if (error) throw new Error(error.message)
-      await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', ent.servicio_id)
-    } else if (ent.estado === 'EN_PROCESO') {
-      const { error } = await db.from('entregas').update({
-        estado: 'ENTREGADA', fecha_realizada: new Date().toISOString().split('T')[0],
-      }).eq('id', ent.id)
-      if (error) throw new Error(error.message)
-      await db.from('servicios').update({ estado: 'ENTREGADO' }).eq('id', ent.servicio_id)
+  async function aceptarEntrega(ent) {
+    const { error } = await db.from('entregas').update({ estado: 'EN_CAMINO' }).eq('id', ent.id)
+    if (error) throw new Error(error.message)
+    await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', ent.servicio_id)
+    // Notificar coordinadores
+    const coords = await getCoordinadores()
+    const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'ENTREGA_EN_CAMINO',
+      titulo:           `${tecnico?.nombre} salió a entregar`,
+      mensaje:          `Entrega de ${mascota} en camino. Dir: ${ent.direccion_entrega || '—'}`,
+      servicio_id:      ent.servicio_id,
+    })))
+    await cargar()
+  }
+
+  async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente, valorCobrado }) {
+    const now = new Date()
+    const patch = {
+      estado:           'ENTREGADA',
+      fecha_realizada:  now.toISOString().split('T')[0],
+      hora_realizada:   now.toTimeString().slice(0, 5),
+      foto_entrega_url: fotoUrl || null,
     }
+
+    // Subir firma si existe
+    if (firmaDataUrl) {
+      try {
+        const blob  = await (await fetch(firmaDataUrl)).blob()
+        const path  = `entregas/firmas/${ent.id}_${Date.now()}.png`
+        const { data: up } = await dbAdmin.storage.from('evidencias').upload(path, blob, { upsert: true, contentType: 'image/png' })
+        if (up) {
+          const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(up.path)
+          patch.foto_firma_url = publicUrl
+        }
+      } catch (_) { /* no bloquear si falla subida firma */ }
+    }
+
+    const { error } = await db.from('entregas').update(patch).eq('id', ent.id)
+    if (error) throw new Error(error.message)
+
+    await db.from('servicios').update({ estado: 'ENTREGADO' }).eq('id', ent.servicio_id)
+
+    // Cobro en entrega
+    const cobrado = parseFloat(valorCobrado) || 0
+    if (cobrado > 0) {
+      const svc = ent.servicios || {}
+      const nuevoPagado = (svc.valor_pagado || 0) + cobrado
+      const total = svc.valor_total || 0
+      const nuevoEstadoPago = nuevoPagado >= total ? 'COMPLETO' : 'PARCIAL'
+      await db.from('servicios').update({ valor_pagado: nuevoPagado, estado_pago: nuevoEstadoPago }).eq('id', ent.servicio_id)
+      await db.from('novedades_servicio').insert({
+        servicio_id:    ent.servicio_id,
+        tipo_novedad:   'PAGO_RECIBIDO',
+        descripcion:    `Mensajero cobró ${fmt(cobrado)} en entrega${nuevoEstadoPago === 'COMPLETO' ? ' — pago completo' : `. Queda: ${fmt(total - nuevoPagado)}`}`,
+        valor_ajuste:   cobrado,
+        registrado_por: tecnico?.id || null,
+      })
+    }
+
+    // Notificar coordinadores
+    const coords = await getCoordinadores()
+    const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'ENTREGA_COMPLETADA',
+      titulo:           'Entrega completada',
+      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.${cobrado > 0 ? ` Cobró: ${fmt(cobrado)}.` : ''}`,
+      servicio_id:      ent.servicio_id,
+    })))
+
     await cargar()
   }
 
@@ -1453,7 +1654,10 @@ export default function TecnicoApp() {
         ) : tab === 'entregas' ? (
           entregas.length === 0
             ? <EmptyState icon="📦" texto="Sin entregas asignadas" sub="Cuando te asignen una entrega, aparecerá aquí." />
-            : entregas.map(e => <CardEntrega key={e.id} ent={e} onAction={accionEntrega} />)
+            : entregas.map(e => (
+                <CardEntrega key={e.id} ent={e} tecnico={tecnico}
+                  onAceptar={aceptarEntrega} onCompletar={completarEntrega} />
+              ))
         ) : tab === 'cuarto_frio' ? (
           <div className="space-y-5">
             <ReporteCuartoFrio

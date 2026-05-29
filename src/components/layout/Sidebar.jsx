@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
-  Users, Star, Heart, BarChart3, Settings, X, LogOut,
+  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -42,8 +42,10 @@ const ALL_NAV_GROUPS = [
   {
     label: 'ADMIN',
     items: [
+      { path: '/finanzas',      label: 'Finanzas',       icon: Wallet    },
       { path: '/reportes',      label: 'Reportes',       icon: BarChart3 },
-      { path: '/configuracion', label: 'Configuración',  icon: Settings },
+      { path: '/recibos',       label: 'Recibos',        icon: Receipt   },
+      { path: '/configuracion', label: 'Configuración',  icon: Settings  },
     ],
   },
 ]

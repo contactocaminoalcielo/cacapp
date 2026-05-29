@@ -47,7 +47,16 @@ export default function SeguimientoImagenes() {
 
   async function actualizarEstado(id, nuevoEstado) {
     const update = { estado: nuevoEstado }
-    if (nuevoEstado === 'RECIBIDA') update.fecha_recepcion = today()
+    if (nuevoEstado === 'RECIBIDA') {
+      update.fecha_recepcion = today()
+      const sol = solicitudes.find(s => s.id === id)
+      if (sol?.servicio_id) {
+        await db.from('servicios')
+          .update({ fecha_imagenes_recibidas: today() })
+          .eq('id', sol.servicio_id)
+          .is('fecha_imagenes_recibidas', null)
+      }
+    }
     await db.from('solicitudes_imagenes').update(update).eq('id', id)
     setSolicitudes(prev => prev.map(s => s.id === id ? { ...s, ...update } : s))
   }

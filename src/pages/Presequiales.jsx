@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
-import { Plus, RefreshCw } from 'lucide-react'
+import { Plus, RefreshCw, Rocket } from 'lucide-react'
 
 const FILTROS = [
   { key: 'todos', label: 'Todos' },
@@ -28,8 +29,10 @@ const NIVEL_COLORS = {
 }
 
 export default function Presequiales() {
+  const navigate = useNavigate()
   const [data, setData] = useState([])
   const [planes, setPlanes] = useState([])
+  const [planesServicio, setPlanesServicio] = useState([])
   const [clientes, setClientes] = useState([])
   const [mascotas, setMascotas] = useState([])
   const [loading, setLoading] = useState(true)
@@ -38,22 +41,25 @@ export default function Presequiales() {
   const [selected, setSelected] = useState(null)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
+  const [modalOroItem, setModalOroItem] = useState(null) // item ORO pendiente de elegir tipo
 
   useEffect(() => { cargar() }, [])
 
   async function cargar() {
     try {
       setLoading(true)
-      const [{ data: d }, { data: pls }, { data: cls }, { data: msc }] = await Promise.all([
+      const [{ data: d }, { data: pls }, { data: pls2 }, { data: cls }, { data: msc }] = await Promise.all([
         db.from('planes_presequiales')
           .select('*, clientes(nombre,apellido,whatsapp,cedula_nit), mascotas(nombre,especie_id,especies(nombre)), planes(nombre,codigo)')
           .order('created_at', { ascending: false }),
         db.from('planes').select('*').in('codigo', ['BRONCE','PLATA','ORO_EXCLUSIVO','DIAMANTE','VITALICIO']),
+        db.from('planes').select('id,nombre,codigo').in('codigo', ['EXCLUSIVO_PRESENCIAL','EXCLUSIVO_VIDEOLLAMADA','COMPETS_EVIDENCIA','COMPETS_PRESENCIAL']),
         db.from('clientes').select('id_cliente,nombre,apellido').order('nombre'),
         db.from('mascotas').select('id_mascota,nombre,cliente_id,especies(nombre)').order('nombre'),
       ])
       setData(d || [])
       setPlanes(pls || [])
+      setPlanesServicio(pls2 || [])
       setClientes(cls || [])
       setMascotas(msc || [])
     } catch (e) {
@@ -63,10 +69,35 @@ export default function Presequiales() {
     }
   }
 
-  async function activar(item) {
-    if (!confirm('¿Confirmar activación del plan presequial?')) return
+  async function activar(item, planIdOverride) {
+    // ORO necesita elegir tipo antes de continuar
+    if (item.nivel === 'ORO' && !planIdOverride) {
+      setModalOroItem(item)
+      return
+    }
+    if (!confirm(`¿Activar el plan ${item.nivel} de ${item.clientes?.nombre} ${item.clientes?.apellido || ''}?\n\nSe abrirá el formulario de registro preconfigurado con sus datos.`)) return
     await db.from('planes_presequiales').update({ estado: 'ACTIVADO' }).eq('id', item.id)
-    await cargar()
+    navigate('/registro', {
+      state: {
+        presequial: {
+          id:         item.id,
+          cliente_id: item.cliente_id,
+          mascota_id: item.mascota_id,
+          plan_id:    planIdOverride || item.plan_id,
+          nivel:      item.nivel,
+        }
+      }
+    })
+  }
+
+  async function activarOro(tipo) {
+    // tipo: 'exclusivo' | 'compostaje'
+    const codigos = tipo === 'exclusivo'
+      ? ['EXCLUSIVO_PRESENCIAL','EXCLUSIVO_VIDEOLLAMADA']
+      : ['COMPETS_EVIDENCIA','COMPETS_PRESENCIAL']
+    const plan = planesServicio.find(p => codigos.includes(p.codigo))
+    setModalOroItem(null)
+    activar(modalOroItem, plan?.id || null)
   }
 
   async function guardar() {
@@ -190,7 +221,9 @@ export default function Presequiales() {
                     <Td>
                       <div className="flex gap-1">
                         {d.estado === 'ACTIVO' && (
-                          <Button size="sm" variant="gold" onClick={() => activar(d)}>Activar</Button>
+                          <Button size="sm" variant="gold" onClick={() => activar(d)}>
+                            <Rocket size={11} /> Activar
+                          </Button>
                         )}
                         <Button size="sm" variant="ghost" onClick={() => { setSelected(d); setForm({ nivel:d.nivel,plan_id:d.plan_id,modalidad_pago:d.modalidad_pago||'MENSUAL',valor_total:d.valor_total,valor_pagado:d.valor_pagado,numero_cuotas:d.numero_cuotas,cuotas_pagadas:d.cuotas_pagadas,notas:d.notas||'' }) }}>
                           Editar
@@ -208,7 +241,41 @@ export default function Presequiales() {
         </TableWrap>
       </div>
 
-      {/* Modal */}
+      {/* Modal selección tipo ORO */}
+      {modalOroItem && (
+        <Modal open={!!modalOroItem} onClose={() => setModalOroItem(null)}
+          title="Activar plan ORO — elige el tipo de servicio"
+          maxWidth="max-w-sm"
+          footer={<Button variant="secondary" onClick={() => setModalOroItem(null)}>Cancelar</Button>}>
+          <p className="text-[13px] text-ink2 mb-4">
+            El plan ORO puede convertirse en <strong>Exclusivo (cremación individual)</strong> o en <strong>Compostaje (Compets)</strong>. Elige según lo que el cliente prefiera:
+          </p>
+          <div className="grid grid-cols-1 gap-3">
+            <button
+              onClick={() => activarOro('exclusivo')}
+              className="flex items-start gap-3 p-4 rounded-xl border-2 hover:bg-surface2 transition-all text-left"
+              style={{ borderColor: '#5B21B6' }}>
+              <div className="text-2xl">🕊️</div>
+              <div>
+                <div className="font-bold text-ink">Exclusivo (cremación individual)</div>
+                <div className="text-[11px] text-ink3 mt-0.5">Cremación en Tenjo, entrega en 8 días hábiles</div>
+              </div>
+            </button>
+            <button
+              onClick={() => activarOro('compostaje')}
+              className="flex items-start gap-3 p-4 rounded-xl border-2 hover:bg-surface2 transition-all text-left"
+              style={{ borderColor: '#1D8A55' }}>
+              <div className="text-2xl">🌱</div>
+              <div>
+                <div className="font-bold text-ink">Compostaje (Compets)</div>
+                <div className="text-[11px] text-ink3 mt-0.5">Compostaje individual, proceso de ~2 meses</div>
+              </div>
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal editar/nuevo */}
       {selected && (
         <Modal open={!!selected} onClose={() => setSelected(null)}
           title={selected?.id ? 'Editar presequial' : 'Nuevo presequial'}

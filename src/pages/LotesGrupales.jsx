@@ -281,7 +281,7 @@ function CertificadoModal({ servicio, lote, onClose }) {
 }
 
 // ─── Lote card (historial) ─────────────────────────────────────────────────────
-function LoteCard({ lote, servicios, onCert }) {
+function LoteCard({ lote, servicios, onCert, onCompletar }) {
   const [open, setOpen]   = useState(false)
   const cfg   = TIPO_CFG[lote.tipo_proceso]  || TIPO_CFG.CREMACION_GRUPAL
   const eCfg  = ESTADO_CFG[lote.estado]      || {}
@@ -313,6 +313,14 @@ function LoteCard({ lote, servicios, onCert }) {
 
       {open && (
         <div className="px-5 pb-4 border-t space-y-2" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          {onCompletar && (
+            <button
+              onClick={e => { e.stopPropagation(); onCompletar() }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all hover:opacity-90 mb-1"
+              style={{ background: '#D1FAE5', color: '#065F46', border: '1.5px solid #6EE7B7' }}>
+              <CheckCircle2 size={14} /> Proceso completado — pasar a EN PRODUCCIÓN
+            </button>
+          )}
           {servicios?.length ? servicios.map(s => (
             <SvcRow
               key={s.servicio_id}
@@ -510,6 +518,23 @@ export default function LotesGrupales() {
       alert('Error cerrando lote. Intenta de nuevo.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ── Completar lote: marca COMPLETADO y pasa servicios a EN_PRODUCCION ──────
+  async function completarLote(loteId) {
+    if (!confirm('¿Confirmar que el proceso fue completado y las cenizas están listas?\n\nTodos los servicios de este lote pasarán a EN PRODUCCIÓN.')) return
+    try {
+      const svcs = svcsHist[loteId] || []
+      await db.from('lotes_grupales').update({ estado: 'COMPLETADO' }).eq('id', loteId)
+      if (svcs.length > 0) {
+        await db.from('servicios')
+          .update({ estado: 'EN_PRODUCCION' })
+          .in('id', svcs.map(s => s.servicio_id))
+      }
+      await cargar()
+    } catch (e) {
+      alert('Error: ' + e.message)
     }
   }
 
@@ -714,6 +739,7 @@ export default function LotesGrupales() {
                 lote={lote}
                 servicios={svcsHist[lote.id] || []}
                 onCert={(svc, lt) => setCertModal({ servicio: svc, lote: lt })}
+                onCompletar={lote.estado === 'ENVIADO' && esCoord ? () => completarLote(lote.id) : null}
               />
             ))}
           </div>

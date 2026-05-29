@@ -6,9 +6,9 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji } from '@/lib/utils'
+import { petEmoji, fmt } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
-import { AlertTriangle, TrendingUp, PlusCircle, Activity, Snowflake, Package, Truck, Layers, Camera, Star, Calendar } from 'lucide-react'
+import { AlertTriangle, TrendingUp, TrendingDown, PlusCircle, Activity, Snowflake, Package, Truck, Layers, Camera, Star, Calendar, DollarSign, BadgePercent, Clock } from 'lucide-react'
 
 // ── constantes compartidas ────────────────────────────────────────────────────
 const ESTADOS_TODOS    = ['INGRESADO','EN_RECOGIDA','EN_CUARTO_FRIO','EN_PROCESO','EN_PRODUCCION','LISTO','EN_ENTREGA']
@@ -40,6 +40,7 @@ export default function Dashboard() {
 
   const [servicios, setServicios] = useState([])
   const [alertas,   setAlertas]   = useState([])
+  const [npsPromedio, setNpsPromedio] = useState(null)
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState(null)
 
@@ -48,19 +49,29 @@ export default function Dashboard() {
   async function cargar() {
     try {
       setLoading(true)
+      const hoy = new Date()
+      const primerMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
+
       let kanbanQ = db.from('v_kanban').select('*').order('fecha_ingreso', { ascending: false })
       let alertasQ = db.from('v_alertas').select('*')
         .in('nivel_alerta', ['VENCIDO','HOY','URGENTE'])
         .order('dias_para_vencer', { ascending: true })
+      const npsQ = db.from('nps_seguimiento')
+        .select('nps')
+        .not('nps', 'is', null)
+        .gte('fecha_realizada', primerMes)
 
       if (esProductor) {
         kanbanQ  = kanbanQ.in('estado', ESTADOS_PROD)
         alertasQ = alertasQ.in('estado', ESTADOS_ACTIVOS_PROD)
       }
 
-      const [{ data: kanban }, { data: alts }] = await Promise.all([kanbanQ, alertasQ])
+      const [{ data: kanban }, { data: alts }, { data: nps }] = await Promise.all([kanbanQ, alertasQ, npsQ])
       setServicios(kanban || [])
       setAlertas(alts || [])
+      if (nps?.length > 0) {
+        setNpsPromedio((nps.reduce((a, n) => a + n.nps, 0) / nps.length).toFixed(1))
+      }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -84,11 +95,23 @@ export default function Dashboard() {
 
   return esProductor
     ? <DashboardProductor servicios={servicios} alertas={alertas} navigate={navigate} />
-    : <DashboardGeneral   servicios={servicios} alertas={alertas} navigate={navigate} />
+    : <DashboardGeneral   servicios={servicios} alertas={alertas} npsPromedio={npsPromedio} navigate={navigate} />
+}
+
+// ─── Tendencia numérica ───────────────────────────────────────────────────────
+function Tendencia({ pct }) {
+  if (pct === null || pct === undefined) return null
+  const up = pct >= 0
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[11px] font-bold ${up ? 'text-emerald-600' : 'text-red-500'}`}>
+      {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+      {up ? '+' : ''}{pct}%
+    </span>
+  )
 }
 
 // ─── Dashboard general (coordinador / admin) ──────────────────────────────────
-function DashboardGeneral({ servicios, alertas, navigate }) {
+function DashboardGeneral({ servicios, alertas, npsPromedio, navigate }) {
   const activos      = servicios.filter(s => ESTADOS_TODOS.includes(s.estado))
   const enProduccion = servicios.filter(s => ['EN_PROCESO','EN_PRODUCCION'].includes(s.estado))
   const listos       = servicios.filter(s => s.estado === 'LISTO')
@@ -96,6 +119,27 @@ function DashboardGeneral({ servicios, alertas, navigate }) {
   const enCuartoFrio = servicios.filter(s => s.estado === 'EN_CUARTO_FRIO')
   const recientes    = servicios.slice(0, 10)
   const totalActivos = activos.length || 1
+
+  // Finanzas del mes actual vs mes anterior
+  const hoy      = new Date()
+  const mesActual  = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`
+  const dMesAnt    = new Date(hoy.getFullYear(), hoy.getMonth()-1, 1)
+  const mesAnterior= `${dMesAnt.getFullYear()}-${String(dMesAnt.getMonth()+1).padStart(2,'0')}`
+
+  const svsEstesMes = servicios.filter(s => s.fecha_ingreso?.startsWith(mesActual))
+  const svsMesAnt   = servicios.filter(s => s.fecha_ingreso?.startsWith(mesAnterior))
+
+  const ingresosMes    = svsEstesMes.reduce((a, s) => a + (s.valor_total     || 0), 0)
+  const ingresosMesAnt = svsMesAnt.reduce((a, s)   => a + (s.valor_total     || 0), 0)
+  const cobradoMes     = svsEstesMes.reduce((a, s) => a + (s.valor_pagado    || 0), 0)
+  const porCobrarMes   = svsEstesMes.reduce((a, s) => a + (s.saldo_pendiente || 0), 0)
+  const svsMesAntCount = svsMesAnt.length
+
+  const pctSvs  = svsMesAntCount > 0 ? Math.round((svsEstesMes.length - svsMesAntCount) / svsMesAntCount * 100) : null
+  const pctIngr = ingresosMesAnt  > 0 ? Math.round((ingresosMes - ingresosMesAnt) / ingresosMesAnt * 100) : null
+  const pctCobr = ingresosMes     > 0 ? Math.round(cobradoMes / ingresosMes * 100) : 0
+
+  const mesLabel = new Intl.DateTimeFormat('es-CO', { month: 'long' }).format(hoy)
 
   return (
     <div className="flex flex-col flex-1">
@@ -106,7 +150,49 @@ function DashboardGeneral({ servicios, alertas, navigate }) {
       } />
       <div className="flex-1 p-6 space-y-6">
 
-        {/* KPIs */}
+        {/* Banner finanzas del mes */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              <Activity size={12} />Servicios {mesLabel}
+            </div>
+            <div className="text-3xl font-bold text-gray-900">{svsEstesMes.length}</div>
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+              <Tendencia pct={pctSvs} />
+              <span>vs {new Intl.DateTimeFormat('es-CO',{month:'short'}).format(dMesAnt)}</span>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              <DollarSign size={12} />Ingresos {mesLabel}
+            </div>
+            <div className="text-2xl font-bold text-gray-900 leading-tight">{fmt(ingresosMes)}</div>
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+              <Tendencia pct={pctIngr} />
+              <span>{fmt(ingresosMesAnt)} mes ant.</span>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              <BadgePercent size={12} />Cobrado {mesLabel}
+            </div>
+            <div className="text-3xl font-bold text-gray-900">{pctCobr}%</div>
+            <div className="text-[11px] text-red-500 font-semibold">
+              {porCobrarMes > 0 ? `${fmt(porCobrarMes)} por cobrar` : 'Sin saldos pendientes'}
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              <Star size={12} />NPS {mesLabel}
+            </div>
+            <div className="text-3xl font-bold" style={{ color: npsPromedio >= 4 ? '#10B981' : npsPromedio >= 3 ? '#F59E0B' : '#EF4444' }}>
+              {npsPromedio ? `${npsPromedio}/5` : '—'}
+            </div>
+            <div className="text-[11px] text-gray-400">Promedio del mes</div>
+          </div>
+        </div>
+
+        {/* KPIs operacionales */}
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
           <StatCard label="Activos"       value={activos.length}      sub="En curso"          icon={Activity} />
           <StatCard label="En producción" value={enProduccion.length} sub="Proceso activo"    valueColor="#F97316" icon={Package} />

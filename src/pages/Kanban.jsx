@@ -13,8 +13,9 @@ import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
-  Camera, Download, Images,
+  Camera, Download, Images, Truck,
 } from 'lucide-react'
+import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
 // ── Columnas por tablero ──────────────────────────────────────────────────────
 const COLS_COORDINACION = ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
@@ -82,6 +83,7 @@ export default function Kanban() {
   // ── DnD ───────────────────────────────────────────────────────────────────
   const [draggingId, setDraggingId]       = useState(null)
   const [dragOverCol, setDragOverCol]     = useState(null)
+  const [groupsOpen, setGroupsOpen]       = useState({}) // `${col}-${tierKey}` → bool
 
   // ── Alertas inicio ruta ───────────────────────────────────────────────────
   const [alertaRuta, setAlertaRuta]       = useState(null) // notificación TECNICO_INICIO_RUTA activa
@@ -95,6 +97,7 @@ export default function Kanban() {
   const [mensajeros, setMensajeros]       = useState([])
   const [tecnicos, setTecnicos]           = useState([])
   const [mensajeroId, setMensajeroId]     = useState('')
+  const [modalEntrega, setModalEntrega]   = useState(null) // servicioId para modal entrega
   const [editTecnicoId, setEditTecnicoId] = useState('')
   const [editEstadoPago, setEditEstadoPago] = useState('')
   const [editNotas, setEditNotas]         = useState('')
@@ -146,8 +149,33 @@ export default function Kanban() {
         .from('v_kanban').select('*').order('fecha_ingreso', { ascending: false })
       if (err) throw err
       setServicios(data || [])
+      await autoCorregirDesdeKanban(data || [])
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
+  }
+
+  async function autoCorregirDesdeKanban(svcs) {
+    const candidatos = svcs
+      .filter(s => ['EN_PRODUCCION', 'EN_PROCESO', 'EN_CUARTO_FRIO', 'INGRESADO'].includes(s.estado))
+      .map(s => s.servicio_id)
+    if (!candidatos.length) return
+    const { data: items } = await db.from('servicio_recordatorios')
+      .select('servicio_id, estado')
+      .in('servicio_id', candidatos)
+      .neq('origen', 'REMOVIDO')
+      .neq('estado', 'NA')
+    if (!items?.length) return
+    const porSvc = {}
+    items.forEach(i => {
+      if (!porSvc[i.servicio_id]) porSvc[i.servicio_id] = []
+      porSvc[i.servicio_id].push(i)
+    })
+    const fijarListo = Object.entries(porSvc)
+      .filter(([_, its]) => its.length > 0 && its.every(i => i.estado === 'LISTO' || i.estado === 'ENTREGADO'))
+      .map(([id]) => id)
+    if (!fijarListo.length) return
+    await db.from('servicios').update({ estado: 'LISTO' }).in('id', fijarListo)
+    setServicios(prev => prev.map(s => fijarListo.includes(s.servicio_id) ? { ...s, estado: 'LISTO' } : s))
   }
 
   async function abrirModal(s) {
@@ -193,7 +221,7 @@ export default function Kanban() {
       if ('tecnico_id' in updates) {
         await db.from('recogidas').update({ tecnico_id: updates.tecnico_id }).eq('servicio_id', selected.servicio_id)
 
-        const mascotaNombre = selected.mascota_nombre || 'la mascota'
+        const mascotaNombre = selected.mascota || 'la mascota'
         // Notificar al técnico anterior que fue removido
         if (selected.tecnico_id && selected.tecnico_id !== updates.tecnico_id) {
           await crearNotificacion({
@@ -245,17 +273,16 @@ export default function Kanban() {
   }
 
   async function ciclarRecordatorio(rec) {
-    if (rec.estado === 'NA') return // No desea — no ciclar
+    if (rec.estado === 'NA') return
     const ciclo = { PENDIENTE: 'EN_PROCESO', EN_PROCESO: 'LISTO', LISTO: 'ENTREGADO', ENTREGADO: 'PENDIENTE' }
     const next = ciclo[rec.estado] || 'PENDIENTE'
     await db.from('servicio_recordatorios').update({ estado: next }).eq('id', rec.id)
 
-    // 1. Actualizar estado en el modal
-    setRecordatorios(prev => prev.map(r => r.id === rec.id ? { ...r, estado: next } : r))
+    const updatedRecs = recordatorios.map(r => r.id === rec.id ? { ...r, estado: next } : r)
+    setRecordatorios(updatedRecs)
 
-    // 2. Sincronizar items_listos en la tarjeta del kanban
-    const esListo = e => e === 'LISTO' || e === 'ENTREGADO'
-    const cambio = (esListo(next) ? 1 : 0) - (esListo(rec.estado) ? 1 : 0)
+    const esTerminado = e => e === 'LISTO' || e === 'ENTREGADO'
+    const cambio = (esTerminado(next) ? 1 : 0) - (esTerminado(rec.estado) ? 1 : 0)
     if (cambio !== 0) {
       setServicios(prev => prev.map(s =>
         s.servicio_id === selected?.servicio_id
@@ -263,6 +290,32 @@ export default function Kanban() {
           : s
       ))
     }
+
+    // Recalcular estado del servicio dinámicamente
+    const svcId = selected?.servicio_id
+    if (!svcId) return
+    try {
+      const activos = updatedRecs.filter(r => r.estado !== 'NA' && r.origen !== 'REMOVIDO')
+      if (!activos.length) return
+      const { data: svc } = await db.from('servicios').select('estado').eq('id', svcId).maybeSingle()
+      const estadoActual = svc?.estado
+      if (['EN_ENTREGA', 'ENTREGADO', 'CANCELADO'].includes(estadoActual)) return
+      const todosTerminados = activos.every(r => esTerminado(r.estado))
+      const algunoEnProceso = activos.some(r => r.estado === 'EN_PROCESO')
+      let nuevoEstado = null
+      if (todosTerminados && estadoActual !== 'LISTO') {
+        nuevoEstado = 'LISTO'
+      } else if (!todosTerminados && estadoActual === 'LISTO') {
+        nuevoEstado = 'EN_PRODUCCION'
+      } else if (algunoEnProceso && ['INGRESADO', 'EN_CUARTO_FRIO', 'EN_PROCESO'].includes(estadoActual)) {
+        nuevoEstado = 'EN_PRODUCCION'
+      }
+      if (nuevoEstado) {
+        await db.from('servicios').update({ estado: nuevoEstado }).eq('id', svcId)
+        setServicios(prev => prev.map(s => s.servicio_id === svcId ? { ...s, estado: nuevoEstado } : s))
+        setSelected(prev => ({ ...prev, estado: nuevoEstado }))
+      }
+    } catch (_) { /* silencioso */ }
   }
 
   async function agregarComentario() {
@@ -565,78 +618,131 @@ export default function Kanban() {
                     {/* Área de tarjetas */}
                     <div className="space-y-2 flex-1 rounded-xl p-1 -m-1 transition-colors duration-150 min-h-[80px]"
                       style={{ backgroundColor: isOver ? '#F9FAFB' : 'transparent' }}>
-                      {items.map(s => {
-                        const al  = alertLevel(s)
-                        const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
-                        const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
-                        const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
+                      {(() => {
+                        const TIERS = [
+                          { key: 'vencido', label: 'Vencidos',    color: '#C03030', bg: '#FEE2E2', urgent: true,  test: s => s.dias_para_vencer != null && s.dias_para_vencer < 0 },
+                          { key: 'hoy',    label: 'Vence hoy',   color: '#B45309', bg: '#FEF3C7', urgent: true,  test: s => s.dias_para_vencer === 0 },
+                          { key: 'pronto', label: '≤ 3 días',    color: '#9A5500', bg: '#FFF3DC', urgent: true,  test: s => s.dias_para_vencer != null && s.dias_para_vencer >= 1 && s.dias_para_vencer <= 3 },
+                          { key: 'proximo',label: '4-7 días',    color: '#1D8A55', bg: '#E8F3EB', urgent: false, test: s => s.dias_para_vencer != null && s.dias_para_vencer >= 4 && s.dias_para_vencer <= 7 },
+                          { key: 'normal', label: 'Sin urgencia', color: '#3B6FBF', bg: '#EEF3FB', urgent: false, test: s => s.dias_para_vencer != null && s.dias_para_vencer > 7 },
+                          { key: 'sin_fecha', label: 'Sin fecha', color: '#9CA3AF', bg: '#F3F4F6', urgent: false, test: s => s.dias_para_vencer == null },
+                        ]
 
-                        return (
-                          <div key={s.servicio_id} draggable
-                            onDragStart={e => onDragStart(e, s)} onDragEnd={onDragEnd}
-                            className="bg-white border rounded-xl p-3.5 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:-translate-y-px transition-all select-none"
-                            style={{ borderColor: al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6', opacity: draggingId === s.servicio_id ? 0.35 : 1 }}
-                            onClick={() => draggingId === null && abrirModal(s)}
-                          >
-                            <div className="flex items-start gap-2 mb-2.5">
-                              <span className="text-xl leading-none flex-shrink-0">{petEmoji(s.especie)}</span>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
-                                <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
-                              </div>
-                            </div>
-
-                            <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{s.plan}</div>
-
-                            {/* Alerta de vencimiento */}
-                            {al && (
-                              <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                                <AlertTriangle size={9} />
-                                {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Vence hoy' : `${s.dias_para_vencer}d`}
-                              </div>
-                            )}
-
-                            {/* Badge "Imágenes listas" */}
-                            {tieneImagenes && (
-                              <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
-                                <Camera size={9} /> Imágenes listas
-                              </div>
-                            )}
-
-                            {/* Barra de progreso ítems */}
-                            {s.total_items > 0 && (
-                              <div className="flex items-center gap-2 mt-1">
-                                <div className="k-progress-bar flex-1">
-                                  <div className="k-progress-fill" style={{ width: `${pct}%` }} />
+                        const renderCard = s => {
+                          const al  = alertLevel(s)
+                          const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
+                          const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
+                          const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
+                          return (
+                            <div key={s.servicio_id} draggable
+                              onDragStart={e => onDragStart(e, s)} onDragEnd={onDragEnd}
+                              className="bg-white border rounded-xl p-3.5 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:-translate-y-px transition-all select-none"
+                              style={{ borderColor: al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6', opacity: draggingId === s.servicio_id ? 0.35 : 1 }}
+                              onClick={() => draggingId === null && abrirModal(s)}
+                            >
+                              <div className="flex items-start gap-2 mb-2.5">
+                                <span className="text-xl leading-none flex-shrink-0">{petEmoji(s.especie)}</span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
+                                  <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
                                 </div>
-                                <span className="text-[10px] text-gray-400 tabular-nums flex-shrink-0">{s.items_listos}/{s.total_items}</span>
                               </div>
-                            )}
+                              <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{s.plan}</div>
+                              {al && (
+                                <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                  <AlertTriangle size={9} />
+                                  {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Vence hoy' : `${s.dias_para_vencer}d`}
+                                </div>
+                              )}
+                              {tieneImagenes && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
+                                  <Camera size={9} /> Imágenes listas
+                                </div>
+                              )}
+                              {s.total_items > 0 && (
+                                <div className="flex items-center gap-2 mt-1">
+                                  <div className="k-progress-bar flex-1">
+                                    <div className="k-progress-fill" style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className="text-[10px] text-gray-400 tabular-nums flex-shrink-0">{s.items_listos}/{s.total_items}</span>
+                                </div>
+                              )}
+                              {puedeContactar && (
+                                <button
+                                  onClick={e => contactar(e, s)}
+                                  disabled={contactarLoadingId === s.servicio_id}
+                                  className="mt-2.5 flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                                  style={{ backgroundColor: '#25D366' }}
+                                >
+                                  {contactarLoadingId === s.servicio_id
+                                    ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                                    : <MessageCircle size={11} />}
+                                  Contactar cliente
+                                </button>
+                              )}
+                            </div>
+                          )
+                        }
 
-                            {/* Botón Contactar (productor y admin en EN_CUARTO_FRIO) */}
-                            {puedeContactar && (
-                              <button
-                                onClick={e => contactar(e, s)}
-                                disabled={contactarLoadingId === s.servicio_id}
-                                className="mt-2.5 flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-                                style={{ backgroundColor: '#25D366' }}
-                              >
-                                {contactarLoadingId === s.servicio_id
-                                  ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-                                  : <MessageCircle size={11} />}
-                                Contactar cliente
-                              </button>
-                            )}
+                        if (items.length === 0) return (
+                          <div className="border-2 border-dashed rounded-xl p-5 text-center text-[12px] font-medium transition-all"
+                            style={{ borderColor: isOver ? cs.bar : cs.dot, color: isOver ? cs.bar : '#D1D5DB' }}>
+                            {isOver ? '↓ Soltar aquí' : 'Sin servicios'}
                           </div>
                         )
-                      })}
 
-                      {items.length === 0 && (
-                        <div className="border-2 border-dashed rounded-xl p-5 text-center text-[12px] font-medium transition-all"
-                          style={{ borderColor: isOver ? cs.bar : cs.dot, color: isOver ? cs.bar : '#D1D5DB' }}>
-                          {isOver ? '↓ Soltar aquí' : 'Sin servicios'}
-                        </div>
-                      )}
+                        const tiered = TIERS.map(t => ({ ...t, items: items.filter(t.test) })).filter(t => t.items.length > 0)
+
+                        // Un solo grupo → render directo sin cabecera
+                        if (tiered.length === 1) return <div className="space-y-2">{tiered[0].items.map(renderCard)}</div>
+
+                        // Múltiples grupos → jerarquía colapsable
+                        return tiered.map(tier => {
+                          const gKey = `${col}-${tier.key}`
+                          const defaultOpen = tier.urgent || tier.items.length <= 3
+                          const isOpenTier = gKey in groupsOpen ? groupsOpen[gKey] : defaultOpen
+                          return (
+                            <div key={tier.key} className="mb-0.5">
+                              {/* Cabecera del grupo */}
+                              <button
+                                className="w-full flex items-center gap-1.5 py-1 px-1.5 rounded-lg transition-colors hover:bg-gray-50 mb-1"
+                                onClick={() => setGroupsOpen(prev => ({ ...prev, [gKey]: !isOpenTier }))}
+                              >
+                                <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: tier.color }} />
+                                <span className="text-[11px] font-bold flex-1 text-left" style={{ color: tier.color }}>{tier.label}</span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: tier.color + '22', color: tier.color }}>{tier.items.length}</span>
+                                <ChevronDown size={11} className="transition-transform flex-shrink-0" style={{ color: tier.color, transform: isOpenTier ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
+                              </button>
+
+                              {isOpenTier ? (
+                                <div className="space-y-2 pl-0.5">{tier.items.map(renderCard)}</div>
+                              ) : (
+                                /* Vista pila colapsada */
+                                <button
+                                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl border transition-all hover:shadow-sm"
+                                  style={{ background: tier.bg, borderColor: tier.color + '44' }}
+                                  onClick={() => setGroupsOpen(prev => ({ ...prev, [gKey]: true }))}
+                                >
+                                  <div className="flex -space-x-2 flex-shrink-0">
+                                    {tier.items.slice(0, 4).map((s, i) => (
+                                      <div key={s.servicio_id}
+                                        className="w-7 h-7 rounded-full bg-white border-2 flex items-center justify-center text-[13px] leading-none shadow-sm"
+                                        style={{ borderColor: tier.color + '66', zIndex: 4 - i }}>
+                                        {petEmoji(s.especie)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div className="flex-1 text-left min-w-0">
+                                    <div className="text-[11px] font-bold" style={{ color: tier.color }}>{tier.items.length} en cola</div>
+                                    <div className="text-[10px] text-gray-400 truncate">{tier.items.map(s => s.mascota).join(', ')}</div>
+                                  </div>
+                                  <ChevronDown size={11} className="flex-shrink-0" style={{ color: tier.color, transform: 'rotate(-90deg)' }} />
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })
+                      })()}
                     </div>
                   </div>
                 )
@@ -891,21 +997,14 @@ export default function Kanban() {
               </div>
             </div>
 
-            {/* Asignar mensajero (LISTO) */}
+            {/* Preparar entrega (LISTO) */}
             {selected.estado === 'LISTO' && (
-              <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#E0E7FF', background: '#F5F3FF' }}>
-                <div className="flex items-center gap-2">
-                  <Package size={13} style={{ color: '#6366F1' }} />
-                  <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6366F1' }}>Asignar mensajero para entrega</div>
-                </div>
-                <Select value={mensajeroId} onChange={e => setMensajeroId(e.target.value)} className="w-full">
-                  <option value="">Sin asignar</option>
-                  {mensajeros.map(m => <option key={m.id} value={m.id}>{m.nombre} {m.apellido}</option>)}
-                </Select>
-                <button disabled={saving} onClick={confirmarEntrega} className="w-full py-2 rounded-lg text-[12px] font-bold transition-all hover:opacity-90 disabled:opacity-50" style={{ background: '#6366F1', color: '#fff' }}>
-                  {saving ? 'Guardando…' : '🛵 Enviar a entrega'}
-                </button>
-              </div>
+              <button
+                onClick={() => { setModalEntrega(selected.servicio_id); setSelected(null) }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-bold transition-all hover:opacity-90"
+                style={{ background: '#4F46E5', color: '#fff' }}>
+                <Truck size={14} /> Preparar entrega
+              </button>
             )}
 
             {/* Mover estado */}
@@ -1018,6 +1117,15 @@ export default function Kanban() {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* Modal preparar entrega */}
+      {modalEntrega && (
+        <ModalPreparaEntrega
+          servicioId={modalEntrega}
+          onClose={() => setModalEntrega(null)}
+          onGuardado={() => { setModalEntrega(null); cargar() }}
+        />
       )}
     </div>
     </>
