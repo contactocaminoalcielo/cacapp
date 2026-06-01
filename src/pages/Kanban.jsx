@@ -483,13 +483,22 @@ export default function Kanban() {
 
   // ── WhatsApp message según tipo_lugar ────────────────────────────────────
   function generarMsgRuta(notif) {
-    const d = notif.datos || {}
-    const mascota = d.mascota || 'su mascota'
-    const hora    = d.hora_llegada || '(hora confirmada)'
-    if (d.tipo_lugar === 'CLINICA_ALIADA') {
-      return `Buenas, somos Camino al Cielo 🐾. Le informamos que nuestro técnico está en camino a recoger a *${mascota}*. Hora estimada de llegada: *${hora}*. Cualquier novedad nos escribe. Gracias.`
-    }
-    return `Hola 🐾, somos Camino al Cielo. Nuestro técnico está en camino para recoger a *${mascota}*. Llegará aproximadamente a las *${hora}*. Si necesita comunicarse con él, por favor escríbanos. Gracias.`
+    const d        = notif.datos || {}
+    const mascota  = d.mascota        || 'su mascota'
+    const hora     = d.hora_llegada   || '(hora por confirmar)'
+    const tecnico  = d.tecnico_nombre || 'nuestro técnico'
+    const direccion = d.direccion     || d.lugar || ''
+
+    return [
+      `Hola, esperamos que te encuentres bien.`,
+      ``,
+      `Te informamos que nuestro técnico *${tecnico}* estará acompañándonos en la recolección de *${mascota}*${direccion ? ` en la dirección *${direccion}*` : ''}, aproximadamente a las *${hora}*.`,
+      ``,
+      `Agradecemos la confianza que has depositado en nosotros en este momento tan especial. Si tienes alguna inquietud, estaremos atentos para ayudarte.`,
+      ``,
+      `Con cariño,`,
+      `Equipo Camino al Cielo 🤍🐾`,
+    ].join('\n')
   }
 
   return (
@@ -698,14 +707,6 @@ export default function Kanban() {
                               {tieneImagenes && (
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
                                   <Camera size={9} /> Imágenes listas
-                                </div>
-                              )}
-                              {s.total_items > 0 && (
-                                <div className="flex items-center gap-2 mt-1">
-                                  <div className="k-progress-bar flex-1">
-                                    <div className="k-progress-fill" style={{ width: `${pct}%` }} />
-                                  </div>
-                                  <span className="text-[10px] text-gray-400 tabular-nums flex-shrink-0">{s.items_listos}/{s.total_items}</span>
                                 </div>
                               )}
                               {puedeContactar && (

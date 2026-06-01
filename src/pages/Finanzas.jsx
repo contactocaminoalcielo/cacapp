@@ -6,7 +6,7 @@ import { fmt, parsearErrorDB } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
-  Banknote, Building2, Receipt,
+  Banknote, Building2, Receipt, User2,
 } from 'lucide-react'
 
 // ── Helpers de badge ─────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export default function Finanzas() {
       // 1. Servicios activos (sin cancelados)
       const { data: svcs, error: errSvcs } = await db
         .from('servicios')
-        .select('id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, mascota_id, aliado_origen_id, plan_id, notas')
+        .select('id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id')
         .not('estado', 'eq', 'CANCELADO')
         .order('fecha_ingreso', { ascending: false })
 
@@ -131,14 +131,44 @@ export default function Finanzas() {
         }
       }
 
-      // 6. Enriquecer + calcular saldo
+      // 6. Personal (técnicos)
+      const tecnicoIds = [...new Set(rows.map(s => s.tecnico_id).filter(Boolean))]
+      let tecnicoMap = {}
+      if (tecnicoIds.length) {
+        const { data: personal } = await db
+          .from('personal')
+          .select('id, nombre, apellido')
+          .in('id', tecnicoIds)
+        if (personal) {
+          tecnicoMap = Object.fromEntries(personal.map(p => [p.id, p]))
+        }
+      }
+
+      // 7. Recibos del técnico (últimos por servicio)
+      const svcIds = rows.map(s => s.id)
+      let reciboMap = {}
+      if (svcIds.length) {
+        const { data: recibos } = await db
+          .from('recibos_tecnico')
+          .select('id, servicio_id, tipo, fecha_emision, hora_emision, valor_cobrado, medios_pago, numero_recibo')
+          .in('servicio_id', svcIds)
+          .eq('tipo', 'CLIENTE')
+          .order('created_at', { ascending: false })
+        ;(recibos || []).forEach(r => {
+          if (!reciboMap[r.servicio_id]) reciboMap[r.servicio_id] = r
+        })
+      }
+
+      // 8. Enriquecer + calcular saldo
       const enriched = rows.map(s => {
         const mascota = mascotaMap[s.mascota_id] || null
         const cliente = mascota ? (clienteMap[mascota.cliente_id] || null) : null
         const aliado  = s.aliado_origen_id ? (aliadoMap[s.aliado_origen_id] || null) : null
         const plan    = s.plan_id ? (planMap[s.plan_id] || null) : null
+        const tecnico = s.tecnico_id ? (tecnicoMap[s.tecnico_id] || null) : null
+        const recibo  = reciboMap[s.id] || null
         const saldo   = Math.max(0, (s.valor_total || 0) - (s.valor_pagado || 0))
-        return { ...s, mascota, cliente, aliado, plan, saldo }
+        return { ...s, mascota, cliente, aliado, plan, tecnico, recibo, saldo }
       })
 
       setServicios(enriched)
@@ -415,6 +445,7 @@ export default function Finanzas() {
                   { key: 'cartera',     label: 'Cartera' },
                   { key: 'comisiones',  label: 'Comisiones' },
                   { key: 'historial',   label: 'Historial' },
+                  { key: 'tecnicos',    label: 'Cuadre técnicos' },
                 ].map(t => (
                   <button
                     key={t.key}
@@ -710,41 +741,165 @@ export default function Finanzas() {
                     </div>
                   ) : (
                     <div className="overflow-x-auto -mx-5 px-5">
-                      <table className="w-full min-w-[900px]">
+                      <table className="w-full min-w-[1100px]">
                         <thead>
                           <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                            {['Fecha', 'Mascota', 'Cliente', 'Canal', 'Plan', 'Total', 'Pagado', 'Saldo', 'Estado pago', 'Método pago'].map(h => (
+                            {['Fecha', 'Mascota', 'Cliente', 'Canal', 'Plan', 'Técnico', 'Total', 'Pagado', 'Saldo', 'Estado pago', 'Medios de pago', ''].map(h => (
                               <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
-                          {servicios.map(s => (
-                            <tr key={s.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
-                              <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{fmtFecha(s.fecha_ingreso)}</td>
-                              <td className="py-3 pr-4 font-semibold text-gray-900">{nombreMascota(s)}</td>
-                              <td className="py-3 pr-4 text-gray-600">{nombreCliente(s)}</td>
-                              <td className="py-3 pr-4"><BadgeCanal canal={s.canal_entrada} /></td>
-                              <td className="py-3 pr-4 text-gray-600 text-[12px]">{nombrePlan(s)}</td>
-                              <td className="py-3 pr-4 font-semibold text-gray-900 tabular-nums">{fmt(s.valor_total)}</td>
-                              <td className="py-3 pr-4 text-[#16a34a] font-semibold tabular-nums">{fmt(s.valor_pagado)}</td>
-                              <td className={`py-3 pr-4 font-bold tabular-nums ${s.saldo > 0 ? 'text-[#DC2626]' : 'text-gray-400'}`}>
-                                {s.saldo > 0 ? fmt(s.saldo) : '—'}
-                              </td>
-                              <td className="py-3 pr-4"><BadgeEstadoPago estado={s.estado_pago} /></td>
-                              <td className="py-3 pr-4">
-                                {s.metodo_pago ? (
-                                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                                    {s.metodo_pago}
-                                  </span>
-                                ) : <span className="text-gray-300">—</span>}
-                              </td>
-                            </tr>
-                          ))}
+                          {servicios.map(s => {
+                            const mediosPago = s.recibo?.medios_pago || (s.metodo_pago ? [{ metodo: s.metodo_pago, monto: s.valor_pagado }] : [])
+                            return (
+                              <tr key={s.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                                <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{fmtFecha(s.fecha_ingreso)}</td>
+                                <td className="py-3 pr-4 font-semibold text-gray-900">{nombreMascota(s)}</td>
+                                <td className="py-3 pr-4 text-gray-600">{nombreCliente(s)}</td>
+                                <td className="py-3 pr-4"><BadgeCanal canal={s.canal_entrada} /></td>
+                                <td className="py-3 pr-4 text-gray-600 text-[12px]">{nombrePlan(s)}</td>
+                                <td className="py-3 pr-4 text-[12px]">
+                                  {s.tecnico ? (
+                                    <span className="flex items-center gap-1 text-gray-700">
+                                      <User2 size={11} className="text-gray-400" />
+                                      {s.tecnico.nombre} {s.tecnico.apellido}
+                                    </span>
+                                  ) : <span className="text-gray-300 italic text-[11px]">Sin asignar</span>}
+                                </td>
+                                <td className="py-3 pr-4 font-semibold text-gray-900 tabular-nums">{fmt(s.valor_total)}</td>
+                                <td className="py-3 pr-4 text-[#16a34a] font-semibold tabular-nums">{fmt(s.valor_pagado)}</td>
+                                <td className={`py-3 pr-4 font-bold tabular-nums ${s.saldo > 0 ? 'text-[#DC2626]' : 'text-gray-400'}`}>
+                                  {s.saldo > 0 ? fmt(s.saldo) : '—'}
+                                </td>
+                                <td className="py-3 pr-4"><BadgeEstadoPago estado={s.estado_pago} /></td>
+                                <td className="py-3 pr-4">
+                                  {mediosPago.length > 0 ? (
+                                    <div className="flex flex-col gap-0.5">
+                                      {mediosPago.map((m, i) => (
+                                        <span key={i} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 whitespace-nowrap">
+                                          {m.metodo}{m.monto > 0 ? `: ${fmt(parseFloat(m.monto)||0)}` : ''}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : <span className="text-gray-300">—</span>}
+                                </td>
+                                <td className="py-3">
+                                  {s.recibo && (
+                                    <a href={`#/recibos`}
+                                      className="text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap"
+                                      style={{ background: '#EDE9FE', color: '#5B21B6' }}
+                                      title="Ver recibo del técnico">
+                                      <Receipt size={10} /> Recibo
+                                    </a>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
                         </tbody>
                       </table>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* ── Tab: Cuadre técnicos ─────────────────────────────── */}
+              {tab === 'tecnicos' && (
+                <div className="p-5">
+                  <p className="text-[12px] text-gray-500 mb-4">
+                    Resumen de dinero recogido por cada técnico. Úsalo para citarlos al cuadre de cuentas.
+                  </p>
+                  {(() => {
+                    const porTecnico = {}
+                    servicios.forEach(s => {
+                      if (!s.tecnico_id || !s.valor_pagado) return
+                      const key = s.tecnico_id
+                      if (!porTecnico[key]) porTecnico[key] = {
+                        tecnico: s.tecnico,
+                        servicios: 0,
+                        efectivo: 0,
+                        transferencia: 0,
+                        nequi: 0,
+                        daviplata: 0,
+                        tarjeta: 0,
+                        otro: 0,
+                        total: 0,
+                      }
+                      porTecnico[key].servicios++
+                      porTecnico[key].total += s.valor_pagado || 0
+                      // Desglose por medios de pago del recibo
+                      const medios = s.recibo?.medios_pago || []
+                      medios.forEach(m => {
+                        const monto = parseFloat(m.monto) || 0
+                        const met   = (m.metodo || '').toLowerCase()
+                        if (met === 'efectivo')       porTecnico[key].efectivo      += monto
+                        else if (met === 'transferencia') porTecnico[key].transferencia += monto
+                        else if (met === 'nequi')     porTecnico[key].nequi         += monto
+                        else if (met === 'daviplata') porTecnico[key].daviplata     += monto
+                        else if (met === 'tarjeta')   porTecnico[key].tarjeta       += monto
+                        else                          porTecnico[key].otro          += monto
+                      })
+                      if (medios.length === 0 && s.valor_pagado > 0) {
+                        // Sin recibo detallado: sumar al total sin desglose
+                      }
+                    })
+                    const lista = Object.values(porTecnico).sort((a, b) => b.total - a.total)
+
+                    if (lista.length === 0) return (
+                      <div className="py-12 text-center">
+                        <div className="text-3xl mb-2">👤</div>
+                        <p className="text-[13px] text-gray-500">Sin técnicos con cobros registrados</p>
+                      </div>
+                    )
+
+                    return (
+                      <div className="space-y-4">
+                        {lista.map(t => (
+                          <div key={t.tecnico?.id} className="border rounded-2xl overflow-hidden"
+                            style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                            <div className="px-5 py-3 flex items-center gap-3"
+                              style={{ background: 'linear-gradient(135deg,#EEF3FB 0%,#fff 60%)' }}>
+                              <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-[13px] flex-shrink-0"
+                                style={{ background: '#1A5CD8' }}>
+                                {(t.tecnico?.nombre?.[0] || '?').toUpperCase()}{(t.tecnico?.apellido?.[0] || '').toUpperCase()}
+                              </div>
+                              <div className="flex-1">
+                                <div className="font-bold text-gray-900 text-[14px]">
+                                  {t.tecnico ? `${t.tecnico.nombre} ${t.tecnico.apellido}` : 'Sin nombre'}
+                                </div>
+                                <div className="text-[11px] text-gray-400">{t.servicios} servicio{t.servicios !== 1 ? 's' : ''}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[18px] font-extrabold tabular-nums" style={{ color: '#1A5CD8' }}>{fmt(t.total)}</div>
+                                <div className="text-[10px] text-gray-400">Total cobrado</div>
+                              </div>
+                            </div>
+                            {/* Desglose medios */}
+                            {(t.efectivo + t.transferencia + t.nequi + t.daviplata + t.tarjeta + t.otro) > 0 && (
+                              <div className="px-5 py-3 border-t flex flex-wrap gap-3"
+                                style={{ borderColor: 'rgba(30,80,40,0.06)', background: '#FAFAFA' }}>
+                                {[
+                                  ['Efectivo',       t.efectivo,      '#16A34A'],
+                                  ['Transferencia',  t.transferencia, '#1A5CD8'],
+                                  ['Nequi',          t.nequi,         '#7C3AED'],
+                                  ['Daviplata',      t.daviplata,     '#D97706'],
+                                  ['Tarjeta',        t.tarjeta,       '#0E7490'],
+                                  ['Otro',           t.otro,          '#6B7280'],
+                                ].filter(([,v]) => v > 0).map(([label, valor, color]) => (
+                                  <div key={label} className="flex flex-col items-center px-3 py-2 rounded-xl border"
+                                    style={{ borderColor: `${color}30`, background: `${color}08` }}>
+                                    <span className="text-[10px] font-bold uppercase" style={{ color }}>{label}</span>
+                                    <span className="text-[14px] font-extrabold tabular-nums" style={{ color }}>{fmt(valor)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
 

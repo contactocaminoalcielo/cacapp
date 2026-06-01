@@ -9,11 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert } from '@/components/ui/alert'
+import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
-  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles
+  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare
 } from 'lucide-react'
 
 const ESPECIE_NOMBRE_A_ID = { 'Perro':1, 'Gato':2, 'Conejo':3, 'Ave':4, 'Hámster':5, 'Pez':6, 'Reptil':7, 'Otro':8 }
@@ -479,6 +481,18 @@ export default function Registro() {
   useEffect(() => {
     if (!aliadoSeleccionado || !planSeleccionado) { setComisionPorcentaje(0); return }
     async function calcularComision() {
+      // ── VIP: comisión máxima fija, sin pisos de volumen ──────────────────
+      if (aliadoSeleccionado?.vip) {
+        const tipo = planSeleccionado?.tipo_proceso || ''
+        let pct = 32 // CREMACION_GRUPAL: 32%
+        if (tipo === 'COMPOSTAJE_GRUPAL')    pct = 10 // Eco-grupal: 10%
+        else if (tipo === 'CREMACION_INDIVIDUAL' ||
+                 tipo === 'COMPOSTAJE_INDIVIDUAL') pct = 27 // Individuales: 27%
+        setComisionPorcentaje(pct)
+        return
+      }
+
+      // ── No VIP: pisos de volumen mensual ─────────────────────────────────
       // 1. Contar servicios de este aliado en el mes actual
       const hoy = new Date()
       const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
@@ -487,11 +501,10 @@ export default function Registro() {
         .eq('aliado_origen_id', aliadoSeleccionado.id_aliado)
         .gte('fecha_ingreso', inicioMes)
       const serviciosMes = count || 0
-      // 2. Traer todas las comisiones del aliado y filtrar en JS (evita problemas con OR doble en PostgREST)
+      // 2. Traer todas las comisiones y filtrar en JS (evita problemas con OR doble en PostgREST)
       const { data: filas } = await db.from('config_comisiones')
         .select('porcentaje, plan_id, rango_min, rango_max')
-        .eq('es_vip', aliadoSeleccionado.vip || false)
-      const esVip = aliadoSeleccionado.vip || false
+        .eq('es_vip', false)
       const match = (filas || [])
         .filter(c =>
           (c.plan_id === planSeleccionado.id || c.plan_id === null) &&
@@ -747,6 +760,52 @@ export default function Registro() {
         }).eq('servicio_id', svcData[0].id)
       }
 
+      // ── Notificación WhatsApp al técnico (no-bloqueante) ──────────────────
+      if (tecnicoSeleccionado?.whatsapp) {
+        const mascotaNombre  = mascotaNueva ? formMascota.nombre : (mascotaSeleccionada?.nombre || '')
+        const mascotaEspecie = mascotaNueva
+          ? (especies.find(e => String(e.id) === String(formMascota.especie_id))?.nombre || '')
+          : (mascotaSeleccionada?.especies?.nombre || '')
+        const clienteNombre  = clienteNuevo
+          ? `${formCliente.nombre} ${formCliente.apellido}`.trim()
+          : `${clienteSeleccionado?.nombre || ''} ${clienteSeleccionado?.apellido || ''}`.trim()
+        const clienteTel = clienteNuevo
+          ? (formCliente.whatsapp || formCliente.telefono || '')
+          : (clienteSeleccionado?.whatsapp || clienteSeleccionado?.telefono || '')
+        const direccion     = formRecogida.direccion_recogida || ''
+        const ciudad        = formRecogida.ciudad_recogida !== 'Bogotá' ? ` (${formRecogida.ciudad_recogida})` : ''
+        const barrio        = formRecogida.barrio_recogida ? ` · ${formRecogida.barrio_recogida}` : ''
+        const horaAprox     = formRecogida.hora_aproximada ? `\n⏰ Hora aprox: *${formRecogida.hora_aproximada}*` : ''
+        const veterinaria   = aliadoSeleccionado ? `\n🏥 Veterinaria: *${aliadoSeleccionado.nombre}*` : ''
+        const planNombre    = planSeleccionado?.nombre || ''
+        const contacto      = clienteTel ? `\n📞 Contacto: ${clienteTel}` : ''
+        const indicaciones  = formRecogida.notas ? `\n📋 Indicaciones: ${formRecogida.notas}` : ''
+
+        const mensaje = [
+          `🐾 *Nueva recogida asignada — Camino al Cielo*`,
+          ``,
+          `Se te asignó un nuevo servicio:`,
+          ``,
+          `🐾 Mascota: *${mascotaNombre}*${mascotaEspecie ? ` (${mascotaEspecie})` : ''}`,
+          `👤 Propietario: ${clienteNombre}${contacto}`,
+          `📍 Dirección: ${direccion}${barrio}${ciudad}`,
+          `📦 Plan: ${planNombre}`,
+          horaAprox,
+          veterinaria,
+          indicaciones,
+          ``,
+          `Ingresa a la app para confirmar y ver los detalles. ¡Mucho éxito! 🙏`,
+        ].filter(l => l !== undefined && l !== null && l !== false).join('\n')
+
+        // Envío no-bloqueante: un fallo de WA no impide guardar el servicio
+        enviarWhatsApp({
+          telefono:   tecnicoSeleccionado.whatsapp,
+          nombre:     `${tecnicoSeleccionado.nombre} ${tecnicoSeleccionado.apellido || ''}`.trim(),
+          mensaje,
+          fromNumber: LINEAS_WHATSAPP[0]?.numero,
+        }).catch(() => { /* silencioso: WA falla pero el servicio ya está guardado */ })
+      }
+
       limpiarBorrador()
       setSuccess(true)
       setTimeout(() => navigate('/kanban'), 2000)
@@ -774,7 +833,19 @@ export default function Registro() {
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-gray-900 mb-1">Servicio registrado</div>
-          <div className="text-sm text-gray-500">Redirigiendo al tablero...</div>
+          <div className="text-sm text-gray-500 mb-3">Redirigiendo al tablero...</div>
+          {tecnicoSeleccionado && (
+            <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-semibold ${
+              tecnicoSeleccionado.whatsapp
+                ? 'bg-green-100 text-green-800'
+                : 'bg-gray-100 text-gray-500'
+            }`}>
+              <MessageSquare size={13} />
+              {tecnicoSeleccionado.whatsapp
+                ? `✅ Notificación WA enviada a ${tecnicoSeleccionado.nombre}`
+                : `⚠️ ${tecnicoSeleccionado.nombre} no tiene WhatsApp registrado`}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -906,9 +977,9 @@ export default function Registro() {
                 <div className={`${SUB} mb-4`}>Datos del nuevo cliente</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div><label className={LABEL}>Nombre *</label>
-                    <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value }))} maxLength={80} /></div>
+                    <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value.toUpperCase() }))} maxLength={80} /></div>
                   <div><label className={LABEL}>Apellido *</label>
-                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value }))} maxLength={80} /></div>
+                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value.toUpperCase() }))} maxLength={80} /></div>
                   <div>
                     <label className={LABEL}>Cédula / NIT</label>
                     <Input
@@ -957,13 +1028,12 @@ export default function Registro() {
                       <option value="RECURRENTE">Recurrente</option>
                     </Select></div>
                   <div className="sm:col-span-2"><label className={LABEL}>Dirección</label>
-                    <Input value={formCliente.direccion} onChange={e => setFormCliente(p => ({ ...p, direccion: e.target.value }))} /></div>
+                    <Input value={formCliente.direccion} onChange={e => setFormCliente(p => ({ ...p, direccion: e.target.value.toUpperCase() }))} /></div>
                   <div><label className={LABEL}>Barrio</label>
-                    <Input value={formCliente.barrio} placeholder="Ej: Chapinero Alto"
-                      onChange={e => setFormCliente(p => ({ ...p, barrio: e.target.value }))} /></div>
-                  <div><label className={LABEL}>Localidad / Municipio</label>
-                    <Input value={formCliente.localidad} placeholder="Ej: Chapinero"
-                      onChange={e => setFormCliente(p => ({ ...p, localidad: e.target.value }))} /></div>
+                    <Input value={formCliente.barrio} placeholder="Ej: CHAPINERO ALTO"
+                      onChange={e => setFormCliente(p => ({ ...p, barrio: e.target.value.toUpperCase() }))} /></div>
+                  <div><label className={LABEL}>Localidad</label>
+                    <LocalidadSelect value={formCliente.localidad} onChange={v => setFormCliente(p => ({ ...p, localidad: v }))} /></div>
                 </div>
                 <button className="text-[11px] text-red-500 hover:text-red-700 mt-3 font-semibold"
                   onClick={() => setClienteNuevo(false)}>Cancelar</button>
@@ -1041,14 +1111,12 @@ export default function Registro() {
                 <div className={`${SUB} mb-4`}>Datos de la mascota</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div><label className={LABEL}>Nombre *</label>
-                    <Input value={formMascota.nombre} onChange={e => setFormMascota(p => ({ ...p, nombre: e.target.value }))} /></div>
+                    <Input value={formMascota.nombre} onChange={e => setFormMascota(p => ({ ...p, nombre: e.target.value.toUpperCase() }))} /></div>
                   <div><label className={LABEL}>Especie</label>
                     <Select value={formMascota.especie_id} onChange={e => setFormMascota(p => ({ ...p, especie_id: e.target.value }))}>
                       <option value="">Seleccionar...</option>
                       {especies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
                     </Select></div>
-                  <div><label className={LABEL}>Raza</label>
-                    <Input value={formMascota.raza} onChange={e => setFormMascota(p => ({ ...p, raza: e.target.value }))} /></div>
                   <div><label className={LABEL}>Peso (kg) *</label>
                     <Input type="text" inputMode="decimal" placeholder="Ej: 28.5" value={formMascota.peso_kg}
                       onChange={e => setFormMascota(p => ({ ...p, peso_kg: e.target.value.replace(',', '.') }))} /></div>
@@ -1213,6 +1281,7 @@ export default function Registro() {
               <div className={SUB}>Canal de entrada</div>
               <Select value={canalEntrada} onChange={e => setCanalEntrada(e.target.value)}>
                 <option value="DIRECTO">Directo</option>
+                <option value="CLIENTE_ANTIGUO">Cliente antiguo</option>
                 <option value="ALIADO">Aliado / Veterinaria</option>
                 <option value="REFERIDO">Referido</option>
                 <option value="REDES_SOCIALES">Redes sociales</option>
@@ -1336,8 +1405,8 @@ export default function Registro() {
                 </div>
                 <div>
                   <label className={LABEL}>Barrio</label>
-                  <Input value={formRecogida.barrio_recogida} placeholder="Barrio o localidad"
-                    onChange={e => setFormRecogida(p => ({ ...p, barrio_recogida: e.target.value }))} />
+                  <Input value={formRecogida.barrio_recogida} placeholder="BARRIO O LOCALIDAD"
+                    onChange={e => setFormRecogida(p => ({ ...p, barrio_recogida: e.target.value.toUpperCase() }))} />
                 </div>
               </div>
 
@@ -1372,7 +1441,7 @@ export default function Registro() {
               <div>
                 <label className={LABEL}>Dirección de recogida</label>
                 <Input value={formRecogida.direccion_recogida}
-                  onChange={e => setFormRecogida(p => ({ ...p, direccion_recogida: e.target.value }))} />
+                  onChange={e => setFormRecogida(p => ({ ...p, direccion_recogida: e.target.value.toUpperCase() }))} />
               </div>
 
               {/* Hora */}
@@ -1389,8 +1458,8 @@ export default function Registro() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={LABEL}>Nombre contacto</label>
-                  <Input value={formRecogida.nombre_contacto_recogida} placeholder="Quien entrega la mascota"
-                    onChange={e => setFormRecogida(p => ({ ...p, nombre_contacto_recogida: e.target.value }))} />
+                  <Input value={formRecogida.nombre_contacto_recogida} placeholder="QUIEN ENTREGA LA MASCOTA"
+                    onChange={e => setFormRecogida(p => ({ ...p, nombre_contacto_recogida: e.target.value.toUpperCase() }))} />
                 </div>
                 <div>
                   <label className={LABEL}>Teléfono contacto</label>
@@ -1403,11 +1472,21 @@ export default function Registro() {
               <div ref={tecnicoRef} className="relative">
                 <label className={LABEL}>Técnico asignado</label>
                 {tecnicoSeleccionado ? (
-                  <div className="flex items-center gap-2 px-3 py-2 border border-[#1A5CD8] rounded-lg bg-green-50">
-                    <Avatar nombre={tecnicoSeleccionado.nombre} apellido={tecnicoSeleccionado.apellido} size={6} />
-                    <span className="text-[13px] font-medium text-gray-900 flex-1">{tecnicoSeleccionado.nombre} {tecnicoSeleccionado.apellido}</span>
-                    <button className="text-gray-400 hover:text-red-500"
-                      onClick={() => { setTecnicoSeleccionado(null); setTecnicoBusqueda('') }}><X size={14} /></button>
+                  <div>
+                    <div className="flex items-center gap-2 px-3 py-2 border border-[#1A5CD8] rounded-lg bg-green-50">
+                      <Avatar nombre={tecnicoSeleccionado.nombre} apellido={tecnicoSeleccionado.apellido} size={6} />
+                      <span className="text-[13px] font-medium text-gray-900 flex-1">{tecnicoSeleccionado.nombre} {tecnicoSeleccionado.apellido}</span>
+                      <button className="text-gray-400 hover:text-red-500"
+                        onClick={() => { setTecnicoSeleccionado(null); setTecnicoBusqueda('') }}><X size={14} /></button>
+                    </div>
+                    {/* Indicador notificación WA */}
+                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px]"
+                      style={{ color: tecnicoSeleccionado.whatsapp ? '#15803D' : '#9CA3AF' }}>
+                      <MessageSquare size={11} />
+                      {tecnicoSeleccionado.whatsapp
+                        ? `Se enviará notificación automática al WhatsApp del técnico (${tecnicoSeleccionado.whatsapp})`
+                        : 'Sin WhatsApp registrado — no se enviará notificación automática'}
+                    </div>
                   </div>
                 ) : (
                   <>

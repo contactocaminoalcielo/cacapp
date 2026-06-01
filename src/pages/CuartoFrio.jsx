@@ -10,7 +10,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji } from '@/lib/utils'
-import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package, History, ChevronDown, ChevronUp } from 'lucide-react'
+import { Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package, History, ChevronDown, ChevronUp, Plus, Trash2, Thermometer } from 'lucide-react'
 
 // ─── helpers módulo ────────────────────────────────────────────────────────
 function fmtFechaHora(ts) {
@@ -420,6 +420,9 @@ export default function CuartoFrio() {
             </div>
           </div>
         </div>
+
+        {/* ── GESTIÓN DE NEVERAS ── */}
+        <GestionNeveras />
 
         {/* ── REPORTES DEL TÉCNICO ── */}
         <div className="mb-7">
@@ -839,5 +842,258 @@ function DetalleModal({ registro: r, onClose, onEdit, movimientos, estadoColor }
 
       </div>
     </Modal>
+  )
+}
+
+// ─── Gestión de Neveras (CRUD) ─────────────────────────────────────────────
+export function GestionNeveras() {
+  const { personalData } = useAuth()
+  const canEdit = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+
+  const [neveras, setNeveras]   = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [open, setOpen]         = useState(false)
+  const [selected, setSelected] = useState(null)
+  const [form, setForm]         = useState({})
+  const [saving, setSaving]     = useState(false)
+  const [err, setErr]           = useState('')
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('neveras').select('*').order('codigo')
+    setNeveras(data || [])
+    setLoading(false)
+  }
+
+  function abrir(item) {
+    setSelected(item || { nuevo: true })
+    setForm(item ? {
+      codigo:        item.codigo        || '',
+      descripcion:   item.descripcion   || '',
+      capacidad_kg:  item.capacidad_kg  || 100,
+      ubicacion:     item.ubicacion     || '',
+      notas:         item.notas         || '',
+      activa:        item.activa !== false,
+    } : { codigo: '', descripcion: '', capacidad_kg: 100, ubicacion: '', notas: '', activa: true })
+    setErr('')
+  }
+
+  async function guardar() {
+    if (!form.codigo?.trim()) { setErr('El código de la nevera es requerido.'); return }
+    setSaving(true); setErr('')
+    try {
+      const body = { ...form, codigo: form.codigo.trim().toUpperCase(), capacidad_kg: parseFloat(form.capacidad_kg) || 100 }
+      const { error } = selected?.id
+        ? await db.from('neveras').update(body).eq('id', selected.id)
+        : await db.from('neveras').insert(body)
+      if (error) { setErr(error.message); return }
+      await cargar()
+      setSelected(null)
+    } finally { setSaving(false) }
+  }
+
+  async function eliminar(n) {
+    if (!window.confirm(`¿Eliminar la nevera ${n.codigo}? Esta acción no se puede deshacer.`)) return
+    const { error } = await db.from('neveras').delete().eq('id', n.id)
+    if (error) { alert('Error al eliminar: ' + error.message); return }
+    await cargar()
+  }
+
+  async function toggleActiva(n) {
+    await db.from('neveras').update({ activa: !n.activa }).eq('id', n.id)
+    await cargar()
+  }
+
+  const FUNC_ESTADO = {
+    true:  { bg: '#D1FAE5', text: '#065F46', label: 'Activa'  },
+    false: { bg: '#F3F4F6', text: '#6B7280', label: 'Inactiva' },
+  }
+
+  return (
+    <div className="bg-surface border rounded-2xl shadow-sm mb-7 overflow-hidden"
+      style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+
+      {/* Header colapsable */}
+      <button
+        className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-surface2 transition-colors"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-2">
+          <Thermometer size={16} className="text-[#3B6FBF]" />
+          <span className="font-serif text-base text-ink">Gestión de neveras</span>
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full ml-1"
+            style={{ background: '#EEF3FB', color: '#3B6FBF' }}>
+            {neveras.length} nevera{neveras.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          {canEdit && (
+            <button
+              onClick={e => { e.stopPropagation(); abrir(null) }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-colors"
+              style={{ background: '#1A5CD8', color: '#fff' }}
+            >
+              <Plus size={13} /> Nueva nevera
+            </button>
+          )}
+          {open ? <ChevronUp size={16} className="text-ink3" /> : <ChevronDown size={16} className="text-ink3" />}
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          {loading ? (
+            <div className="flex items-center justify-center py-8 gap-2 text-ink3">
+              <div className="spinner" /><span className="text-sm">Cargando neveras…</span>
+            </div>
+          ) : neveras.length === 0 ? (
+            <div className="py-10 text-center">
+              <div className="text-3xl mb-2">🧊</div>
+              <p className="text-sm font-semibold text-ink2">No hay neveras registradas</p>
+              {canEdit && (
+                <button onClick={() => abrir(null)}
+                  className="mt-3 px-4 py-2 rounded-xl text-[12px] font-bold"
+                  style={{ background: '#1A5CD8', color: '#fff' }}>
+                  + Agregar primera nevera
+                </button>
+              )}
+            </div>
+          ) : (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>Código</Th>
+                    <Th>Descripción</Th>
+                    <Th>Cap. máx. (kg)</Th>
+                    <Th>Ubicación</Th>
+                    <Th>Estado</Th>
+                    {canEdit && <Th></Th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {neveras.map(n => {
+                    const est = FUNC_ESTADO[String(n.activa)] || FUNC_ESTADO['true']
+                    return (
+                      <Tr key={n.id}>
+                        <Td><span className="font-mono font-bold text-[#3B6FBF] text-[13px]">{n.codigo}</span></Td>
+                        <Td className="text-ink2 text-[12px]">{n.descripcion || '—'}</Td>
+                        <Td className="text-ink3 text-[12px]">{n.capacidad_kg ? `${n.capacidad_kg} kg` : '—'}</Td>
+                        <Td className="text-ink3 text-[12px]">{n.ubicacion || '—'}</Td>
+                        <Td>
+                          <button
+                            onClick={() => canEdit && toggleActiva(n)}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded-full border cursor-pointer"
+                            style={{ background: est.bg, color: est.text, borderColor: est.text + '40' }}
+                          >
+                            {est.label}
+                          </button>
+                        </Td>
+                        {canEdit && (
+                          <Td>
+                            <div className="flex items-center gap-1">
+                              <Button size="sm" variant="ghost" onClick={() => abrir(n)}>
+                                <Edit2 size={12} />
+                              </Button>
+                              <button onClick={() => eliminar(n)}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </Td>
+                        )}
+                      </Tr>
+                    )
+                  })}
+                </tbody>
+              </Table>
+            </TableWrap>
+          )}
+        </div>
+      )}
+
+      {/* Modal crear / editar nevera */}
+      {selected && (
+        <Modal open={!!selected} onClose={() => setSelected(null)}
+          title={selected?.id ? `Editar nevera ${selected.codigo}` : 'Nueva nevera'}
+          maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button>
+              <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</Button>
+            </>
+          }>
+          <div className="space-y-3">
+            {err && (
+              <div className="flex items-center gap-2 bg-red-50 text-red-700 text-[12px] px-3 py-2 rounded-xl">
+                {err}
+              </div>
+            )}
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Código *</label>
+              <Input
+                value={form.codigo || ''}
+                onChange={e => setForm(p => ({ ...p, codigo: e.target.value.toUpperCase() }))}
+                placeholder="Ej: N1, N2, CF-A…"
+                maxLength={20}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Descripción</label>
+              <Input
+                value={form.descripcion || ''}
+                onChange={e => setForm(p => ({ ...p, descripcion: e.target.value }))}
+                placeholder="Ej: Nevera vertical 450L…"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Capacidad máx. (kg)</label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min={1}
+                  step={0.5}
+                  placeholder="Ej: 150"
+                  value={form.capacidad_kg || ''}
+                  onChange={e => setForm(p => ({ ...p, capacidad_kg: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Ubicación</label>
+                <Input
+                  value={form.ubicacion || ''}
+                  onChange={e => setForm(p => ({ ...p, ubicacion: e.target.value }))}
+                  placeholder="Ej: Zona A, Cuarto 1…"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
+              <textarea
+                value={form.notas || ''}
+                onChange={e => setForm(p => ({ ...p, notas: e.target.value }))}
+                placeholder="Observaciones, características especiales…"
+                rows={2}
+                className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none resize-none"
+                style={{ borderColor: 'rgba(30,80,40,0.2)' }}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="nevera-activa"
+                checked={!!form.activa}
+                onChange={e => setForm(p => ({ ...p, activa: e.target.checked }))}
+                className="w-4 h-4 accent-[#1A5CD8]"
+              />
+              <label htmlFor="nevera-activa" className="text-[12px] font-semibold text-ink2 cursor-pointer">
+                Nevera activa / en uso
+              </label>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
   )
 }

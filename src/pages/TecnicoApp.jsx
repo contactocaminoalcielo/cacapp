@@ -8,7 +8,9 @@ import {
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
   AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
   FileText, ChevronDown, ChevronUp, History, Download, Pen,
+  Plus, Trash2, Upload as UploadIcon, Receipt,
 } from 'lucide-react'
+import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 
 const POLL = 30_000
 
@@ -430,26 +432,14 @@ function Checklist({ svc, fotoUrl, checked, onChange }) {
 // ─── REGISTRO CUARTO FRÍO ──────────────────────────────────────────────
 const NEVERAS_DEFAULT = ['N1','N2','N3','N4','N5','N6']
 
-function RegistroCuartoFrio({ svc, onCompletar }) {
+function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT }) {
   const cf = svc.cuarto_frio_data || null
   const [peso, setPeso]               = useState(String(svc.mascotas?.peso_kg || ''))
   const [nevera, setNevera]           = useState('')
   const [neveraCustom, setNeveraCustom] = useState(false)
-  const [neverasList, setNeverasList] = useState(NEVERAS_DEFAULT)
   const [fotoUrl, setFotoUrl]         = useState(null)
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState('')
-
-  useEffect(() => {
-    db.from('cuarto_frio').select('nevera_codigo').not('nevera_codigo', 'is', null)
-      .then(({ data }) => {
-        const extras = [...new Set((data || []).map(r => r.nevera_codigo).filter(Boolean))]
-        const all = [...new Set([...NEVERAS_DEFAULT, ...extras])].sort((a, b) =>
-          a.localeCompare(b, undefined, { numeric: true })
-        )
-        setNeverasList(all)
-      })
-  }, [])
 
   const canConfirm = !!fotoUrl && !!nevera.trim() && !!peso
 
@@ -547,7 +537,7 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
 }
 
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
-function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
   const [sheetOpen, setSheetOpen]     = useState(false)
   const [declinarOpen, setDeclinarOpen] = useState(false)
   const [motivoDeclina, setMotivoDeclina] = useState('')
@@ -558,6 +548,10 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
   const [valorCobrado, setValorCobrado] = useState('')
   const [completing, setCompleting]   = useState(false)
   const [actErr, setActErr]           = useState('')
+  const [reciboOpen, setReciboOpen]   = useState(false)
+  const [svcDataRecibo, setSvcDataRecibo] = useState(null)
+  const [reciboGuardado, setReciboGuardado] = useState(false)
+  const [loadingRecibo, setLoadingRecibo] = useState(false)
 
   const mascota  = svc.mascotas
   const especie  = mascota?.especies?.nombre || ''
@@ -572,14 +566,36 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
 
   const itemsReq = ['id_ok']
   const checklistListo = checked.includes('id_ok') && !!fotoUrl
+  const puedeCompletar = checklistListo && reciboGuardado
 
   function toggleCheck(id) {
     setChecked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
+  async function abrirRecibo() {
+    // Si ya hay datos cacheados (recibo guardado), reusar sin recargar desde DB
+    // para que los valores del recibo no cambien después de registrar el pago
+    if (svcDataRecibo) { setReciboOpen(true); return }
+    setLoadingRecibo(true)
+    try {
+      const { data } = await db.from('servicios')
+        .select(`id, valor_total, valor_pagado, estado_pago, comision_aliado, tipo_acompanamiento,
+          mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,whatsapp,direccion,ciudad)),
+          planes:plan_id(nombre,codigo,tipo_proceso), aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)`)
+        .eq('id', svc.id).single()
+      const { data: cfData } = await db.from('cuarto_frio').select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
+      setSvcDataRecibo({ ...data, peso_confirmado: cfData?.peso_kg || null })
+      setReciboOpen(true)
+    } finally { setLoadingRecibo(false) }
+  }
+
   async function completar() {
+    if (!reciboGuardado) {
+      setActErr('Debes generar y guardar el recibo antes de completar la recogida.')
+      return
+    }
     setCompleting(true); setActErr('')
-    try { await onCompletar(svc, recogida?.id, parseFloat(valorCobrado) || 0) }
+    try { await onCompletar(svc, recogida?.id, 0) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompleting(false) }
   }
@@ -753,7 +769,7 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
         )}
 
         {/* ── FASE 2: EN CAMINO ── */}
-        {enCamino && (
+        {enCamino && !reciboOpen && (
           <div className="mt-2">
             <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-4 text-sm font-semibold"
               style={{ background: '#DBEAFE', color: '#1E40AF' }}>
@@ -769,27 +785,29 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
             />
             <Checklist svc={svc} fotoUrl={fotoUrl} checked={checked} onChange={toggleCheck} />
 
-            {/* Valor cobrado — opcional */}
-            {svc.estado_pago !== 'COMPLETO' && (
-              <div className="mb-4">
-                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                  <CreditCard size={11} /> Valor recogido en sitio
+            {/* Botón generar recibo — obligatorio */}
+            <div className="mb-4">
+              {reciboGuardado ? (
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
+                  style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
+                  <CheckCircle size={14} style={{ color: '#16A34A' }} />
+                  <span className="text-[12px] font-bold text-green-800 flex-1">Recibo guardado</span>
+                  <button onClick={abrirRecibo} className="text-[10px] font-bold text-green-700 underline">Ver</button>
                 </div>
-                <div className="rounded-xl px-3 py-2 mb-2 flex items-center justify-between"
-                  style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
-                  <span className="text-[11px] text-amber-700">Pendiente total</span>
-                  <span className="font-bold text-sm" style={{ color: '#92400E' }}>
-                    {fmt((svc.valor_total || 0) - (svc.valor_pagado || 0))}
-                  </span>
-                </div>
-                <input type="number" inputMode="numeric" step="100"
-                  value={valorCobrado} onChange={e => setValorCobrado(e.target.value)}
-                  placeholder="Monto recibido (dejar vacío si no cobró)"
-                  className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
-                  style={{ borderColor: valorCobrado ? '#1A5CD8' : '#E5E7EB', color: '#111827' }} />
-                <p className="text-[11px] text-gray-400 mt-1 ml-1">Opcional · Dejar vacío si no se cobró</p>
-              </div>
-            )}
+              ) : (
+                <button onClick={abrirRecibo} disabled={loadingRecibo}
+                  className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all active:scale-98 disabled:opacity-60"
+                  style={{ background: '#0B1D4F', color: '#fff' }}>
+                  <Receipt size={15} />
+                  {loadingRecibo ? 'Cargando…' : '📄 Generar recibo (requerido)'}
+                </button>
+              )}
+              {!reciboGuardado && (
+                <p className="text-[10px] text-amber-600 mt-1.5 text-center font-medium">
+                  ⚠️ Debes generar y guardar el recibo antes de completar la recogida
+                </p>
+              )}
+            </div>
 
             {actErr && (
               <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
@@ -797,20 +815,33 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
                 <AlertCircle size={13} /> {actErr}
               </div>
             )}
-            <button onClick={completar} disabled={!checklistListo || completing}
+            <button onClick={completar} disabled={!puedeCompletar || completing}
               className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-50"
-              style={{ background: checklistListo ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
+              style={{ background: puedeCompletar ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
               {completing ? 'Completando…'
-                : checklistListo ? '✅ Completar recogida'
-                : `Falta: ${!fotoUrl ? 'foto' : ''}${!fotoUrl && !checked.includes('id_ok') ? ' + ' : ''}${!checked.includes('id_ok') ? 'verificar identidad' : ''}`}
+                : !fotoUrl ? 'Falta: foto de la mascota'
+                : !checked.includes('id_ok') ? 'Falta: verificar identidad'
+                : !reciboGuardado ? 'Falta: generar y guardar recibo'
+                : '✅ Completar recogida'}
             </button>
           </div>
         )}
 
-        {/* ── FASE 3: CUARTO FRÍO ── */}
-        {enCuartoFrio && (
-          <RegistroCuartoFrio svc={svc} onCompletar={onCuartoFrio} />
+        {/* ── MODAL RECIBO dentro del flujo ── */}
+        {reciboOpen && svcDataRecibo && (
+          <div className="mt-2">
+            <ReciboForm
+              svcData={svcDataRecibo}
+              servicioSel={svc}
+              tecnico={tecnico}
+              yaGuardado={reciboGuardado}
+              onVolver={() => setReciboOpen(false)}
+              onGuardado={() => setReciboGuardado(true)}
+            />
+          </div>
         )}
+
+        {/* EN_CUARTO_FRIO: ahora se gestiona en el tab C. Frío */}
 
         {/* ── COMENTARIOS ── siempre visibles */}
         <ComentariosSection servicioId={svc.id} personalId={tecnico?.id} />
@@ -1262,6 +1293,7 @@ export default function TecnicoApp() {
   const [reporteHoy,     setReporteHoy]     = useState(null)
   const [neverasActivas, setNeverasActivas] = useState([])
   const [misCF,          setMisCF]          = useState([])
+  const [pendientesCF,   setPendientesCF]   = useState([])
   const [reciboSvc,      setReciboSvc]      = useState(null)
 
   const cargar = useCallback(async (silent = false) => {
@@ -1325,9 +1357,10 @@ export default function TecnicoApp() {
         .in('estado', ['ASIGNADA', 'EN_CAMINO'])
         .order('fecha_programada', { ascending: true, nullsFirst: true })
 
-      // Filtrar EN_CUARTO_FRIO ya registrados
+      // Recogidas activas: solo INGRESADO y EN_RECOGIDA
+      // EN_CUARTO_FRIO va exclusivamente al tab C. Frío
       const nuevasR = serviciosConCF.filter(s =>
-        s.estado !== 'EN_CUARTO_FRIO' || !s.cuarto_frio_data?.nevera_codigo
+        ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
       )
       const nuevasE = entData || []
 
@@ -1340,24 +1373,31 @@ export default function TecnicoApp() {
       }
       prevCountRef.current = total
 
-      // ── 5. Reporte del día y neveras activas ──
+      // ── 5. Reporte del día y neveras activas (desde tabla neveras) ──
       const todayStr = new Date().toISOString().split('T')[0]
-      const [{ data: reporteData }, { data: cfNeveras }] = await Promise.all([
+      const [{ data: reporteData }, { data: neverasData }] = await Promise.all([
         dbAdmin.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*)')
           .eq('fecha', todayStr)
           .order('created_at', { ascending: false })
           .limit(1),
-        db.from('cuarto_frio')
-          .select('nevera_codigo')
-          .not('nevera_codigo', 'is', null),
+        db.from('neveras')
+          .select('codigo, capacidad_kg')
+          .eq('activa', true)
+          .order('codigo'),
       ])
       setReporteHoy(reporteData?.[0] || null)
-      // Siempre incluir las neveras base + cualquier código extra del historial
-      const dbCodes = (cfNeveras || []).map(r => r.nevera_codigo).filter(Boolean)
-      const todasNeveras = [...new Set([...NEVERAS_DEFAULT, ...dbCodes])]
+      // Usar neveras de la tabla; fallback a defaults si la tabla está vacía
+      const codigosNeveras = (neverasData || [])
+        .map(n => n.codigo)
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      setNeverasActivas(todasNeveras)
+      setNeverasActivas(codigosNeveras.length > 0 ? codigosNeveras : NEVERAS_DEFAULT)
+
+      // Pendientes de registro en C. Frío (seleccionaron nevera aún no)
+      const pendientesCFArr = serviciosConCF.filter(s =>
+        s.estado === 'EN_CUARTO_FRIO' && !s.cuarto_frio_data?.nevera_codigo
+      )
+      setPendientesCF(pendientesCFArr)
 
       // Mis registros en cuarto frío (ya registrados con nevera)
       const misCFArr = serviciosConCF.filter(s =>
@@ -1411,12 +1451,14 @@ export default function TecnicoApp() {
       mensaje:          `Sale a recoger a ${mascotaNombre}. Hora estimada: ${hora}. Destino: ${lugar}`,
       servicio_id:      svc.id,
       datos: {
-        hora_llegada: hora,
-        mascota:      mascotaNombre,
+        hora_llegada:   hora,
+        mascota:        mascotaNombre,
         lugar,
-        tipo_lugar:   tipoLugar,
-        wa_cliente:   tipoLugar !== 'CLINICA_ALIADA' ? waCliente : null,
-        wa_aliado:    tipoLugar === 'CLINICA_ALIADA'  ? (waTelContacto || waCliente) : null,
+        direccion:      svc.direccion_recogida || lugar,
+        tipo_lugar:     tipoLugar,
+        tecnico_nombre: `${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim(),
+        wa_cliente:     tipoLugar !== 'CLINICA_ALIADA' ? waCliente : null,
+        wa_aliado:      tipoLugar === 'CLINICA_ALIADA'  ? (waTelContacto || waCliente) : null,
       },
     })))
     await cargar()
@@ -1570,7 +1612,7 @@ export default function TecnicoApp() {
   const TABS = [
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
-    { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: sinReporteHoy ? 1 : 0, color: '#0E7490' },
+    { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'recibo',      label: 'Recibo',    Icon: CreditCard, count: 0,                    color: '#7C3AED' },
   ]
 
@@ -1646,6 +1688,7 @@ export default function TecnicoApp() {
             ? <EmptyState icon="🚐" texto="Sin recogidas asignadas" sub="Cuando el coordinador te asigne una recogida, aparecerá aquí." />
             : <RecogidaList
                 recogidas={recogidas} tecnico={tecnico}
+                neverasList={neverasActivas}
                 onIniciar={iniciarRecogida}
                 onCompletar={completarRecogida}
                 onCuartoFrio={confirmarCuartoFrio}
@@ -1659,16 +1702,56 @@ export default function TecnicoApp() {
                   onAceptar={aceptarEntrega} onCompletar={completarEntrega} />
               ))
         ) : tab === 'cuarto_frio' ? (
-          <div className="space-y-5">
+          <div className="space-y-4">
+
+            {/* ── Pendientes de registro en C. Frío ── */}
+            {pendientesCF.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 mb-3 text-sm font-semibold"
+                  style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A' }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                  {pendientesCF.length} mascota{pendientesCF.length > 1 ? 's' : ''} pendiente{pendientesCF.length > 1 ? 's' : ''} de ingreso al cuarto frío
+                </div>
+                {pendientesCF.map(svc => {
+                  const mascota = svc.mascotas
+                  const emoji   = petEmoji(mascota?.especies?.nombre)
+                  return (
+                    <div key={svc.id} className="bg-white rounded-2xl border p-4 mb-3 shadow-sm"
+                      style={{ borderColor: '#FDE68A', borderWidth: 2 }}>
+                      <div className="flex items-center gap-3 mb-3">
+                        <span style={{ fontSize: 28 }}>{emoji}</span>
+                        <div>
+                          <div className="font-bold text-gray-900 text-base">{mascota?.nombre || '—'}</div>
+                          <div className="text-[11px] text-gray-500">
+                            {mascota?.clientes?.nombre} {mascota?.clientes?.apellido}
+                            {mascota?.peso_kg ? ` · ${mascota.peso_kg} kg` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <RegistroCuartoFrio
+                        svc={svc}
+                        onCompletar={confirmarCuartoFrio}
+                        neverasList={neverasActivas}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* ── Reporte del cuarto frío ── */}
             <ReporteCuartoFrio
               tecnico={tecnico}
               neverasActivas={neverasActivas}
               reporteHoy={reporteHoy}
               onGuardado={() => cargar(true)}
             />
+
+            {/* ── Mascotas ya registradas con nevera ── */}
             <MisCuartoFrioSection
               misCF={misCF}
               tecnico={tecnico}
+              neverasList={neverasActivas}
               onRefresh={() => cargar(true)}
             />
           </div>
@@ -1704,12 +1787,12 @@ function SeccionHeader({ color, dot, emoji, titulo, count }) {
   )
 }
 
-function RecogidaList({ recogidas, tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
   const porRecoger   = recogidas.filter(s => s.estado === 'INGRESADO')
   const enCamino     = recogidas.filter(s => s.estado === 'EN_RECOGIDA')
   const cuartoFrio   = recogidas.filter(s => s.estado === 'EN_CUARTO_FRIO')
 
-  const cardProps = { tecnico, onIniciar, onCompletar, onCuartoFrio, onDeclinar }
+  const cardProps = { tecnico, neverasList, onIniciar, onCompletar, onCuartoFrio, onDeclinar }
 
   return (
     <div>
@@ -1746,7 +1829,7 @@ function EmptyState({ icon, texto, sub }) {
 }
 
 // ─── MIS MASCOTAS EN CUARTO FRÍO ───────────────────────────────────────────
-function MisCuartoFrioSection({ misCF, tecnico, onRefresh }) {
+function MisCuartoFrioSection({ misCF, tecnico, neverasList = NEVERAS_DEFAULT, onRefresh }) {
   const [editando,    setEditando]    = useState(null)
   const [nuevaNevera, setNuevaNevera] = useState('')
   const [saving,      setSaving]      = useState(false)
@@ -1885,8 +1968,8 @@ function MisCuartoFrioSection({ misCF, tecnico, onRefresh }) {
               </div>
             </div>
             <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Nueva nevera</div>
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              {NEVERAS_DEFAULT.map(n => (
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {neverasList.map(n => (
                 <button key={n} onClick={() => setNuevaNevera(n)}
                   className="py-3 rounded-xl text-sm font-bold transition-all active:scale-95"
                   style={{
@@ -1898,10 +1981,6 @@ function MisCuartoFrioSection({ misCF, tecnico, onRefresh }) {
                 </button>
               ))}
             </div>
-            <input type="text" value={nuevaNevera} onChange={e => setNuevaNevera(e.target.value)}
-              placeholder="Código personalizado…"
-              className="w-full px-4 py-3 rounded-xl border-2 outline-none font-mono font-bold mb-4"
-              style={{ borderColor: nuevaNevera ? '#1D4ED8' : '#E5E7EB', color: '#111827', fontSize: 18 }} />
             <button onClick={guardarCambioNevera} disabled={!nuevaNevera.trim() || saving}
               className="w-full py-4 rounded-2xl text-base font-bold disabled:opacity-50"
               style={{ background: '#1D4ED8', color: '#fff' }}>
@@ -2011,8 +2090,8 @@ function ReciboTab({ recogidas, tecnico }) {
             especies(nombre),
             clientes:cliente_id(nombre,apellido,email,telefono,whatsapp,direccion,ciudad)
           ),
-          planes:plan_id(nombre,codigo),
-          aliados:aliado_origen_id(nombre)
+          planes:plan_id(nombre,codigo,tipo_proceso),
+          aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)
         `)
         .eq('id', svc.id)
         .single()
@@ -2061,21 +2140,53 @@ function ReciboTab({ recogidas, tecnico }) {
       servicioSel={servicioSel}
       tecnico={tecnico}
       onVolver={() => { setServicioSel(null); setSvcData(null) }}
+      onGuardado={() => {}}
     />
   )
 }
 
+// ─── MEDIOS DE PAGO DISPONIBLES ────────────────────────────────────────────
+const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
+
 // ─── RECIBO FORM ────────────────────────────────────────────────────────────
-function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
+function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolver, onGuardado }) {
   const mascota = svcData.mascotas
   const cliente = mascota?.clientes
   const plan    = svcData.planes
   const aliado  = svcData.aliados
 
-  const numeroRecibo = `CAC-${new Date().getFullYear()}${String(new Date().getMonth()+1).padStart(2,'0')}-${servicioSel.id.slice(0,6).toUpperCase()}`
+  const now          = new Date()
+  const numeroRecibo = `CAC-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}-${servicioSel.id.slice(0,6).toUpperCase()}`
+  const fechaHoy     = now.toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
+  const horaActual   = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
 
+  const saldoPendiente = Math.max(0, (svcData.valor_total || 0) - (svcData.valor_pagado || 0))
+
+  // ── Lógica recibo veterinaria ────────────────────────────────────────────
+  // La comisión se aplica SIEMPRE sobre el precio bruto original del servicio.
+  // Para DESCUENTO_INMEDIATO: valor_total ya tiene el descuento aplicado.
+  //   → precio_original = valor_total + comision_aliado
+  //   → lo que la vet paga a Camino = valor_total (NO se vuelve a deducir)
+  // Para FACTURACION_MENSUAL / CREDITO_ACUMULADO: valor_total es el precio completo.
+  //   → lo que la vet paga a Camino = valor_total (comisión se gestiona aparte)
+  const modalidad     = aliado?.modalidad_comision || ''
+  const comisionGuardada = svcData.comision_aliado || 0
+  const precioOriginal   = modalidad === 'DESCUENTO_INMEDIATO'
+    ? (svcData.valor_total || 0) + comisionGuardada   // reconstruimos el bruto
+    : (svcData.valor_total || 0)                       // ya es el bruto
+
+  // Porcentaje real = comision / precio_original (NO sobre valor_total)
+  const [comisionPct, setComisionPct] = useState(
+    precioOriginal > 0 ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1)) : 0
+  )
+  const comisionMonto = Math.round(precioOriginal * comisionPct / 100)
+  // El vet siempre paga precio_original - comision (= valor_total para DESCUENTO_INMEDIATO)
+  const valorVet      = Math.max(0, precioOriginal - comisionMonto)
+
+  const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE') // CLIENTE | VETERINARIA
   const [form, setForm] = useState({
-    fecha:              new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' }),
+    fecha:              fechaHoy,
+    hora:               horaActual,
     numero_recibo:      numeroRecibo,
     mascota_nombre:     mascota?.nombre || '',
     peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
@@ -2086,8 +2197,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
     telefono:           cliente?.telefono || cliente?.whatsapp || '',
     casa:               servicioSel.direccion_recogida || '',
     servicio:           plan?.nombre || '',
-    valor_servicio:     svcData.valor_total || 0,
-    total_recibido:     (svcData.valor_total || 0) - (svcData.valor_pagado || 0),
+    valor_servicio:     precioOriginal,
+    total_recibido:     saldoPendiente,
     toma_huella:        false,
     toma_mechon:        false,
     entrega_rec_basicos: false,
@@ -2095,128 +2206,241 @@ function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
     confirmacion_foto:  false,
     observaciones:      '',
   })
-  const [firma, setFirma] = useState(null)
-  const [generando, setGenerando] = useState(false)
-  const reciboRef = useRef(null)
+
+  // Multi-medios de pago: [{metodo, monto, referencia, comprobanteUrl, subiendoComprobante}]
+  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: saldoPendiente, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+  const totalMedios = mediosPago.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0)
+
+  const [firma, setFirma]           = useState(null)
+  const [generando, setGenerando]   = useState(false)
+  const [guardando, setGuardando]   = useState(false)
+  const [guardado,  setGuardado]    = useState(yaGuardado)
+  const [reciboId,  setReciboId]    = useState(null)
+  const [err, setErr]               = useState('')
+
+  const uploadRefs = useRef({})
 
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
-  async function descargarPDF() {
-    setGenerando(true)
+  function addMedio() {
+    setMediosPago(prev => [...prev, { metodo: 'EFECTIVO', monto: '', referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+  }
+
+  function removeMedio(idx) {
+    setMediosPago(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function updateMedio(idx, field, value) {
+    setMediosPago(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m))
+  }
+
+  async function subirComprobante(idx, file) {
+    if (!file) return
+    updateMedio(idx, 'subiendoComprobante', true)
     try {
+      const ext  = file.name.split('.').pop() || 'jpg'
+      const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
+      const { data, error: upErr } = await dbAdmin.storage
+        .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
+      updateMedio(idx, 'comprobanteUrl', publicUrl)
+    } catch (e) {
+      setErr('Error al subir comprobante: ' + (e.message || e))
+    } finally {
+      updateMedio(idx, 'subiendoComprobante', false)
+    }
+  }
+
+  // Métodos que requieren comprobante/referencia
+  const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
+
+  async function guardarRecibo() {
+    if (totalMedios <= 0 && saldoPendiente > 0) {
+      setErr('Registra al menos un medio de pago con monto.')
+      return
+    }
+    setGuardando(true); setErr('')
+    try {
+      const valorCobrado  = tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios
+      const { data, error } = await db.from('recibos_tecnico').insert({
+        servicio_id:     servicioSel.id,
+        tecnico_id:      tecnico?.id || null,
+        numero_recibo:   form.numero_recibo,
+        tipo:            tipoRecibo,
+        fecha_emision:   now.toISOString().split('T')[0],
+        hora_emision:    horaActual,
+        valor_total:     form.valor_servicio,
+        valor_cobrado:   valorCobrado,
+        medios_pago:     mediosPago,
+        datos_form:      form,
+        estado:          'GUARDADO',
+      }).select('id').single()
+      if (error) throw error
+      setReciboId(data.id)
+
+      // Actualizar pago en servicios si hubo cobro
+      if (totalMedios > 0) {
+        const nuevoPagado   = (svcData.valor_pagado || 0) + totalMedios
+        const nuevoEstado   = nuevoPagado >= (svcData.valor_total || 0) ? 'COMPLETO' : 'PARCIAL'
+        await db.from('servicios').update({
+          valor_pagado: nuevoPagado,
+          estado_pago:  nuevoEstado,
+          medios_pago:  mediosPago.map(m => m.metodo).join(', '),
+        }).eq('id', servicioSel.id)
+        const detallePagos = mediosPago.map(m => {
+          let txt = `${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
+          if (m.referencia) txt += ` (Ref: ${m.referencia})`
+          if (m.comprobanteUrl) txt += ` ✅comprobante`
+          return txt
+        }).join(' | ')
+        await db.from('novedades_servicio').insert({
+          servicio_id:    servicioSel.id,
+          tipo_novedad:   'PAGO_RECIBIDO',
+          descripcion:    `Técnico recibió ${fmt(totalMedios)} — ${detallePagos}`,
+          valor_ajuste:   totalMedios,
+          registrado_por: tecnico?.id || null,
+        })
+      }
+
+      setGuardado(true)
+      if (onGuardado) onGuardado(data.id)
+    } catch (e) {
+      setErr('Error al guardar: ' + (e.message || e))
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  async function descargarPDF(tipo = tipoRecibo, soloBlob = false) {
+    if (!guardado) {
+      setErr('Debes guardar el recibo primero antes de descargarlo.')
+      return null
+    }
+    if (!soloBlob) setGenerando(true)
+    try {
+      const valorMostrar = tipo === 'VETERINARIA' ? valorVet : form.valor_servicio
+      const totalMostrar = tipo === 'VETERINARIA' ? totalMedios : form.total_recibido
+      const mediosPagoTexto = mediosPago
+        .filter(m => parseFloat(m.monto) > 0)
+        .map(m => {
+          let txt = `${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
+          if (m.referencia) txt += ` | Ref: ${m.referencia}`
+          if (m.comprobanteUrl) txt += ' ✓comprobante'
+          return txt
+        })
+        .join(' / ') || '—'
+
       const { default: jsPDF } = await import('jspdf')
       const pdf = new jsPDF('p', 'mm', 'a4')
       const W = 210, M = 15, CW = W - M * 2
       let y = 0
 
-      // ── Helpers ──────────────────────────────────────────
-      const t = (text, x, yy, opts = {}) => pdf.text(String(text ?? ''), x, yy, opts)
-      const sec = (label, yy) => {
-        pdf.setFillColor(232, 243, 235)
-        pdf.rect(M, yy, CW, 6, 'F')
-        pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(7.5)
-        pdf.setTextColor(31, 90, 50)
-        t(label, M + 2, yy + 4.2)
-        return yy + 8
+      const t     = (text, x, yy, opts = {}) => pdf.text(String(text ?? ''), x, yy, opts)
+      const sec   = (label, yy) => {
+        pdf.setFillColor(11, 29, 79); pdf.rect(M, yy, CW, 6, 'F')
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(255, 255, 255)
+        t(label, M + 2, yy + 4.2); return yy + 8
       }
       const field = (label, value, x, yy, w = CW / 2 - 3) => {
-        pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(6.5)
-        pdf.setTextColor(140, 140, 140)
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(140, 140, 140)
         t(label.toUpperCase(), x, yy)
-        pdf.setFont('helvetica', 'normal')
-        pdf.setFontSize(9)
-        pdf.setTextColor(25, 25, 25)
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(25, 25, 25)
         const lines = pdf.splitTextToSize(value || '—', w)
         pdf.text(lines, x, yy + 4.5)
         return yy + 4.5 + lines.length * 4.5
       }
       const hr = (yy) => {
-        pdf.setDrawColor(210, 225, 215)
-        pdf.setLineWidth(0.25)
-        pdf.line(M, yy, W - M, yy)
-        return yy + 4
+        pdf.setDrawColor(210, 210, 225); pdf.setLineWidth(0.25)
+        pdf.line(M, yy, W - M, yy); return yy + 4
       }
 
-      // ── Cabecera verde ────────────────────────────────────
-      pdf.setFillColor(31, 90, 50)
-      pdf.rect(0, 0, W, 30, 'F')
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(20)
-      pdf.setTextColor(255, 255, 255)
-      t('CAMINO AL CIELO', W / 2, 13, { align: 'center' })
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(8.5)
-      pdf.setTextColor(190, 220, 200)
-      t('Funeraria para mascotas  ·  Bogotá, Colombia', W / 2, 20, { align: 'center' })
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(8)
-      pdf.setTextColor(196, 168, 122)
-      t('RECIBO DE SERVICIO', W / 2, 27, { align: 'center' })
+      // Cabecera
+      pdf.setFillColor(11, 29, 79); pdf.rect(0, 0, W, 30, 'F')
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18); pdf.setTextColor(255, 255, 255)
+      t('CAMINO AL CIELO', W / 2, 12, { align: 'center' })
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(176, 196, 228)
+      t('Funeraria para mascotas  ·  Bogotá, Colombia', W / 2, 18.5, { align: 'center' })
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(196, 168, 122)
+      const tipoLabel = tipo === 'VETERINARIA' ? 'RECIBO VETERINARIA / ALIADO' : 'RECIBO DE SERVICIO — CLIENTE'
+      t(tipoLabel, W / 2, 26, { align: 'center' })
 
-      // ── Número y fecha ────────────────────────────────────
-      pdf.setFillColor(244, 247, 244)
-      pdf.rect(0, 30, W, 11, 'F')
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(9)
-      pdf.setTextColor(31, 90, 50)
-      t(`No. ${form.numero_recibo}`, M, 37.5)
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(9)
-      pdf.setTextColor(80, 80, 80)
-      t(`Fecha: ${form.fecha}`, W - M, 37.5, { align: 'right' })
-
+      pdf.setFillColor(240, 244, 250); pdf.rect(0, 30, W, 11, 'F')
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(11, 29, 79)
+      t(`No. ${form.numero_recibo}${tipo === 'VETERINARIA' ? '-VET' : ''}`, M, 37.5)
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(80, 80, 80)
+      t(`Fecha: ${form.fecha}  Hora: ${form.hora}`, W - M, 37.5, { align: 'right' })
       y = 46
 
-      // ── Mascota ───────────────────────────────────────────
       y = sec('DATOS DE LA MASCOTA', y)
-      const yMasc = y
+      const yM = y
       field('Mascota', form.mascota_nombre, M, y)
       field('Especie', form.especie, M + CW / 2, y)
-      y = yMasc + 12
+      y = yM + 12
       field('Peso', form.peso ? `${form.peso} kg` : '—', M, y)
-      field('Veterinaria / Aliado', form.veterinaria, M + CW / 2, y)
-      y += 13
-      y = hr(y)
+      if (tipo !== 'VETERINARIA') field('Veterinaria / Aliado', form.veterinaria, M + CW / 2, y)
+      y += 13; y = hr(y)
 
-      // ── Propietario ───────────────────────────────────────
       y = sec('DATOS DEL PROPIETARIO', y)
-      const yProp = y
-      y = Math.max(field('Nombre completo', form.propietario, M, yProp, CW), yProp + 10)
-      const yProp2 = y
-      field('Correo electrónico', form.email, M, yProp2)
-      field('Teléfono', form.telefono, M + CW / 2, yProp2)
-      y = yProp2 + 12
-      y = Math.max(field('Dirección de recogida', form.casa, M, y, CW), y + 10)
+      const yP = y
+      y = Math.max(field('Nombre completo', form.propietario, M, yP, CW), yP + 10)
+      const yP2 = y
+      if (tipo !== 'VETERINARIA') {
+        field('Correo', form.email, M, yP2)
+        field('Teléfono', form.telefono, M + CW / 2, yP2)
+        y = yP2 + 12
+        y = Math.max(field('Dirección de recogida', form.casa, M, y, CW), y + 10)
+      } else {
+        field('Teléfono', form.telefono, M, yP2)
+        y = yP2 + 12
+      }
       y = hr(y)
 
-      // ── Servicio ──────────────────────────────────────────
-      y = sec('SERVICIO CONTRATADO', y)
+      y = sec('SERVICIO Y PAGO', y)
       y = Math.max(field('Plan / Servicio', form.servicio, M, y, CW), y + 10)
-      // Cajas de valor
       const bw = (CW - 4) / 2
-      const drawValBox = (label, value, x, yy) => {
-        pdf.setDrawColor(196, 168, 122)
-        pdf.setLineWidth(0.4)
-        pdf.setFillColor(255, 253, 248)
+      const drawBox = (label, value, x, yy) => {
+        pdf.setDrawColor(196, 168, 122); pdf.setLineWidth(0.4); pdf.setFillColor(255, 253, 248)
         pdf.rect(x, yy, bw, 14, 'FD')
-        pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(6.5)
-        pdf.setTextColor(140, 110, 60)
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(140, 110, 60)
         t(label.toUpperCase(), x + bw / 2, yy + 4.5, { align: 'center' })
-        pdf.setFont('helvetica', 'bold')
-        pdf.setFontSize(13)
-        pdf.setTextColor(31, 90, 50)
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(11, 29, 79)
         t(fmt(Number(value) || 0), x + bw / 2, yy + 11, { align: 'center' })
       }
-      drawValBox('Valor del servicio', form.valor_servicio, M, y)
-      drawValBox('Total recibido', form.total_recibido, M + bw + 4, y)
-      y += 18
+      if (tipo === 'VETERINARIA') {
+        // Desglose comisión para recibo VET
+        // precioOriginal = precio bruto (antes del descuento de comisión)
+        // valorVet       = lo que el aliado paga a Camino al Cielo
+        const lineH = 6.5
+        pdf.setFillColor(255, 251, 235); pdf.rect(M, y, CW, lineH * 3 + 4, 'F')
+        pdf.setDrawColor(253, 230, 138); pdf.setLineWidth(0.3)
+        pdf.rect(M, y, CW, lineH * 3 + 4, 'D')
+
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
+        t('Precio bruto del servicio:', M + 3, y + lineH)
+        pdf.setFont('helvetica', 'bold')
+        t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
+
+        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(180, 50, 0)
+        t(`Comisión aliado (${comisionPct}%):`, M + 3, y + lineH * 2)
+        pdf.setFont('helvetica', 'bold')
+        t(`– ${fmt(comisionMonto)}`, W - M - 3, y + lineH * 2, { align: 'right' })
+
+        pdf.setFillColor(254, 240, 138); pdf.rect(M, y + lineH * 2 + 1, CW, lineH + 3, 'F')
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(120, 50, 0)
+        t('TOTAL A COBRAR:', M + 3, y + lineH * 3 + 1)
+        t(fmt(valorVet), W - M - 3, y + lineH * 3 + 1, { align: 'right' })
+        y += lineH * 3 + 8
+      } else {
+        // Recibo cliente: solo muestra el valor del servicio, sin detalles de cobro
+        drawBox('Valor del servicio', valorMostrar, M, y)
+        y += 18
+      }
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(80, 80, 80)
+      t(`Medios de pago: ${mediosPagoTexto}`, M, y); y += 6
       y = hr(y)
 
-      // ── Elementos recibidos ───────────────────────────────
-      y = sec('ELEMENTOS RECIBIDOS / ENTREGADOS', y)
+      y = sec('ELEMENTOS', y)
       const items = [
         { label: 'Se toma huella', checked: form.toma_huella },
         { label: 'Se toma mechón de pelo', checked: form.toma_mechon },
@@ -2224,192 +2448,524 @@ function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
         { label: 'Confirmación de foto', checked: form.confirmacion_foto },
       ]
       items.forEach(item => {
-        pdf.setDrawColor(item.checked ? 31 : 180, item.checked ? 90 : 180, item.checked ? 50 : 180)
-        pdf.setLineWidth(0.35)
-        pdf.rect(M, y - 3.2, 3.8, 3.8, 'D')
+        pdf.setDrawColor(item.checked ? 11 : 180, item.checked ? 29 : 180, item.checked ? 79 : 180)
+        pdf.setLineWidth(0.35); pdf.rect(M, y - 3.2, 3.8, 3.8, 'D')
         if (item.checked) {
-          pdf.setDrawColor(31, 90, 50)
-          pdf.setLineWidth(0.7)
-          pdf.line(M + 0.7, y - 1.2, M + 1.7, y + 0.1)
-          pdf.line(M + 1.7, y + 0.1, M + 3.3, y - 2.8)
+          pdf.setDrawColor(11, 29, 79); pdf.setLineWidth(0.7)
+          pdf.line(M + 0.7, y - 1.2, M + 1.7, y + 0.1); pdf.line(M + 1.7, y + 0.1, M + 3.3, y - 2.8)
         }
-        pdf.setFont('helvetica', item.checked ? 'bold' : 'normal')
-        pdf.setFontSize(9)
-        pdf.setTextColor(item.checked ? 25 : 130, item.checked ? 25 : 130, item.checked ? 25 : 130)
-        t(item.label, M + 6, y)
-        y += 6
+        pdf.setFont('helvetica', item.checked ? 'bold' : 'normal'); pdf.setFontSize(9)
+        pdf.setTextColor(item.checked ? 11 : 130, item.checked ? 29 : 130, item.checked ? 79 : 130)
+        t(item.label, M + 6, y); y += 6
       })
-      if (form.nombre_recibe) {
-        y += 1
-        field('Recibido / firmado por', form.nombre_recibe, M, y, CW)
-        y += 11
-      } else {
-        y += 3
-      }
+      if (form.nombre_recibe) { y += 1; field('Recibido / firmado por', form.nombre_recibe, M, y, CW); y += 11 } else { y += 3 }
 
-      // ── Observaciones ─────────────────────────────────────
       if (form.observaciones?.trim()) {
-        y = hr(y)
-        y = sec('OBSERVACIONES', y)
-        pdf.setFont('helvetica', 'normal')
-        pdf.setFontSize(9)
-        pdf.setTextColor(50, 50, 50)
+        y = hr(y); y = sec('OBSERVACIONES', y)
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(50, 50, 50)
         const lines = pdf.splitTextToSize(form.observaciones, CW)
-        pdf.text(lines, M, y)
-        y += lines.length * 4.8 + 5
+        pdf.text(lines, M, y); y += lines.length * 4.8 + 5
       }
 
-      // ── Firma ─────────────────────────────────────────────
-      y = hr(y)
-      y = sec('FIRMA DEL CLIENTE', y)
+      y = hr(y); y = sec('FIRMA DEL CLIENTE', y)
       if (firma) {
-        pdf.setDrawColor(200, 215, 205)
-        pdf.setLineWidth(0.3)
-        pdf.setFillColor(252, 254, 252)
+        pdf.setDrawColor(200, 210, 225); pdf.setLineWidth(0.3); pdf.setFillColor(250, 252, 255)
         pdf.rect(M, y, CW, 28, 'FD')
-        pdf.addImage(firma, 'PNG', M + 5, y + 2, CW - 10, 24)
-        y += 32
+        pdf.addImage(firma, 'PNG', M + 5, y + 2, CW - 10, 24); y += 32
       } else {
-        pdf.setDrawColor(200, 215, 205)
-        pdf.setLineWidth(0.3)
+        pdf.setDrawColor(200, 210, 225); pdf.setLineWidth(0.3)
         pdf.rect(M, y, CW, 22, 'D')
-        pdf.setFont('helvetica', 'normal')
-        pdf.setFontSize(8)
-        pdf.setTextColor(180, 180, 180)
-        t('Sin firma registrada', W / 2, y + 13, { align: 'center' })
-        y += 26
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(180, 180, 180)
+        t('Sin firma registrada', W / 2, y + 13, { align: 'center' }); y += 26
       }
 
-      // ── Pie de página ─────────────────────────────────────
-      pdf.setFillColor(31, 90, 50)
-      pdf.rect(0, 285, W, 12, 'F')
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(7)
-      pdf.setTextColor(190, 220, 200)
-      t(`Técnico: ${tecnico?.nombre || ''} ${tecnico?.apellido || ''}  ·  Camino al Cielo  ·  contacto@caminoalcielo.com.co  ·  ${new Date().getFullYear()}`, W / 2, 292, { align: 'center' })
+      pdf.setFillColor(11, 29, 79); pdf.rect(0, 285, W, 12, 'F')
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(176, 196, 228)
+      t(`Técnico: ${tecnico?.nombre || ''} ${tecnico?.apellido || ''}  ·  Camino al Cielo  ·  contacto@caminoalcielo.com.co  ·  ${now.getFullYear()}`, W / 2, 292, { align: 'center' })
 
-      pdf.save(`Recibo_${form.mascota_nombre}_${form.numero_recibo}.pdf`)
-    } catch (e) { alert('Error al generar PDF: ' + e.message) }
-    finally { setGenerando(false) }
+      const suffix = tipo === 'VETERINARIA' ? '_VET' : '_CLI'
+      if (soloBlob) {
+        return pdf.output('blob')
+      }
+      pdf.save(`Recibo_${form.mascota_nombre}_${form.numero_recibo}${suffix}.pdf`)
+      return null
+    } catch (e) {
+      if (!soloBlob) alert('Error al generar PDF: ' + e.message)
+      return null
+    } finally {
+      if (!soloBlob) setGenerando(false)
+    }
   }
 
-  function enviarWhatsApp() {
-    const wa = cliente?.whatsapp || cliente?.telefono
-    if (!wa) { alert('No hay número WhatsApp del cliente'); return }
-    const msg = [
-      `Recibo de servicio — Camino al Cielo 🐾`,
-      `No. recibo: *${form.numero_recibo}*`,
-      `Fecha: ${form.fecha}`,
-      `Mascota: *${form.mascota_nombre}* (${form.especie})`,
-      `Propietario: ${form.propietario}`,
-      `Plan: ${form.servicio}`,
-      `Valor: $${Number(form.valor_servicio).toLocaleString('es-CO')}`,
-      `Total recibido: $${Number(form.total_recibido).toLocaleString('es-CO')}`,
-      form.toma_huella ? '✅ Se tomó huella' : '',
-      form.toma_mechon ? '✅ Se tomó mechón' : '',
-      form.entrega_rec_basicos ? `✅ Recordatorios básicos entregados a: ${form.nombre_recibe}` : '',
-      form.observaciones ? `Obs: ${form.observaciones}` : '',
-    ].filter(Boolean).join('\n')
-    window.open(`https://wa.me/57${wa.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`, '_blank')
-  }
+  // Cierra el recibo (vuelve a la tarjeta de recogida)
+  function cerrar() { if (onVolver) onVolver() }
 
-  const FIELD = 'mb-1'
-  const LBL   = 'text-[9px] font-bold text-gray-400 uppercase tracking-wider'
-  const VAL   = 'text-[12px] text-gray-800'
+  async function enviarPorWA() {
+    if (!guardado) { setErr('Guarda el recibo primero.'); return }
+
+    // ── Número y nombre del destinatario según tipo de recibo ──────────────
+    let waDestino, nombreDestino, msgTipo
+    if (tipoRecibo === 'VETERINARIA') {
+      waDestino     = aliado?.whatsapp || aliado?.telefono
+      nombreDestino = aliado?.contacto_nombre || aliado?.nombre || ''
+      msgTipo       = 'VETERINARIA'
+      if (!waDestino) { setErr('La veterinaria no tiene número de WhatsApp registrado.'); return }
+    } else {
+      waDestino     = cliente?.whatsapp || cliente?.telefono
+      nombreDestino = form.propietario
+      msgTipo       = 'CLIENTE'
+      if (!waDestino) { setErr('El cliente no tiene número de WhatsApp registrado.'); return }
+    }
+
+    // ── Mensaje según tipo ─────────────────────────────────────────────────
+    let msg
+    if (msgTipo === 'CLIENTE') {
+      msg = [
+        `*Recibo de servicio — Camino al Cielo 🐾*`,
+        ``,
+        `Estimado/a *${form.propietario}*, adjuntamos el recibo de servicio para *${form.mascota_nombre}*.`,
+        ``,
+        `📋 No. recibo: ${form.numero_recibo}`,
+        `📅 Fecha: ${form.fecha}`,
+        `🐾 Mascota: ${form.mascota_nombre}`,
+        `📦 Plan: ${form.servicio}`,
+        `💰 Valor del servicio: ${fmt(Number(form.valor_servicio))}`,
+        ``,
+        `Gracias por confiar en nosotros 🙏`,
+        `_Camino al Cielo · contacto@caminoalcielo.com.co_`,
+      ].join('\n')
+    } else {
+      const mediosTxt = mediosPago
+        .filter(m => parseFloat(m.monto) > 0)
+        .map(m => {
+          let t = `• ${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
+          if (m.referencia) t += ` (Ref: ${m.referencia})`
+          return t
+        }).join('\n') || '—'
+      msg = [
+        `*Recibo aliado — Camino al Cielo*`,
+        ``,
+        `Estimados, adjuntamos el recibo correspondiente al servicio de *${form.mascota_nombre}*.`,
+        ``,
+        `📋 No. recibo: ${form.numero_recibo}-VET`,
+        `📅 Fecha: ${form.fecha}`,
+        `📦 Plan: ${form.servicio}`,
+        ``,
+        `💵 Precio bruto: ${fmt(precioOriginal)}`,
+        `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
+        `✅ *Total a cobrar: ${fmt(valorVet)}*`,
+        ``,
+        `Medios de pago recibidos:\n${mediosTxt}`,
+        ``,
+        `_Camino al Cielo · contacto@caminoalcielo.com.co_`,
+      ].join('\n')
+    }
+
+    setGenerando(true)
+    setErr('')
+    try {
+      // 1. Generar PDF como blob
+      const pdfBlob = await descargarPDF(tipoRecibo, true)
+      let pdfUrl = null
+
+      // 2. Subir a Supabase Storage para obtener URL pública
+      if (pdfBlob) {
+        try {
+          const suffix   = tipoRecibo === 'VETERINARIA' ? '_VET' : '_CLI'
+          const fileName = `recibos/${servicioSel.id}/${form.numero_recibo}${suffix}_${Date.now()}.pdf`
+          const { data: up, error: upErr } = await dbAdmin.storage
+            .from('evidencias')
+            .upload(fileName, pdfBlob, { upsert: true, contentType: 'application/pdf' })
+          if (!upErr && up) {
+            const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(up.path)
+            pdfUrl = publicUrl
+          }
+        } catch (_) { /* si falla el upload, enviamos solo el texto */ }
+      }
+
+      // 3. Enviar por GHL/Zolutium con PDF adjunto
+      await enviarWhatsApp({
+        telefono:    waDestino,
+        nombre:      nombreDestino,
+        mensaje:     msg,
+        pdfUrl,
+        fromNumber:  LINEAS_WHATSAPP[0]?.numero,
+      })
+      alert(`Recibo enviado por WhatsApp${pdfUrl ? ' con PDF adjunto' : ''} a ${waDestino} desde la línea oficial.`)
+    } catch (e) {
+      setErr('Error al enviar: ' + (e.message || e))
+    } finally {
+      setGenerando(false)
+    }
+  }
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        <button onClick={onVolver} className="text-[11px] text-[#1A5CD8] font-semibold underline">← Volver</button>
-        <span className="text-gray-400">|</span>
-        <span className="text-[12px] font-semibold text-gray-600">Recibo — {form.mascota_nombre}</span>
+        <span className="text-[13px] font-bold text-gray-800">
+          📄 Recibo — {form.mascota_nombre}
+        </span>
+        {guardado && (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto"
+            style={{ background: '#D1FAE5', color: '#065F46' }}>
+            ✓ Guardado
+          </span>
+        )}
       </div>
 
-      {/* ── RECIBO IMPRIMIBLE — solo inline styles (sin Tailwind) para html2canvas ── */}
-      <div ref={reciboRef} style={{
-        background: '#ffffff', padding: '20px', borderRadius: '16px',
+      {/* Selector tipo de recibo */}
+      <div className="flex gap-2 mb-3">
+        {[
+          { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(form.valor_servicio)}` },
+          ...(aliado ? [{ key: 'VETERINARIA', label: '🏥 Para veterinaria', desc: `Cobrar: ${fmt(valorVet)}` }] : []),
+        ].map(op => (
+          <button key={op.key} onClick={() => setTipoRecibo(op.key)}
+            className="flex-1 py-2.5 px-3 rounded-xl border-2 text-left transition-all active:scale-98"
+            style={{
+              borderColor: tipoRecibo === op.key ? '#1A5CD8' : '#E5E7EB',
+              background:  tipoRecibo === op.key ? '#EEF3FB' : '#FAFAFA',
+            }}>
+            <div className="text-[12px] font-bold" style={{ color: tipoRecibo === op.key ? '#1A5CD8' : '#374151' }}>{op.label}</div>
+            <div className="text-[10px] text-gray-400 mt-0.5">{op.desc}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Configurar comisión — solo visible para vet */}
+      {tipoRecibo === 'VETERINARIA' && aliado && (
+        <div className="rounded-2xl mb-4 overflow-hidden"
+          style={{ border: '1.5px solid #FDE68A' }}>
+          <div className="px-4 py-2.5" style={{ background: '#FFF3DC' }}>
+            <div className="text-[11px] font-bold text-amber-800 mb-2">Desglose comisión del aliado</div>
+            <div className="flex justify-between text-[12px] mb-1">
+              <span className="text-amber-700">Precio bruto del servicio</span>
+              <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[12px] mb-1">
+              <span className="text-amber-700">Comisión aliado</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-red-600 font-bold">– {fmt(comisionMonto)}</span>
+                <div className="flex items-center gap-1 ml-2">
+                  <input
+                    type="number" min={0} max={100} step={0.5}
+                    value={comisionPct}
+                    onChange={e => setComisionPct(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                    className="w-14 text-center px-1 py-0.5 rounded-lg border text-[12px] font-bold outline-none"
+                    style={{ borderColor: '#F59E0B', color: '#92400E' }}
+                  />
+                  <span className="text-[11px] font-bold text-amber-700">%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-between px-4 py-2.5" style={{ background: '#FEF08A' }}>
+            <span className="text-[13px] font-bold text-amber-900">Total a cobrar</span>
+            <span className="text-[16px] font-extrabold text-amber-900">{fmt(valorVet)}</span>
+          </div>
+          {modalidad === 'FACTURACION_MENSUAL' || modalidad === 'CREDITO_ACUMULADO' ? (
+            <div className="px-4 py-2 text-[10px] text-amber-700" style={{ background: '#FFFBEB' }}>
+              ℹ️ Modalidad <strong>{modalidad.replace('_', ' ')}</strong> — la comisión se gestiona por separado, el aliado paga el valor total.
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* Datos recibo preview */}
+      <div style={{
+        background: '#ffffff', padding: '16px', borderRadius: '16px',
         border: '1px solid #F3F4F6', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-        marginBottom: '16px', fontFamily: 'system-ui, sans-serif',
+        marginBottom: '14px', fontFamily: 'system-ui, sans-serif',
       }}>
         {/* Encabezado */}
-        <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #1A5CD8' }}>
-          <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#0B1D4F' }}>CAMINO AL CIELO</div>
-          <div style={{ fontSize: '11px', color: '#6B7280' }}>Funeraria para mascotas · Bogotá, Colombia</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '11px', fontWeight: '600', color: '#6B7280' }}>
-            <span>No. Recibo: <span style={{ color: '#1A5CD8', fontWeight: 'bold' }}>{form.numero_recibo}</span></span>
-            <span>{form.fecha}</span>
+        <div style={{ textAlign: 'center', marginBottom: '12px', paddingBottom: '10px', borderBottom: '2px solid #0B1D4F' }}>
+          <div style={{ fontWeight: 'bold', fontSize: '15px', color: '#0B1D4F' }}>CAMINO AL CIELO</div>
+          <div style={{ fontSize: '10px', color: '#6B7280' }}>Funeraria para mascotas · Bogotá</div>
+          <div style={{ fontSize: '9px', fontWeight: '700', color: '#C4A87A', marginTop: '2px' }}>
+            {tipoRecibo === 'VETERINARIA' ? 'RECIBO VETERINARIA / ALIADO' : 'RECIBO DE SERVICIO — CLIENTE'}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '10px', color: '#6B7280' }}>
+            <span>No. <strong style={{ color: '#0B1D4F' }}>{form.numero_recibo}{tipoRecibo === 'VETERINARIA' ? '-VET' : ''}</strong></span>
+            <span>{form.fecha} · {form.hora}</span>
           </div>
         </div>
 
-        {/* Campos en grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '16px', rowGap: '8px', marginBottom: '12px', fontSize: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '12px', rowGap: '6px', marginBottom: '10px', fontSize: '11px' }}>
           <RField label="Mascota" value={form.mascota_nombre} onChange={v => f('mascota_nombre',v)} />
-          <RField label="Peso (kg)" value={form.peso} onChange={v => f('peso',v)} />
           <RField label="Especie" value={form.especie} onChange={v => f('especie',v)} />
-          <RField label="Veterinaria / Aliado" value={form.veterinaria} onChange={v => f('veterinaria',v)} />
           <RField label="Propietario" value={form.propietario} onChange={v => f('propietario',v)} span2 />
-          <RField label="Correo" value={form.email} onChange={v => f('email',v)} span2 />
-          <RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} />
-          <RField label="Dirección recogida" value={form.casa} onChange={v => f('casa',v)} />
-          <RField label="Plan / Servicio" value={form.servicio} onChange={v => f('servicio',v)} span2 />
-          <RField label="Valor del servicio ($)" value={String(form.valor_servicio)} onChange={v => f('valor_servicio', Number(v)||0)} type="number" />
-          <RField label="Total recibido ($)" value={String(form.total_recibido)} onChange={v => f('total_recibido', Number(v)||0)} type="number" highlight />
+          {tipoRecibo !== 'VETERINARIA' && <><RField label="Correo" value={form.email} onChange={v => f('email',v)} span2 /><RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} /></>}
+          <RField label="Plan" value={form.servicio} onChange={v => f('servicio',v)} span2 />
         </div>
 
-        {/* Checkboxes */}
-        <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {/* Cajas de valor */}
+        {tipoRecibo === 'VETERINARIA' ? (
+          /* Desglose comisión para vet */
+          <div style={{ marginBottom: '10px', border: '1.5px solid #FDE68A', borderRadius: '10px', overflow: 'hidden', background: '#FFFBEB' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
+              <span style={{ fontSize: '11px', color: '#92400E' }}>Precio bruto del servicio</span>
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#0B1D4F' }}>{fmt(precioOriginal)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
+              <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}%)</span>
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#DC2626' }}>– {fmt(comisionMonto)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
+              <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>Total a cobrar</span>
+              <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(valorVet)}</span>
+            </div>
+          </div>
+        ) : (
+          /* Recibo cliente: solo valor del servicio, sin detalles de cobro */
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ border: '1.5px solid #C4A87A', borderRadius: '8px', padding: '8px 12px', textAlign: 'center', background: '#FFFDF8' }}>
+              <div style={{ fontSize: '8px', fontWeight: '700', color: '#8C6C3C', textTransform: 'uppercase', marginBottom: '2px' }}>Valor del servicio</div>
+              <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(form.valor_servicio)}</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <RCheck label="Se toma huella" checked={form.toma_huella} onChange={v => f('toma_huella',v)} />
           <RCheck label="Se toma mechón de pelo" checked={form.toma_mechon} onChange={v => f('toma_mechon',v)} />
           <RCheck label="Entrega de recordatorios básicos" checked={form.entrega_rec_basicos} onChange={v => f('entrega_rec_basicos',v)} />
           <RCheck label="Confirmación de foto" checked={form.confirmacion_foto} onChange={v => f('confirmacion_foto',v)} />
         </div>
-
-        {/* Nombre quien recibe */}
         {(form.toma_huella || form.toma_mechon || form.entrega_rec_basicos) && (
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
-              Nombre de quien recibe huella / mechón / recordatorios
-            </div>
-            <input type="text" value={form.nombre_recibe}
-              onChange={e => f('nombre_recibe', e.target.value)}
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '9px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', marginBottom: '4px' }}>Recibido por</div>
+            <input type="text" value={form.nombre_recibe} onChange={e => f('nombre_recibe', e.target.value)}
               placeholder="Nombre completo…"
-              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '12px', outline: 'none', boxSizing: 'border-box', color: '#111827' }} />
+              style={{ width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
           </div>
         )}
-
-        {/* Observaciones */}
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Observaciones</div>
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{ fontSize: '9px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', marginBottom: '4px' }}>Observaciones</div>
           <textarea value={form.observaciones} onChange={e => f('observaciones', e.target.value)}
-            placeholder="Observaciones, novedades, acuerdos de pago…"
-            rows={2}
-            style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '12px', outline: 'none', resize: 'none', boxSizing: 'border-box', color: '#111827' }} />
+            placeholder="Observaciones, novedades…" rows={2}
+            style={{ width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '11px', outline: 'none', resize: 'none', boxSizing: 'border-box' }} />
         </div>
-
-        {/* Firma */}
         <SignaturePad onSigned={setFirma} firmaDataUrl={firma} />
-        {firma && (
-          <img src={firma} alt="Firma" style={{ marginTop: '8px', maxHeight: '64px', border: '1px solid #E5E7EB', borderRadius: '8px' }} />
-        )}
-
-        {/* Footer */}
-        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #E5E7EB', fontSize: '10px', color: '#9CA3AF', textAlign: 'center' }}>
-          Técnico: {tecnico?.nombre} {tecnico?.apellido} · Camino al Cielo © {new Date().getFullYear()}
+        <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #E5E7EB', fontSize: '9px', color: '#9CA3AF', textAlign: 'center' }}>
+          Técnico: {tecnico?.nombre} {tecnico?.apellido} · Camino al Cielo
         </div>
       </div>
 
+      {/* ── Medios de pago ── */}
+      <div className="mb-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+            <CreditCard size={11} /> Medios de pago recibidos
+          </div>
+          <span className="text-[10px] text-gray-400">
+            Pendiente: <strong style={{ color: '#92400E' }}>{fmt(saldoPendiente)}</strong>
+          </span>
+        </div>
+
+        {/* Tip pago mixto */}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[11px]"
+          style={{ background: '#EEF3FB', color: '#1E40AF' }}>
+          <span className="text-base">💡</span>
+          <span><strong>Pago mixto:</strong> podés combinar efectivo + transferencia + Nequi, etc. Agregá un medio por cada forma recibida.</span>
+        </div>
+
+        <div className="space-y-3">
+          {mediosPago.map((m, idx) => {
+            const necesitaComprobante = METODOS_CON_COMPROBANTE.includes(m.metodo)
+            const tieneComprobante    = !!m.comprobanteUrl
+            return (
+              <div key={idx} className="rounded-2xl border overflow-hidden"
+                style={{ borderColor: necesitaComprobante && !tieneComprobante ? '#FDE68A' : '#E5E7EB' }}>
+
+                {/* Fila principal: método + monto + eliminar */}
+                <div className="flex gap-2 items-center p-3">
+                  <select value={m.metodo}
+                    onChange={e => updateMedio(idx, 'metodo', e.target.value)}
+                    className="px-2 py-2 rounded-xl border text-[12px] font-semibold outline-none flex-shrink-0"
+                    style={{ borderColor: '#E5E7EB', minWidth: 120 }}>
+                    {METODOS_PAGO.map(mp => <option key={mp} value={mp}>{mp}</option>)}
+                  </select>
+                  <input type="number" inputMode="numeric" step="1000"
+                    value={m.monto}
+                    onChange={e => updateMedio(idx, 'monto', e.target.value)}
+                    placeholder="Monto $"
+                    className="flex-1 px-3 py-2 rounded-xl border text-[13px] font-bold outline-none"
+                    style={{ borderColor: m.monto ? '#1A5CD8' : '#E5E7EB' }} />
+                  {mediosPago.length > 1 && (
+                    <button onClick={() => removeMedio(idx)}
+                      className="p-2 rounded-xl text-red-400 hover:bg-red-50 flex-shrink-0">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Sección comprobante — solo para pagos electrónicos */}
+                {necesitaComprobante && (
+                  <div className="px-3 pb-3 border-t"
+                    style={{ borderColor: '#F3F4F6', background: '#FAFAFA' }}>
+
+                    {/* Número de referencia */}
+                    <div className="mt-2 mb-2">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">
+                        No. de referencia / transacción
+                      </div>
+                      <input
+                        type="text"
+                        value={m.referencia || ''}
+                        onChange={e => updateMedio(idx, 'referencia', e.target.value)}
+                        placeholder={`Ej: ${m.metodo === 'NEQUI' || m.metodo === 'DAVIPLATA' ? '123456789' : m.metodo === 'TARJETA' ? 'Últimos 4 dígitos o ref.' : 'Número de transacción'}`}
+                        className="w-full px-3 py-2 rounded-xl border text-[12px] font-mono outline-none"
+                        style={{ borderColor: m.referencia ? '#1A5CD8' : '#E5E7EB', background: '#fff' }}
+                      />
+                    </div>
+
+                    {/* Upload comprobante */}
+                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                      Comprobante de pago {!tieneComprobante && <span className="text-amber-600">(recomendado)</span>}
+                    </div>
+                    <input type="file" accept="image/*,application/pdf"
+                      ref={el => uploadRefs.current[idx] = el}
+                      className="hidden"
+                      onChange={e => subirComprobante(idx, e.target.files?.[0])} />
+
+                    {tieneComprobante ? (
+                      /* Preview del comprobante */
+                      <div className="relative rounded-xl overflow-hidden border border-green-200">
+                        <img src={m.comprobanteUrl} alt="Comprobante"
+                          className="w-full object-cover"
+                          style={{ maxHeight: 160 }} />
+                        <div className="absolute inset-0 flex items-end justify-between p-2"
+                          style={{ background: 'linear-gradient(transparent 60%, rgba(0,0,0,0.5))' }}>
+                          <span className="text-white text-[11px] font-bold flex items-center gap-1">
+                            <Check size={12} /> Comprobante guardado
+                          </span>
+                          <button
+                            onClick={() => uploadRefs.current[idx]?.click()}
+                            className="text-white text-[10px] font-semibold px-2 py-1 rounded-full"
+                            style={{ background: 'rgba(255,255,255,0.25)' }}>
+                            Cambiar
+                          </button>
+                        </div>
+                      </div>
+                    ) : m.subiendoComprobante ? (
+                      <div className="w-full py-5 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5"
+                        style={{ borderColor: '#D1D5DB' }}>
+                        <div className="spinner" style={{ width: 22, height: 22 }} />
+                        <span className="text-[11px] text-gray-500">Subiendo comprobante…</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => uploadRefs.current[idx]?.click()}
+                        className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
+                        style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+                        <UploadIcon size={20} style={{ color: '#D97706' }} />
+                        <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>
+                          Subir captura / foto del comprobante
+                        </span>
+                        <span className="text-[10px] text-gray-400">
+                          Foto de pantalla, recibo físico o comprobante digital
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Botón agregar medio — prominente, debajo de la lista */}
+        <button onClick={addMedio}
+          className="w-full py-3 rounded-2xl border-2 border-dashed flex items-center justify-center gap-2 mt-2 transition-all active:scale-98 text-[13px] font-bold"
+          style={{ borderColor: '#BFDBFE', color: '#1A5CD8', background: '#F0F7FF' }}>
+          <Plus size={15} /> Agregar otro medio de pago
+        </button>
+
+        {/* Resumen totales */}
+        <div className="mt-3 rounded-2xl overflow-hidden border"
+          style={{ borderColor: totalMedios >= saldoPendiente ? '#86EFAC' : '#FDE68A' }}>
+          <div className="flex items-center justify-between px-4 py-2.5"
+            style={{ background: '#FAFAFA', borderBottom: '1px solid #F3F4F6' }}>
+            <span className="text-[12px] font-semibold text-gray-600">Pendiente a cobrar</span>
+            <span className="font-semibold text-[13px]" style={{ color: '#92400E' }}>{fmt(saldoPendiente)}</span>
+          </div>
+          <div className="flex items-center justify-between px-4 py-2.5"
+            style={{ background: totalMedios > 0 ? '#F0FDF4' : '#FFFBEB' }}>
+            <span className="text-[12px] font-semibold text-gray-600">Total cobrado</span>
+            <span className="font-extrabold text-[18px]" style={{ color: totalMedios >= saldoPendiente ? '#15803D' : '#D97706' }}>
+              {fmt(totalMedios)}
+            </span>
+          </div>
+          {totalMedios > 0 && totalMedios < saldoPendiente && (
+            <div className="flex items-center justify-between px-4 py-2"
+              style={{ background: '#FEF3C7', borderTop: '1px solid #FDE68A' }}>
+              <span className="text-[11px] font-semibold text-amber-700">Queda pendiente</span>
+              <span className="font-bold text-[13px] text-amber-800">{fmt(saldoPendiente - totalMedios)}</span>
+            </div>
+          )}
+          {totalMedios >= saldoPendiente && saldoPendiente > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2"
+              style={{ background: '#D1FAE5', borderTop: '1px solid #86EFAC' }}>
+              <CheckCircle size={13} style={{ color: '#16A34A' }} />
+              <span className="text-[11px] font-bold text-green-800">Pago completo cubierto</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {err && (
+        <div className="flex items-center gap-2 bg-red-50 text-red-700 rounded-xl px-3 py-2 text-[12px] mb-3">
+          <AlertCircle size={13} /> {err}
+        </div>
+      )}
+
       {/* Botones de acción */}
       <div className="space-y-2">
-        <button onClick={descargarPDF} disabled={generando}
-          className="w-full py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+        {/* Guardar primero */}
+        {!guardado ? (
+          <button onClick={guardarRecibo} disabled={guardando}
+            className="w-full py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+            style={{ background: '#0B1D4F', color: '#fff' }}>
+            <Receipt size={18} />
+            {guardando ? 'Guardando recibo…' : '💾 Guardar recibo'}
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-1"
+            style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
+            <CheckCircle size={16} style={{ color: '#16A34A' }} />
+            <span className="text-[12px] font-bold text-green-800 flex-1">Recibo guardado correctamente</span>
+          </div>
+        )}
+
+        {/* Descargar PDF - cliente */}
+        <button onClick={async () => { await descargarPDF('CLIENTE'); cerrar() }} disabled={generando || !guardado}
+          className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
           style={{ background: '#7C3AED', color: '#fff' }}>
-          <Download size={18} />
-          {generando ? 'Generando PDF…' : 'Descargar recibo PDF'}
+          <Download size={16} />
+          {generando ? 'Generando…' : '📄 Descargar recibo CLIENTE'}
         </button>
-        <button onClick={enviarWhatsApp}
-          className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2"
+
+        {/* Descargar PDF - veterinaria (solo si hay aliado y comisión) */}
+        {aliado && (
+          <button onClick={async () => { await descargarPDF('VETERINARIA'); cerrar() }} disabled={generando || !guardado}
+            className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+            style={{ background: '#0B1D4F', color: '#fff' }}>
+            <Download size={16} />
+            🏥 Descargar recibo VETERINARIA ({fmt(valorVet)})
+          </button>
+        )}
+
+        {/* Enviar por WA oficial */}
+        <button onClick={async () => { await enviarPorWA(); cerrar() }} disabled={generando || !guardado}
+          className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
           style={{ background: '#25D366', color: '#fff' }}>
-          <MessageSquare size={16} /> Enviar resumen por WhatsApp
+          <MessageSquare size={16} /> Enviar por WhatsApp (línea oficial)
+        </button>
+
+        {/* Volver sin cerrar — para cuando solo quieran guardar y volver después */}
+        <button onClick={cerrar}
+          className="w-full py-3 rounded-2xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors">
+          ← Volver a la recogida
         </button>
       </div>
     </div>

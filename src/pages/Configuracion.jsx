@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db, dbAdmin } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone } from 'lucide-react'
+import { LocalidadSelect } from '@/components/ui/localidad-select'
 
 const nullify = (obj, keys) => {
   const out = { ...obj }
@@ -348,6 +349,7 @@ function TabVeterinarias() {
       telefono: item.telefono || '', email: item.email || '',
       ciudad: item.ciudad || 'Bogotá', localidad: item.localidad || '',
       barrio: item.barrio || '', direccion: item.direccion || '',
+      horario_atencion: item.horario_atencion || '',
       vip: item.vip || false,
       modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
       saldo_comision: item.saldo_comision || 0,
@@ -356,6 +358,7 @@ function TabVeterinarias() {
       nombre: '', identificacion_nit: '', contacto_nombre: '',
       whatsapp: '', telefono: '', email: '',
       ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '',
+      horario_atencion: '',
       vip: false, modalidad_comision: 'FACTURACION_MENSUAL',
       saldo_comision: 0, notas: '', activo: true,
     })
@@ -413,7 +416,7 @@ function TabVeterinarias() {
           <Table>
             <thead><tr>
               <Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th>
-              <Th>Ciudad</Th><Th>VIP</Th><Th>Comisión</Th><Th>Estado</Th><Th></Th>
+              <Th>Ciudad</Th><Th>Horario</Th><Th>VIP</Th><Th>Comisión</Th><Th>Estado</Th><Th></Th>
             </tr></thead>
             <tbody>
               {filtered.map(a => (
@@ -425,6 +428,7 @@ function TabVeterinarias() {
                   <Td className="text-gray-600 text-[12px]">{a.contacto_nombre || '—'}</Td>
                   <Td className="text-gray-500 text-[12px]">{a.whatsapp || '—'}</Td>
                   <Td className="text-gray-500 text-[12px]">{a.ciudad || '—'}</Td>
+                  <Td className="text-gray-500 text-[11px]">{a.horario_atencion || '—'}</Td>
                   <Td>
                     {a.vip
                       ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">VIP</span>
@@ -496,7 +500,7 @@ function TabVeterinarias() {
                 </div>
                 <div>
                   <label className={LABEL}>Localidad</label>
-                  <Input value={form.localidad || ''} onChange={e => setForm(p => ({ ...p, localidad: e.target.value }))} placeholder="ej: Chapinero" />
+                  <LocalidadSelect value={form.localidad || ''} onChange={v => setForm(p => ({ ...p, localidad: v }))} />
                 </div>
                 <div>
                   <label className={LABEL}>Barrio / Sector</label>
@@ -528,6 +532,14 @@ function TabVeterinarias() {
                 <div>
                   <label className={LABEL}>Email</label>
                   <Input type="email" value={form.email || ''} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="contacto@vet.com" />
+                </div>
+                <div className="col-span-2">
+                  <label className={LABEL}>Horario de atención</label>
+                  <Input
+                    value={form.horario_atencion || ''}
+                    onChange={e => setForm(p => ({ ...p, horario_atencion: e.target.value }))}
+                    placeholder="Ej: Lun–Vie 8am–6pm, Sáb 9am–1pm"
+                  />
                 </div>
                 <div className="col-span-2">
                   <label className={LABEL}>Notas internas</label>
