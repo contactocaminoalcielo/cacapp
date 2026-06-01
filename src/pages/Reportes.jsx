@@ -9,7 +9,7 @@ import { fmt } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from 'recharts'
 import { Download, CalendarDays } from 'lucide-react'
 
-const COLORS = ['#1F5A32','#C4A87A','#3B6FBF','#9A5500','#1D8A55','#5B21B6']
+const COLORS = ['#0B1D4F','#C4A87A','#3B6FBF','#9A5500','#1D8A55','#5B21B6']
 
 // --- Utilidades de rango de fechas ---
 function getRango(key) {
@@ -129,7 +129,7 @@ function TabContabilidad({ rango }) {
               <YAxis tick={{ fontSize: 10 }} tickFormatter={v => fmt(v)} width={70} />
               <Tooltip formatter={v => fmt(v)} />
               <Bar dataKey="Facturado" fill="#C4A87A" radius={[4,4,0,0]} />
-              <Bar dataKey="Cobrado"   fill="#1F5A32" radius={[4,4,0,0]} />
+              <Bar dataKey="Cobrado"   fill="#0B1D4F" radius={[4,4,0,0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -246,7 +246,7 @@ function TabServicios({ rango }) {
               <XAxis dataKey="name" tick={{ fontSize: 9 }} angle={-25} textAnchor="end" />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip />
-              <Bar dataKey="value" fill="#1F5A32" radius={[4,4,0,0]} />
+              <Bar dataKey="value" fill="#0B1D4F" radius={[4,4,0,0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -345,7 +345,7 @@ function TabComisiones({ rango }) {
             <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" />
             <YAxis tick={{ fontSize: 10 }} tickFormatter={v => fmt(v)} />
             <Tooltip formatter={v => fmt(v)} />
-            <Bar dataKey="total" fill="#1F5A32" radius={[4,4,0,0]} />
+            <Bar dataKey="total" fill="#0B1D4F" radius={[4,4,0,0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

@@ -760,7 +760,7 @@ function DetalleModal({ registro: r, onClose, onEdit, movimientos, estadoColor }
             {c?.whatsapp && (
               <a href={`https://wa.me/57${c.whatsapp.replace(/\D/g,'')}`}
                 target="_blank" rel="noreferrer"
-                className="text-[11px] text-[#2D7A45] font-medium">
+                className="text-[11px] text-[#1A5CD8] font-medium">
                 📱 {c.whatsapp}
               </a>
             )}

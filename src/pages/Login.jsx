@@ -26,7 +26,7 @@ export default function Login() {
   return (
     <div
       className="min-h-screen flex items-center justify-center p-5"
-      style={{ background: 'linear-gradient(160deg, #263218 0%, #111a0b 100%)' }}
+      style={{ background: 'linear-gradient(160deg, #0B1D4F 0%, #111a0b 100%)' }}
     >
       <motion.div
         initial={{ opacity: 0, y: 24 }}
@@ -89,7 +89,7 @@ export default function Login() {
                 required
                 className="w-full h-12 px-4 rounded-xl border text-[14px] text-gray-900 placeholder:text-gray-300 transition-colors"
                 style={{ borderColor: '#E5E7EB', outline: 'none' }}
-                onFocus={e  => { e.target.style.borderColor = '#3D5A27'; e.target.style.boxShadow = '0 0 0 3px rgba(61,90,39,0.12)' }}
+                onFocus={e  => { e.target.style.borderColor = '#1A5CD8'; e.target.style.boxShadow = '0 0 0 3px rgba(61,90,39,0.12)' }}
                 onBlur={e   => { e.target.style.borderColor = '#E5E7EB'; e.target.style.boxShadow = 'none' }}
               />
             </div>
@@ -107,7 +107,7 @@ export default function Login() {
                 required
                 className="w-full h-12 px-4 rounded-xl border text-[14px] text-gray-900 placeholder:text-gray-300 transition-colors"
                 style={{ borderColor: '#E5E7EB', outline: 'none' }}
-                onFocus={e  => { e.target.style.borderColor = '#3D5A27'; e.target.style.boxShadow = '0 0 0 3px rgba(61,90,39,0.12)' }}
+                onFocus={e  => { e.target.style.borderColor = '#1A5CD8'; e.target.style.boxShadow = '0 0 0 3px rgba(61,90,39,0.12)' }}
                 onBlur={e   => { e.target.style.borderColor = '#E5E7EB'; e.target.style.boxShadow = 'none' }}
               />
             </div>
@@ -117,7 +117,7 @@ export default function Login() {
               disabled={loading || !email || !password}
               whileTap={{ scale: 0.97 }}
               className="w-full h-12 rounded-xl font-bold text-[15px] text-white transition-all disabled:opacity-50"
-              style={{ background: '#3D5A27' }}
+              style={{ background: '#1A5CD8' }}
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">

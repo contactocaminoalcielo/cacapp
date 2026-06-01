@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,8 +10,8 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { fmt } from '@/lib/utils'
-import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History } from 'lucide-react'
+import { fmt, parsearErrorDB } from '@/lib/utils'
+import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
 const nullify = (obj, keys) => {
@@ -27,8 +28,348 @@ function useSearch(data, fields) {
   return { q, setQ, filtered }
 }
 
+// ─── CSV parser genérico ───────────────────────────────────────────────────────
+function parsearCSV(texto) {
+  const lineas = texto.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim())
+  if (lineas.length < 2) return { headers: [], filas: [] }
+
+  // Detectar delimitador automáticamente (coma o punto y coma)
+  const delim = (lineas[0].split(';').length > lineas[0].split(',').length) ? ';' : ','
+
+  function parsearLinea(linea) {
+    const campos = []
+    let dentro = false, campo = ''
+    for (let i = 0; i < linea.length; i++) {
+      const c = linea[i]
+      if (c === '"') { dentro = !dentro }
+      else if (c === delim && !dentro) { campos.push(campo.trim()); campo = '' }
+      else { campo += c }
+    }
+    campos.push(campo.trim())
+    return campos
+  }
+
+  const headers = parsearLinea(lineas[0]).map(h => h.toLowerCase().trim()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // quitar tildes
+    .replace(/\s+/g, '_'))
+  const filas = lineas.slice(1).map((l, i) => {
+    const vals = parsearLinea(l)
+    const obj = {}
+    headers.forEach((h, j) => { obj[h] = vals[j] ?? '' })
+    obj._linea = i + 2
+    return obj
+  }).filter(f => Object.values(f).some(v => v && v !== ''))
+
+  return { headers, filas }
+}
+
+// ─── Importar CSV Aliados ──────────────────────────────────────────────────────
+const ALIADO_HEADER_MAP = {
+  nombre:             'nombre',
+  nit_cedula:         'identificacion_nit',
+  nit:                'identificacion_nit',
+  identificacion_nit: 'identificacion_nit',
+  cedula:             'identificacion_nit',
+  contacto_nombre:    'contacto_nombre',
+  contacto:           'contacto_nombre',
+  whatsapp:           'whatsapp',
+  telefono:           'telefono',
+  ciudad:             'ciudad',
+  localidad:          'localidad',
+  barrio:             'barrio',
+  direccion:          'direccion',
+  modalidad_comision: 'modalidad_comision',
+  modalidad:          'modalidad_comision',
+  comision:           'modalidad_comision',
+  vip:                'vip',
+}
+
+const MODALIDAD_MAP = {
+  facturacion_mensual:  'FACTURACION_MENSUAL',
+  facturacion:          'FACTURACION_MENSUAL',
+  mensual:              'FACTURACION_MENSUAL',
+  descuento_inmediato:  'DESCUENTO_INMEDIATO',
+  descuento:            'DESCUENTO_INMEDIATO',
+  inmediato:            'DESCUENTO_INMEDIATO',
+  credito_acumulado:    'CREDITO_ACUMULADO',
+  credito:              'CREDITO_ACUMULADO',
+  acumulado:            'CREDITO_ACUMULADO',
+}
+
+function normalizarModalidad(val) {
+  if (!val) return 'FACTURACION_MENSUAL'
+  const key = val.toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '_')
+  return MODALIDAD_MAP[key] || 'FACTURACION_MENSUAL'
+}
+
+function normalizarVip(val) {
+  if (!val) return false
+  const v = val.toLowerCase().trim()
+  return ['si', 'sí', '1', 'true', 'verdadero', 'yes', 'vip'].includes(v)
+}
+
+function validarFilaAliado(fila, headers) {
+  const mapped = {}
+  headers.forEach(h => {
+    const destino = ALIADO_HEADER_MAP[h]
+    if (destino && fila[h] !== undefined) mapped[destino] = fila[h]
+  })
+
+  const errores = []
+  if (!mapped.nombre?.trim()) errores.push('Nombre requerido')
+
+  const modalidad = normalizarModalidad(mapped.modalidad_comision)
+  const validas = ['FACTURACION_MENSUAL', 'DESCUENTO_INMEDIATO', 'CREDITO_ACUMULADO']
+  if (mapped.modalidad_comision && !validas.includes(modalidad)) {
+    errores.push(`Modalidad inválida: "${mapped.modalidad_comision}"`)
+  }
+
+  const row = {
+    nombre:             (mapped.nombre || '').trim(),
+    identificacion_nit: (mapped.identificacion_nit || '').trim() || null,
+    contacto_nombre:    (mapped.contacto_nombre || '').trim() || null,
+    whatsapp:           (mapped.whatsapp || '').trim() || null,
+    telefono:           (mapped.telefono || '').trim() || null,
+    ciudad:             (mapped.ciudad || '').trim() || 'Bogotá',
+    localidad:          (mapped.localidad || '').trim() || null,
+    barrio:             (mapped.barrio || '').trim() || null,
+    direccion:          (mapped.direccion || '').trim() || null,
+    modalidad_comision: modalidad,
+    vip:                normalizarVip(mapped.vip),
+    activo:             true,
+  }
+
+  return { row, errores, linea: fila._linea }
+}
+
+const TEMPLATE_CSV = `nombre;nit_cedula;contacto_nombre;whatsapp;telefono;ciudad;localidad;barrio;direccion;modalidad_comision;vip
+Veterinaria El Bosque;900123456;Dr. Juan Pérez;3001234567;6012345678;Bogotá;Chapinero;El Bosque;Calle 72 # 14-20;FACTURACION_MENSUAL;NO
+Clínica Veterinaria Norte;900654321;Dra. Ana López;3109876543;;Bogotá;Usaquén;Santa Bárbara;Carrera 15 # 118-30;DESCUENTO_INMEDIATO;SI
+`
+
+function descargarTemplate() {
+  const blob = new Blob([TEMPLATE_CSV], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = 'plantilla_aliados.csv'
+  a.click(); URL.revokeObjectURL(url)
+}
+
+function ImportarAliadosModal({ onClose, onImportado }) {
+  const [fase, setFase]         = useState('upload')  // upload | preview | done
+  const [filas, setFilas]       = useState([])
+  const [headers, setHeaders]   = useState([])
+  const [saving, setSaving]     = useState(false)
+  const [resultado, setResultado] = useState(null)
+  const [dragOver, setDragOver] = useState(false)
+
+  function procesarArchivo(file) {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = e => {
+      const texto = e.target.result
+      const { headers: hs, filas: fs } = parsearCSV(texto)
+      const tieneNombre = hs.some(h => ALIADO_HEADER_MAP[h] === 'nombre')
+      if (!tieneNombre) {
+        alert('El archivo no tiene columna "nombre". Descarga la plantilla y úsala como base.')
+        return
+      }
+      setHeaders(hs)
+      setFilas(fs.map(f => validarFilaAliado(f, hs)))
+      setFase('preview')
+    }
+    reader.readAsText(file, 'UTF-8')
+  }
+
+  const validas   = filas.filter(f => f.errores.length === 0)
+  const invalidas = filas.filter(f => f.errores.length > 0)
+
+  async function importar() {
+    if (!validas.length) return
+    setSaving(true)
+    const rows  = validas.map(f => f.row)
+    const okList = []
+    const errList = []
+
+    // Insertar en lotes de 50 para no sobrecargar
+    for (let i = 0; i < rows.length; i += 50) {
+      const batch = rows.slice(i, i + 50)
+      const { error } = await db.from('aliados').insert(batch)
+      if (error) {
+        batch.forEach(r => errList.push({ nombre: r.nombre, msg: error.message }))
+      } else {
+        okList.push(...batch.map(r => r.nombre))
+      }
+    }
+
+    setSaving(false)
+    setResultado({ ok: okList.length, errores: errList })
+    setFase('done')
+    if (okList.length > 0) onImportado()
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Importar aliados desde CSV" maxWidth="max-w-2xl">
+      {/* ── Fase upload ── */}
+      {fase === 'upload' && (
+        <div className="space-y-4">
+          <div className="rounded-xl p-4 bg-blue-50 border border-blue-200 text-[12px] text-blue-800 space-y-1">
+            <p className="font-semibold">Formato esperado del archivo CSV</p>
+            <p>Columnas: <code className="bg-blue-100 px-1 rounded">nombre</code> (requerida), nit_cedula, contacto_nombre, whatsapp, telefono, ciudad, localidad, barrio, direccion, modalidad_comision, vip</p>
+            <p>Delimitador: coma <strong>(,)</strong> o punto y coma <strong>(;)</strong> — se detecta automáticamente.</p>
+            <p><strong>modalidad_comision</strong>: FACTURACION_MENSUAL / DESCUENTO_INMEDIATO / CREDITO_ACUMULADO</p>
+            <p><strong>vip</strong>: SI / NO (o 1 / 0)</p>
+          </div>
+
+          <button
+            onClick={descargarTemplate}
+            className="flex items-center gap-2 text-[12px] font-medium text-[#1A5CD8] hover:underline"
+          >
+            <Download size={14} /> Descargar plantilla de ejemplo
+          </button>
+
+          <div
+            className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors cursor-pointer ${dragOver ? 'border-[#1A5CD8] bg-green-50' : 'border-gray-300 hover:border-[#1A5CD8] hover:bg-gray-50'}`}
+            onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); procesarArchivo(e.dataTransfer.files[0]) }}
+            onClick={() => document.getElementById('csv-input-aliados').click()}
+          >
+            <Upload size={28} className="mx-auto mb-2 text-gray-400" />
+            <p className="font-semibold text-gray-600 text-[13px]">Arrastra tu archivo CSV aquí</p>
+            <p className="text-[11px] text-gray-400 mt-1">o haz clic para seleccionar</p>
+            <input
+              id="csv-input-aliados"
+              type="file"
+              accept=".csv,.txt"
+              className="hidden"
+              onChange={e => procesarArchivo(e.target.files[0])}
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Fase preview ── */}
+      {fase === 'preview' && (
+        <div className="space-y-4">
+          {/* Resumen */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl p-3 text-center bg-green-50 border border-green-200">
+              <p className="text-[22px] font-bold text-green-700">{validas.length}</p>
+              <p className="text-[11px] text-green-600">Listos para importar</p>
+            </div>
+            <div className={`rounded-xl p-3 text-center border ${invalidas.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+              <p className={`text-[22px] font-bold ${invalidas.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>{invalidas.length}</p>
+              <p className="text-[11px] text-gray-500">Con errores (se omitirán)</p>
+            </div>
+            <div className="rounded-xl p-3 text-center bg-gray-50 border border-gray-200">
+              <p className="text-[22px] font-bold text-gray-700">{filas.length}</p>
+              <p className="text-[11px] text-gray-500">Total en archivo</p>
+            </div>
+          </div>
+
+          {/* Filas con error */}
+          {invalidas.length > 0 && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 space-y-1 max-h-32 overflow-y-auto">
+              <p className="text-[11px] font-bold text-red-700 mb-1">Filas con error — se omitirán:</p>
+              {invalidas.map(f => (
+                <p key={f.linea} className="text-[11px] text-red-600">
+                  Línea {f.linea}: {f.row.nombre || '(sin nombre)'} — {f.errores.join(', ')}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {/* Preview de filas válidas */}
+          {validas.length > 0 && (
+            <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+              <div className="px-4 py-2 bg-gray-50 border-b text-[11px] font-bold text-gray-500 uppercase tracking-wide" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                Vista previa — primeras {Math.min(validas.length, 8)} filas
+              </div>
+              <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      {['Nombre','NIT/Cédula','Contacto','WhatsApp','Ciudad','Modalidad','VIP'].map(h => (
+                        <th key={h} className="text-left px-3 py-2 font-semibold text-gray-500">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {validas.slice(0, 8).map((f, i) => (
+                      <tr key={i} className="border-t" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                        <td className="px-3 py-2 font-medium text-gray-900">{f.row.nombre}</td>
+                        <td className="px-3 py-2 text-gray-500">{f.row.identificacion_nit || '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{f.row.contacto_nombre || '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{f.row.whatsapp || '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{f.row.ciudad}</td>
+                        <td className="px-3 py-2 text-gray-500 text-[10px]">{f.row.modalidad_comision}</td>
+                        <td className="px-3 py-2">
+                          <span className={`px-1.5 py-0.5 rounded-full font-bold ${f.row.vip ? 'bg-[#FFF3DC] text-[#9A5500]' : 'bg-gray-100 text-gray-400'}`}>
+                            {f.row.vip ? 'VIP' : 'No'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {validas.length > 8 && (
+                      <tr><td colSpan={7} className="px-3 py-2 text-center text-[11px] text-gray-400">… y {validas.length - 8} más</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {validas.length === 0 && (
+            <div className="rounded-xl p-6 text-center border border-red-200 bg-red-50">
+              <XCircle size={28} className="mx-auto mb-2 text-red-500" />
+              <p className="font-semibold text-red-700">Ninguna fila válida para importar</p>
+              <p className="text-[12px] text-red-500 mt-1">Revisa los errores arriba y corrige el archivo.</p>
+            </div>
+          )}
+
+          <div className="flex justify-between">
+            <Button variant="secondary" onClick={() => setFase('upload')}>← Cambiar archivo</Button>
+            <Button onClick={importar} disabled={saving || validas.length === 0}>
+              <Upload size={13} /> {saving ? 'Importando...' : `Importar ${validas.length} aliado${validas.length !== 1 ? 's' : ''}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Fase done ── */}
+      {fase === 'done' && resultado && (
+        <div className="space-y-4">
+          {resultado.ok > 0 && (
+            <div className="rounded-xl p-5 text-center bg-green-50 border border-green-200">
+              <CheckCircle2 size={36} className="mx-auto mb-2 text-green-600" />
+              <p className="text-[20px] font-bold text-green-700">{resultado.ok} aliado{resultado.ok !== 1 ? 's' : ''} importado{resultado.ok !== 1 ? 's' : ''}</p>
+            </div>
+          )}
+          {resultado.errores.length > 0 && (
+            <div className="rounded-xl p-4 bg-red-50 border border-red-200 space-y-1">
+              <p className="text-[12px] font-bold text-red-700">{resultado.errores.length} error{resultado.errores.length !== 1 ? 'es' : ''} al insertar:</p>
+              {resultado.errores.map((e, i) => (
+                <p key={i} className="text-[11px] text-red-600">{e.nombre}: {e.msg}</p>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end">
+            <Button onClick={onClose}>Cerrar</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 // --- CLIENTES TAB ---
 function TabClientes({ isAdmin }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -54,28 +395,28 @@ function TabClientes({ isAdmin }) {
     } : { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
   }
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
     const body = nullify(form, ['tipo_cliente'])
     const { error } = selected?.id_cliente
       ? await db.from('clientes').update(body).eq('id_cliente', selected.id_cliente)
       : await db.from('clientes').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar()
     setSelected(null)
   }
   async function eliminar(c) {
-    if (!window.confirm(`¿Eliminar a ${c.nombre} ${c.apellido || ''}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${c.nombre} ${c.apellido || ''}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('clientes').delete().eq('id_cliente', c.id_cliente)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm(`${c.nombre} tiene servicios o mascotas registradas y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+        if (await confirm(`Tiene servicios o mascotas registradas y no se puede eliminar.\n¿Marcarlo como INACTIVO en su lugar?`, { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' })) {
           await db.from('clientes').update({ activo: false }).eq('id_cliente', c.id_cliente)
           await cargar()
         }
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -122,10 +463,10 @@ function TabClientes({ isAdmin }) {
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              {[['nombre','Nombre'],['apellido','Apellido'],['cedula_nit','Cédula/NIT'],['whatsapp','WhatsApp'],['telefono','Teléfono'],['email','Email'],['ciudad','Ciudad'],['direccion','Dirección']].map(([k,l]) => (
+              {[['nombre','Nombre',80],['apellido','Apellido',80],['cedula_nit','Cédula/NIT',30],['whatsapp','WhatsApp',20],['telefono','Teléfono',20],['email','Email',null],['ciudad','Ciudad',80],['direccion','Dirección',null]].map(([k,l,ml]) => (
                 <div key={k} className={k === 'direccion' ? 'col-span-2' : ''}>
                   <label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label>
-                  <Input value={form[k] || ''} onChange={e => setForm(p => ({ ...p, [k]: e.target.value }))} />
+                  <Input value={form[k] || ''} onChange={e => setForm(p => ({ ...p, [k]: e.target.value }))} {...(ml ? { maxLength: ml } : {})} />
                 </div>
               ))}
               <div>
@@ -146,6 +487,7 @@ function TabClientes({ isAdmin }) {
 
 // --- MASCOTAS TAB ---
 function TabMascotas({ isAdmin }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [especies, setEspecies] = useState([])
   const [loading, setLoading] = useState(true)
@@ -174,24 +516,24 @@ function TabMascotas({ isAdmin }) {
     } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'' })
   }
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
     const body = nullify({ ...form, peso_kg: parseFloat(form.peso_kg) || 0 }, ['especie_id'])
     const { error } = selected?.id_mascota
       ? await db.from('mascotas').update(body).eq('id_mascota', selected.id_mascota)
       : await db.from('mascotas').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar(); setSelected(null)
   }
   async function eliminar(m) {
-    if (!window.confirm(`¿Eliminar a ${m.nombre}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${m.nombre}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('mascotas').delete().eq('id_mascota', m.id_mascota)
     if (error) {
       if (error.code === '23503') {
-        alert(`${m.nombre} tiene servicios registrados y no se puede eliminar.\nSi necesitas desactivarla, edita el registro del cliente.`)
+        await showAlert(`${m.nombre} tiene servicios registrados y no se puede eliminar.\nSi necesitas desactivarla, edita el registro del cliente.`, { title: 'No se puede eliminar', variant: 'warning' })
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -261,11 +603,13 @@ function TabMascotas({ isAdmin }) {
 
 // --- ALIADOS TAB ---
 function TabAliados({ isAdmin }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
+  const [modalImport, setModalImport] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','contacto_nombre','ciudad'])
 
   useEffect(() => { cargar() }, [])
@@ -288,27 +632,27 @@ function TabAliados({ isAdmin }) {
     } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true })
   }
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
     const body = nullify(form, ['modalidad_comision'])
     const { error } = selected?.id_aliado
       ? await db.from('aliados').update(body).eq('id_aliado', selected.id_aliado)
       : await db.from('aliados').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar(); setSelected(null)
   }
   async function eliminar(a) {
-    if (!window.confirm(`¿Eliminar a ${a.nombre}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${a.nombre}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('aliados').delete().eq('id_aliado', a.id_aliado)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm(`${a.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+        if (await confirm(`Tiene servicios registrados y no se puede eliminar.\n¿Marcarlo como INACTIVO en su lugar?`, { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' })) {
           await db.from('aliados').update({ activo: false }).eq('id_aliado', a.id_aliado)
           await cargar()
         }
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -321,7 +665,14 @@ function TabAliados({ isAdmin }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        {isAdmin && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>}
+        {isAdmin && (
+          <>
+            <Button size="sm" variant="secondary" onClick={() => setModalImport(true)}>
+              <Upload size={14} /> Importar CSV
+            </Button>
+            <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+          </>
+        )}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
@@ -354,8 +705,8 @@ function TabAliados({ isAdmin }) {
         <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.id_aliado ? 'Editar aliado' : 'Nuevo aliado'} maxWidth="max-w-lg"
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="grid grid-cols-2 gap-3">
-            {[['nombre','Nombre'],['identificacion_nit','NIT/Cédula'],['contacto_nombre','Contacto'],['whatsapp','WhatsApp'],['telefono','Teléfono'],['ciudad','Ciudad'],['localidad','Localidad'],['barrio','Barrio']].map(([k,l]) => (
-              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} /></div>
+            {[['nombre','Nombre',null],['identificacion_nit','NIT/Cédula',30],['contacto_nombre','Contacto',80],['whatsapp','WhatsApp',20],['telefono','Teléfono',20],['ciudad','Ciudad',80],['localidad','Localidad',80],['barrio','Barrio',80]].map(([k,l,ml]) => (
+              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} {...(ml ? { maxLength: ml } : {})} /></div>
             ))}
             <div className="col-span-2">
               <label className="text-[11px] font-bold text-ink3 block mb-1">Dirección</label>
@@ -370,11 +721,17 @@ function TabAliados({ isAdmin }) {
               </Select>
             </div>
             <div className="flex items-center gap-2 pt-4">
-              <input type="checkbox" id="aliado-vip" checked={!!form.vip} onChange={e => setForm(p=>({...p,vip:e.target.checked}))} className="w-4 h-4 accent-[#3D5A27]" />
+              <input type="checkbox" id="aliado-vip" checked={!!form.vip} onChange={e => setForm(p=>({...p,vip:e.target.checked}))} className="w-4 h-4 accent-[#1A5CD8]" />
               <label htmlFor="aliado-vip" className="text-[12px] font-semibold text-ink2 cursor-pointer">Aliado VIP</label>
             </div>
           </div>
         </Modal>
+      )}
+      {modalImport && (
+        <ImportarAliadosModal
+          onClose={() => setModalImport(false)}
+          onImportado={() => { cargar(); setModalImport(false) }}
+        />
       )}
     </div>
   )
@@ -382,6 +739,7 @@ function TabAliados({ isAdmin }) {
 
 // --- PERSONAL TAB ---
 function TabPersonal({ isAdmin }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [roles, setRoles] = useState([])
   const [loading, setLoading] = useState(true)
@@ -411,30 +769,37 @@ function TabPersonal({ isAdmin }) {
     } : { nombre:'',apellido:'',cedula:'',whatsapp:'',tipo_vehiculo:'',placa_vehiculo:'',activo:true,rol_principal_id:'' })
   }
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim())   { await showAlert('El nombre es requerido.',   { title: 'Campo requerido', variant: 'warning' }); return }
+    if (!form.apellido?.trim()) { await showAlert('El apellido es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
-    const body = nullify(
-      { ...form, rol_principal_id: form.rol_principal_id ? parseInt(form.rol_principal_id) : null },
-      ['tipo_vehiculo', 'placa_vehiculo']
-    )
+    const body = {
+      nombre:          form.nombre.trim(),
+      apellido:        form.apellido.trim(),
+      cedula:          form.cedula?.trim()   || null,
+      whatsapp:        form.whatsapp?.trim() || null,
+      tipo_vehiculo:   form.tipo_vehiculo    || null,
+      placa_vehiculo:  form.placa_vehiculo?.trim() || null,
+      activo:          form.activo,
+      rol_principal_id: form.rol_principal_id ? parseInt(form.rol_principal_id) : null,
+    }
     const { error } = selected?.id
       ? await db.from('personal').update(body).eq('id', selected.id)
       : await db.from('personal').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar(); setSelected(null)
   }
   async function eliminar(p) {
-    if (!window.confirm(`¿Eliminar a ${p.nombre} ${p.apellido || ''}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${p.nombre} ${p.apellido || ''}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('personal').delete().eq('id', p.id)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm(`${p.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+        if (await confirm(`Tiene servicios registrados y no se puede eliminar.\n¿Marcarlo como INACTIVO en su lugar?`, { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' })) {
           await db.from('personal').update({ activo: false }).eq('id', p.id)
           await cargar()
         }
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -480,9 +845,19 @@ function TabPersonal({ isAdmin }) {
         <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.id ? 'Editar personal' : 'Nuevo personal'} maxWidth="max-w-lg"
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="grid grid-cols-2 gap-3">
-            {[['nombre','Nombre'],['apellido','Apellido'],['cedula','Cédula'],['whatsapp','WhatsApp'],['tipo_vehiculo','Tipo vehículo'],['placa_vehiculo','Placa']].map(([k,l]) => (
-              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} /></div>
+            {[['nombre','Nombre *',80],['apellido','Apellido *',80],['cedula','Cédula',20],['whatsapp','WhatsApp',20],['placa_vehiculo','Placa vehículo',10]].map(([k,l,ml]) => (
+              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} {...(ml ? { maxLength: ml } : {})} /></div>
             ))}
+            <div><label className="text-[11px] font-bold text-ink3 block mb-1">Tipo vehículo</label>
+              <Select value={form.tipo_vehiculo||''} onChange={e => setForm(p=>({...p,tipo_vehiculo:e.target.value}))}>
+                <option value="">Sin vehículo</option>
+                <option value="moto_cajon">Moto cajón</option>
+                <option value="moto_trailer">Moto tráiler</option>
+                <option value="camioneta">Camioneta</option>
+                <option value="bicicleta">Bicicleta</option>
+                <option value="a_pie">A pie</option>
+              </Select>
+            </div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Rol</label>
               <Select value={form.rol_principal_id||''} onChange={e => setForm(p=>({...p,rol_principal_id:e.target.value}))}>
                 <option value="">Seleccionar...</option>
@@ -497,6 +872,7 @@ function TabPersonal({ isAdmin }) {
 
 // --- INVENTARIO TAB ---
 function TabInventario({ isAdmin }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const { personalData } = useAuth()
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
@@ -530,32 +906,32 @@ function TabInventario({ isAdmin }) {
   }
 
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
     const body = { ...form, stock_actual: parseFloat(form.stock_actual)||0, stock_minimo: parseFloat(form.stock_minimo)||0, precio_unitario: parseFloat(form.precio_unitario)||0 }
     const { error } = selected?.id
       ? await db.from('inventario').update(body).eq('id', selected.id)
       : await db.from('inventario').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar(); setSelected(null)
   }
 
   async function eliminar(i) {
-    if (!window.confirm(`¿Eliminar "${i.nombre}"?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar "${i.nombre}"?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('inventario').delete().eq('id', i.id)
-    if (error) { alert('Error al eliminar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' }); return }
     await cargar()
   }
 
   async function registrarMovimiento() {
-    if (!movForm.cantidad || parseFloat(movForm.cantidad) <= 0) return alert('Ingrese una cantidad válida.')
+    if (!movForm.cantidad || parseFloat(movForm.cantidad) <= 0) { await showAlert('Ingrese una cantidad válida.', { title: 'Aviso', variant: 'warning' }); return }
     setMovSaving(true)
     try {
       const cant = parseFloat(movForm.cantidad)
       const delta = movForm.tipo === 'ENTRADA' ? cant : -cant
       const nuevoStock = (movItem.stock_actual || 0) + delta
-      if (nuevoStock < 0) { alert('El stock no puede quedar negativo.'); setMovSaving(false); return }
+      if (nuevoStock < 0) { await showAlert('El stock no puede quedar negativo.', { title: 'Aviso', variant: 'warning' }); setMovSaving(false); return }
       await db.from('movimientos_inventario').insert({
         inventario_id: movItem.id,
         tipo: movForm.tipo,
@@ -568,7 +944,7 @@ function TabInventario({ isAdmin }) {
       setMovItem(null)
       setMovForm({ tipo: 'ENTRADA', cantidad: '', motivo: '' })
     } catch (e) {
-      alert('Error: ' + e.message)
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     } finally {
       setMovSaving(false)
     }
@@ -644,8 +1020,8 @@ function TabInventario({ isAdmin }) {
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Nombre</label><Input value={form.nombre||''} onChange={e => setForm(p=>({...p,nombre:e.target.value}))} /></div>
-            {[['unidad','Unidad'],['stock_actual','Stock actual'],['stock_minimo','Stock mínimo'],['proveedor','Proveedor'],['precio_unitario','Precio unitario'],['ubicacion','Ubicación']].map(([k,l]) => (
-              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input type={['stock_actual','stock_minimo','precio_unitario'].includes(k)?'number':'text'} value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} /></div>
+            {[['unidad','Unidad',20],['stock_actual','Stock actual',null],['stock_minimo','Stock mínimo',null],['proveedor','Proveedor',null],['precio_unitario','Precio unitario',null],['ubicacion','Ubicación',80]].map(([k,l,ml]) => (
+              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input type={['stock_actual','stock_minimo','precio_unitario'].includes(k)?'number':'text'} value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:e.target.value}))} {...(ml ? { maxLength: ml } : {})} /></div>
             ))}
             <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Descripción</label><Textarea value={form.descripcion||''} onChange={e => setForm(p=>({...p,descripcion:e.target.value}))} /></div>
           </div>

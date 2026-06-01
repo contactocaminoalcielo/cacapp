@@ -120,7 +120,7 @@ function PINScreen({ onAuth }) {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4"
-      style={{ background: 'linear-gradient(160deg, #263218 0%, #111a0b 100%)' }}>
+      style={{ background: 'linear-gradient(160deg, #0B1D4F 0%, #111a0b 100%)' }}>
       <div className="mb-10 text-center select-none">
         <div className="text-5xl mb-3">🐾</div>
         <div className="text-white font-bold text-2xl tracking-tight">Camino al Cielo</div>
@@ -131,14 +131,14 @@ function PINScreen({ onAuth }) {
           {[0,1,2,3].map(i => (
             <div key={i} className="transition-all duration-150" style={{
               width: 14, height: 14, borderRadius: '50%',
-              background: i < pin.length ? '#3D5A27' : 'transparent',
-              border: `2px solid ${i < pin.length ? '#3D5A27' : '#D1D5DB'}`,
+              background: i < pin.length ? '#1A5CD8' : 'transparent',
+              border: `2px solid ${i < pin.length ? '#1A5CD8' : '#D1D5DB'}`,
               transform: i < pin.length ? 'scale(1.25)' : 'scale(1)',
             }} />
           ))}
         </div>
         {err  && <p className="text-center text-red-500 text-sm font-medium mb-3">{err}</p>}
-        {busy && <p className="text-center text-sm mb-3" style={{ color: '#3D5A27' }}>Verificando…</p>}
+        {busy && <p className="text-center text-sm mb-3" style={{ color: '#1A5CD8' }}>Verificando…</p>}
         <div className="grid grid-cols-3 gap-3">
           {PAD.map((d, i) => d === null ? <div key={i} /> : (
             <button key={i} onClick={() => tap(d)} disabled={busy}
@@ -185,17 +185,17 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
         <div className="flex justify-center mb-6">
           <input type="time" value={hora} onChange={e => setHora(e.target.value)}
             className="text-5xl font-extrabold text-center border-0 outline-none bg-transparent"
-            style={{ color: '#3D5A27', width: 180 }} />
+            style={{ color: '#1A5CD8', width: 180 }} />
         </div>
         {svc.direccion_recogida && (
           <div className="flex items-center gap-2 mb-6 px-4 py-3 rounded-xl" style={{ background: '#F0FDF4' }}>
-            <MapPin size={14} style={{ color: '#3D5A27', flexShrink: 0 }} />
+            <MapPin size={14} style={{ color: '#1A5CD8', flexShrink: 0 }} />
             <span className="text-sm text-gray-700">{svc.direccion_recogida}{svc.ciudad_recogida ? `, ${svc.ciudad_recogida}` : ''}</span>
           </div>
         )}
         <button onClick={confirmar} disabled={saving}
           className="w-full py-4 rounded-2xl text-base font-bold disabled:opacity-60 transition-all active:scale-98"
-          style={{ background: '#3D5A27', color: '#fff' }}>
+          style={{ background: '#1A5CD8', color: '#fff' }}>
           {saving ? 'Iniciando ruta…' : '🚐 Iniciar ruta'}
         </button>
       </div>
@@ -380,7 +380,7 @@ function ComentariosSection({ servicioId, personalId }) {
           style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }} />
         <button onClick={enviar} disabled={saving || !texto.trim()}
           className="px-3 py-2 rounded-xl font-bold text-sm flex items-center gap-1.5 disabled:opacity-40 transition-all active:scale-95"
-          style={{ background: '#3D5A27', color: '#fff' }}>
+          style={{ background: '#1A5CD8', color: '#fff' }}>
           <Send size={13} />
         </button>
       </div>
@@ -486,7 +486,7 @@ function RegistroCuartoFrio({ svc, onCompletar }) {
           value={peso} onChange={e => setPeso(e.target.value.replace(',', '.'))}
           placeholder={svc.mascotas?.peso_kg ? `Registrado: ${svc.mascotas.peso_kg} kg` : 'Ej: 28.5'}
           className="w-full text-2xl font-extrabold px-4 py-3 rounded-xl border-2 outline-none"
-          style={{ borderColor: peso ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
+          style={{ borderColor: peso ? '#1A5CD8' : '#E5E7EB', color: '#111827' }} />
         {svc.mascotas?.peso_kg && (
           <p className="text-[11px] text-gray-400 mt-1 ml-1">Peso al registro: {svc.mascotas.peso_kg} kg</p>
         )}
@@ -649,7 +649,7 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
         {cliente && (
           <div className="flex items-center gap-2.5 mb-2.5">
             <div className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white"
-              style={{ background: '#3D5A27' }}>
+              style={{ background: '#1A5CD8' }}>
               {(cliente.nombre?.[0] || '').toUpperCase()}{(cliente.apellido?.[0] || '').toUpperCase()}
             </div>
             <div>
@@ -681,7 +681,7 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
             <span className="text-xs text-gray-600">{recogida.contacto_nombre}</span>
             {recogida.contacto_telefono && (
               <a href={`tel:${recogida.contacto_telefono}`}
-                className="text-xs font-semibold ml-1" style={{ color: '#3D5A27' }}>
+                className="text-xs font-semibold ml-1" style={{ color: '#1A5CD8' }}>
                 {recogida.contacto_telefono}
               </a>
             )}
@@ -711,7 +711,7 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
           <div className="space-y-2">
             <button onClick={() => setSheetOpen(true)}
               className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98"
-              style={{ background: '#3D5A27', color: '#fff' }}>
+              style={{ background: '#1A5CD8', color: '#fff' }}>
               🚐 Iniciar ruta
             </button>
             <button onClick={() => setDeclinarOpen(true)}
@@ -786,7 +786,7 @@ function CardRecogida({ svc, tecnico, onIniciar, onCompletar, onCuartoFrio, onDe
                   value={valorCobrado} onChange={e => setValorCobrado(e.target.value)}
                   placeholder="Monto recibido (dejar vacío si no cobró)"
                   className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
-                  style={{ borderColor: valorCobrado ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
+                  style={{ borderColor: valorCobrado ? '#1A5CD8' : '#E5E7EB', color: '#111827' }} />
                 <p className="text-[11px] text-gray-400 mt-1 ml-1">Opcional · Dejar vacío si no se cobró</p>
               </div>
             )}
@@ -1004,7 +1004,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
             <input type="text" value={nombreCliente} onChange={e => setNombreCliente(e.target.value)}
               placeholder={cliente ? `${cliente.nombre} ${cliente.apellido}` : 'Nombre completo'}
               className="w-full px-4 py-3 rounded-xl border-2 outline-none font-semibold text-sm"
-              style={{ borderColor: nombreCliente ? '#3D5A27' : '#E5E7EB' }} />
+              style={{ borderColor: nombreCliente ? '#1A5CD8' : '#E5E7EB' }} />
           </div>
 
           {/* Cobro en entrega (si hay saldo) */}
@@ -1017,7 +1017,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
                 onChange={e => setValorCobrado(e.target.value)}
                 placeholder={`Máx. ${fmt(saldo)}`}
                 className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
-                style={{ borderColor: valorCobrado ? '#3D5A27' : '#E5E7EB', color: '#111827' }} />
+                style={{ borderColor: valorCobrado ? '#1A5CD8' : '#E5E7EB', color: '#111827' }} />
             </div>
           )}
 
@@ -1568,15 +1568,15 @@ export default function TecnicoApp() {
 
   const sinReporteHoy = !reporteHoy
   const TABS = [
-    { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#3D5A27' },
-    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#3D5A27' },
+    { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
+    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: sinReporteHoy ? 1 : 0, color: '#0E7490' },
     { key: 'recibo',      label: 'Recibo',    Icon: CreditCard, count: 0,                    color: '#7C3AED' },
   ]
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
-      <div style={{ background: '#263218' }} className="px-5 pb-4 pt-3">
+      <div style={{ background: '#0B1D4F' }} className="px-5 pb-4 pt-3">
         <div className="flex items-start justify-between">
           <div>
             <div className="text-[11px] font-semibold mb-0.5" style={{ color: '#C4A87A' }}>
@@ -2320,7 +2320,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        <button onClick={onVolver} className="text-[11px] text-[#3D5A27] font-semibold underline">← Volver</button>
+        <button onClick={onVolver} className="text-[11px] text-[#1A5CD8] font-semibold underline">← Volver</button>
         <span className="text-gray-400">|</span>
         <span className="text-[12px] font-semibold text-gray-600">Recibo — {form.mascota_nombre}</span>
       </div>
@@ -2332,11 +2332,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, onVolver }) {
         marginBottom: '16px', fontFamily: 'system-ui, sans-serif',
       }}>
         {/* Encabezado */}
-        <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #3D5A27' }}>
-          <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#263218' }}>CAMINO AL CIELO</div>
+        <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px solid #1A5CD8' }}>
+          <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#0B1D4F' }}>CAMINO AL CIELO</div>
           <div style={{ fontSize: '11px', color: '#6B7280' }}>Funeraria para mascotas · Bogotá, Colombia</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '11px', fontWeight: '600', color: '#6B7280' }}>
-            <span>No. Recibo: <span style={{ color: '#3D5A27', fontWeight: 'bold' }}>{form.numero_recibo}</span></span>
+            <span>No. Recibo: <span style={{ color: '#1A5CD8', fontWeight: 'bold' }}>{form.numero_recibo}</span></span>
             <span>{form.fecha}</span>
           </div>
         </div>
@@ -2427,7 +2427,7 @@ function RField({ label, value, onChange, type = 'text', highlight, span2 }) {
         onChange={e => onChange(e.target.value)}
         style={{
           width: '100%', padding: '6px 8px', borderRadius: '8px',
-          border: `1px solid ${highlight ? '#3D5A27' : '#E5E7EB'}`,
+          border: `1px solid ${highlight ? '#1A5CD8' : '#E5E7EB'}`,
           background: highlight ? '#F0FDF4' : '#FAFAFA',
           fontSize: '12px', fontWeight: '600', color: '#111827',
           outline: 'none', boxSizing: 'border-box',
@@ -2442,7 +2442,7 @@ function RCheck({ label, checked, onChange }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
       <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)}
-        style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#3D5A27' }} />
+        style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#1A5CD8' }} />
       <span style={{ fontSize: '12px', color: '#374151' }}>{label}</span>
     </label>
   )

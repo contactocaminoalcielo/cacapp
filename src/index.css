@@ -5,39 +5,39 @@
   --font-serif: 'Playfair Display', serif;
   --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
 
-  /* Brand */
-  --color-brand:       #3D5A27;
-  --color-brand-dark:  #263218;
-  --color-brand-hover: #2D4A1E;
-  --color-gold:        #C4A87A;
-  --color-gold-dark:   #9E7D4A;
+  /* Brand — ORBIT */
+  --color-brand:       #1A5CD8;
+  --color-brand-dark:  #0B1D4F;
+  --color-brand-hover: #1550C0;
+  --color-gold:        #F5C842;
+  --color-gold-dark:   #C9920A;
 
   /* Surfaces */
-  --color-background: #F8F9FA;
+  --color-background: #F4F7FF;
   --color-surface:    #FFFFFF;
-  --color-surface2:   #F9FAFB;
-  --color-surface3:   #F3F4F6;
+  --color-surface2:   #F8FAFF;
+  --color-surface3:   #EEF3FF;
 
   /* Text */
-  --color-ink:  #111827;
-  --color-ink2: #374151;
-  --color-ink3: #9CA3AF;
+  --color-ink:  #0B1D4F;
+  --color-ink2: #2A4A8C;
+  --color-ink3: #7B93C4;
 
   /* Semantic — primary */
-  --color-primary:       #3D5A27;
-  --color-primary-dark:  #263218;
-  --color-primary-hover: #2D4A1E;
+  --color-primary:       #1A5CD8;
+  --color-primary-dark:  #0B1D4F;
+  --color-primary-hover: #1550C0;
 
   /* Semantic — danger */
   --color-danger:       #DC2626;
   --color-danger-light: #FEF2F2;
 
-  /* Greens for badges */
-  --color-green-light: #F0FDF4;
-  --color-green-mid:   #86EFAC;
+  /* Blues for badges */
+  --color-green-light: #EFF5FF;
+  --color-green-mid:   #93C5FD;
 
   /* Sidebar */
-  --color-sidebar: #263218;
+  --color-sidebar: #0B1D4F;
 
   /* Radii */
   --radius-sm:  6px;
@@ -64,7 +64,7 @@ html {
 
 body {
   font-family: 'Nunito', sans-serif;
-  background-color: #F8F9FA;
+  background-color: #F4F7FF;
   color: #111827;
   min-height: 100vh;
   max-width: 100%;
@@ -84,7 +84,7 @@ a, button, [role="button"] {
 
 /* ─── Focus-visible ring ─────────────────────────────────────── */
 :focus-visible {
-  outline: 2px solid #3D5A27;
+  outline: 2px solid #1A5CD8;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -92,45 +92,45 @@ a, button, [role="button"] {
 
 /* ─── Selection color ────────────────────────────────────────── */
 ::selection {
-  background-color: rgba(61, 90, 39, 0.18);
-  color: #111827;
+  background-color: rgba(26, 92, 216, 0.15);
+  color: #0B1D4F;
 }
 
 /* ─── Explicit color utilities (cross-page compatibility) ─────── */
-.text-ink    { color: #111827; }
-.text-ink2   { color: #374151; }
-.text-ink3   { color: #9CA3AF; }
+.text-ink    { color: #0B1D4F; }
+.text-ink2   { color: #2A4A8C; }
+.text-ink3   { color: #7B93C4; }
 
 .bg-surface  { background-color: #FFFFFF; }
-.bg-surface2 { background-color: #F9FAFB; }
-.bg-surface3 { background-color: #F3F4F6; }
-.bg-background { background-color: #F8F9FA; }
+.bg-surface2 { background-color: #F8FAFF; }
+.bg-surface3 { background-color: #EEF3FF; }
+.bg-background { background-color: #F4F7FF; }
 
-.text-primary      { color: #3D5A27; }
-.text-primary-dark { color: #263218; }
-.bg-primary        { background-color: #3D5A27; }
-.bg-primary-dark   { background-color: #263218; }
-.border-primary    { border-color: #3D5A27; }
+.text-primary      { color: #1A5CD8; }
+.text-primary-dark { color: #0B1D4F; }
+.bg-primary        { background-color: #1A5CD8; }
+.bg-primary-dark   { background-color: #0B1D4F; }
+.border-primary    { border-color: #1A5CD8; }
 
-.text-gold { color: #C4A87A; }
-.bg-gold   { background-color: #C4A87A; }
+.text-gold { color: #F5C842; }
+.bg-gold   { background-color: #F5C842; }
 
 .text-danger      { color: #DC2626; }
 .bg-danger-light  { background-color: #FEF2F2; }
 .border-danger    { border-color: #DC2626; }
 
-.bg-green-light   { background-color: #F0FDF4; }
-.border-green-mid { border-color: #86EFAC; }
+.bg-green-light   { background-color: #EFF5FF; }
+.border-green-mid { border-color: #93C5FD; }
 
 .font-serif { font-family: 'Playfair Display', serif; }
 
 /* ─── Hover variants ─────────────────────────────────────────── */
-.hover\:bg-surface2:hover { background-color: #F9FAFB; }
-.hover\:bg-surface3:hover { background-color: #F3F4F6; }
-.hover\:text-primary-dark:hover { color: #263218; }
+.hover\:bg-surface2:hover { background-color: #F8FAFF; }
+.hover\:bg-surface3:hover { background-color: #EEF3FF; }
+.hover\:text-primary-dark:hover { color: #0B1D4F; }
 
 /* ─── Focus utilities ────────────────────────────────────────── */
-.focus\:border-primary:focus { border-color: #3D5A27; }
+.focus\:border-primary:focus { border-color: #1A5CD8; }
 
 /* ─── Scrollbar — thin & elegant ─────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -144,7 +144,7 @@ a, button, [role="button"] {
   display: inline-block;
   width: 20px; height: 20px;
   border: 2.5px solid #E5E7EB;
-  border-top-color: #3D5A27;
+  border-top-color: #1A5CD8;
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
   flex-shrink: 0;
@@ -170,7 +170,7 @@ a, button, [role="button"] {
 }
 .k-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #3D5A27, #2D7A45);
+  background: linear-gradient(90deg, #1A5CD8, #4D9FE8);
   border-radius: 999px;
   transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -199,7 +199,7 @@ a, button, [role="button"] {
   transition: background 100ms;
 }
 .combobox-item:hover { background: #F9FAFB; }
-.combobox-item.active { background: rgba(61,90,39,0.07); color: #263218; font-weight: 600; }
+.combobox-item.active { background: rgba(26,92,216,0.07); color: #0B1D4F; font-weight: 600; }
 
 /* ─── Avatar circle ──────────────────────────────────────────── */
 .avatar {
@@ -218,7 +218,7 @@ a, button, [role="button"] {
   color: #374151;
   text-transform: uppercase; letter-spacing: 0.08em;
   padding-left: 10px;
-  border-left: 2.5px solid #3D5A27;
+  border-left: 2.5px solid #1A5CD8;
 }
 
 /* ─── Toggle tabs ────────────────────────────────────────────── */

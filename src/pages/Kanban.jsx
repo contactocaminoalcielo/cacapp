@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { EstadoBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { db, dbAdmin } from '@/lib/supabase'
-import { petEmoji, fmt } from '@/lib/utils'
+import { petEmoji, fmt, parsearErrorDB } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
@@ -45,7 +46,44 @@ function SortIcon({ field, sortField, sortDir }) {
     : <ChevronDown size={11} className="text-gray-600" />
 }
 
+function EvidenciasColapsable({ fotos }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-xl border overflow-hidden" style={{ borderColor: '#FED7AA' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 text-left transition-colors hover:bg-orange-50"
+        style={{ background: '#FFF7ED' }}
+      >
+        <span className="text-[11px] font-bold flex items-center gap-1.5" style={{ color: '#C2410C' }}>
+          <Camera size={12} /> Evidencias del técnico ({fotos.length} foto{fotos.length !== 1 ? 's' : ''})
+        </span>
+        {open ? <ChevronUp size={13} style={{ color: '#C2410C' }} /> : <ChevronDown size={13} style={{ color: '#C2410C' }} />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-2 grid grid-cols-3 gap-2" style={{ background: '#FFF7ED' }}>
+          {fotos.map((f, i) => (
+            <a key={i} href={f.url} target="_blank" rel="noreferrer"
+              className="group relative rounded-lg overflow-hidden bg-orange-100 block"
+              style={{ aspectRatio: '1/1' }}
+              title={f.label}
+            >
+              <img src={f.url} alt={f.label} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors" />
+              <div className="absolute bottom-0 left-0 right-0 px-1.5 py-1 text-[9px] font-semibold text-white leading-tight"
+                style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.65))' }}>
+                {f.emoji} {f.label}
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Kanban() {
+  const { alert: showAlert } = useConfirm()
   const { personalData } = useAuth()
   const rol = personalData?.rol
 
@@ -183,12 +221,12 @@ export default function Kanban() {
     setEditTecnicoId(s.tecnico_id || ''); setEditEstadoPago(s.estado_pago || '')
     setEditNotas(s.notas || '')
 
-    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }] = await Promise.all([
+    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }] = await Promise.all([
       db.from('servicios')
         .select('punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, comision_aliado, comision_descontada, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id')
         .eq('id', s.servicio_id).maybeSingle(),
       db.from('recogidas')
-        .select('contacto_nombre, contacto_telefono, estado, tecnico_id')
+        .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
         .eq('servicio_id', s.servicio_id).maybeSingle(),
       db.from('servicio_recordatorios')
         .select('*, recordatorios(nombre)')
@@ -198,9 +236,12 @@ export default function Kanban() {
         .eq('servicio_id', s.servicio_id)
         .in('tipo_novedad', ['NOTA', 'PAGO_RECIBIDO'])
         .order('created_at', { ascending: true }),
+      db.from('cuarto_frio')
+        .select('foto_ingreso_url, foto_pesaje_url, peso_kg')
+        .eq('servicio_id', s.servicio_id).maybeSingle(),
     ])
 
-    setDetalle({ ...svcFull, recogida: rec })
+    setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf })
     setRecordatorios(recs || [])
     setNovedades(novs || [])
     setNuevoComentario('')
@@ -216,7 +257,7 @@ export default function Kanban() {
 
     if (Object.keys(updates).length > 0) {
       const { error } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
-      if (error) { alert('Error: ' + error.message); setGuardando(false); return }
+      if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); setGuardando(false); return }
 
       if ('tecnico_id' in updates) {
         await db.from('recogidas').update({ tecnico_id: updates.tecnico_id }).eq('servicio_id', selected.servicio_id)
@@ -256,7 +297,7 @@ export default function Kanban() {
     setServicios(prev => prev.map(s => s.servicio_id === servicioId ? { ...s, estado: nuevoEstado } : s))
     if (selected?.servicio_id === servicioId) setSelected(prev => ({ ...prev, estado: nuevoEstado }))
     const { error: err } = await db.from('servicios').update({ estado: nuevoEstado }).eq('id', servicioId)
-    if (err) { alert('Error: ' + err.message); cargar() }
+    if (err) { await showAlert(parsearErrorDB(err), { title: 'Error' }); cargar() }
   }
 
   async function confirmarEntrega() {
@@ -268,7 +309,7 @@ export default function Kanban() {
         await db.from('entregas').update({ mensajero_id: mensajeroId }).eq('servicio_id', selected.servicio_id).in('estado', ['PENDIENTE'])
       setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, estado: 'EN_ENTREGA' } : s))
       setSelected(prev => ({ ...prev, estado: 'EN_ENTREGA' })); setMensajeroId('')
-    } catch (e) { alert('Error: ' + e.message) }
+    } catch (e) { await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' }) }
     finally { setSaving(false) }
   }
 
@@ -350,7 +391,7 @@ export default function Kanban() {
     try {
       const { data: svcRow, error: selErr } = await dbAdmin
         .from('servicios').select('codigo_fotos, fecha_codigo_enviado').eq('id', s.servicio_id).single()
-      if (selErr) { alert('Error al leer servicio: ' + selErr.message); return }
+      if (selErr) { await showAlert(parsearErrorDB(selErr), { title: 'Error al leer servicio' }); return }
       let codigo = svcRow?.codigo_fotos
       if (!codigo) {
         codigo = generateCodigo()
@@ -358,7 +399,7 @@ export default function Kanban() {
           codigo_fotos: codigo,
           fecha_codigo_enviado: new Date().toISOString().split('T')[0],
         }).eq('id', s.servicio_id)
-        if (updErr) { alert('Error al generar código: ' + updErr.message); return }
+        if (updErr) { await showAlert(parsearErrorDB(updErr), { title: 'Error al generar código' }); return }
       } else if (!svcRow?.fecha_codigo_enviado) {
         // El código ya existía pero no se había registrado la fecha de envío
         await dbAdmin.from('servicios').update({ fecha_codigo_enviado: new Date().toISOString().split('T')[0] }).eq('id', s.servicio_id)
@@ -886,6 +927,17 @@ export default function Kanban() {
               </div>
             )}
 
+            {/* ── Evidencias del técnico (colapsable) ── */}
+            {detalle && (() => {
+              const fotos = [
+                detalle.recogida?.foto_recogida_url  && { url: detalle.recogida.foto_recogida_url,  label: 'Identidad mascota',  emoji: '🪪' },
+                detalle.cuartoFrio?.foto_ingreso_url && { url: detalle.cuartoFrio.foto_ingreso_url, label: 'Ingreso cuarto frío', emoji: '❄️' },
+                detalle.cuartoFrio?.foto_pesaje_url  && { url: detalle.cuartoFrio.foto_pesaje_url,  label: 'Foto pesaje',         emoji: '⚖️' },
+              ].filter(Boolean)
+              if (!fotos.length) return null
+              return <EvidenciasColapsable fotos={fotos} />
+            })()}
+
             {/* ── Frases y textos del cliente (productor y admin) ── */}
             {puedeVerImagenes && (() => {
               const conTextos = recordatorios.filter(r => r.datos_cliente && Object.keys(r.datos_cliente).length > 0)
@@ -990,7 +1042,7 @@ export default function Kanban() {
                   <textarea value={editNotas} onChange={e => setEditNotas(e.target.value)} rows={2} placeholder="Sin notas…" className="w-full text-[12px] text-gray-700 bg-white border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-green-200" />
                 </div>
 
-                <button onClick={guardarCambios} disabled={guardando} className="w-full py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50" style={{ background: '#2D7A45', color: '#fff' }}>
+                <button onClick={guardarCambios} disabled={guardando} className="w-full py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50" style={{ background: '#1A5CD8', color: '#fff' }}>
                   <Save size={13} />
                   {guardando ? 'Guardando…' : 'Guardar cambios'}
                 </button>
@@ -1100,7 +1152,7 @@ export default function Kanban() {
                   style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }} />
                 <button onClick={agregarComentario} disabled={guardandoComentario || !nuevoComentario.trim()}
                   className="px-3 py-2 rounded-xl font-bold text-[12px] flex items-center gap-1.5 disabled:opacity-40 transition-all hover:opacity-90"
-                  style={{ background: '#2D7A45', color: '#fff' }}>
+                  style={{ background: '#1A5CD8', color: '#fff' }}>
                   <Send size={13} />
                 </button>
               </div>

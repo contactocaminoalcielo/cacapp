@@ -3,6 +3,7 @@ import { Suspense, lazy } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { BadgesProvider } from '@/contexts/BadgesContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
+import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
@@ -27,6 +28,7 @@ const Configuracion      = lazy(() => import('@/pages/Configuracion'))
 const LotesGrupales      = lazy(() => import('@/pages/LotesGrupales'))
 const Recibos            = lazy(() => import('@/pages/Recibos'))
 const Finanzas           = lazy(() => import('@/pages/Finanzas'))
+const Certificados       = lazy(() => import('@/pages/Certificados'))
 
 function FullScreenLoader() {
   return (
@@ -81,6 +83,7 @@ function AppRoutes({ rol }) {
             {routes.has('/lotes-grupales') && <Route path="/lotes-grupales" element={<LotesGrupales />} />}
             {routes.has('/recibos')        && <Route path="/recibos"        element={<Recibos />} />}
             {routes.has('/finanzas')       && <Route path="/finanzas"       element={<Finanzas />} />}
+            {routes.has('/certificados')   && <Route path="/certificados"   element={<Certificados />} />}
             <Route path="*" element={<Navigate to={redirectTo} replace />} />
           </Routes>
         </Suspense>
@@ -123,7 +126,7 @@ function InnerApp() {
 
   // Autenticado pero sin registro en personal
   if (personalData === null) return (
-    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: '#263218' }}>
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: '#0B1D4F' }}>
       <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center">
         <div className="text-3xl mb-3">⚠️</div>
         <h2 className="font-bold text-gray-900 mb-2">Usuario sin perfil</h2>
@@ -140,7 +143,7 @@ function InnerApp() {
   if (config.isTecnico) {
     return (
       <Suspense fallback={
-        <div style={{ minHeight: '100vh', background: '#263218', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ minHeight: '100vh', background: '#0B1D4F', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="spinner" style={{ borderColor: '#C4A87A', borderTopColor: 'transparent' }} />
         </div>
       }>
@@ -162,9 +165,11 @@ function InnerApp() {
 export default function App() {
   return (
     <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <AuthProvider>
-        <InnerApp />
-      </AuthProvider>
+      <ConfirmProvider>
+        <AuthProvider>
+          <InnerApp />
+        </AuthProvider>
+      </ConfirmProvider>
     </HashRouter>
   )
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,8 +9,8 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { db, dbAdmin } from '@/lib/supabase'
-import { fmt } from '@/lib/utils'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package } from 'lucide-react'
+import { fmt, parsearErrorDB } from '@/lib/utils'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone } from 'lucide-react'
 
 const nullify = (obj, keys) => {
   const out = { ...obj }
@@ -62,6 +63,7 @@ function SearchBar({ q, setQ, placeholder = 'Buscar...' }) {
 
 // ─── PERSONAL ────────────────────────────────────────────────────────────────
 function TabPersonal() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]         = useState([])
   const [loading, setLoading]   = useState(true)
   const [selected, setSelected] = useState(null)
@@ -118,16 +120,16 @@ function TabPersonal() {
   }
 
   async function eliminar(p) {
-    if (!window.confirm(`¿Eliminar a ${p.nombre} ${p.apellido}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${p.nombre} ${p.apellido}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('personal').delete().eq('id', p.id)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm(`${p.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+        if (await confirm(`Tiene servicios registrados y no se puede eliminar.\n¿Marcarlo como INACTIVO en su lugar?`, { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' })) {
           await db.from('personal').update({ activo: false }).eq('id', p.id)
           await cargar()
         }
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -232,19 +234,19 @@ function TabPersonal() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={LABEL}>Nombre *</label>
-                  <Input value={form.nombre || ''} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} />
+                  <Input value={form.nombre || ''} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} maxLength={80} />
                 </div>
                 <div>
                   <label className={LABEL}>Apellido</label>
-                  <Input value={form.apellido || ''} onChange={e => setForm(p => ({ ...p, apellido: e.target.value }))} />
+                  <Input value={form.apellido || ''} onChange={e => setForm(p => ({ ...p, apellido: e.target.value }))} maxLength={80} />
                 </div>
                 <div>
                   <label className={LABEL}>Cédula</label>
-                  <Input value={form.cedula || ''} onChange={e => setForm(p => ({ ...p, cedula: e.target.value }))} />
+                  <Input value={form.cedula || ''} onChange={e => setForm(p => ({ ...p, cedula: e.target.value }))} maxLength={20} />
                 </div>
                 <div>
                   <label className={LABEL}>WhatsApp</label>
-                  <Input value={form.whatsapp || ''} onChange={e => setForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="3XX XXX XXXX" />
+                  <Input value={form.whatsapp || ''} onChange={e => setForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="3XX XXX XXXX" maxLength={20} />
                 </div>
               </div>
             </div>
@@ -307,6 +309,7 @@ function TabPersonal() {
                     value={form.placa_vehiculo || ''}
                     onChange={e => setForm(p => ({ ...p, placa_vehiculo: e.target.value }))}
                     placeholder="AAA-000"
+                    maxLength={10}
                   />
                 </div>
               </div>
@@ -320,6 +323,7 @@ function TabPersonal() {
 
 // ─── VETERINARIAS / ALIADOS ───────────────────────────────────────────────────
 function TabVeterinarias() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]         = useState([])
   const [loading, setLoading]   = useState(true)
   const [selected, setSelected] = useState(null)
@@ -358,29 +362,29 @@ function TabVeterinarias() {
   }
 
   async function guardar() {
-    if (!form.nombre?.trim()) return alert('El nombre es requerido.')
+    if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
     const body = nullify(form, ['modalidad_comision'])
     const { error } = selected?.id_aliado
       ? await db.from('aliados').update(body).eq('id_aliado', selected.id_aliado)
       : await db.from('aliados').insert(body)
     setSaving(false)
-    if (error) { alert('Error al guardar: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     await cargar()
     setSelected(null)
   }
 
   async function eliminar(a) {
-    if (!window.confirm(`¿Eliminar a ${a.nombre}?\nEsta acción no se puede deshacer.`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${a.nombre}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('aliados').delete().eq('id_aliado', a.id_aliado)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm(`${a.nombre} tiene servicios registrados y no se puede eliminar.\n\n¿Deseas marcarlo como INACTIVO en su lugar?`)) {
+        if (await confirm(`Tiene servicios registrados y no se puede eliminar.\n¿Marcarlo como INACTIVO en su lugar?`, { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' })) {
           await db.from('aliados').update({ activo: false }).eq('id_aliado', a.id_aliado)
           await cargar()
         }
       } else {
-        alert('Error al eliminar: ' + error.message)
+        await showAlert(parsearErrorDB(error), { title: 'Error al eliminar' })
       }
       return
     }
@@ -484,11 +488,11 @@ function TabVeterinarias() {
                 </div>
                 <div>
                   <label className={LABEL}>NIT / Cédula</label>
-                  <Input value={form.identificacion_nit || ''} onChange={e => setForm(p => ({ ...p, identificacion_nit: e.target.value }))} />
+                  <Input value={form.identificacion_nit || ''} onChange={e => setForm(p => ({ ...p, identificacion_nit: e.target.value }))} maxLength={30} />
                 </div>
                 <div>
                   <label className={LABEL}>Ciudad</label>
-                  <Input value={form.ciudad || ''} onChange={e => setForm(p => ({ ...p, ciudad: e.target.value }))} />
+                  <Input value={form.ciudad || ''} onChange={e => setForm(p => ({ ...p, ciudad: e.target.value }))} maxLength={80} />
                 </div>
                 <div>
                   <label className={LABEL}>Localidad</label>
@@ -511,15 +515,15 @@ function TabVeterinarias() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={LABEL}>Nombre del contacto</label>
-                  <Input value={form.contacto_nombre || ''} onChange={e => setForm(p => ({ ...p, contacto_nombre: e.target.value }))} />
+                  <Input value={form.contacto_nombre || ''} onChange={e => setForm(p => ({ ...p, contacto_nombre: e.target.value }))} maxLength={80} />
                 </div>
                 <div>
                   <label className={LABEL}>WhatsApp</label>
-                  <Input value={form.whatsapp || ''} onChange={e => setForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="3XX XXX XXXX" />
+                  <Input value={form.whatsapp || ''} onChange={e => setForm(p => ({ ...p, whatsapp: e.target.value }))} placeholder="3XX XXX XXXX" maxLength={20} />
                 </div>
                 <div>
                   <label className={LABEL}>Teléfono fijo</label>
-                  <Input value={form.telefono || ''} onChange={e => setForm(p => ({ ...p, telefono: e.target.value }))} />
+                  <Input value={form.telefono || ''} onChange={e => setForm(p => ({ ...p, telefono: e.target.value }))} maxLength={20} />
                 </div>
                 <div>
                   <label className={LABEL}>Email</label>
@@ -562,7 +566,7 @@ function TabVeterinarias() {
                       type="checkbox"
                       checked={form.activo !== false}
                       onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))}
-                      className="w-4 h-4 accent-[#3D5A27]"
+                      className="w-4 h-4 accent-[#1A5CD8]"
                     />
                     <span className="text-[13px] font-semibold text-gray-700">Activo</span>
                   </label>
@@ -702,7 +706,7 @@ function TabAccesos() {
 
       <div className="flex items-center gap-3">
         <SearchBar q={q} setQ={setQ} placeholder="Buscar por nombre o email..." />
-        <button className="text-gray-400 hover:text-[#3D5A27] p-1.5 rounded-lg hover:bg-gray-100 transition-colors" onClick={cargar} title="Actualizar">
+        <button className="text-gray-400 hover:text-[#1A5CD8] p-1.5 rounded-lg hover:bg-gray-100 transition-colors" onClick={cargar} title="Actualizar">
           <RefreshCw size={15} />
         </button>
       </div>
@@ -832,6 +836,7 @@ function TabAccesos() {
 
 // ─── PLANES ───────────────────────────────────────────────────────────────────
 function TabPlanes() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]           = useState([])
   const [loading, setLoading]     = useState(true)
   const [selected, setSelected]   = useState(null)
@@ -883,13 +888,13 @@ function TabPlanes() {
   }
 
   async function eliminar(p) {
-    if (!window.confirm(`¿Eliminar el plan "${p.nombre}"?`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar el plan "${p.nombre}"?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('planes').delete().eq('id', p.id)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm('Este plan tiene servicios o ítems vinculados.\n¿Marcarlo como INACTIVO?'))
+        if (await confirm('Este plan tiene servicios o ítems vinculados.\n¿Marcarlo como INACTIVO?', { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' }))
           await db.from('planes').update({ activo: false }).eq('id', p.id)
-      } else alert('Error: ' + error.message)
+      } else await showAlert(parsearErrorDB(error), { title: 'Error' })
     }
     await cargar()
   }
@@ -931,7 +936,7 @@ function TabPlanes() {
           {formError && <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{formError}</div>}
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={LABEL}>Código *</label><Input value={form.codigo || ''} onChange={e => setForm(p => ({ ...p, codigo: e.target.value.toUpperCase() }))} placeholder="BASICO" /></div>
+              <div><label className={LABEL}>Código *</label><Input value={form.codigo || ''} onChange={e => setForm(p => ({ ...p, codigo: e.target.value.toUpperCase() }))} placeholder="BASICO" maxLength={60} /></div>
               <div><label className={LABEL}>Nombre *</label><Input value={form.nombre || ''} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} /></div>
               <div>
                 <label className={LABEL}>Tipo de proceso</label>
@@ -943,14 +948,23 @@ function TabPlanes() {
                   <option value="COMPOSTAJE_INDIVIDUAL">Compostaje individual</option>
                 </Select>
               </div>
-              <div><label className={LABEL}>Categoría</label><Input value={form.categoria || ''} onChange={e => setForm(p => ({ ...p, categoria: e.target.value }))} placeholder="premium, básico..." /></div>
+              <div>
+                <label className={LABEL}>Categoría</label>
+                <Select value={form.categoria || ''} onChange={e => setForm(p => ({ ...p, categoria: e.target.value }))}>
+                  <option value="">— Sin categoría —</option>
+                  <option value="individual">Individual</option>
+                  <option value="grupal">Grupal</option>
+                  <option value="especial">Especial</option>
+                  <option value="presequial">Presequial</option>
+                </Select>
+              </div>
               <div><label className={LABEL}>Días de entrega</label><Input type="number" min="1" value={form.dias_entrega_prometidos || ''} onChange={e => setForm(p => ({ ...p, dias_entrega_prometidos: e.target.value }))} /></div>
               <div><label className={LABEL}>Precio base ($)</label><Input type="number" min="0" value={form.precio_base || ''} onChange={e => setForm(p => ({ ...p, precio_base: e.target.value }))} /></div>
             </div>
             <div><label className={LABEL}>Descripción</label><Textarea value={form.descripcion || ''} onChange={e => setForm(p => ({ ...p, descripcion: e.target.value }))} rows={2} /></div>
             <div className="flex gap-5">
-              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.requiere_imagenes} onChange={e => setForm(p => ({ ...p, requiere_imagenes: e.target.checked }))} className="w-4 h-4 accent-[#3D5A27]" /><span className="text-[13px] font-semibold text-gray-700">Requiere imágenes</span></label>
-              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#3D5A27]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.requiere_imagenes} onChange={e => setForm(p => ({ ...p, requiere_imagenes: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Requiere imágenes</span></label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
             </div>
           </div>
         </Modal>
@@ -961,6 +975,7 @@ function TabPlanes() {
 
 // ─── RECORDATORIOS ────────────────────────────────────────────────────────────
 function TabRecordatorios() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]           = useState([])
   const [maquinas, setMaquinas]   = useState([])
   const [loading, setLoading]     = useState(true)
@@ -1019,13 +1034,13 @@ function TabRecordatorios() {
   }
 
   async function eliminar(r) {
-    if (!window.confirm(`¿Eliminar "${r.nombre}"?`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar "${r.nombre}"?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('recordatorios').delete().eq('id', r.id)
     if (error) {
       if (error.code === '23503') {
-        if (window.confirm('Este ítem tiene planes o servicios vinculados.\n¿Marcarlo como INACTIVO?'))
+        if (await confirm('Este ítem tiene planes o servicios vinculados.\n¿Marcarlo como INACTIVO?', { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' }))
           await db.from('recordatorios').update({ activo: false }).eq('id', r.id)
-      } else alert('Error: ' + error.message)
+      } else await showAlert(parsearErrorDB(error), { title: 'Error' })
     }
     await cargar()
   }
@@ -1107,9 +1122,9 @@ function TabRecordatorios() {
             </div>
             <div><label className={LABEL}>Descripción</label><Textarea value={form.descripcion || ''} onChange={e => setForm(p => ({ ...p, descripcion: e.target.value }))} rows={2} /></div>
             <div className="flex flex-wrap gap-5">
-              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.requiere_imagen} onChange={e => setForm(p => ({ ...p, requiere_imagen: e.target.checked }))} className="w-4 h-4 accent-[#3D5A27]" /><span className="text-[13px] font-semibold text-gray-700">Requiere imagen</span></label>
-              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.solo_nombre} onChange={e => setForm(p => ({ ...p, solo_nombre: e.target.checked }))} className="w-4 h-4 accent-[#3D5A27]" /><span className="text-[13px] font-semibold text-gray-700">Solo nombre</span></label>
-              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#3D5A27]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.requiere_imagen} onChange={e => setForm(p => ({ ...p, requiere_imagen: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Requiere imagen</span></label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.solo_nombre} onChange={e => setForm(p => ({ ...p, solo_nombre: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Solo nombre</span></label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
             </div>
 
             {/* ── Campos de texto del cliente ── */}
@@ -1158,7 +1173,7 @@ function TabRecordatorios() {
                 <button
                   onClick={() => setForm(p => ({ ...p, campos_texto: [...(p.campos_texto || []), { label: '', cantidad: 1 }] }))}
                   className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg border border-dashed transition-colors hover:bg-gray-50"
-                  style={{ borderColor: '#C5DEC9', color: '#3D5A27' }}
+                  style={{ borderColor: '#C5DEC9', color: '#1A5CD8' }}
                 >
                   <Plus size={12} /> Agregar campo de texto
                 </button>
@@ -1174,6 +1189,7 @@ function TabRecordatorios() {
 
 // ─── PLAN → ÍTEMS ─────────────────────────────────────────────────────────────
 function TabPlanItems() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [planes, setPlanes]               = useState([])
   const [recordatorios, setRecordatorios] = useState([])
   // conteo de ítems por plan para mostrar en la lista izquierda
@@ -1189,6 +1205,7 @@ function TabPlanItems() {
   const [addIncluido, setAddIncluido]     = useState(true)
   const [saving, setSaving]               = useState(false)
   const [busqueda, setBusqueda]           = useState('')
+  const [qItems, setQItems]               = useState('')
 
   useEffect(() => {
     async function cargarTodo() {
@@ -1228,13 +1245,15 @@ function TabPlanItems() {
     setAddRecId('')
     setAddCantidad(1)
     setAddIncluido(true)
+    setQItems('')
     cargarItems(id)
   }
 
   async function agregar() {
     if (!addRecId || !planId) return
-    if (items.find(i => i.recordatorio_id === addRecId)) {
-      alert('Este ítem ya está en el plan.'); return
+    if (yaEnPlanSet.has(addRecId)) {
+      setAddRecId('')
+      return
     }
     setSaving(true)
     const { error } = await db.from('plan_recordatorios').insert({
@@ -1244,8 +1263,8 @@ function TabPlanItems() {
       incluido_en_precio: addIncluido,
     })
     setSaving(false)
-    if (error) { alert('Error al agregar: ' + error.message); return }
-    setAddRecId(''); setAddCantidad(1); setAddIncluido(true)
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al agregar' }); return }
+    setAddRecId(''); setAddCantidad(1); setAddIncluido(true); setBusqueda('')
     setCountsByPlan(prev => ({ ...prev, [planId]: (prev[planId] || 0) + 1 }))
     await cargarItems(planId)
   }
@@ -1254,7 +1273,7 @@ function TabPlanItems() {
     const { error } = await db.from('plan_recordatorios')
       .update({ cantidad: parseInt(editCantidad) || 1 })
       .eq('id', id)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
     setEditingId(null)
     await cargarItems(planId)
   }
@@ -1265,16 +1284,28 @@ function TabPlanItems() {
   }
 
   async function eliminar(id, nombre) {
-    if (!window.confirm(`¿Quitar "${nombre}" del plan?`)) return
+    if (!await confirm(`¿Quitar "${nombre}" del plan?`, { title: 'Quitar ítem', variant: 'danger', confirmLabel: 'Quitar' })) return
     const { error } = await db.from('plan_recordatorios').delete().eq('id', id)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
     setCountsByPlan(prev => ({ ...prev, [planId]: Math.max(0, (prev[planId] || 1) - 1) }))
     await cargarItems(planId)
   }
 
-  const planActual     = planes.find(p => p.id === planId)
-  const disponibles    = recordatorios.filter(r => !items.find(i => i.recordatorio_id === r.id))
-  const dispFiltrados  = disponibles.filter(r => r.nombre.toLowerCase().includes(busqueda.toLowerCase()))
+  const planActual  = planes.find(p => p.id === planId)
+  const yaEnPlanSet = new Set(items.map(i => i.recordatorio_id))
+  // Lista completa filtrada por búsqueda — incluye los ya agregados (marcados como deshabilitados)
+  const dispFiltrados = recordatorios.filter(r =>
+    !busqueda.trim() ||
+    r.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
+    (r.categoria || '').toLowerCase().includes(busqueda.toLowerCase())
+  )
+  // Filtro sobre los ítems ya en el plan (tabla superior)
+  const itemsFiltrados = qItems.trim()
+    ? items.filter(i =>
+        (i.recordatorios?.nombre || '').toLowerCase().includes(qItems.toLowerCase()) ||
+        (i.recordatorios?.categoria || '').toLowerCase().includes(qItems.toLowerCase())
+      )
+    : items
 
   if (loading) return <div className="text-center py-10 text-gray-400">Cargando...</div>
 
@@ -1292,7 +1323,7 @@ function TabPlanItems() {
               <button key={p.id}
                 className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center justify-between gap-2 ${
                   activo
-                    ? 'bg-[#3D5A27] text-white shadow-sm'
+                    ? 'bg-[#1A5CD8] text-white shadow-sm'
                     : 'hover:bg-gray-100 text-gray-700'
                 }`}
                 onClick={() => seleccionarPlan(p.id)}
@@ -1333,6 +1364,20 @@ function TabPlanItems() {
             {loadingItems ? (
               <div className="text-center py-10 text-gray-400 text-[13px]">Cargando ítems...</div>
             ) : (
+              <>
+                {items.length > 0 && (
+                  <div className="relative max-w-xs">
+                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Buscar ítem en este plan..."
+                      value={qItems}
+                      onChange={e => setQItems(e.target.value)}
+                      className="w-full pl-8 pr-3 py-1.5 text-[12px] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#1A5CD8]"
+                      style={{ borderColor: 'rgba(30,80,40,0.2)' }}
+                    />
+                  </div>
+                )}
               <TableWrap>
                 <Table>
                   <thead>
@@ -1346,7 +1391,7 @@ function TabPlanItems() {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map(item => (
+                    {itemsFiltrados.map(item => (
                       <Tr key={item.id}>
                         <Td className="font-semibold text-gray-900">{item.recordatorios?.nombre || '—'}</Td>
                         <Td>
@@ -1367,7 +1412,7 @@ function TabPlanItems() {
                             </div>
                           ) : (
                             <button
-                              className="text-[13px] font-bold text-gray-700 hover:text-[#3D5A27] hover:underline px-1"
+                              className="text-[13px] font-bold text-gray-700 hover:text-[#1A5CD8] hover:underline px-1"
                               onClick={() => { setEditingId(item.id); setEditCantidad(item.cantidad || 1) }}
                               title="Clic para editar"
                             >
@@ -1408,9 +1453,17 @@ function TabPlanItems() {
                         </td>
                       </tr>
                     )}
+                    {items.length > 0 && itemsFiltrados.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="text-center py-8 text-gray-400 text-[13px]">
+                          Sin resultados para "<span className="font-medium">{qItems}</span>"
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </Table>
               </TableWrap>
+              </>
             )}
 
             {/* Formulario agregar ítem */}
@@ -1418,29 +1471,18 @@ function TabPlanItems() {
               <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                 <Plus size={11} /> Agregar ítem a este plan
               </div>
+
               <div className="space-y-3">
-                <div>
-                  <label className={LABEL}>Buscar recordatorio</label>
-                  <Input
-                    placeholder="Escribe para filtrar..."
-                    value={busqueda}
-                    onChange={e => setBusqueda(e.target.value)}
-                  />
-                </div>
+                {/* Búsqueda + opciones cantidad/incluido en la misma fila */}
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex-1 min-w-[200px]">
-                    <label className={LABEL}>Recordatorio</label>
-                    <Select value={addRecId} onChange={e => setAddRecId(e.target.value)}>
-                      <option value="">— Seleccionar —</option>
-                      {dispFiltrados.map(r => (
-                        <option key={r.id} value={r.id}>
-                          {r.nombre}{r.categoria ? ` · ${r.categoria}` : ''}
-                        </option>
-                      ))}
-                    </Select>
-                    {disponibles.length === 0 && (
-                      <p className="text-[10px] text-gray-400 mt-1">Todos los recordatorios activos ya están en este plan.</p>
-                    )}
+                    <label className={LABEL}>Buscar recordatorio</label>
+                    <Input
+                      placeholder="Nombre o categoría..."
+                      value={busqueda}
+                      onChange={e => { setBusqueda(e.target.value); setAddRecId('') }}
+                      autoComplete="off"
+                    />
                   </div>
                   <div className="w-20">
                     <label className={LABEL}>Cantidad</label>
@@ -1450,13 +1492,69 @@ function TabPlanItems() {
                   <div className="flex items-center gap-2 pb-1">
                     <input type="checkbox" id="addIncluido" checked={addIncluido}
                       onChange={e => setAddIncluido(e.target.checked)}
-                      className="w-4 h-4 accent-[#3D5A27]" />
+                      className="w-4 h-4 accent-[#1A5CD8]" />
                     <label htmlFor="addIncluido" className="text-[12px] font-semibold text-gray-700 cursor-pointer">
                       Incluido en precio
                     </label>
                   </div>
+                </div>
+
+                {/* Lista de resultados */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-white max-h-52 overflow-y-auto">
+                  {dispFiltrados.length === 0 ? (
+                    <p className="text-[12px] text-gray-400 text-center py-5">
+                      Sin resultados para "<span className="font-medium">{busqueda}</span>"
+                    </p>
+                  ) : (
+                    dispFiltrados.map(r => {
+                      const yaAgregado  = yaEnPlanSet.has(r.id)
+                      const seleccionado = !yaAgregado && addRecId === r.id
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          disabled={yaAgregado}
+                          onClick={() => !yaAgregado && setAddRecId(seleccionado ? '' : r.id)}
+                          className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left border-b last:border-b-0 transition-colors"
+                          style={{
+                            borderColor: 'rgba(30,80,40,0.08)',
+                            background: seleccionado ? '#EDF7ED' : yaAgregado ? '#F9FAFB' : 'transparent',
+                            cursor: yaAgregado ? 'default' : 'pointer',
+                          }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <span className={`text-[12px] font-semibold truncate block ${seleccionado ? 'text-[#1A5CD8]' : yaAgregado ? 'text-gray-400' : 'text-gray-800'}`}>
+                              {r.nombre}
+                            </span>
+                            {r.categoria && (
+                              <span className="text-[10px] text-gray-400 capitalize">{r.categoria}</span>
+                            )}
+                          </div>
+                          {yaAgregado ? (
+                            <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                              Ya en el plan
+                            </span>
+                          ) : seleccionado ? (
+                            <span className="text-[10px] font-bold text-[#1A5CD8] bg-green-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                              Seleccionado ✓
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-gray-300 flex-shrink-0">Clic para seleccionar</span>
+                          )}
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-gray-400">
+                    {recordatorios.length - yaEnPlanSet.size} disponible{recordatorios.length - yaEnPlanSet.size !== 1 ? 's' : ''}
+                    {' · '}{yaEnPlanSet.size} ya en el plan
+                    {busqueda && ` · filtrando "${busqueda}"`}
+                  </span>
                   <Button onClick={agregar} disabled={saving || !addRecId || loadingItems}>
-                    <Plus size={13} /> {saving ? 'Guardando...' : 'Agregar'}
+                    <Plus size={13} /> {saving ? 'Guardando...' : 'Agregar ítem'}
                   </Button>
                 </div>
               </div>
@@ -1470,6 +1568,7 @@ function TabPlanItems() {
 
 // ─── COMISIONES ───────────────────────────────────────────────────────────────
 function TabComisiones() {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]           = useState([])
   const [planes, setPlanes]       = useState([])
   const [loading, setLoading]     = useState(true)
@@ -1531,9 +1630,9 @@ function TabComisiones() {
   }
 
   async function eliminar(c) {
-    if (!window.confirm('¿Eliminar esta regla de comisión?')) return
+    if (!await confirm('¿Eliminar esta regla de comisión?', { title: 'Eliminar regla', variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from('config_comisiones').delete().eq('id', c.id)
-    if (error) alert('Error: ' + error.message)
+    if (error) await showAlert(parsearErrorDB(error), { title: 'Error' })
     else await cargar()
   }
 
@@ -1560,7 +1659,7 @@ function TabComisiones() {
         ) : (
           <button
             onClick={() => { setEditingId(regla.id); setEditPct(parseFloat(regla.porcentaje).toString()) }}
-            className="text-[14px] font-bold text-gray-800 hover:text-[#3D5A27] hover:underline tabular-nums"
+            className="text-[14px] font-bold text-gray-800 hover:text-[#1A5CD8] hover:underline tabular-nums"
           >
             {parseFloat(regla.porcentaje)}%
           </button>
@@ -1697,6 +1796,7 @@ function TabComisiones() {
 
 // ─── CATÁLOGOS ────────────────────────────────────────────────────────────────
 function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo = true }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [adding, setAdding]       = useState(false)
   const [newNombre, setNewNombre] = useState('')
   const [editingId, setEditingId] = useState(null)
@@ -1708,7 +1808,7 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
     setSaving(true)
     const { error } = await db.from(table).insert({ nombre: newNombre.trim() })
     setSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
     setNewNombre(''); setAdding(false); onReload()
   }
 
@@ -1717,7 +1817,7 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
     setSaving(true)
     const { error } = await db.from(table).update({ nombre: editNombre.trim() }).eq(pkCol, item[pkCol])
     setSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
     setEditingId(null); onReload()
   }
 
@@ -1727,11 +1827,11 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
   }
 
   async function del(item) {
-    if (!window.confirm(`¿Eliminar "${item.nombre}"?`)) return
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar "${item.nombre}"?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
     const { error } = await db.from(table).delete().eq(pkCol, item[pkCol])
     if (error) {
-      if (error.code === '23503') alert(`"${item.nombre}" está en uso y no se puede eliminar.`)
-      else alert('Error: ' + error.message)
+      if (error.code === '23503') await showAlert(`"${item.nombre}" está en uso y no se puede eliminar.`, { title: 'No se puede eliminar', variant: 'warning' })
+      else await showAlert(parsearErrorDB(error), { title: 'Error' })
       return
     }
     onReload()
@@ -1741,7 +1841,7 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
     <div className="bg-white border border-gray-100 rounded-xl overflow-hidden shadow-sm">
       <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
         <span className="font-semibold text-[14px] text-gray-900">{title} <span className="text-[11px] font-normal text-gray-400">({items.length})</span></span>
-        <button onClick={() => setAdding(true)} className="flex items-center gap-1 text-[11px] font-semibold text-[#3D5A27] hover:underline">
+        <button onClick={() => setAdding(true)} className="flex items-center gap-1 text-[11px] font-semibold text-[#1A5CD8] hover:underline">
           <Plus size={11} /> Agregar
         </button>
       </div>
@@ -1921,7 +2021,7 @@ function TabPreciosPlanes() {
                 onClick={() => seleccionarPlan(plan)}
                 className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-left transition-all"
                 style={{
-                  borderColor: planSel?.id === plan.id ? '#3D5A27' : '#E5E7EB',
+                  borderColor: planSel?.id === plan.id ? '#1A5CD8' : '#E5E7EB',
                   background:  planSel?.id === plan.id ? '#F0FDF4' : '#fff',
                 }}>
                 <div>
@@ -1985,7 +2085,7 @@ function TabPreciosPlanes() {
                   />
                 </div>
                 {editForm[rango] && !isNaN(parseFloat(editForm[rango])) && (
-                  <div className="text-[11px] text-[#3D5A27] font-semibold mt-1">
+                  <div className="text-[11px] text-[#1A5CD8] font-semibold mt-1">
                     {fmt(parseFloat(editForm[rango]))}
                   </div>
                 )}
@@ -1998,6 +2098,174 @@ function TabPreciosPlanes() {
           Selecciona un plan para editar sus precios por rango de peso
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── TAB WHATSAPP ─────────────────────────────────────────────────────────────
+function TabWhatsApp() {
+  const { confirm, alert: showAlert } = useConfirm()
+  const [lineas,    setLineas]    = useState([])
+  const [defecto,   setDefecto]   = useState('')
+  const [loading,   setLoading]   = useState(true)
+  const [saving,    setSaving]    = useState(false)
+  // Form para nueva línea
+  const [showForm,  setShowForm]  = useState(false)
+  const [formNum,   setFormNum]   = useState('')
+  const [formLabel, setFormLabel] = useState('')
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('config_sistema')
+      .select('clave, valor')
+      .in('clave', ['wa_linea_default', 'wa_lineas'])
+    const map = Object.fromEntries((data || []).map(r => [r.clave, r.valor]))
+    try { setLineas(JSON.parse(map.wa_lineas || '[]')) } catch { setLineas([]) }
+    setDefecto(map.wa_linea_default || '')
+    setLoading(false)
+  }
+
+  async function guardarDefecto(numero) {
+    setSaving(true)
+    await db.from('config_sistema')
+      .upsert({ clave: 'wa_linea_default', valor: numero, updated_at: new Date().toISOString() })
+    setDefecto(numero)
+    setSaving(false)
+  }
+
+  async function agregarLinea() {
+    const num = formNum.trim().replace(/\s/g, '')
+    if (!num || !formLabel.trim()) return
+    const normalizado = num.startsWith('+') ? num : `+57${num.replace(/^57/, '')}`
+    if (lineas.find(l => l.numero === normalizado)) {
+      await showAlert('Esa línea ya está registrada.', { title: 'Duplicado', variant: 'warning' }); return
+    }
+    const nuevas = [...lineas, { numero: normalizado, label: formLabel.trim() }]
+    await db.from('config_sistema').upsert({
+      clave: 'wa_lineas', valor: JSON.stringify(nuevas), updated_at: new Date().toISOString()
+    })
+    setLineas(nuevas); setShowForm(false); setFormNum(''); setFormLabel('')
+  }
+
+  async function eliminarLinea(numero) {
+    if (!await confirm(`¿Eliminar la línea ${numero}?`, { title: 'Eliminar línea', variant: 'danger', confirmLabel: 'Eliminar' })) return
+    const nuevas = lineas.filter(l => l.numero !== numero)
+    await db.from('config_sistema').upsert({
+      clave: 'wa_lineas', valor: JSON.stringify(nuevas), updated_at: new Date().toISOString()
+    })
+    if (defecto === numero && nuevas.length) await guardarDefecto(nuevas[0].numero)
+    setLineas(nuevas)
+  }
+
+  if (loading) return <div className="text-center py-8 text-gray-400">Cargando...</div>
+
+  return (
+    <div className="space-y-6 max-w-xl">
+      <div className="rounded-2xl border bg-white shadow-sm overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+        <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <Smartphone size={15} className="text-green-600" />
+          <div className="font-semibold text-gray-900">Líneas WhatsApp</div>
+          <span className="text-[11px] text-gray-400 ml-auto">Línea por defecto para certificados y reportes</span>
+        </div>
+
+        <div className="p-5 space-y-3">
+          {lineas.length === 0 && (
+            <p className="text-[12px] text-gray-400 text-center py-4">Sin líneas configuradas.</p>
+          )}
+          {lineas.map(l => {
+            const esDefecto = defecto === l.numero
+            return (
+              <div key={l.numero}
+                className="flex items-center gap-3 p-4 rounded-xl border transition-all"
+                style={{
+                  borderColor: esDefecto ? '#16A34A' : 'rgba(30,80,40,0.1)',
+                  background:  esDefecto ? '#F0FDF4' : 'white',
+                }}>
+                <MessageCircle size={18} className={esDefecto ? 'text-green-600' : 'text-gray-400'} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-[13px] font-semibold ${esDefecto ? 'text-green-800' : 'text-gray-800'}`}>
+                    {l.label}
+                  </p>
+                  <p className="text-[11px] text-gray-400 font-mono">{l.numero}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {esDefecto ? (
+                    <span className="text-[11px] font-bold text-green-700 bg-green-100 px-2 py-1 rounded-full flex items-center gap-1">
+                      <CheckCircle size={11} /> Por defecto
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => guardarDefecto(l.numero)}
+                      disabled={saving}
+                      className="text-[11px] font-medium text-gray-500 hover:text-green-700 px-2 py-1 rounded-lg hover:bg-green-50 transition-colors border border-gray-200 hover:border-green-300"
+                    >
+                      Usar por defecto
+                    </button>
+                  )}
+                  <button
+                    onClick={() => eliminarLinea(l.numero)}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+
+          {!showForm ? (
+            <button
+              onClick={() => setShowForm(true)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed text-[12px] font-medium text-gray-500 hover:text-[#1A5CD8] hover:border-[#1A5CD8] hover:bg-green-50 transition-all"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }}
+            >
+              <Plus size={14} /> Agregar línea
+            </button>
+          ) : (
+            <div className="rounded-xl border p-4 space-y-3 bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 block mb-1">Número (con o sin +57)</label>
+                <input
+                  type="tel"
+                  value={formNum}
+                  onChange={e => setFormNum(e.target.value)}
+                  placeholder="Ej: 3159891247 o +573159891247"
+                  className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#1A5CD8]"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 block mb-1">Nombre de la línea</label>
+                <input
+                  type="text"
+                  value={formLabel}
+                  onChange={e => setFormLabel(e.target.value)}
+                  placeholder="Ej: Línea principal Camino al Cielo"
+                  className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#1A5CD8]"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowForm(false)}
+                  className="flex-1 py-2 text-[12px] font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors">
+                  Cancelar
+                </button>
+                <button onClick={agregarLinea} disabled={!formNum || !formLabel}
+                  className="flex-1 py-2 text-[12px] font-bold rounded-lg text-white transition-colors disabled:opacity-50"
+                  style={{ background: '#1A5CD8' }}>
+                  Guardar línea
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl p-4 border text-[12px] text-amber-800 bg-amber-50 border-amber-200 space-y-1">
+        <p className="font-semibold">¿Cómo funciona la selección de línea?</p>
+        <p>La línea marcada como <strong>"Por defecto"</strong> se preselecciona en el módulo Certificados al enviar reportes.</p>
+        <p>Si el cliente ya tiene historial con otra línea en Zolutium, el mensaje saldrá desde esa línea por el enrutamiento automático del CRM.</p>
+      </div>
     </div>
   )
 }
@@ -2037,6 +2305,9 @@ export default function Configuracion() {
             <TabsTrigger value="precios">
               <DollarSign size={13} className="mr-1.5" /> Precios por peso
             </TabsTrigger>
+            <TabsTrigger value="whatsapp">
+              <MessageCircle size={13} className="mr-1.5" /> WhatsApp
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2048,6 +2319,7 @@ export default function Configuracion() {
           <TabsContent value="comisiones"><TabComisiones /></TabsContent>
           <TabsContent value="catalogos"><TabCatalogos /></TabsContent>
           <TabsContent value="precios"><TabPreciosPlanes /></TabsContent>
+          <TabsContent value="whatsapp"><TabWhatsApp /></TabsContent>
         </Tabs>
       </div>
     </div>

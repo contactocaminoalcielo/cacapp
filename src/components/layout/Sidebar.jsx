@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
-  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet,
+  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -25,8 +25,9 @@ const ALL_NAV_GROUPS = [
     label: 'PRODUCCIÓN',
     items: [
       { path: '/cuarto-frio',    label: 'Cuarto frío',    icon: Snowflake },
-      { path: '/lotes-grupales', label: 'Lotes grupales', icon: Package2 },
-      { path: '/tenjo',          label: 'Planta Tenjo',   icon: Leaf },
+      { path: '/lotes-grupales', label: 'Lotes grupales',  icon: Package2 },
+      { path: '/tenjo',          label: 'Planta Tenjo',    icon: Leaf },
+      { path: '/certificados',   label: 'Certificados',    icon: Award },
       { path: '/produccion',     label: 'Producción',     icon: Layers,  badge: 'produccion' },
       { path: '/imagenes',       label: 'Imágenes',       icon: Camera,  badge: 'imagenes' },
     ],
@@ -50,13 +51,13 @@ const ALL_NAV_GROUPS = [
   },
 ]
 
-const BG        = '#263218'
+const BG        = '#0B1D4F'
 const ACTIVE_BG = 'rgba(255,255,255,0.12)'
 const HOVER_BG  = 'rgba(255,255,255,0.06)'
 const TEXT_ON   = '#FFFFFF'
-const TEXT_OFF  = 'rgba(255,255,255,0.52)'
-const LABEL_CLR = 'rgba(255,255,255,0.22)'
-const BORDER    = 'rgba(255,255,255,0.07)'
+const TEXT_OFF  = 'rgba(255,255,255,0.55)'
+const LABEL_CLR = 'rgba(255,255,255,0.25)'
+const BORDER    = 'rgba(255,255,255,0.08)'
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(
@@ -97,23 +98,27 @@ export default function Sidebar({ isOpen, onClose }) {
     >
       {/* Logo + close */}
       <div
-        className="flex items-center gap-3 px-5 py-5"
+        className="flex items-center gap-3 px-4 py-4"
         style={{ borderBottom: `1px solid ${BORDER}` }}
       >
         <motion.div
-          className="w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0"
-          style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}
-          whileHover={{ scale: 1.07 }}
+          className="flex-shrink-0"
+          whileHover={{ scale: 1.05 }}
           transition={{ type: 'spring', stiffness: 400, damping: 20 }}
         >
-          🕊️
+          <img
+            src="/orbit-logo.png"
+            alt="ORBIT"
+            className="rounded-xl object-contain"
+            style={{ width: 44, height: 44, background: 'white', padding: 3 }}
+          />
         </motion.div>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-white leading-tight truncate">
-            Camino al Cielo
+          <div className="text-[14px] font-bold text-white leading-tight tracking-wide">
+            ORBIT
           </div>
-          <div className="text-[10px] font-medium mt-0.5" style={{ color: LABEL_CLR }}>
-            Sistema interno
+          <div className="text-[10px] font-medium mt-0.5 truncate" style={{ color: LABEL_CLR }}>
+            Gestión Inteligente de Servicios
           </div>
         </div>
         <motion.button
@@ -178,7 +183,7 @@ export default function Sidebar({ isOpen, onClose }) {
                         animate={{ scale: 1, opacity: 1 }}
                         transition={{ type: 'spring', stiffness: 500, damping: 25 }}
                         className="text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center tabular-nums leading-none"
-                        style={{ backgroundColor: '#C4A87A', color: '#1A2E1E' }}
+                        style={{ backgroundColor: '#F5C842', color: '#0B1D4F' }}
                       >
                         {count}
                       </motion.span>
@@ -198,7 +203,7 @@ export default function Sidebar({ isOpen, onClose }) {
             {/* Avatar */}
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
-              style={{ backgroundColor: '#C4A87A', color: '#1A2E1E' }}
+              style={{ backgroundColor: '#1A5CD8', color: '#FFFFFF' }}
             >
               {nombreCorto.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
             </div>
@@ -221,7 +226,7 @@ export default function Sidebar({ isOpen, onClose }) {
         )}
         <div className="px-5 pb-3">
           <div className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.15)' }}>
-            v2.0 · Camino al Cielo © 2025
+            ORBIT v2.0 · © 2026
           </div>
         </div>
       </div>

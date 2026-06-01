@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { db, dbAdmin } from '@/lib/supabase'
 import { Camera, Check, ChevronLeft, ChevronRight, Loader2, Send, X, Plus } from 'lucide-react'
 
-const G      = '#2D7A45'
+const G      = '#1A5CD8'
 const G_LITE = '#E8F3EB'
 const G_MID  = '#C5DEC9'
 const BG     = '#F4F7F4'

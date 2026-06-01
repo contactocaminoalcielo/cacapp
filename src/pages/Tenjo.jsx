@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -9,52 +10,281 @@ import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { EstadoBadge } from '@/components/ui/badge'
 import { db } from '@/lib/supabase'
-import { petEmoji, today } from '@/lib/utils'
-import { Truck, RefreshCw, Plus, CheckCircle2, Flame } from 'lucide-react'
+import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
+import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock } from 'lucide-react'
+
+function fmtFecha(s) {
+  if (!s) return '-'
+  return new Date(s + 'T12:00:00').toLocaleDateString('es-CO', {
+    day: 'numeric', month: 'short', year: 'numeric'
+  })
+}
+
+// ─── Certificado individual (cremación o compostaje) ──────────────────────────
+function CertificadoIndividualModal({ traslado, onClose }) {
+  const svc      = traslado.servicios
+  const m        = svc?.mascotas
+  const c        = m?.clientes
+  const plan     = svc?.planes
+  const esEco    = plan?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+  const tipoCert = esEco ? 'COMPOSTAJE INDIVIDUAL' : 'CREMACIÓN INDIVIDUAL'
+  const mascota  = m?.nombre    || '-'
+  const especie  = m?.especies?.nombre || '-'
+  const cliente  = `${c?.nombre || ''} ${c?.apellido || ''}`.trim() || '-'
+  const fechaProc = traslado.fecha_completado || today()
+  const certFecha = addDiasHabiles(fechaProc, 3)
+
+  function imprimir() {
+    const w = window.open('', '_blank', 'width=820,height=700')
+    w.document.write(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Certificado ${tipoCert} — ${mascota}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a;
+           max-width: 680px; margin: 48px auto; padding: 40px; background: #fff; }
+    .logo-area { text-align: center; padding-bottom: 20px; margin-bottom: 28px;
+                 border-bottom: 2.5px solid #1A5CD8; }
+    .logo-name  { font-size: 22px; font-weight: bold; color: #1A5CD8; letter-spacing: 1.5px; }
+    .logo-sub   { font-size: 11px; color: #777; margin-top: 5px; letter-spacing: 0.5px; }
+    .cert-title { font-size: 16px; font-weight: bold; text-align: center; letter-spacing: 3px;
+                  color: #0B1D4F; text-transform: uppercase; margin: 24px 0; }
+    .intro-text { font-size: 13px; line-height: 1.9; color: #333; margin-bottom: 20px; text-align: justify; }
+    .pet-box    { background: #f5f8f2; border-left: 4px solid #1A5CD8; padding: 14px 18px;
+                  border-radius: 4px; margin: 18px 0; }
+    .pet-box h3 { font-size: 11px; font-weight: bold; color: #1A5CD8; letter-spacing: 1px;
+                  text-transform: uppercase; margin-bottom: 10px; }
+    .pet-table  { width: 100%; border-collapse: collapse; }
+    .pet-table td { font-size: 12px; padding: 3px 0; vertical-align: top; }
+    .pet-table td:first-child { width: 40%; color: #555; font-weight: bold; padding-right: 8px; }
+    .pet-table td:last-child  { color: #1a1a1a; }
+    .process-text { font-size: 12.5px; line-height: 1.85; color: #444; margin: 20px 0; text-align: justify; }
+    .sigs       { display: flex; justify-content: space-between; margin-top: 56px; }
+    .sig-box    { width: 44%; text-align: center; }
+    .sig-line   { border-top: 1px solid #888; padding-top: 8px; font-size: 11px; color: #555; }
+    .sig-sub    { font-size: 10px; color: #999; margin-top: 3px; }
+    .footer     { text-align: center; margin-top: 36px; padding-top: 14px; border-top: 1px solid #eee;
+                  font-size: 10px; color: #aaa; }
+    @media print { body { margin: 24px; } }
+  </style>
+</head>
+<body>
+  <div class="logo-area">
+    <div class="logo-name">🕊️ CAMINO AL CIELO</div>
+    <div class="logo-sub">Servicios Funerarios para Mascotas · Bogotá, Colombia</div>
+    <div class="logo-sub" style="margin-top:3px">contacto@caminoalcielo.com.co</div>
+  </div>
+
+  <div class="cert-title">Certificado de ${tipoCert}</div>
+
+  <p class="intro-text">
+    La empresa <strong>Camino al Cielo — Servicios Funerarios para Mascotas</strong>
+    certifica que la mascota de la familia <strong>${cliente}</strong>,
+    cuyos datos se detallan a continuación, fue sometida al proceso de
+    <strong>${tipoCert.toLowerCase()}</strong> en la planta de Tenjo, Cundinamarca,
+    conforme al plan <strong>${plan?.nombre || '-'}</strong> contratado.
+  </p>
+
+  <div class="pet-box">
+    <h3>Información de la Mascota</h3>
+    <table class="pet-table">
+      <tr><td>Nombre:</td><td><strong>${mascota}</strong></td></tr>
+      <tr><td>Especie:</td><td>${especie}</td></tr>
+      <tr><td>Propietario(s):</td><td>${cliente}</td></tr>
+      <tr><td>Plan:</td><td>${plan?.nombre || '-'}</td></tr>
+      <tr><td>Fecha de proceso:</td><td>${fmtFecha(fechaProc)}</td></tr>
+      <tr><td>Fecha de certificado:</td><td>${fmtFecha(certFecha)}</td></tr>
+    </table>
+  </div>
+
+  ${esEco ? `
+  <p class="process-text">
+    El proceso de <strong>compostaje individual</strong> fue realizado en condiciones controladas
+    en la planta de Tenjo, Cundinamarca. El material procesado estará disponible para el propietario
+    según las condiciones acordadas en el contrato de servicio.
+  </p>
+  ` : `
+  <p class="process-text">
+    El proceso de <strong>cremación individual</strong> garantiza que las cenizas obtenidas
+    corresponden exclusivamente a la mascota indicada. Las cenizas serán entregadas al propietario
+    en el paquete de recordatorios, según el plan contratado.
+  </p>
+  `}
+
+  <div class="sigs">
+    <div class="sig-box">
+      <div class="sig-line">Camino al Cielo</div>
+      <div class="sig-sub">Dirección Operativa · Planta Tenjo</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-line">${fmtFecha(certFecha)}</div>
+      <div class="sig-sub">Fecha de emisión del certificado</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Camino al Cielo · Bogotá, Colombia · contacto@caminoalcielo.com.co<br>
+    Este certificado es válido sin firma manuscrita como constancia del servicio prestado.
+  </div>
+</body>
+</html>`)
+    w.document.close()
+    setTimeout(() => w.print(), 600)
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Certificado — ${mascota}`} maxWidth="max-w-2xl">
+      <div className="space-y-5">
+        <div className="rounded-xl border p-5 bg-gray-50 space-y-3" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+          <div className="text-center pb-3 border-b" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+            <p className="font-bold text-[13px]" style={{ color: '#1A5CD8' }}>🕊️ CAMINO AL CIELO</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Servicios Funerarios para Mascotas · Planta Tenjo</p>
+          </div>
+          <p className="text-center font-bold uppercase tracking-widest text-[11px]" style={{ color: '#0B1D4F' }}>
+            Certificado de {tipoCert}
+          </p>
+          <div className="grid grid-cols-2 gap-1 text-[11px]">
+            {[
+              ['Mascota', mascota], ['Especie', especie],
+              ['Propietario', cliente], ['Plan', plan?.nombre || '-'],
+              ['Fecha de proceso', fmtFecha(fechaProc)],
+              ['Fecha certificado (3er día hábil)', fmtFecha(certFecha), true],
+            ].map(([k, v, span]) => (
+              <div key={k} className={span ? 'col-span-2' : ''}>
+                <span className="text-gray-400">{k}: </span>
+                <span className="font-medium text-gray-800">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+          <Button onClick={imprimir} className="gap-1.5">
+            <Printer size={13} /> Imprimir / Guardar PDF
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
 
 export default function Tenjo() {
-  const [traslados, setTraslados] = useState([])
-  const [aptosTraslado, setAptosTraslado] = useState([])
-  const [cenizasPendientes, setCenizasPendientes] = useState([])
-  const [compostajes, setCompostajes] = useState([])
-  const [personal, setPersonal] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [modalNuevo, setModalNuevo] = useState(false)
+  const { confirm, alert: showAlert } = useConfirm()
+  const [traslados,         setTraslados]         = useState([])
+  const [aptosTraslado,     setAptosTraslado]     = useState([])
+  const [cenizasEspera,     setCenizasEspera]     = useState([])   // < 5 días desde cremación
+  const [cenizasListas,     setCenizasListas]     = useState([])   // ≥ 5 días, listas para traslado de regreso
+  const [cenizasPendientes, setCenizasPendientes] = useState([])   // traslado de regreso llegó, confirmar
+  const [procesados,        setProcesados]        = useState([])
+  const [compostajes,       setCompostajes]       = useState([])
+  const [compostajesAlerta, setCompostajesAlerta] = useState([])   // ≤ 7 días para terminar
+  const [compostajesListos, setCompostajesListos] = useState([])   // ya cumplieron los 2 meses
+  const [personal,          setPersonal]          = useState([])
+  const [loading,           setLoading]           = useState(true)
+  const [error,             setError]             = useState(null)
+  const [modalNuevo,        setModalNuevo]        = useState(false)
   const [mascotaParaTraslado, setMascotaParaTraslado] = useState(null)
-  const [formTraslado, setFormTraslado] = useState({ fecha_programada: today(), tecnico_id: '', notas: '' })
-  const [saving, setSaving] = useState(false)
+  const [formTraslado,      setFormTraslado]      = useState({ fecha_programada: today(), tecnico_id: '', notas: '' })
+  const [saving,            setSaving]            = useState(false)
+  const [certIndModal,      setCertIndModal]      = useState(null)
+  const [modalCubiculo,     setModalCubiculo]     = useState(null) // seguimiento_compostaje para registrar cubículo
+  const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
 
   useEffect(() => { cargar() }, [])
 
   async function cargar() {
     try {
       setLoading(true)
-      const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: comp }, { data: per }] = await Promise.all([
+      const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: comp }, { data: per }, { data: procComp }] = await Promise.all([
         db.from('traslados_tenjo')
-          .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), personal(nombre,apellido)')
+          .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
           .in('estado', ['PROGRAMADO','EN_CAMINO'])
-          .order('fecha_programada', { ascending: true }),
-        // Traslados completados donde servicio aún está EN_PROCESO → cenizas pendientes de confirmar
+          .order('fecha_traslado', { ascending: true }),
+        // Traslados completados donde servicio aún está EN_PROCESO → contar 5 días
         db.from('traslados_tenjo')
-          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), personal(nombre,apellido)')
+          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
           .eq('estado', 'COMPLETADO')
           .eq('servicios.estado', 'EN_PROCESO')
           .order('fecha_completado', { ascending: true }),
         db.from('cuarto_frio')
           .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
           .eq('estado', 'REFRIGERADO'),
-        db.from('v_compostaje_activo').select('*').order('fecha_inicio', { ascending: true }),
+        db.from('seguimiento_compostaje')
+          .select('id, cubiculo_codigo, fecha_inicio, fecha_fin_estimada, estado, planta_lista, planta_entregada, servicio_id, servicios!inner(estado, mascotas(nombre,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)), planes(nombre))')
+          .eq('estado', 'EN_PROCESO')
+          .order('fecha_inicio', { ascending: true }),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
+        // Individuales procesados (cenizas ya confirmadas) — para emitir certificados
+        db.from('traslados_tenjo')
+          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
+          .eq('estado', 'COMPLETADO')
+          .order('fecha_completado', { ascending: false })
+          .limit(30),
       ])
       setTraslados(tras || [])
-      // filtro extra client-side: solo cremaciones donde el servicio aún está EN_PROCESO
-      setCenizasPendientes((cenizas || []).filter(t => t.servicios?.estado === 'EN_PROCESO'))
+
+      // Separar cenizas según días transcurridos desde la cremación
+      const hoy = new Date(); hoy.setHours(0,0,0,0)
+      const cremaciones = (cenizas || []).filter(t => t.servicios?.estado === 'EN_PROCESO')
+      const espera = [], listas = []
+      cremaciones.forEach(t => {
+        if (!t.fecha_completado) { espera.push({ ...t, diasDesde: null, diasRestantes: 5 }); return }
+        const fc = new Date(t.fecha_completado + 'T12:00:00')
+        const diasDesde   = Math.floor((hoy - fc) / 86400000)
+        const diasRestantes = Math.max(0, 5 - diasDesde)
+        if (diasDesde >= 5) listas.push({ ...t, diasDesde, diasRestantes: 0 })
+        else                espera.push({ ...t, diasDesde, diasRestantes })
+      })
+      setCenizasEspera(espera)
+      setCenizasListas(listas)
+      setCenizasPendientes(cremaciones) // total para el stat
+
+      // Individuales con cenizas confirmadas (servicio ya avanzó de EN_PROCESO)
+      setProcesados((procComp || []).filter(t => {
+        const estado = t.servicios?.estado
+        const tipo   = t.servicios?.planes?.tipo_proceso
+        return (tipo === 'CREMACION_INDIVIDUAL' || tipo === 'COMPOSTAJE_INDIVIDUAL')
+          && ['EN_PRODUCCION', 'LISTO', 'EN_ENTREGA', 'ENTREGADO'].includes(estado)
+      }))
+      // Mascotas en cuarto_frio aptas para traslado individual, excluyendo las que ya tienen traslado activo
+      const serviciosConTraslado = new Set((tras || []).map(t => t.servicio_id))
       setAptosTraslado((cuarto || []).filter(r => {
         const tipo = r.servicios?.planes?.tipo_proceso
-        return tipo === 'CREMACION_INDIVIDUAL' || tipo === 'COMPOSTAJE_INDIVIDUAL'
+        return (tipo === 'CREMACION_INDIVIDUAL' || tipo === 'COMPOSTAJE_INDIVIDUAL')
+          && !serviciosConTraslado.has(r.servicio_id)
       }))
-      setCompostajes(comp || [])
+
+      // Compostajes: solo los que ya están físicamente en Tenjo (servicio en EN_PROCESO o más adelante)
+      const hoyComp = new Date(); hoyComp.setHours(0,0,0,0)
+      const compAll = (comp || [])
+        .filter(c => ['EN_PROCESO','EN_PRODUCCION','LISTO','EN_ENTREGA','ENTREGADO'].includes(c.servicios?.estado))
+        .map(c => ({
+          id:                 c.id,
+          cubiculo_codigo:    c.cubiculo_codigo,
+          fecha_inicio:       c.fecha_inicio,
+          fecha_fin_estimada: c.fecha_fin_estimada,
+          estado:             c.estado,
+          planta_lista:       c.planta_lista,
+          planta_entregada:   c.planta_entregada,
+          mascota:            c.servicios?.mascotas?.nombre,
+          cliente:            `${c.servicios?.mascotas?.clientes?.nombre || ''} ${c.servicios?.mascotas?.clientes?.apellido || ''}`.trim(),
+          especie:            c.servicios?.mascotas?.especies?.nombre,
+          dias_para_finalizar: c.fecha_fin_estimada
+            ? Math.floor((new Date(c.fecha_fin_estimada + 'T12:00:00') - hoyComp) / 86400000)
+            : null,
+        }))
+
+      setCompostajes(compAll.filter(c => (c.dias_para_finalizar ?? 999) > 7))
+      setCompostajesAlerta(compAll.filter(c => {
+        const d = c.dias_para_finalizar
+        return d != null && d > 0 && d <= 7
+      }))
+      setCompostajesListos(compAll.filter(c => {
+        const d = c.dias_para_finalizar
+        return d != null && d <= 0 && !c.planta_lista
+      }))
       setPersonal(per || [])
     } catch (e) {
       setError(e.message)
@@ -65,23 +295,66 @@ export default function Tenjo() {
 
   async function actualizarTraslado(id, estado, servicioId) {
     try {
-      await db.from('traslados_tenjo').update({ estado, fecha_completado: estado === 'COMPLETADO' ? today() : null }).eq('id', id)
+      await db.from('traslados_tenjo').update({
+        estado,
+        ...(estado === 'COMPLETADO' && { fecha_completado: today() }),
+      }).eq('id', id)
       if (estado === 'COMPLETADO' && servicioId) {
         await db.from('servicios').update({ estado: 'EN_PROCESO' }).eq('id', servicioId)
       }
       await cargar()
     } catch (e) {
-      alert('Error: ' + e.message)
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     }
   }
 
-  async function confirmarCenizas(servicioId) {
-    if (!confirm('¿Confirmar que las cenizas están listas? El servicio pasará a EN_PRODUCCION.')) return
+  async function confirmarCenizas(servicioId, traslado) {
+    if (!await confirm('El servicio pasará a EN_PRODUCCION.', { title: '¿Confirmar que las cenizas están listas?', variant: 'warning', confirmLabel: 'Confirmar' })) return
     try {
       await db.from('servicios').update({ estado: 'EN_PRODUCCION' }).eq('id', servicioId)
       await cargar()
+      // Ofrecer generar certificado inmediatamente después de confirmar
+      if (traslado) setCertIndModal(traslado)
     } catch (e) {
-      alert('Error: ' + e.message)
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    }
+  }
+
+  async function registrarCubiculo() {
+    if (!modalCubiculo) return
+    if (!formCubiculo.fecha_inicio) {
+      await showAlert('Ingresa la fecha de inicio del compostaje.', { title: 'Campo requerido' }); return
+    }
+    setSaving(true)
+    try {
+      // fecha_fin_estimada = fecha_inicio + 2 meses
+      const fechaFin = new Date(formCubiculo.fecha_inicio + 'T12:00:00')
+      fechaFin.setMonth(fechaFin.getMonth() + 2)
+      const fechaFinStr = fechaFin.toISOString().split('T')[0]
+
+      await db.from('seguimiento_compostaje').update({
+        fecha_inicio:       formCubiculo.fecha_inicio,
+        fecha_fin_estimada: fechaFinStr,
+        cubiculo_codigo:    formCubiculo.cubiculo_codigo || null,
+        notas:              formCubiculo.notas || null,
+      }).eq('id', modalCubiculo.id)
+
+      setModalCubiculo(null)
+      await cargar()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function marcarPlantaLista(compostajeId) {
+    if (!await confirm('Se marcará que la planta del compostaje está lista para recoger.', { title: '¿Compostaje finalizado?', confirmLabel: 'Confirmar', variant: 'warning' })) return
+    try {
+      await db.from('seguimiento_compostaje').update({ planta_lista: true }).eq('id', compostajeId)
+      await cargar()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     }
   }
 
@@ -92,7 +365,7 @@ export default function Tenjo() {
       await db.from('traslados_tenjo').insert({
         servicio_id: mascotaParaTraslado.servicio_id,
         estado: 'PROGRAMADO',
-        fecha_programada: formTraslado.fecha_programada,
+        fecha_traslado: formTraslado.fecha_programada,
         tecnico_id: formTraslado.tecnico_id || null,
         notas: formTraslado.notas,
       })
@@ -100,7 +373,7 @@ export default function Tenjo() {
       setMascotaParaTraslado(null)
       await cargar()
     } catch (e) {
-      alert('Error: ' + e.message)
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     } finally {
       setSaving(false)
     }
@@ -121,8 +394,8 @@ export default function Tenjo() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="Traslados programados" value={traslados.filter(t => t.estado === 'PROGRAMADO').length} valueColor="#3B6FBF" />
           <StatCard label="En camino" value={traslados.filter(t => t.estado === 'EN_CAMINO').length} valueColor="#9A5500" />
-          <StatCard label="Cenizas por confirmar" value={cenizasPendientes.length} valueColor={cenizasPendientes.length > 0 ? '#C03030' : '#9CA3AF'} />
-          <StatCard label="Compostajes activos" value={compostajes.length} valueColor="#1D8A55" />
+          <StatCard label="Cenizas listas para recoger" value={cenizasListas.length} valueColor={cenizasListas.length > 0 ? '#C03030' : '#9CA3AF'} />
+          <StatCard label="Compostajes activos" value={compostajes.length + compostajesAlerta.length + compostajesListos.length} valueColor="#1D8A55" />
         </div>
 
         {/* Traslados activos */}
@@ -139,7 +412,7 @@ export default function Tenjo() {
                 const m = t.servicios?.mascotas
                 const c = m?.clientes
                 const p = t.servicios?.planes
-                const tec = t.personal
+                const tec = t.tecnico
                 return (
                   <div key={t.id} className="flex items-center gap-4 p-4 rounded-xl border hover:bg-surface2 transition-all"
                     style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
@@ -148,7 +421,7 @@ export default function Tenjo() {
                       <div className="font-semibold text-ink">{m?.nombre}</div>
                       <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
                       <div className="text-[11px] text-ink2 mt-0.5">
-                        {t.fecha_programada && `Programado: ${new Date(t.fecha_programada).toLocaleDateString('es-CO')}`}
+                        {t.fecha_traslado && `Programado: ${new Date(t.fecha_traslado + 'T12:00:00').toLocaleDateString('es-CO')}`}
                         {tec && ` · ${tec.nombre} ${tec.apellido}`}
                       </div>
                     </div>
@@ -174,18 +447,62 @@ export default function Tenjo() {
           )}
         </div>
 
-        {/* Cenizas por confirmar */}
-        {cenizasPendientes.length > 0 && (
-          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C03030' }}>
-            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(192,48,48,0.2)' }}>
-              <Flame size={16} className="text-danger" />
-              <div className="font-serif text-lg text-ink flex-1">Cenizas por confirmar</div>
-              <span className="text-[11px] font-bold text-danger bg-danger-light px-2 py-0.5 rounded-full">
-                {cenizasPendientes.length} pendiente{cenizasPendientes.length !== 1 ? 's' : ''}
+        {/* Cenizas: esperando 5 días */}
+        {cenizasEspera.length > 0 && (
+          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#93C5FD' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(147,197,253,0.4)' }}>
+              <Clock size={15} style={{ color: '#2563EB' }} />
+              <div className="font-serif text-lg text-ink flex-1">Cremación completada — esperando 5 días</div>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#DBEAFE', color: '#1D4ED8' }}>
+                {cenizasEspera.length} en espera
               </span>
             </div>
             <div className="p-5 space-y-3">
-              {cenizasPendientes.map(t => {
+              {cenizasEspera.map(t => {
+                const m = t.servicios?.mascotas
+                const c = m?.clientes
+                const p = t.servicios?.planes
+                const progreso = t.diasRestantes != null ? Math.round(((5 - t.diasRestantes) / 5) * 100) : 0
+                return (
+                  <div key={t.id} className="p-4 rounded-xl border" style={{ borderColor: 'rgba(147,197,253,0.3)', background: '#EFF6FF' }}>
+                    <div className="flex items-center gap-3 mb-3">
+                      <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
+                      <div className="flex-1">
+                        <div className="font-semibold text-ink">{m?.nombre}</div>
+                        <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[13px] font-bold" style={{ color: '#1D4ED8' }}>
+                          {t.diasRestantes != null ? `${t.diasRestantes} día${t.diasRestantes !== 1 ? 's' : ''}` : '?'} restantes
+                        </div>
+                        <div className="text-[10px] text-ink3">
+                          Cremado: {t.fecha_completado ? fmtFecha(t.fecha_completado) : '-'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-full bg-blue-100 rounded-full h-2">
+                      <div className="h-2 rounded-full transition-all" style={{ width: `${progreso}%`, background: '#3B82F6' }} />
+                    </div>
+                    <div className="text-[10px] text-blue-400 mt-1">{progreso}% del período de espera completado</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Cenizas: listas para traslado de regreso */}
+        {cenizasListas.length > 0 && (
+          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C03030' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(192,48,48,0.2)' }}>
+              <Flame size={16} className="text-danger" />
+              <div className="font-serif text-lg text-ink flex-1">Cenizas listas — solicitar traslado de regreso</div>
+              <span className="text-[11px] font-bold text-danger bg-danger-light px-2 py-0.5 rounded-full">
+                {cenizasListas.length} lista{cenizasListas.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="p-5 space-y-3">
+              {cenizasListas.map(t => {
                 const m = t.servicios?.mascotas
                 const c = m?.clientes
                 const p = t.servicios?.planes
@@ -196,13 +513,13 @@ export default function Tenjo() {
                     <div className="flex-1">
                       <div className="font-semibold text-ink">{m?.nombre}</div>
                       <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
-                      <div className="text-[11px] text-ink2 mt-0.5">
-                        Completado: {t.fecha_completado ? new Date(t.fecha_completado).toLocaleDateString('es-CO') : '-'}
+                      <div className="text-[11px] mt-0.5" style={{ color: '#C03030' }}>
+                        Cremado el {fmtFecha(t.fecha_completado)} · {t.diasDesde} días transcurridos
                       </div>
                     </div>
                     <Button size="sm" variant="primary"
-                      onClick={() => confirmarCenizas(t.servicios?.id)}>
-                      <CheckCircle2 size={13} /> Confirmar cenizas
+                      onClick={() => confirmarCenizas(t.servicios?.id, t)}>
+                      <CheckCircle2 size={13} /> Confirmar cenizas recibidas
                     </Button>
                   </div>
                 )
@@ -263,7 +580,71 @@ export default function Tenjo() {
           )}
         </div>
 
-        {/* Compostajes activos */}
+        {/* Compostajes: alerta 1 semana antes */}
+        {compostajesAlerta.length > 0 && (
+          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#F59E0B' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(245,158,11,0.3)' }}>
+              <AlertTriangle size={15} className="text-amber-500" />
+              <div className="font-serif text-lg text-ink flex-1">Compostajes próximos a finalizar</div>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                {compostajesAlerta.length} en alerta
+              </span>
+            </div>
+            <div className="p-5 space-y-3">
+              {compostajesAlerta.map(c => (
+                <div key={c.id} className="flex items-center gap-4 p-4 rounded-xl border"
+                  style={{ borderColor: 'rgba(245,158,11,0.25)', background: '#FFFBEB' }}>
+                  <span className="text-2xl">🌿</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-ink">{c.mascota}</div>
+                    <div className="text-[11px] text-ink3">{c.cliente} · Cubículo {c.cubiculo_codigo || '-'}</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: '#92400E' }}>
+                      Finaliza el {fmtFecha(c.fecha_fin_estimada)}
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[18px] font-bold" style={{ color: '#D97706' }}>{c.dias_para_finalizar}</div>
+                    <div className="text-[10px] text-amber-600">días restantes</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Compostajes: listos para traslado de planta */}
+        {compostajesListos.length > 0 && (
+          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#059669' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(5,150,105,0.2)' }}>
+              <Leaf size={15} className="text-green-600" />
+              <div className="font-serif text-lg text-ink flex-1">Compostajes listos — solicitar traslado de planta</div>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#D1FAE5', color: '#065F46' }}>
+                {compostajesListos.length} listo{compostajesListos.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="p-5 space-y-3">
+              {compostajesListos.map(c => (
+                <div key={c.id} className="flex items-center gap-4 p-4 rounded-xl border"
+                  style={{ borderColor: 'rgba(5,150,105,0.2)', background: '#ECFDF5' }}>
+                  <span className="text-2xl">🌿</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-ink">{c.mascota}</div>
+                    <div className="text-[11px] text-ink3">{c.cliente} · Cubículo {c.cubiculo_codigo || '-'}</div>
+                    <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
+                      Finalizó el {fmtFecha(c.fecha_fin_estimada)} · {Math.abs(c.dias_para_finalizar)} día{Math.abs(c.dias_para_finalizar) !== 1 ? 's' : ''} completado{Math.abs(c.dias_para_finalizar) !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  <Button size="sm" style={{ background: '#059669', color: 'white' }}
+                    onClick={() => marcarPlantaLista(c.id)}>
+                    <CheckCircle2 size={13} /> Planta lista para recoger
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Compostajes activos (sin alerta aún) */}
         {compostajes.length > 0 && (
           <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
@@ -275,28 +656,74 @@ export default function Tenjo() {
                   <tr>
                     <Th>Mascota</Th>
                     <Th>Cliente</Th>
+                    <Th>Cubículo</Th>
                     <Th>Inicio</Th>
+                    <Th>Fin estimado</Th>
                     <Th>Días restantes</Th>
-                    <Th>Estado</Th>
+                    <Th></Th>
                   </tr>
                 </thead>
                 <tbody>
-                  {compostajes.map((c, i) => (
-                    <Tr key={i}>
-                      <Td><div className="flex items-center gap-2"><span>{petEmoji(c.especie)}</span><span className="font-semibold text-ink">{c.mascota}</span></div></Td>
+                  {compostajes.map((c) => (
+                    <Tr key={c.id}>
+                      <Td><div className="flex items-center gap-2"><span>🌿</span><span className="font-semibold text-ink">{c.mascota}</span></div></Td>
                       <Td className="text-ink2">{c.cliente}</Td>
-                      <Td className="text-ink3">{c.fecha_inicio ? new Date(c.fecha_inicio).toLocaleDateString('es-CO') : '-'}</Td>
+                      <Td className="font-mono text-[11px]">{c.cubiculo_codigo || '-'}</Td>
+                      <Td className="text-ink3">{c.fecha_inicio ? fmtFecha(c.fecha_inicio) : <span className="text-amber-600 font-semibold">Sin registrar</span>}</Td>
+                      <Td className="text-ink3">{c.fecha_fin_estimada ? fmtFecha(c.fecha_fin_estimada) : '-'}</Td>
                       <Td>
-                        <span className={`text-[11px] font-bold ${(c.dias_restantes || 0) < 7 ? 'text-[#9A5500]' : 'text-ink2'}`}>
-                          {c.dias_restantes || '-'} días
+                        <span className="text-[11px] font-bold text-ink2">
+                          {c.dias_para_finalizar != null ? `${c.dias_para_finalizar} días` : '-'}
                         </span>
                       </Td>
-                      <Td><EstadoBadge estado={c.estado} /></Td>
+                      <Td>
+                        {!c.fecha_inicio && (
+                          <Button size="sm" variant="secondary"
+                            onClick={() => { setModalCubiculo(c); setFormCubiculo({ fecha_inicio: today(), cubiculo_codigo: c.cubiculo_codigo || '', notas: '' }) }}>
+                            <Plus size={12} /> Registrar entrada
+                          </Button>
+                        )}
+                      </Td>
                     </Tr>
                   ))}
                 </tbody>
               </Table>
             </TableWrap>
+          </div>
+        )}
+
+        {/* Individuales procesados — certificados */}
+        {procesados.length > 0 && (
+          <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+              <FileText size={15} className="text-ink3" />
+              <div className="font-serif text-lg text-ink flex-1">Individuales procesados — Certificados</div>
+              <span className="text-[11px] text-ink3 bg-surface2 px-2 py-0.5 rounded-full">{procesados.length}</span>
+            </div>
+            <div className="p-5 space-y-3">
+              {procesados.map(t => {
+                const m = t.servicios?.mascotas
+                const c = m?.clientes
+                const p = t.servicios?.planes
+                const esEco = p?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+                return (
+                  <div key={t.id} className="flex items-center gap-4 p-4 rounded-xl border hover:bg-surface2 transition-all"
+                    style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <span className="text-2xl">{esEco ? '🌿' : '🔥'}</span>
+                    <div className="flex-1">
+                      <div className="font-semibold text-ink">{m?.nombre}</div>
+                      <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
+                      <div className="text-[11px] text-ink2 mt-0.5">
+                        Procesado: {fmtFecha(t.fecha_completado)}
+                      </div>
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={() => setCertIndModal(t)}>
+                      <FileText size={12} /> Certificado
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -323,6 +750,53 @@ export default function Tenjo() {
               <Textarea value={formTraslado.notas} onChange={e => setFormTraslado(p => ({ ...p, notas: e.target.value }))} /></div>
           </div>
         </Modal>
+      )}
+
+      {/* Modal registrar entrada al cubículo (compostaje) */}
+      {modalCubiculo && (
+        <Modal open onClose={() => setModalCubiculo(null)}
+          title={`Registrar entrada al cubículo — ${modalCubiculo.mascota}`}
+          maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setModalCubiculo(null)}>Cancelar</Button>
+              <Button onClick={registrarCubiculo} disabled={saving}>{saving ? 'Guardando...' : 'Registrar entrada'}</Button>
+            </>
+          }>
+          <div className="space-y-4">
+            <div className="rounded-xl p-3 text-[12px]" style={{ background: '#F0FDF4', borderColor: '#86EFAC', border: '1px solid' }}>
+              Al registrar la fecha de inicio el sistema calculará automáticamente la fecha de fin estimada sumando <strong>2 meses calendario</strong> y activará las alertas de seguimiento.
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Fecha de ingreso al cubículo *</label>
+              <Input type="date" value={formCubiculo.fecha_inicio}
+                onChange={e => setFormCubiculo(p => ({ ...p, fecha_inicio: e.target.value }))} />
+              {formCubiculo.fecha_inicio && (
+                <p className="text-[11px] text-ink3 mt-1">
+                  → Fin estimado: <strong>{(() => { const d = new Date(formCubiculo.fecha_inicio + 'T12:00:00'); d.setMonth(d.getMonth() + 2); return fmtFecha(d.toISOString().split('T')[0]) })()} </strong>
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Código del cubículo</label>
+              <Input placeholder="Ej: C-03" value={formCubiculo.cubiculo_codigo}
+                onChange={e => setFormCubiculo(p => ({ ...p, cubiculo_codigo: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
+              <Textarea value={formCubiculo.notas}
+                onChange={e => setFormCubiculo(p => ({ ...p, notas: e.target.value }))} />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal certificado individual */}
+      {certIndModal && (
+        <CertificadoIndividualModal
+          traslado={certIndModal}
+          onClose={() => setCertIndModal(null)}
+        />
       )}
     </div>
   )

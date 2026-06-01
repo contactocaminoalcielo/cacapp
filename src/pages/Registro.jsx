@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
@@ -53,12 +54,12 @@ const CIUDADES = [
 const LABEL = 'text-[11px] font-bold text-gray-400 uppercase tracking-wider block mb-1'
 const CARD  = 'bg-white rounded-2xl shadow-sm border border-gray-100 p-6'
 const SUB   = 'text-[13px] font-semibold text-gray-700 mb-3'
-const SELECTED_CARD = 'bg-green-50 border border-green-200 rounded-xl p-4'
+const SELECTED_CARD = 'bg-blue-50 border border-blue-200 rounded-xl p-4'
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 function Avatar({ nombre, apellido, size = 8 }) {
   return (
-    <div className={`w-${size} h-${size} rounded-full bg-[#3D5A27] flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0`}>
+    <div className={`w-${size} h-${size} rounded-full bg-[#1A5CD8] flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0`}>
       {initials(nombre, apellido)}
     </div>
   )
@@ -74,9 +75,9 @@ function Stepper({ paso, setPaso }) {
             <button
               className={`w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-bold border-2 transition-all ${
                 i < paso
-                  ? 'bg-[#3D5A27] text-white border-[#3D5A27] cursor-pointer'
+                  ? 'bg-[#1A5CD8] text-white border-[#1A5CD8] cursor-pointer'
                   : i === paso
-                  ? 'border-[#3D5A27] text-[#3D5A27] bg-white cursor-default'
+                  ? 'border-[#1A5CD8] text-[#1A5CD8] bg-white cursor-default'
                   : 'border-gray-200 text-gray-400 bg-white cursor-default'
               }`}
               onClick={() => i < paso && setPaso(i)}
@@ -85,12 +86,12 @@ function Stepper({ paso, setPaso }) {
               {i < paso ? <CheckCircle size={14} /> : i + 1}
             </button>
             <span className={`text-[10px] font-semibold hidden sm:block whitespace-nowrap ${
-              i === paso ? 'text-[#3D5A27]' : i < paso ? 'text-gray-500' : 'text-gray-300'
+              i === paso ? 'text-[#1A5CD8]' : i < paso ? 'text-gray-500' : 'text-gray-300'
             }`}>{p.label}</span>
           </div>
           {i < PASOS.length - 1 && (
             <div className="flex-1 h-0.5 mx-1 mb-4"
-              style={{ background: i < paso ? '#3D5A27' : '#e5e7eb' }} />
+              style={{ background: i < paso ? '#1A5CD8' : '#e5e7eb' }} />
           )}
         </div>
       ))}
@@ -99,19 +100,37 @@ function Stepper({ paso, setPaso }) {
 }
 
 function Spinner({ size = 16 }) {
-  return <Loader2 size={size} className="animate-spin text-[#3D5A27]" />
+  return <Loader2 size={size} className="animate-spin text-[#1A5CD8]" />
+}
+
+// ─── Persistencia de borrador ─────────────────────────────────────────────────
+const DRAFT_KEY = 'registro_borrador_v1'
+
+function leerBorrador() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
+}
+function guardarBorrador(data) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...data, _ts: Date.now() })) } catch {}
+}
+function limpiarBorrador() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch {}
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function Registro() {
+  const { confirm } = useConfirm()
   const navigate = useNavigate()
   const location = useLocation()
-  const [paso, setPaso]       = useState(0)
+
+  const borrador = leerBorrador()
+
+  const [paso, setPaso]       = useState(borrador?.paso ?? 0)
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState(null)
   const [success, setSuccess] = useState(false)
   const [iaOpen, setIaOpen]       = useState(false)
-  const [iaDatos, setIaDatos]     = useState(false) // true = IA ya aplicó datos
+  const [iaDatos, setIaDatos]     = useState(false)
+  const [borradorRestaurado, setBorradorRestaurado] = useState(!!borrador)
 
   function aplicarDatosIA(d) {
     if (!d) return
@@ -163,11 +182,11 @@ export default function Registro() {
   // paso 0: cliente
   const [clienteBusqueda, setClienteBusqueda]           = useState('')
   const [clienteResultados, setClienteResultados]       = useState([])
-  const [clienteSeleccionado, setClienteSeleccionado]   = useState(null)
-  const [clienteNuevo, setClienteNuevo]                 = useState(false)
+  const [clienteSeleccionado, setClienteSeleccionado]   = useState(borrador?.clienteSeleccionado ?? null)
+  const [clienteNuevo, setClienteNuevo]                 = useState(borrador?.clienteNuevo ?? false)
   const [buscandoCliente, setBuscandoCliente]           = useState(false)
-  const [cedulaDuplicada, setCedulaDuplicada]           = useState(null) // cliente existente con esa cédula
-  const [formCliente, setFormCliente] = useState({
+  const [cedulaDuplicada, setCedulaDuplicada]           = useState(null)
+  const [formCliente, setFormCliente] = useState(borrador?.formCliente ?? {
     nombre: '', apellido: '', cedula_nit: '', whatsapp: '',
     telefono: '', email: '', direccion: '', barrio: '',
     localidad: '', ciudad: 'Bogotá', tipo_cliente: 'NORMAL',
@@ -175,31 +194,31 @@ export default function Registro() {
 
   // paso 1: mascota
   const [mascotasCliente, setMascotasCliente]           = useState([])
-  const [mascotaSeleccionada, setMascotaSeleccionada]   = useState(null)
-  const [mascotaNueva, setMascotaNueva]                 = useState(false)
-  const [pesoKgOverride, setPesoKgOverride]             = useState('')
-  const [formMascota, setFormMascota] = useState({
+  const [mascotaSeleccionada, setMascotaSeleccionada]   = useState(borrador?.mascotaSeleccionada ?? null)
+  const [mascotaNueva, setMascotaNueva]                 = useState(borrador?.mascotaNueva ?? false)
+  const [pesoKgOverride, setPesoKgOverride]             = useState(borrador?.pesoKgOverride ?? '')
+  const [formMascota, setFormMascota] = useState(borrador?.formMascota ?? {
     nombre: '', especie_id: '', raza: '', sexo: 'Macho',
     peso_kg: '', tamano: 'Mediano', notas: '',
   })
 
   // paso 2: plan
-  const [planSeleccionado, setPlanSeleccionado]     = useState(null)
+  const [planSeleccionado, setPlanSeleccionado]     = useState(borrador?.planSeleccionado ?? null)
   const [preciosPorPlan, setPreciosPorPlan]         = useState({})
-  const [precioSeleccionado, setPrecioSeleccionado] = useState(null)
+  const [precioSeleccionado, setPrecioSeleccionado] = useState(borrador?.precioSeleccionado ?? null)
   const [cargandoPrecios, setCargandoPrecios]       = useState(false)
-  const [tipoAcomp, setTipoAcomp]                   = useState('EVIDENCIA')
-  const [canalEntrada, setCanalEntrada]             = useState('DIRECTO')
+  const [tipoAcomp, setTipoAcomp]                   = useState(borrador?.tipoAcomp ?? 'EVIDENCIA')
+  const [canalEntrada, setCanalEntrada]             = useState(borrador?.canalEntrada ?? 'DIRECTO')
   const [aliadoBusqueda, setAliadoBusqueda]         = useState('')
-  const [aliadoSeleccionado, setAliadoSeleccionado] = useState(null)
+  const [aliadoSeleccionado, setAliadoSeleccionado] = useState(borrador?.aliadoSeleccionado ?? null)
   const [aliadoOpen, setAliadoOpen]                 = useState(false)
-  const [adicionales, setAdicionales]               = useState([])
+  const [adicionales, setAdicionales]               = useState(borrador?.adicionales ?? [])
   const [adicionalBusqueda, setAdicionalBusqueda]   = useState('')
-  const [comisionPorcentaje, setComisionPorcentaje] = useState(0)
-  const [desamparadoPrioridad, setDesamparadoPrioridad] = useState(false)
+  const [comisionPorcentaje, setComisionPorcentaje] = useState(borrador?.comisionPorcentaje ?? 0)
+  const [desamparadoPrioridad, setDesamparadoPrioridad] = useState(borrador?.desamparadoPrioridad ?? false)
 
   // paso 3: recogida + pago
-  const [formRecogida, setFormRecogida] = useState({
+  const [formRecogida, setFormRecogida] = useState(borrador?.formRecogida ?? {
     tipo_lugar:                'DOMICILIO',
     direccion_recogida:        '',
     ciudad_recogida:           'Bogotá',
@@ -212,10 +231,10 @@ export default function Registro() {
     valor_pagado:              '',
     notas:                     '',
   })
-  const [vehiculoTipo, setVehiculoTipo]             = useState('MOTO')
+  const [vehiculoTipo, setVehiculoTipo]             = useState(borrador?.vehiculoTipo ?? 'MOTO')
   const [autoFilledRecogida, setAutoFilledRecogida] = useState(false)
   const [tecnicoBusqueda, setTecnicoBusqueda]       = useState('')
-  const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(null)
+  const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(borrador?.tecnicoSeleccionado ?? null)
   const [tecnicoOpen, setTecnicoOpen]               = useState(false)
 
   // refs
@@ -226,6 +245,25 @@ export default function Registro() {
   const clienteNuevoRef = useRef(clienteNuevo)
   useEffect(() => { formClienteRef.current = formCliente }, [formCliente])
   useEffect(() => { clienteNuevoRef.current = clienteNuevo }, [clienteNuevo])
+
+  // ── Auto-guardar borrador en localStorage ─────────────────────────────────
+  useEffect(() => {
+    if (success) return
+    guardarBorrador({
+      paso,
+      formCliente, clienteSeleccionado, clienteNuevo,
+      formMascota, mascotaSeleccionada, mascotaNueva, pesoKgOverride,
+      planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
+      aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
+      formRecogida, vehiculoTipo, tecnicoSeleccionado,
+    })
+  }, [
+    paso, formCliente, clienteSeleccionado, clienteNuevo,
+    formMascota, mascotaSeleccionada, mascotaNueva, pesoKgOverride,
+    planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
+    aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
+    formRecogida, vehiculoTipo, tecnicoSeleccionado, success,
+  ])
 
   // ── computed ──
   const pesoKg = parseFloat(pesoKgOverride || mascotaSeleccionada?.peso_kg || formMascota.peso_kg) || 0
@@ -585,7 +623,7 @@ export default function Registro() {
   // ── guardar ──
   async function guardar() {
     if (!tecnicoSeleccionado) {
-      const ok = window.confirm('No asignaste un técnico de recogida.\n¿Deseas guardar el servicio sin técnico asignado?')
+      const ok = await confirm('No asignaste un técnico de recogida.\n¿Deseas guardar el servicio sin técnico asignado?', { title: 'Sin técnico asignado', variant: 'warning', confirmLabel: 'Guardar sin técnico', cancelLabel: 'Volver' })
       if (!ok) return
     }
     setSaving(true)
@@ -709,6 +747,7 @@ export default function Registro() {
         }).eq('servicio_id', svcData[0].id)
       }
 
+      limpiarBorrador()
       setSuccess(true)
       setTimeout(() => navigate('/kanban'), 2000)
     } catch (e) {
@@ -751,11 +790,30 @@ export default function Registro() {
           <button
             onClick={() => setIaOpen(true)}
             className="w-full flex items-center justify-center gap-2 mb-4 py-3 px-4 rounded-xl font-semibold text-[13px] transition-all hover:opacity-90 active:scale-98"
-            style={{ background: 'linear-gradient(135deg, #263218 0%, #3D5A27 100%)', color: '#C4A87A' }}
+            style={{ background: 'linear-gradient(135deg, #0B1D4F 0%, #1A5CD8 100%)', color: '#C4A87A' }}
           >
             <Sparkles size={15} />
             Cargar con IA — foto o mensaje WhatsApp
           </button>
+        )}
+
+        {/* Banner borrador restaurado */}
+        {borradorRestaurado && (
+          <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl text-[13px] font-medium"
+            style={{ background: '#EFF5FF', border: '1px solid #93C5FD', color: '#1D4ED8' }}>
+            <span>📋 Borrador restaurado — puedes continuar desde donde lo dejaste</span>
+            <button
+              onClick={async () => {
+                const ok = await confirm('¿Descartar el borrador y empezar desde cero?', { title: 'Descartar borrador', confirmLabel: 'Descartar', cancelLabel: 'Continuar' })
+                if (!ok) return
+                limpiarBorrador()
+                window.location.reload()
+              }}
+              className="ml-auto text-[11px] font-bold text-red-500 hover:text-red-700 whitespace-nowrap"
+            >
+              Descartar
+            </button>
+          </div>
         )}
 
         <Stepper paso={paso} setPaso={setPaso} />
@@ -800,14 +858,14 @@ export default function Registro() {
                   <div className="mb-3 space-y-2">
                     {clienteResultados.map(c => (
                       <button key={c.id_cliente}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:border-[#3D5A27]/30 hover:bg-green-50 transition-all text-left"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:border-[#1A5CD8]/30 hover:bg-green-50 transition-all text-left"
                         onClick={() => seleccionarCliente(c)}>
                         <Avatar nombre={c.nombre} apellido={c.apellido} />
                         <div className="flex-1 min-w-0">
                           <div className="text-[13px] font-semibold text-gray-900 truncate">{c.nombre} {c.apellido}</div>
                           <div className="text-[11px] text-gray-500 truncate">
                             {c.cedula_nit && <span>{c.cedula_nit} · </span>}{c.whatsapp}
-                            {c.mascotas && <span className="ml-2 text-[#3D5A27] font-semibold">{c.mascotas.length} mascota{c.mascotas.length !== 1 ? 's' : ''}</span>}
+                            {c.mascotas && <span className="ml-2 text-[#1A5CD8] font-semibold">{c.mascotas.length} mascota{c.mascotas.length !== 1 ? 's' : ''}</span>}
                           </div>
                         </div>
                         <ChevronRight size={14} className="text-gray-300 flex-shrink-0" />
@@ -819,7 +877,7 @@ export default function Registro() {
                   <p className="text-[12px] text-gray-400 mb-3 text-center py-2">No se encontraron clientes</p>
                 )}
                 <button
-                  className="w-full mt-1 py-3 text-[12px] font-semibold text-[#3D5A27] border-2 border-dashed border-green-200 rounded-xl hover:bg-green-50 transition-all flex items-center justify-center gap-2"
+                  className="w-full mt-1 py-3 text-[12px] font-semibold text-[#1A5CD8] border-2 border-dashed border-green-200 rounded-xl hover:bg-green-50 transition-all flex items-center justify-center gap-2"
                   onClick={() => setClienteNuevo(true)}>
                   <User size={14} /> Crear nuevo cliente
                 </button>
@@ -848,15 +906,16 @@ export default function Registro() {
                 <div className={`${SUB} mb-4`}>Datos del nuevo cliente</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div><label className={LABEL}>Nombre *</label>
-                    <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value }))} /></div>
+                    <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value }))} maxLength={80} /></div>
                   <div><label className={LABEL}>Apellido *</label>
-                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value }))} /></div>
+                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value }))} maxLength={80} /></div>
                   <div>
                     <label className={LABEL}>Cédula / NIT</label>
                     <Input
                       value={formCliente.cedula_nit}
                       onChange={e => setFormCliente(p => ({ ...p, cedula_nit: e.target.value }))}
                       className={cedulaDuplicada ? 'border-amber-400 bg-amber-50' : ''}
+                      maxLength={30}
                     />
                     {cedulaDuplicada && (
                       <div className="mt-1.5 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -869,7 +928,7 @@ export default function Registro() {
                         </div>
                         <button
                           type="button"
-                          className="text-[11px] font-bold text-[#3D5A27] underline flex-shrink-0"
+                          className="text-[11px] font-bold text-[#1A5CD8] underline flex-shrink-0"
                           onClick={() => {
                             setClienteSeleccionado(cedulaDuplicada)
                             setClienteNuevo(false)
@@ -882,9 +941,9 @@ export default function Registro() {
                   </div>
                   <div><label className={LABEL}>WhatsApp *</label>
                     <Input value={formCliente.whatsapp} placeholder="3001234567"
-                      onChange={e => setFormCliente(p => ({ ...p, whatsapp: e.target.value }))} /></div>
+                      onChange={e => setFormCliente(p => ({ ...p, whatsapp: e.target.value }))} maxLength={20} /></div>
                   <div><label className={LABEL}>Teléfono</label>
-                    <Input value={formCliente.telefono} onChange={e => setFormCliente(p => ({ ...p, telefono: e.target.value }))} /></div>
+                    <Input value={formCliente.telefono} onChange={e => setFormCliente(p => ({ ...p, telefono: e.target.value }))} maxLength={20} /></div>
                   <div><label className={LABEL}>Email</label>
                     <Input value={formCliente.email} type="email" onChange={e => setFormCliente(p => ({ ...p, email: e.target.value }))} /></div>
                   <div><label className={LABEL}>Ciudad</label>
@@ -925,7 +984,7 @@ export default function Registro() {
                     <div className={`${SUB} mb-3`}>Mascotas del cliente</div>
                     {mascotasCliente.map(m => (
                       <button key={m.id_mascota}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:border-[#3D5A27]/30 hover:bg-green-50 transition-all text-left mb-2"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:border-[#1A5CD8]/30 hover:bg-green-50 transition-all text-left mb-2"
                         onClick={() => setMascotaSeleccionada(m)}>
                         <div className="w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center text-lg flex-shrink-0">
                           {petEmoji(m.especies?.nombre)}
@@ -942,7 +1001,7 @@ export default function Registro() {
                   </div>
                 )}
                 <button
-                  className="w-full py-3 text-[12px] font-semibold text-[#3D5A27] border-2 border-dashed border-green-200 rounded-xl hover:bg-green-50 transition-all"
+                  className="w-full py-3 text-[12px] font-semibold text-[#1A5CD8] border-2 border-dashed border-green-200 rounded-xl hover:bg-green-50 transition-all"
                   onClick={() => setMascotaNueva(true)}>
                   + Registrar nueva mascota
                 </button>
@@ -1040,7 +1099,7 @@ export default function Registro() {
                 return (
                   <button key={p.id}
                     className={`p-4 border-2 rounded-xl text-left transition-all ${
-                      selected ? 'border-[#3D5A27] bg-green-50 shadow-sm' : 'border-gray-100 hover:border-[#3D5A27]/40 bg-white'
+                      selected ? 'border-[#1A5CD8] bg-green-50 shadow-sm' : 'border-gray-100 hover:border-[#1A5CD8]/40 bg-white'
                     }`}
                     onClick={() => { setPlanSeleccionado(p); setDesamparadoPrioridad(false) }}>
                     <div className="flex items-start justify-between gap-2">
@@ -1048,11 +1107,11 @@ export default function Registro() {
                         <div className="text-[13px] font-semibold text-gray-900">{p.nombre}</div>
                         <div className="text-[11px] text-gray-500 mt-0.5">{p.tipo_proceso?.replace(/_/g, ' ')}</div>
                       </div>
-                      {selected && <CheckCircle size={16} className="text-[#3D5A27] flex-shrink-0 mt-0.5" />}
+                      {selected && <CheckCircle size={16} className="text-[#1A5CD8] flex-shrink-0 mt-0.5" />}
                     </div>
                     <div className="mt-2">
                       {precio !== undefined ? (
-                        <span className="text-[15px] font-bold text-[#3D5A27]">{fmt(precio)}</span>
+                        <span className="text-[15px] font-bold text-[#1A5CD8]">{fmt(precio)}</span>
                       ) : pesoKg > 0 ? (
                         <span className="text-[11px] text-gray-400">Sin precio configurado</span>
                       ) : (
@@ -1069,7 +1128,7 @@ export default function Registro() {
               <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <input type="checkbox"
-                    className="mt-0.5 w-4 h-4 accent-[#3D5A27] flex-shrink-0"
+                    className="mt-0.5 w-4 h-4 accent-[#1A5CD8] flex-shrink-0"
                     checked={desamparadoPrioridad}
                     onChange={e => setDesamparadoPrioridad(e.target.checked)} />
                   <div>
@@ -1091,7 +1150,7 @@ export default function Registro() {
                     <button key={t.value}
                       className={`px-4 py-2 text-[12px] font-semibold rounded-lg border-2 transition-all ${
                         tipoAcomp === t.value
-                          ? 'border-[#3D5A27] bg-green-50 text-[#3D5A27]'
+                          ? 'border-[#1A5CD8] bg-green-50 text-[#1A5CD8]'
                           : 'border-gray-200 text-gray-600 hover:border-gray-300'
                       }`}
                       onClick={() => setTipoAcomp(t.value)}>{t.label}</button>
@@ -1105,7 +1164,7 @@ export default function Registro() {
               <div className={SUB}>Veterinaria / Aliado (opcional)</div>
               <div ref={aliadoRef} className="relative">
                 {aliadoSeleccionado ? (
-                  <div className="flex items-center gap-2 px-3 py-2 border border-[#3D5A27] rounded-lg bg-green-50">
+                  <div className="flex items-center gap-2 px-3 py-2 border border-[#1A5CD8] rounded-lg bg-green-50">
                     {aliadoSeleccionado.vip && <Star size={13} className="text-amber-500 flex-shrink-0" />}
                     <span className="text-[13px] font-medium text-gray-900 flex-1">{aliadoSeleccionado.nombre}</span>
                     {comisionPorcentaje > 0 && (
@@ -1182,10 +1241,10 @@ export default function Registro() {
                         <div>
                           <span className="text-[12px] text-gray-800">{r.nombre}</span>
                           {r.precio_base > 0 && (
-                            <span className="ml-2 text-[10px] text-[#3D5A27] font-semibold">{fmt(r.precio_base)}</span>
+                            <span className="ml-2 text-[10px] text-[#1A5CD8] font-semibold">{fmt(r.precio_base)}</span>
                           )}
                         </div>
-                        <span className="text-[11px] text-[#3D5A27] font-semibold flex-shrink-0 ml-2">+ Agregar</span>
+                        <span className="text-[11px] text-[#1A5CD8] font-semibold flex-shrink-0 ml-2">+ Agregar</span>
                       </button>
                     ))
                   )}
@@ -1204,7 +1263,7 @@ export default function Registro() {
                   {adicionales.map(a => (
                     <div key={a.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-[12px] text-gray-800 truncate">{a.nombre}</span>
-                      <span className="text-[12px] font-semibold text-[#3D5A27] w-20 text-right">{fmt(a.precio_base)}</span>
+                      <span className="text-[12px] font-semibold text-[#1A5CD8] w-20 text-right">{fmt(a.precio_base)}</span>
                       <Input type="number" min="1" className="w-16 text-center"
                         value={a.cantidad}
                         onChange={e => updateAdicionalCantidad(a.id, e.target.value)} />
@@ -1344,7 +1403,7 @@ export default function Registro() {
               <div ref={tecnicoRef} className="relative">
                 <label className={LABEL}>Técnico asignado</label>
                 {tecnicoSeleccionado ? (
-                  <div className="flex items-center gap-2 px-3 py-2 border border-[#3D5A27] rounded-lg bg-green-50">
+                  <div className="flex items-center gap-2 px-3 py-2 border border-[#1A5CD8] rounded-lg bg-green-50">
                     <Avatar nombre={tecnicoSeleccionado.nombre} apellido={tecnicoSeleccionado.apellido} size={6} />
                     <span className="text-[13px] font-medium text-gray-900 flex-1">{tecnicoSeleccionado.nombre} {tecnicoSeleccionado.apellido}</span>
                     <button className="text-gray-400 hover:text-red-500"
@@ -1418,7 +1477,7 @@ export default function Registro() {
                   )}
                   <div className="flex justify-between border-t border-gray-200 pt-1.5">
                     <span className="text-[13px] font-bold text-gray-900">Valor a cobrar</span>
-                    <span className="text-[16px] font-bold text-[#3D5A27]">{fmt(valorCobrado)}</span>
+                    <span className="text-[16px] font-bold text-[#1A5CD8]">{fmt(valorCobrado)}</span>
                   </div>
                 </div>
 
@@ -1467,7 +1526,7 @@ export default function Registro() {
           <div className={CARD}>
             <div className="text-lg font-bold text-gray-900 mb-5">Confirmar servicio</div>
             <div className={`${SELECTED_CARD} mb-5`}>
-              <div className="font-bold text-gray-900 mb-4 text-[13px] uppercase tracking-wider text-[#3D5A27]">Resumen</div>
+              <div className="font-bold text-gray-900 mb-4 text-[13px] uppercase tracking-wider text-[#1A5CD8]">Resumen</div>
               <div className="space-y-2.5 text-[13px]">
                 <div className="flex justify-between gap-3">
                   <span className="text-gray-500">Cliente</span>
@@ -1535,7 +1594,7 @@ export default function Registro() {
                   )}
                   <div className="flex justify-between gap-3">
                     <span className="font-bold text-gray-700">Valor a cobrar</span>
-                    <span className="font-bold text-[#3D5A27] text-[16px]">{fmt(valorCobrado)}</span>
+                    <span className="font-bold text-[#1A5CD8] text-[16px]">{fmt(valorCobrado)}</span>
                   </div>
                   {formRecogida.valor_pagado && parseFloat(formRecogida.valor_pagado) > 0 && (
                     <div className="flex justify-between gap-3">

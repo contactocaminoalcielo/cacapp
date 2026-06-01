@@ -105,7 +105,7 @@ export default function Topbar({ actions }) {
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
                 <span className="text-[13px] font-bold text-gray-900">Notificaciones</span>
                 {notifs.length > 0 && (
-                  <button onClick={leerTodas} className="text-[11px] text-[#3D5A27] font-semibold hover:underline">
+                  <button onClick={leerTodas} className="text-[11px] text-[#1A5CD8] font-semibold hover:underline">
                     Marcar todas leídas
                   </button>
                 )}
@@ -126,7 +126,7 @@ export default function Topbar({ actions }) {
                         <div className="flex-1 min-w-0">
                           <p className="text-[12px] font-semibold text-gray-900 leading-tight">{n.titulo}</p>
                           {n.mensaje && <p className="text-[11px] text-gray-500 mt-0.5 leading-tight">{n.mensaje}</p>}
-                          {mascota && <p className="text-[10px] text-[#3D5A27] font-semibold mt-1">🐾 {mascota}</p>}
+                          {mascota && <p className="text-[10px] text-[#1A5CD8] font-semibold mt-1">🐾 {mascota}</p>}
                           <p className="text-[10px] text-gray-400 mt-0.5">
                             {new Date(n.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                           </p>

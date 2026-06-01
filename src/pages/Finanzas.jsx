@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
-import { fmt } from '@/lib/utils'
+import { fmt, parsearErrorDB } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
@@ -15,7 +16,7 @@ function BadgeEstadoPago({ estado }) {
     PENDIENTE: 'bg-[#FFF3DC] text-[#9A5500]',
     PARCIAL:   'bg-[#EFF6FF] text-[#1E40AF]',
     COMPLETO:  'bg-[#F0FDF4] text-[#166534]',
-    CORTESIA:  'bg-[#F0F7EC] text-[#3D5A27]',
+    CORTESIA:  'bg-[#F0F7EC] text-[#1A5CD8]',
   }
   const cls = MAP[estado] || 'bg-gray-100 text-gray-600'
   return (
@@ -39,6 +40,7 @@ function BadgeCanal({ canal }) {
 // ── Componente principal ─────────────────────────────────────────────────────
 
 export default function Finanzas() {
+  const { confirm, alert: showAlert } = useConfirm()
   // ── State principal ─────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true)
   const [servicios, setServicios] = useState([])   // array enriquecido
@@ -228,10 +230,10 @@ export default function Finanzas() {
     if (!grupo) return
     const pendientes = grupo.servicios.filter(s => !s.comision_descontada)
     if (!pendientes.length) {
-      alert('No hay comisiones pendientes para este aliado.')
+      await showAlert('No hay comisiones pendientes para este aliado.', { title: 'Aviso', variant: 'warning' })
       return
     }
-    if (!window.confirm(`¿Liquidar ${pendientes.length} comisión(es) pendiente(s) de ${grupo.aliado.nombre}?`)) return
+    if (!await confirm(`¿Liquidar ${pendientes.length} comisión(es) pendiente(s) de ${grupo.aliado.nombre}?`, { title: 'Liquidar comisiones', variant: 'warning', confirmLabel: 'Liquidar' })) return
 
     setLiquidandoAliado(aliadoId)
     try {
@@ -264,7 +266,7 @@ export default function Finanzas() {
       await cargar()
     } catch (err) {
       console.error('[Finanzas] Error liquidando aliado:', err)
-      alert('Error al liquidar: ' + (err.message || err))
+      await showAlert(parsearErrorDB(err), { title: 'Error al liquidar' })
     } finally {
       setLiquidandoAliado(null)
     }
@@ -354,7 +356,7 @@ export default function Finanzas() {
       <Topbar actions={
         <button
           onClick={cargar}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border border-[rgba(30,80,40,0.15)] text-[#3D5A27] hover:bg-[#F0F7EC] transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border border-[rgba(30,80,40,0.15)] text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors"
         >
           <RefreshCw size={13} /> Actualizar
         </button>
@@ -373,11 +375,11 @@ export default function Finanzas() {
             {/* ── KPIs ─────────────────────────────────────────────────── */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <KpiCard
-                icon={<DollarSign size={18} className="text-[#3D5A27]" />}
+                icon={<DollarSign size={18} className="text-[#1A5CD8]" />}
                 label="Total facturado"
                 value={fmt(kpis.totalFacturado)}
                 sub={`${servicios.length} servicio${servicios.length !== 1 ? 's' : ''}`}
-                color="#3D5A27"
+                color="#1A5CD8"
               />
               <KpiCard
                 icon={<TrendingUp size={18} className="text-[#16a34a]" />}
@@ -419,7 +421,7 @@ export default function Finanzas() {
                     onClick={() => setTab(t.key)}
                     className={`px-5 py-3 text-[13px] font-semibold transition-colors border-b-2 ${
                       tab === t.key
-                        ? 'border-[#3D5A27] text-[#3D5A27]'
+                        ? 'border-[#1A5CD8] text-[#1A5CD8]'
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                     }`}
                   >
@@ -454,8 +456,8 @@ export default function Finanzas() {
                           onClick={() => setFiltroAliado(null)}
                           className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[12px] font-semibold transition-all ${
                             !filtroAliado
-                              ? 'bg-[#3D5A27] text-white border-[#3D5A27]'
-                              : 'bg-white text-gray-700 border-gray-200 hover:border-[#3D5A27] hover:text-[#3D5A27]'
+                              ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]'
+                              : 'bg-white text-gray-700 border-gray-200 hover:border-[#1A5CD8] hover:text-[#1A5CD8]'
                           }`}
                         >
                           <Building2 size={13} />
@@ -471,8 +473,8 @@ export default function Finanzas() {
                             onClick={() => setFiltroAliado(filtroAliado === a.id ? null : a.id)}
                             className={`flex flex-col items-start px-3 py-2 rounded-xl border text-left transition-all min-w-[140px] ${
                               filtroAliado === a.id
-                                ? 'bg-[#3D5A27] text-white border-[#3D5A27]'
-                                : 'bg-white text-gray-700 border-gray-200 hover:border-[#3D5A27] hover:shadow-sm'
+                                ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-[#1A5CD8] hover:shadow-sm'
                             }`}
                           >
                             <span className={`text-[11px] font-bold truncate max-w-[160px] ${filtroAliado === a.id ? 'text-white' : 'text-gray-800'}`}>
@@ -500,7 +502,7 @@ export default function Finanzas() {
                         onClick={() => setFiltroCartera(f)}
                         className={`px-3 py-1.5 rounded-xl text-[12px] font-semibold border transition-colors ${
                           filtroCartera === f
-                            ? 'bg-[#3D5A27] text-white border-[#3D5A27]'
+                            ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]'
                             : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
                         }`}
                       >
@@ -572,7 +574,7 @@ export default function Finanzas() {
                               <td className="py-3">
                                 <button
                                   onClick={() => abrirPagoModal(s)}
-                                  className="px-3 py-1.5 bg-[#3D5A27] hover:bg-[#2D4A1E] text-white text-[11px] font-semibold rounded-xl transition-colors whitespace-nowrap"
+                                  className="px-3 py-1.5 bg-[#1A5CD8] hover:bg-[#1550C0] text-white text-[11px] font-semibold rounded-xl transition-colors whitespace-nowrap"
                                 >
                                   Registrar pago
                                 </button>
@@ -637,7 +639,7 @@ export default function Finanzas() {
                                 <button
                                   onClick={e => { e.stopPropagation(); liquidarAliado(aliado.id_aliado) }}
                                   disabled={estaLiquidando}
-                                  className="px-3 py-1.5 bg-[#3D5A27] hover:bg-[#2D4A1E] text-white text-[11px] font-semibold rounded-xl transition-colors disabled:opacity-60 whitespace-nowrap"
+                                  className="px-3 py-1.5 bg-[#1A5CD8] hover:bg-[#1550C0] text-white text-[11px] font-semibold rounded-xl transition-colors disabled:opacity-60 whitespace-nowrap"
                                 >
                                   {estaLiquidando ? 'Liquidando…' : `Liquidar pendientes (${pendientes.length})`}
                                 </button>
@@ -762,7 +764,7 @@ export default function Finanzas() {
             {/* Header modal */}
             <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
               <div className="flex items-center gap-2">
-                <CreditCard size={17} className="text-[#3D5A27]" />
+                <CreditCard size={17} className="text-[#1A5CD8]" />
                 <span className="text-[14px] font-bold text-gray-900">Registrar pago</span>
               </div>
               <button
@@ -821,7 +823,7 @@ export default function Finanzas() {
                       step={1000}
                       value={valorAbono}
                       onChange={e => { setValorAbono(e.target.value); setPagoError('') }}
-                      className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#3D5A27]/20 focus:border-[#3D5A27] transition-all"
+                      className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] transition-all"
                       style={{ borderColor: 'rgba(30,80,40,0.2)' }}
                     />
                   </div>
@@ -835,7 +837,7 @@ export default function Finanzas() {
                   <select
                     value={metodoPago}
                     onChange={e => setMetodoPago(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#3D5A27]/20 focus:border-[#3D5A27] transition-all bg-white"
+                    className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] transition-all bg-white"
                     style={{ borderColor: 'rgba(30,80,40,0.2)' }}
                   >
                     {['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO'].map(m => (
@@ -853,7 +855,7 @@ export default function Finanzas() {
                     value={pagoNotas}
                     onChange={e => setPagoNotas(e.target.value)}
                     placeholder="Observaciones del pago…"
-                    className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#3D5A27]/20 focus:border-[#3D5A27] transition-all resize-none"
+                    className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] transition-all resize-none"
                     style={{ borderColor: 'rgba(30,80,40,0.2)' }}
                   />
                 </div>
@@ -880,7 +882,7 @@ export default function Finanzas() {
               <button
                 onClick={guardarPago}
                 disabled={pagoSaving || !valorAbono || parseFloat(valorAbono) <= 0}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#3D5A27] hover:bg-[#2D4A1E] text-white rounded-xl text-[13px] font-semibold transition-colors disabled:opacity-60"
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold transition-colors disabled:opacity-60"
               >
                 {pagoSaving ? (
                   <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Guardando…</>

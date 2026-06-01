@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Modal } from '@/components/ui/dialog'
@@ -6,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { db } from '@/lib/supabase'
-import { petEmoji } from '@/lib/utils'
+import { petEmoji, parsearErrorDB } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
@@ -77,6 +78,7 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
 
 // ── MODAL GESTIÓN ÍTEM ────────────────────────────────────────────────────────
 function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
+  const { alert: showAlert } = useConfirm()
   const rec = item.recordatorios
   const soloN = rec?.solo_nombre
   const reqImg = rec?.requiere_imagen && !soloN
@@ -101,7 +103,7 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
         ? (item.fecha_fin_prod || new Date().toISOString().slice(0, 10)) : null,
     }
     const { error } = await db.from('servicio_recordatorios').update(patch).eq('id', item.id)
-    if (error) { setSaving(false); alert('Error: ' + error.message); return }
+    if (error) { setSaving(false); await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
 
     // ── Recalcular estado del servicio dinámicamente ─────────────────────────
     const svcId = item.servicio_id
@@ -400,7 +402,7 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                           </div>
                           {asig && (
                             <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
-                              style={{ background: '#2D7A45' }}>
+                              style={{ background: '#1A5CD8' }}>
                               {initials(asig)}
                             </div>
                           )}
@@ -480,7 +482,7 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
           <div key={persona.id} className="bg-surface border rounded-2xl p-4 shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white"
-                style={{ background: '#2D7A45' }}>
+                style={{ background: '#1A5CD8' }}>
                 {initials(persona)}
               </div>
               <div className="flex-1">
@@ -507,6 +509,7 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
 
 // ── MÓDULO PRINCIPAL ──────────────────────────────────────────────────────────
 export default function Produccion() {
+  const { alert: showAlert } = useConfirm()
   const [recordatorios, setRecordatorios] = useState([])
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])

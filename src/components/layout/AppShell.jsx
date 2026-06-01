@@ -65,7 +65,7 @@ function ProfileMenu({ personalData, logout }) {
                 {rol && (
                   <div
                     className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                    style={{ background: '#F0F7EC', color: '#3D5A27' }}
+                    style={{ background: '#F0F7EC', color: '#1A5CD8' }}
                   >
                     {rol}
                   </div>

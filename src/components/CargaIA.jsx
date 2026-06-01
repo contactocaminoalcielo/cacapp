@@ -94,7 +94,7 @@ function TabVoz({ onTranscript }) {
           onClick={toggleGrabar}
           whileTap={{ scale: 0.93 }}
           className="w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all"
-          style={{ background: grabando ? '#DC2626' : '#3D5A27' }}
+          style={{ background: grabando ? '#DC2626' : '#1A5CD8' }}
           animate={grabando ? { scale: [1, 1.06, 1] } : { scale: 1 }}
           transition={grabando ? { repeat: Infinity, duration: 1.2 } : {}}
         >
@@ -140,7 +140,7 @@ function TabVoz({ onTranscript }) {
         <button
           onClick={() => onTranscript(transcript)}
           className="w-full h-11 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-2"
-          style={{ background: '#3D5A27' }}
+          style={{ background: '#1A5CD8' }}
         >
           <Sparkles size={14} /> Extraer datos del dictado
         </button>
@@ -249,8 +249,8 @@ export default function CargaIA({ onDatos, onClose }) {
               onClick={() => { setTab(key); setError('') }}
               className="flex-1 flex items-center justify-center gap-1.5 py-3 text-[12px] font-semibold transition-all"
               style={{
-                color:        tab === key ? '#3D5A27' : '#9CA3AF',
-                borderBottom: tab === key ? '2px solid #3D5A27' : '2px solid transparent',
+                color:        tab === key ? '#1A5CD8' : '#9CA3AF',
+                borderBottom: tab === key ? '2px solid #1A5CD8' : '2px solid transparent',
               }}
             >
               <Icon size={13} />{label}
@@ -277,11 +277,11 @@ export default function CargaIA({ onDatos, onClose }) {
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => { fileRef.current.removeAttribute('capture'); fileRef.current?.click() }}
-                      className="border-2 border-dashed border-gray-200 rounded-xl py-7 flex flex-col items-center gap-2 text-gray-400 hover:border-[#3D5A27] hover:text-[#3D5A27] transition-colors">
+                      className="border-2 border-dashed border-gray-200 rounded-xl py-7 flex flex-col items-center gap-2 text-gray-400 hover:border-[#1A5CD8] hover:text-[#1A5CD8] transition-colors">
                       <Upload size={22} /><span className="text-xs font-medium">Galería</span>
                     </button>
                     <button onClick={() => { fileRef.current.setAttribute('capture', 'environment'); fileRef.current?.click() }}
-                      className="border-2 border-dashed border-gray-200 rounded-xl py-7 flex flex-col items-center gap-2 text-gray-400 hover:border-[#3D5A27] hover:text-[#3D5A27] transition-colors">
+                      className="border-2 border-dashed border-gray-200 rounded-xl py-7 flex flex-col items-center gap-2 text-gray-400 hover:border-[#1A5CD8] hover:text-[#1A5CD8] transition-colors">
                       <Camera size={22} /><span className="text-xs font-medium">Cámara</span>
                     </button>
                   </div>
@@ -304,7 +304,7 @@ export default function CargaIA({ onDatos, onClose }) {
                   onChange={e => { setTexto(e.target.value); setError('') }}
                   placeholder="Ej: Buenas, soy del veterinario X. La paciente es Luna, perrita de 3 años, 5kg, la dueña es María García, cel 3001234567..."
                   rows={6}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[13px] resize-none focus:outline-none focus:border-[#3D5A27] transition-colors"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-[13px] resize-none focus:outline-none focus:border-[#1A5CD8] transition-colors"
                 />
               </motion.div>
             )}
@@ -324,7 +324,7 @@ export default function CargaIA({ onDatos, onClose }) {
               disabled={loading || !puedeEnviar || exito}
               whileTap={{ scale: 0.97 }}
               className="w-full h-12 rounded-xl font-bold text-[14px] text-white flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-              style={{ background: exito ? '#16A34A' : '#3D5A27' }}
+              style={{ background: exito ? '#16A34A' : '#1A5CD8' }}
             >
               {exito ? (
                 <><CheckCircle size={16} /> ¡Datos extraídos!</>

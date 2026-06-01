@@ -209,7 +209,7 @@ function DashboardGeneral({ servicios, alertas, npsPromedio, navigate }) {
           {/* Estado del tablero */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm flex flex-col">
             <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
-              <TrendingUp size={15} className="text-[#3D5A27] flex-shrink-0" />
+              <TrendingUp size={15} className="text-[#1A5CD8] flex-shrink-0" />
               <span className="text-[14px] font-semibold text-gray-900">Estado del tablero</span>
             </div>
             <div className="flex-1 p-5 space-y-3">
@@ -361,7 +361,7 @@ function AlertasCard({ alertas, navigate, destino }) {
               </button>
             ))}
             {alertas.length > 7 && (
-              <button className="w-full text-center text-[12px] text-gray-400 hover:text-[#3D5A27] py-2 transition-colors"
+              <button className="w-full text-center text-[12px] text-gray-400 hover:text-[#1A5CD8] py-2 transition-colors"
                 onClick={() => navigate(destino)}>
                 Ver {alertas.length - 7} más →
               </button>
@@ -398,7 +398,7 @@ function TablaRecientes({ servicios, navigate, destino }) {
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
         <span className="text-[14px] font-semibold text-gray-900">Actividad reciente</span>
-        <button className="text-[12px] text-gray-400 hover:text-[#3D5A27] font-medium transition-colors"
+        <button className="text-[12px] text-gray-400 hover:text-[#1A5CD8] font-medium transition-colors"
           onClick={() => navigate(destino)}>
           Ver todo →
         </button>

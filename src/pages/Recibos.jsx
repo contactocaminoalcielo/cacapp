@@ -72,7 +72,7 @@ function buildReciboData(svc, pesoConfirmado) {
 
 // ── Preview HTML del recibo ───────────────────────────────────────────────────
 function PreviewRecibo({ r }) {
-  const G = '#1F5A32'
+  const G = '#0B1D4F'
   const s = (v) => v || '—'
 
   return (
@@ -147,7 +147,7 @@ function PreviewRecibo({ r }) {
 function Section({ title, children }) {
   return (
     <div style={{ marginTop: 14 }}>
-      <div style={{ background: '#E8F3EB', padding: '4px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#1F5A32', letterSpacing: 0.5, marginBottom: 8 }}>
+      <div style={{ background: '#E8F3EB', padding: '4px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#0B1D4F', letterSpacing: 0.5, marginBottom: 8 }}>
         {title}
       </div>
       {children}
@@ -170,7 +170,7 @@ function Row2({ a, b }) {
     </div>
   )
 }
-function ValBox({ label, value, color = '#1F5A32' }) {
+function ValBox({ label, value, color = '#0B1D4F' }) {
   return (
     <div style={{ flex: 1, border: '1.5px solid #C4A87A', borderRadius: 8, padding: '6px 10px', textAlign: 'center', background: '#FFFDF8' }}>
       <div style={{ fontSize: 9, fontWeight: 700, color: '#8C6C3C', textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
@@ -191,7 +191,7 @@ function ModalPreview({ svc, pesoConfirmado, onClose, onDescargar, generando }) 
         {/* Barra superior */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            <FileText size={16} className="text-[#1F5A32]" />
+            <FileText size={16} className="text-[#0B1D4F]" />
             <span className="font-bold text-gray-900 text-[15px]">Previsualización del recibo</span>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
@@ -212,7 +212,7 @@ function ModalPreview({ svc, pesoConfirmado, onClose, onDescargar, generando }) 
           </button>
           <button onClick={onDescargar} disabled={generando}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-bold text-white transition-all hover:opacity-90 disabled:opacity-60"
-            style={{ background: '#1F5A32' }}>
+            style={{ background: '#0B1D4F' }}>
             {generando
               ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               : <Download size={14} />}
