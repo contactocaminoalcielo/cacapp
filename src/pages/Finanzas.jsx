@@ -6,7 +6,7 @@ import { fmt, parsearErrorDB } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
-  Banknote, Building2, Receipt, User2,
+  Banknote, Building2, Receipt, User2, Tag,
 } from 'lucide-react'
 
 // ── Helpers de badge ─────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export default function Finanzas() {
       // 1. Servicios activos (sin cancelados)
       const { data: svcs, error: errSvcs } = await db
         .from('servicios')
-        .select('id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id')
+        .select('id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, descuento_adicional, descuento_adicional_motivo, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id')
         .not('estado', 'eq', 'CANCELADO')
         .order('fecha_ingreso', { ascending: false })
 
@@ -189,7 +189,8 @@ export default function Finanzas() {
     const comisionesAliado = servicios
       .filter(s => s.canal_entrada === 'ALIADO' && !s.comision_descontada && (s.comision_aliado || 0) > 0)
       .reduce((a, s) => a + (s.comision_aliado || 0), 0)
-    return { totalFacturado, totalRecaudado, porCobrar, comisionesAliado }
+    const descuentosAdicionales = servicios.reduce((a, s) => a + (s.descuento_adicional || 0), 0)
+    return { totalFacturado, totalRecaudado, porCobrar, comisionesAliado, descuentosAdicionales }
   }, [servicios])
 
   const carteraSvcs = useMemo(() => {
@@ -434,6 +435,15 @@ export default function Finanzas() {
                 sub="Pendientes de descontar"
                 color="#d97706"
               />
+              {kpis.descuentosAdicionales > 0 && (
+                <KpiCard
+                  icon={<Tag size={18} className="text-[#ea580c]" />}
+                  label="Descuentos adicionales"
+                  value={fmt(kpis.descuentosAdicionales)}
+                  sub="Aplicados en el período"
+                  color="#ea580c"
+                />
+              )}
             </div>
 
             {/* ── Tabs ─────────────────────────────────────────────────── */}
@@ -598,7 +608,14 @@ export default function Finanzas() {
                                 )}
                               </td>
                               <td className="py-3 pr-4 text-gray-600 text-[12px]">{nombrePlan(s)}</td>
-                              <td className="py-3 pr-4 font-semibold text-gray-900 tabular-nums">{fmt(s.valor_total)}</td>
+                              <td className="py-3 pr-4 tabular-nums">
+                                <span className="font-semibold text-gray-900">{fmt(s.valor_total)}</span>
+                                {s.descuento_adicional > 0 && (
+                                  <div className="text-[10px] text-orange-600 font-medium leading-tight mt-0.5" title={s.descuento_adicional_motivo || ''}>
+                                    - {fmt(s.descuento_adicional)} desc.
+                                  </div>
+                                )}
+                              </td>
                               <td className="py-3 pr-4 text-[#16a34a] font-semibold tabular-nums">{fmt(s.valor_pagado)}</td>
                               <td className="py-3 pr-4 text-[#DC2626] font-bold tabular-nums">{fmt(s.saldo)}</td>
                               <td className="py-3 pr-4"><BadgeEstadoPago estado={s.estado_pago} /></td>

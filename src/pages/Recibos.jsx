@@ -62,11 +62,13 @@ function buildReciboData(svc, pesoConfirmado) {
     telefono:       cliente?.telefono || cliente?.whatsapp || '',
     direccion:      svc.direccion_recogida || '',
     servicio:       svc.planes?.nombre || '',
-    valor_total:    svc.valor_total  || 0,
-    valor_pagado:   svc.valor_pagado || 0,
-    metodo_pago:    svc.metodo_pago  || '',
-    tecnico:        svc.tecnico ? `${svc.tecnico.nombre} ${svc.tecnico.apellido}` : '',
-    estado_pago:    svc.estado_pago,
+    valor_total:              svc.valor_total  || 0,
+    valor_pagado:             svc.valor_pagado || 0,
+    metodo_pago:              svc.metodo_pago  || '',
+    tecnico:                  svc.tecnico ? `${svc.tecnico.nombre} ${svc.tecnico.apellido}` : '',
+    estado_pago:              svc.estado_pago,
+    descuento_adicional:      svc.descuento_adicional || 0,
+    descuento_adicional_motivo: svc.descuento_adicional_motivo || '',
   }
 }
 
@@ -102,13 +104,21 @@ function PreviewRecibo({ r }) {
         {/* Datos propietario */}
         <Section title="DATOS DEL PROPIETARIO">
           <RowFull label="Nombre" value={s(r.propietario)} />
-          <Row2 a={['Correo', s(r.email)]} b={['Teléfono', s(r.telefono)]} />
+          <RowFull label="Teléfono" value={s(r.telefono)} />
           <RowFull label="Dirección de recogida" value={s(r.direccion)} />
         </Section>
 
         {/* Servicio y pago */}
         <Section title="SERVICIO Y PAGO">
           <RowFull label="Plan / Servicio" value={s(r.servicio)} />
+          {r.descuento_adicional > 0 && (
+            <div style={{ margin: '6px 0', padding: '5px 8px', background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#92400E' }}>
+                Descuento{r.descuento_adicional_motivo ? `: ${r.descuento_adicional_motivo}` : ' adicional'}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#C2410C' }}>- {fmt(r.descuento_adicional)}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
             <ValBox label="Valor del servicio" value={fmt(r.valor_total)} />
             <ValBox label="Total recibido"     value={fmt(r.valor_pagado)} color="#1D8A55" />
@@ -285,8 +295,7 @@ async function generarPDF(svc, pesoConfirmado) {
   const yP = y
   y = Math.max(field('Nombre completo', r.propietario, M, yP, CW), yP + 10)
   const yP2 = y
-  field('Correo electrónico', r.email, M, yP2)
-  field('Teléfono', r.telefono, M + CW / 2, yP2)
+  field('Teléfono', r.telefono, M, yP2)
   y = yP2 + 12
   y = Math.max(field('Dirección de recogida', r.direccion, M, y, CW), y + 10)
   y = hr(y)
@@ -294,6 +303,16 @@ async function generarPDF(svc, pesoConfirmado) {
   // Servicio
   y = sec('SERVICIO CONTRATADO', y)
   y = Math.max(field('Plan / Servicio', r.servicio, M, y, CW), y + 10)
+  if (r.descuento_adicional > 0) {
+    const label = `Descuento${r.descuento_adicional_motivo ? ': ' + r.descuento_adicional_motivo : ' adicional'}`
+    pdf.setFillColor(255, 247, 237); pdf.setDrawColor(253, 215, 170); pdf.setLineWidth(0.3)
+    pdf.rect(M, y, CW, 8, 'FD')
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(146, 64, 14)
+    t(label, M + 3, y + 5.2)
+    pdf.setFont('helvetica', 'bold'); pdf.setTextColor(194, 65, 12)
+    t(`- ${fmt(r.descuento_adicional)}`, W - M, y + 5.2, { align: 'right' })
+    y += 10
+  }
   const bw = (CW - 4) / 2
   const drawBox = (label, value, x, yy, col) => {
     pdf.setDrawColor(196, 168, 122); pdf.setLineWidth(0.4)
@@ -376,6 +395,7 @@ export default function Recibos() {
       const [{ data: svcs, error: e1 }, { data: per }] = await Promise.all([
         db.from('servicios').select(`
           id, valor_total, valor_pagado, estado_pago, metodo_pago,
+          descuento_adicional, descuento_adicional_motivo,
           fecha_ingreso, direccion_recogida, ciudad_recogida,
           mascotas:mascota_id(
             nombre, peso_kg,

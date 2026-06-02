@@ -10,7 +10,6 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert } from '@/components/ui/alert'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
-import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import {
@@ -235,6 +234,9 @@ export default function Registro() {
   })
   const [vehiculoTipo, setVehiculoTipo]             = useState(borrador?.vehiculoTipo ?? 'MOTO')
   const [autoFilledRecogida, setAutoFilledRecogida] = useState(false)
+  const [descuentoAdicional,       setDescuentoAdicional]       = useState(borrador?.descuentoAdicional ?? 0)
+  const [descuentoAdicionalMotivo, setDescuentoAdicionalMotivo] = useState(borrador?.descuentoAdicionalMotivo ?? '')
+  const [recargoNocturno,          setRecargoNocturno]          = useState(borrador?.recargoNocturno ?? 0)
   const [tecnicoBusqueda, setTecnicoBusqueda]       = useState('')
   const [tecnicoSeleccionado, setTecnicoSeleccionado] = useState(borrador?.tecnicoSeleccionado ?? null)
   const [tecnicoOpen, setTecnicoOpen]               = useState(false)
@@ -258,6 +260,7 @@ export default function Registro() {
       planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
       aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
       formRecogida, vehiculoTipo, tecnicoSeleccionado,
+      descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno,
     })
   }, [
     paso, formCliente, clienteSeleccionado, clienteNuevo,
@@ -265,6 +268,7 @@ export default function Registro() {
     planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
     aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
     formRecogida, vehiculoTipo, tecnicoSeleccionado, success,
+    descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno,
   ])
 
   // ── computed ──
@@ -289,7 +293,10 @@ export default function Registro() {
     formRecogida.tipo_lugar === 'CLINICA_ALIADA' && comisionCalculada > 0
   const comisionMonto      = aplicaDescuento ? comisionCalculada : 0
   const recargoPrioridad  = planSeleccionado?.codigo === 'DESAMPARADO' && desamparadoPrioridad ? 16000 : 0
-  const valorCobrado      = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad
+  const descuentoAdicionalNum = Math.max(0, parseFloat(descuentoAdicional) || 0)
+  const recargoNocturnoNum    = Math.max(0, parseFloat(recargoNocturno) || 0)
+  const esHorarioNocturno     = new Date().getHours() >= 21
+  const valorCobrado          = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad + recargoNocturnoNum - descuentoAdicionalNum
 
   // ── cargar catálogos ──
   useEffect(() => { cargarCatalogos() }, [])
@@ -724,6 +731,8 @@ export default function Registro() {
         notasFinales = `Hora aprox. recogida: ${formRecogida.hora_aproximada}. ${notasFinales}`.trim()
       if (recargoCiudad > 0)
         notasFinales = `${notasFinales} Recargo transporte ${vehiculoTipo.toLowerCase()} ${formRecogida.ciudad_recogida}: ${fmt(recargoCiudad)}.`.trim()
+      if (recargoNocturnoNum > 0)
+        notasFinales = `${notasFinales} Recargo nocturno: ${fmt(recargoNocturnoNum)}.`.trim()
 
       const { data: svcData, error: svcErr } = await db.from('servicios').insert({
         mascota_id:           mascotaId,
@@ -745,8 +754,10 @@ export default function Registro() {
         tecnico_id:           tecnicoSeleccionado?.id || null,
         notas:                notasFinales || null,
         tipo_cliente:         clienteSeleccionado?.tipo_cliente || formCliente.tipo_cliente || 'NORMAL',
-        comision_aliado:      comisionCalculada || 0,
-        comision_descontada:  aplicaDescuento,
+        comision_aliado:             comisionCalculada || 0,
+        comision_descontada:         aplicaDescuento,
+        descuento_adicional:         descuentoAdicionalNum,
+        descuento_adicional_motivo:  descuentoAdicionalMotivo.trim() || null,
       }).select('id')
       if (svcErr) throw svcErr
 
@@ -758,52 +769,6 @@ export default function Registro() {
           aliado_id:          aliadoSeleccionado?.id_aliado || null,
           tecnico_id:         tecnicoSeleccionado?.id || null,
         }).eq('servicio_id', svcData[0].id)
-      }
-
-      // ── Notificación WhatsApp al técnico (no-bloqueante) ──────────────────
-      if (tecnicoSeleccionado?.whatsapp) {
-        const mascotaNombre  = mascotaNueva ? formMascota.nombre : (mascotaSeleccionada?.nombre || '')
-        const mascotaEspecie = mascotaNueva
-          ? (especies.find(e => String(e.id) === String(formMascota.especie_id))?.nombre || '')
-          : (mascotaSeleccionada?.especies?.nombre || '')
-        const clienteNombre  = clienteNuevo
-          ? `${formCliente.nombre} ${formCliente.apellido}`.trim()
-          : `${clienteSeleccionado?.nombre || ''} ${clienteSeleccionado?.apellido || ''}`.trim()
-        const clienteTel = clienteNuevo
-          ? (formCliente.whatsapp || formCliente.telefono || '')
-          : (clienteSeleccionado?.whatsapp || clienteSeleccionado?.telefono || '')
-        const direccion     = formRecogida.direccion_recogida || ''
-        const ciudad        = formRecogida.ciudad_recogida !== 'Bogotá' ? ` (${formRecogida.ciudad_recogida})` : ''
-        const barrio        = formRecogida.barrio_recogida ? ` · ${formRecogida.barrio_recogida}` : ''
-        const horaAprox     = formRecogida.hora_aproximada ? `\n⏰ Hora aprox: *${formRecogida.hora_aproximada}*` : ''
-        const veterinaria   = aliadoSeleccionado ? `\n🏥 Veterinaria: *${aliadoSeleccionado.nombre}*` : ''
-        const planNombre    = planSeleccionado?.nombre || ''
-        const contacto      = clienteTel ? `\n📞 Contacto: ${clienteTel}` : ''
-        const indicaciones  = formRecogida.notas ? `\n📋 Indicaciones: ${formRecogida.notas}` : ''
-
-        const mensaje = [
-          `🐾 *Nueva recogida asignada — Camino al Cielo*`,
-          ``,
-          `Se te asignó un nuevo servicio:`,
-          ``,
-          `🐾 Mascota: *${mascotaNombre}*${mascotaEspecie ? ` (${mascotaEspecie})` : ''}`,
-          `👤 Propietario: ${clienteNombre}${contacto}`,
-          `📍 Dirección: ${direccion}${barrio}${ciudad}`,
-          `📦 Plan: ${planNombre}`,
-          horaAprox,
-          veterinaria,
-          indicaciones,
-          ``,
-          `Ingresa a la app para confirmar y ver los detalles. ¡Mucho éxito! 🙏`,
-        ].filter(l => l !== undefined && l !== null && l !== false).join('\n')
-
-        // Envío no-bloqueante: un fallo de WA no impide guardar el servicio
-        enviarWhatsApp({
-          telefono:   tecnicoSeleccionado.whatsapp,
-          nombre:     `${tecnicoSeleccionado.nombre} ${tecnicoSeleccionado.apellido || ''}`.trim(),
-          mensaje,
-          fromNumber: LINEAS_WHATSAPP[0]?.numero,
-        }).catch(() => { /* silencioso: WA falla pero el servicio ya está guardado */ })
       }
 
       limpiarBorrador()
@@ -835,15 +800,8 @@ export default function Registro() {
           <div className="text-2xl font-bold text-gray-900 mb-1">Servicio registrado</div>
           <div className="text-sm text-gray-500 mb-3">Redirigiendo al tablero...</div>
           {tecnicoSeleccionado && (
-            <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-semibold ${
-              tecnicoSeleccionado.whatsapp
-                ? 'bg-green-100 text-green-800'
-                : 'bg-gray-100 text-gray-500'
-            }`}>
-              <MessageSquare size={13} />
-              {tecnicoSeleccionado.whatsapp
-                ? `✅ Notificación WA enviada a ${tecnicoSeleccionado.nombre}`
-                : `⚠️ ${tecnicoSeleccionado.nombre} no tiene WhatsApp registrado`}
+            <div className="text-[12px] text-gray-500">
+              Técnico asignado: <span className="font-semibold text-gray-700">{tecnicoSeleccionado.nombre}</span>
             </div>
           )}
         </div>
@@ -1362,6 +1320,28 @@ export default function Registro() {
               </div>
             )}
 
+            {(esHorarioNocturno || recargoNocturnoNum > 0) && (
+              <div className="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-3.5">
+                <div className="flex items-start gap-2 mb-2.5">
+                  <Clock size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-[12px] font-bold text-amber-800">Servicio en horario nocturno</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Es después de las 9:00 PM — aplica recargo nocturno. Ingresa el valor acordado.
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <label className={LABEL}>Valor recargo nocturno ($)</label>
+                  <Input
+                    type="number" min="0" placeholder="0"
+                    value={recargoNocturno || ''}
+                    onChange={e => setRecargoNocturno(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="space-y-5">
               {/* Tipo lugar */}
               <div>
@@ -1554,9 +1534,42 @@ export default function Registro() {
                       <span className="font-medium text-blue-600">+ {fmt(recargoCiudad)}</span>
                     </div>
                   )}
+                  {recargoNocturnoNum > 0 && (
+                    <div className="flex justify-between text-[12px]">
+                      <span className="text-amber-600">+ Recargo nocturno 🌙</span>
+                      <span className="font-medium text-amber-600">+ {fmt(recargoNocturnoNum)}</span>
+                    </div>
+                  )}
+                  {descuentoAdicionalNum > 0 && (
+                    <div className="flex justify-between text-[12px]">
+                      <span className="text-orange-600 truncate pr-2">
+                        - Descuento{descuentoAdicionalMotivo ? `: ${descuentoAdicionalMotivo}` : ' adicional'}
+                      </span>
+                      <span className="font-medium text-orange-600 shrink-0">- {fmt(descuentoAdicionalNum)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between border-t border-gray-200 pt-1.5">
                     <span className="text-[13px] font-bold text-gray-900">Valor a cobrar</span>
                     <span className="text-[16px] font-bold text-[#1A5CD8]">{fmt(valorCobrado)}</span>
+                  </div>
+                </div>
+
+                {/* Descuento adicional opcional */}
+                <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/60 p-3">
+                  <p className="text-[11px] font-bold text-orange-700 mb-2">Descuento adicional <span className="font-normal text-orange-500">(opcional)</span></p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className={LABEL}>Valor ($)</label>
+                      <Input type="number" min="0" placeholder="0"
+                        value={descuentoAdicional || ''}
+                        onChange={e => setDescuentoAdicional(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className={LABEL}>Motivo / descripción</label>
+                      <Input placeholder="Ej: acuerdo comercial, cortesía..."
+                        value={descuentoAdicionalMotivo}
+                        onChange={e => setDescuentoAdicionalMotivo(e.target.value)} />
+                    </div>
                   </div>
                 </div>
 
@@ -1669,6 +1682,18 @@ export default function Registro() {
                     <div className="flex justify-between gap-3 text-[12px]">
                       <span className="text-orange-600">Recogida prioritaria</span>
                       <span className="text-orange-600">+ {fmt(recargoPrioridad)}</span>
+                    </div>
+                  )}
+                  {recargoNocturnoNum > 0 && (
+                    <div className="flex justify-between gap-3 text-[12px]">
+                      <span className="text-amber-600">Recargo nocturno 🌙</span>
+                      <span className="text-amber-600">+ {fmt(recargoNocturnoNum)}</span>
+                    </div>
+                  )}
+                  {descuentoAdicionalNum > 0 && (
+                    <div className="flex justify-between gap-3 text-[12px]">
+                      <span className="text-orange-600">Descuento{descuentoAdicionalMotivo ? `: ${descuentoAdicionalMotivo}` : ' adicional'}</span>
+                      <span className="text-orange-600">- {fmt(descuentoAdicionalNum)}</span>
                     </div>
                   )}
                   <div className="flex justify-between gap-3">

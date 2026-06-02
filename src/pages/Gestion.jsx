@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB } from '@/lib/utils'
@@ -630,8 +631,8 @@ function TabAliados({ isAdmin }) {
       direccion: item.direccion || '', vip: item.vip || false,
       modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
       saldo_comision: item.saldo_comision || 0, activo: item.activo !== false,
-      horario_atencion: item.horario_atencion || '',
-    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true,horario_atencion:'' })
+      horario: item.horario || {},
+    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true,horario:{} })
   }
   async function guardar() {
     if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
@@ -719,8 +720,8 @@ function TabAliados({ isAdmin }) {
               <Input value={form.direccion||''} onChange={e => setForm(p=>({...p,direccion:e.target.value.toUpperCase()}))} placeholder="CALLE, CARRERA, NÚMERO…" />
             </div>
             <div className="col-span-2">
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Horario de atención</label>
-              <Input value={form.horario_atencion||''} onChange={e => setForm(p=>({...p,horario_atencion:e.target.value}))} placeholder="Ej: Lun–Vie 8am–6pm, Sáb 9am–1pm" />
+              <label className="text-[11px] font-bold text-ink3 block mb-2">Horario de atención</label>
+              <HorarioEditor value={form.horario||{}} onChange={v => setForm(p=>({...p,horario:v}))} />
             </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Modalidad comisión</label>

@@ -6,7 +6,7 @@ import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { db, dbAdmin } from '@/lib/supabase'
-import { petEmoji, fmt, parsearErrorDB } from '@/lib/utils'
+import { petEmoji, fmt, parsearErrorDB, today } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
@@ -83,7 +83,7 @@ function EvidenciasColapsable({ fotos }) {
 }
 
 export default function Kanban() {
-  const { alert: showAlert } = useConfirm()
+  const { alert: showAlert, confirm } = useConfirm()
   const { personalData } = useAuth()
   const rol = personalData?.rol
 
@@ -102,8 +102,21 @@ export default function Kanban() {
   const esVistaProd = esProductor || (esAdmin && tableroActivo === 'produccion')
   const colLabel    = col => (esVistaProd && col === 'EN_CUARTO_FRIO') ? 'Pendiente' : ESTADO_LABEL[col]
 
-  // ── Estado botón Contactar ──
-  const [contactarLoadingId, setContactarLoadingId] = useState(null)
+  // ── Estado botones Contactar / Notificar técnico ──
+  const [contactarLoadingId,  setContactarLoadingId]  = useState(null)
+  const [notifTecLoadingId,   setNotifTecLoadingId]   = useState(null)
+
+  // ── Solicitudes de clientes ───────────────────────────────────────────────
+  const [solicitudes,    setSolicitudes]    = useState([])
+  const [selSolicitud,   setSelSolicitud]   = useState(null)
+  const [convirtiendo,   setConvirtiendo]   = useState(false)
+  const [planesKanban,   setPlanesKanban]   = useState([])
+  const [especiesKanban, setEspeciesKanban] = useState([])
+  const [aliados,        setAliados]        = useState([])
+  const [convForm, setConvForm] = useState({
+    tipo_acompanamiento: 'PRESENCIAL', estado_pago: 'PENDIENTE',
+    metodo_pago: '', tecnico_id: '', valor_total: '', mascota_sexo: 'Macho',
+  })
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const [servicios, setServicios]         = useState([])
@@ -143,9 +156,121 @@ export default function Kanban() {
   const [nuevoComentario, setNuevoComentario] = useState('')
   const [guardandoComentario, setGuardandoComentario] = useState(false)
 
+  async function cargarSolicitudes() {
+    const { data } = await db.from('solicitudes_servicio')
+      .select('*').eq('estado', 'PENDIENTE').order('created_at', { ascending: true })
+    setSolicitudes(data || [])
+  }
+
+  function abrirSolicitud(s) {
+    const precio = planesKanban.find(p => p.id === s.plan_id)
+    setConvForm({
+      tipo_acompanamiento: 'PRESENCIAL', estado_pago: 'PENDIENTE',
+      metodo_pago: '', tecnico_id: '', mascota_sexo: s.mascota_sexo || 'Macho',
+      valor_total: precio ? String(precio.precio_referencia || '') : '',
+    })
+    setSelSolicitud(s)
+  }
+
+  async function convertirSolicitud() {
+    if (!selSolicitud) return
+    setConvirtiendo(true)
+    try {
+      // 1. Buscar o crear cliente
+      const { data: clis } = await db.from('clientes')
+        .select('id_cliente,tipo_cliente').eq('whatsapp', selSolicitud.cliente_whatsapp).limit(1)
+      let clienteId
+      if (clis?.length) {
+        clienteId = clis[0].id_cliente
+      } else {
+        const { data: nc, error: ce } = await db.from('clientes').insert({
+          nombre: selSolicitud.cliente_nombre, apellido: selSolicitud.cliente_apellido || null,
+          whatsapp: selSolicitud.cliente_whatsapp, email: selSolicitud.cliente_email || null,
+          tipo_cliente: 'NORMAL',
+        }).select('id_cliente')
+        if (ce) throw ce
+        clienteId = nc[0].id_cliente
+      }
+
+      // 2. Crear mascota
+      const pesoKg = parseFloat(selSolicitud.mascota_peso_kg) || 0
+      const tamano = pesoKg < 1 ? 'Mini' : pesoKg <= 10 ? 'Pequeño' : pesoKg <= 20 ? 'Mediano' : pesoKg <= 35 ? 'Grande' : 'Gigante'
+      const { data: nm, error: me } = await db.from('mascotas').insert({
+        nombre: selSolicitud.mascota_nombre, especie_id: selSolicitud.especie_id || null,
+        raza: selSolicitud.mascota_raza || null, sexo: convForm.mascota_sexo,
+        tamano, peso_kg: pesoKg, cliente_id: clienteId,
+        fallecida: true, fecha_fallecimiento: today(),
+      }).select('id_mascota')
+      if (me) throw me
+      const mascotaId = nm[0].id_mascota
+
+      // 3. Crear servicio (el trigger de DB crea recogida, entrega y cuarto_frio)
+      const valorTotal = parseFloat(convForm.valor_total) || 0
+      const puntoRecogida = selSolicitud.tipo_recogida === 'veterinaria' ? 'VETERINARIA' : 'DOMICILIO'
+      const { data: sv, error: se } = await db.from('servicios').insert({
+        mascota_id: mascotaId, plan_id: selSolicitud.plan_id || null,
+        estado: 'INGRESADO', fecha_ingreso: today(),
+        tipo_acompanamiento: convForm.tipo_acompanamiento,
+        canal_entrada: 'DIRECTO',
+        aliado_origen_id: selSolicitud.aliado_id || null,
+        valor_total: valorTotal, valor_pagado: 0,
+        estado_pago: convForm.estado_pago,
+        metodo_pago: convForm.metodo_pago || null,
+        tecnico_id: convForm.tecnico_id || null,
+        punto_recogida: puntoRecogida,
+        direccion_recogida: selSolicitud.direccion || null,
+        ciudad_recogida: selSolicitud.ciudad || 'Bogotá',
+        barrio_recogida: selSolicitud.barrio || null,
+        indicaciones_recogida: selSolicitud.notas_cliente || null,
+        tipo_cliente: 'NORMAL', comision_aliado: 0, comision_descontada: false,
+        notas: selSolicitud.aliado_nombre_otro
+          ? `Veterinaria indicada por cliente: ${selSolicitud.aliado_nombre_otro}` : null,
+      }).select('id')
+      if (se) throw se
+      const servicioId = sv[0].id
+
+      // 4. Actualizar recogida con info adicional
+      await db.from('recogidas').update({
+        aliado_id: selSolicitud.aliado_id || null,
+        tecnico_id: convForm.tecnico_id || null,
+      }).eq('servicio_id', servicioId)
+
+      // 5. Marcar solicitud como convertida
+      await db.from('solicitudes_servicio').update({
+        estado: 'CONVERTIDO', servicio_id: servicioId,
+      }).eq('id', selSolicitud.id)
+
+      setSelSolicitud(null)
+      await Promise.all([cargar(), cargarSolicitudes()])
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al crear servicio' })
+    } finally {
+      setConvirtiendo(false)
+    }
+  }
+
+  async function descartarSolicitud(id) {
+    if (!await confirm('Esta solicitud se marcará como descartada y no se procesará.', {
+      title: '¿Descartar solicitud?', variant: 'danger', confirmLabel: 'Descartar',
+    })) return
+    await db.from('solicitudes_servicio').update({ estado: 'DESCARTADO' }).eq('id', id)
+    setSelSolicitud(null)
+    cargarSolicitudes()
+  }
+
   useEffect(() => {
     cargar()
-    db.from('personal').select('id,nombre,apellido,rol_principal_id')
+    cargarSolicitudes()
+    Promise.all([
+      db.from('planes').select('id,nombre').order('nombre'),
+      db.from('especies').select('id,nombre').order('nombre'),
+      db.from('aliados').select('id_aliado,nombre').eq('activo', true).order('nombre'),
+    ]).then(([p, e, a]) => {
+      setPlanesKanban(p.data || [])
+      setEspeciesKanban(e.data || [])
+      setAliados(a.data || [])
+    })
+    db.from('personal').select('id,nombre,apellido,rol_principal_id,whatsapp')
       .eq('activo', true).order('nombre')
       .then(({ data }) => {
         const all = data || []
@@ -417,6 +542,52 @@ export default function Kanban() {
     } finally { setContactarLoadingId(null) }
   }
 
+  async function notificarTecnico(e, s) {
+    e.stopPropagation()
+    if (notifTecLoadingId || !s.tecnico_id) return
+    const tec = tecnicos.find(t => t.id === s.tecnico_id)
+    if (!tec?.whatsapp) {
+      await showAlert('El técnico asignado no tiene número de WhatsApp registrado.', { title: 'Sin WhatsApp' })
+      return
+    }
+    setNotifTecLoadingId(s.servicio_id)
+    try {
+      const { data: svc } = await db.from('servicios')
+        .select('direccion_recogida, barrio_recogida, ciudad_recogida, notas')
+        .eq('id', s.servicio_id).maybeSingle()
+      const { data: rec } = await db.from('recogidas')
+        .select('hora_aproximada')
+        .eq('servicio_id', s.servicio_id).maybeSingle()
+
+      const direccion = svc?.direccion_recogida || ''
+      const barrio    = svc?.barrio_recogida ? ` · ${svc.barrio_recogida}` : ''
+      const ciudad    = svc?.ciudad_recogida && svc.ciudad_recogida !== 'Bogotá' ? ` (${svc.ciudad_recogida})` : ''
+      const horaAprox = rec?.hora_aproximada ? `\n⏰ Hora aprox: *${rec.hora_aproximada}*` : ''
+      const contacto  = s.cliente_wa ? `\n📞 Contacto: ${s.cliente_wa}` : ''
+      const indicac   = svc?.notas ? `\n📋 Indicaciones: ${svc.notas}` : ''
+
+      const mensaje = [
+        `🐾 *Nueva recogida asignada — Camino al Cielo*`,
+        ``,
+        `Se te asignó un servicio:`,
+        ``,
+        `🐾 Mascota: *${s.mascota}* (${s.especie || ''})`,
+        `👤 Propietario: ${s.cliente}${contacto}`,
+        `📍 Dirección: ${direccion}${barrio}${ciudad}`,
+        `📦 Plan: ${s.plan}`,
+        horaAprox,
+        indicac,
+        ``,
+        `Ingresa a la app para confirmar y ver los detalles. ¡Mucho éxito! 🙏`,
+      ].filter(Boolean).join('\n')
+
+      const numero = tec.whatsapp.replace(/\D/g, '')
+      window.open(`https://wa.me/57${numero}?text=${encodeURIComponent(mensaje)}`, '_blank')
+    } finally {
+      setNotifTecLoadingId(null)
+    }
+  }
+
   function alertLevel(s) {
     if (s.dias_para_vencer == null) return null
     if (s.dias_para_vencer < 0)  return 'vencido'
@@ -427,6 +598,15 @@ export default function Kanban() {
 
   // ── Computed ──────────────────────────────────────────────────────────────
   const planesUnicos = [...new Set(servicios.map(s => s.plan).filter(Boolean))].sort()
+
+  // ── Valores derivados del modal de solicitud (evita IIFE en JSX) ─────────
+  const SOL_LABL = 'block text-[11px] font-bold text-gray-500 mb-1'
+  const SOL_INP  = 'w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10 transition-all bg-white'
+  const solPlanNombre    = selSolicitud ? (planesKanban.find(p => p.id === selSolicitud.plan_id)?.nombre || '—') : ''
+  const solEspecieNombre = selSolicitud ? (especiesKanban.find(e => e.id === selSolicitud.especie_id)?.nombre || '') : ''
+  const solAliadoNombre  = selSolicitud?.aliado_id
+    ? (aliados.find(a => a.id_aliado === selSolicitud.aliado_id)?.nombre || '—')
+    : (selSolicitud?.aliado_nombre_otro || '—')
 
   const filtrados = servicios.filter(s => {
     if (!COLUMNAS.includes(s.estado)) return false
@@ -584,6 +764,45 @@ export default function Kanban() {
           )
         })()}
 
+        {/* ── Solicitudes de clientes (solo COORDINADOR / ADMIN) ──────────── */}
+        {(esAdmin || rol === 'COORDINADOR') && solicitudes.length > 0 && (
+          <div className="rounded-2xl border-2 overflow-hidden" style={{ borderColor: '#C4A87A33', background: '#FFFDF7' }}>
+            <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: '#C4A87A33', background: '#FFF9ED' }}>
+              <span className="text-base">📋</span>
+              <span className="text-[13px] font-bold text-[#9A5500]">Solicitudes de clientes</span>
+              <span className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#C4A87A', color: '#fff' }}>
+                {solicitudes.length}
+              </span>
+            </div>
+            <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+              {solicitudes.map(s => {
+                const planNombre    = planesKanban.find(p => p.id === s.plan_id)?.nombre || '—'
+                const especieNombre = especiesKanban.find(e => e.id === s.especie_id)?.nombre || ''
+                return (
+                  <button key={s.id} onClick={() => abrirSolicitud(s)}
+                    className="text-left bg-white border rounded-xl p-3 shadow-sm hover:shadow-md hover:-translate-y-px transition-all"
+                    style={{ borderColor: '#F3E8CC' }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-lg">{petEmoji(especieNombre)}</span>
+                      <div>
+                        <div className="text-[13px] font-bold text-gray-900 leading-tight">{s.mascota_nombre}</div>
+                        <div className="text-[11px] text-gray-400">{s.cliente_nombre} {s.cliente_apellido || ''}</div>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-gray-500 truncate mb-1">{planNombre}</div>
+                    <div className="text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+                      style={{ background: s.tipo_recogida === 'veterinaria' ? '#EFF5FF' : '#F0F7EB', color: s.tipo_recogida === 'veterinaria' ? '#1A5CD8' : '#3D5A27' }}>
+                      {s.tipo_recogida === 'veterinaria' ? '🏥' : '🏠'}{' '}
+                      {s.tipo_recogida === 'veterinaria' ? (s.aliado_nombre_otro || 'Veterinaria') : (s.barrio || s.ciudad || 'Domicilio')}
+                    </div>
+                    <div className="text-[10px] text-gray-300 mt-1.5">{new Date(s.created_at).toLocaleDateString('es-CO')}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── Selector de tablero (solo ADMIN) ─────────────────────────────── */}
         {esAdmin && (
           <div className="flex gap-1 bg-gray-100 rounded-xl p-1 self-start">
@@ -683,6 +902,7 @@ export default function Kanban() {
                           const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
                           const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
                           const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
+                          const puedeNotifTec  = !esVistaProd && col === 'INGRESADO' && !!s.tecnico_id
                           return (
                             <div key={s.servicio_id} draggable
                               onDragStart={e => onDragStart(e, s)} onDragEnd={onDragEnd}
@@ -720,6 +940,19 @@ export default function Kanban() {
                                     ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
                                     : <MessageCircle size={11} />}
                                   Contactar cliente
+                                </button>
+                              )}
+                              {puedeNotifTec && (
+                                <button
+                                  onClick={e => notificarTecnico(e, s)}
+                                  disabled={notifTecLoadingId === s.servicio_id}
+                                  className="mt-2.5 flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                                  style={{ backgroundColor: '#1A5CD8' }}
+                                >
+                                  {notifTecLoadingId === s.servicio_id
+                                    ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                                    : <Send size={11} />}
+                                  Notificar técnico
                                 </button>
                               )}
                             </div>
@@ -1179,6 +1412,135 @@ export default function Kanban() {
           onClose={() => setModalEntrega(null)}
           onGuardado={() => { setModalEntrega(null); cargar() }}
         />
+      )}
+
+      {/* ── Modal revisión / conversión de solicitud ─────────────────────── */}
+      {selSolicitud && (
+        <Modal open={!!selSolicitud} onClose={() => setSelSolicitud(null)}
+          title="Revisión de solicitud"
+          maxWidth="max-w-xl"
+          footer={
+            <div className="flex items-center justify-between w-full gap-3">
+              <button onClick={() => descartarSolicitud(selSolicitud.id)}
+                className="px-4 py-2 rounded-xl text-[12px] font-bold text-red-600 border border-red-200 hover:bg-red-50 transition-all">
+                Descartar
+              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setSelSolicitud(null)}
+                  className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all">
+                  Cancelar
+                </button>
+                <button onClick={convertirSolicitud} disabled={convirtiendo}
+                  className="px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+                  style={{ background: 'linear-gradient(135deg,#0B1D4F,#1A5CD8)' }}>
+                  {convirtiendo
+                    ? <><div className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin mr-1.5" />Creando...</>
+                    : '✅ Crear servicio'}
+                </button>
+              </div>
+            </div>
+          }>
+          <div className="space-y-4">
+            {/* Datos del cliente */}
+            <div className="rounded-xl p-4 space-y-2" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Propietario</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
+                <div><span className="text-gray-400">Nombre: </span><span className="font-semibold">{selSolicitud.cliente_nombre} {selSolicitud.cliente_apellido || ''}</span></div>
+                <div><span className="text-gray-400">WhatsApp: </span><span className="font-semibold">{selSolicitud.cliente_whatsapp}</span></div>
+                {selSolicitud.cliente_email && <div className="col-span-2"><span className="text-gray-400">Email: </span><span className="font-semibold">{selSolicitud.cliente_email}</span></div>}
+              </div>
+            </div>
+
+            {/* Datos de la mascota */}
+            <div className="rounded-xl p-4 space-y-2" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Mascota</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
+                <div><span className="text-gray-400">Nombre: </span><span className="font-semibold">{petEmoji(solEspecieNombre)} {selSolicitud.mascota_nombre}</span></div>
+                <div><span className="text-gray-400">Especie: </span><span className="font-semibold">{solEspecieNombre}</span></div>
+                <div><span className="text-gray-400">Peso: </span><span className="font-semibold">{selSolicitud.mascota_peso_kg ? `${selSolicitud.mascota_peso_kg} kg` : '—'}</span></div>
+                {selSolicitud.mascota_raza && <div><span className="text-gray-400">Raza: </span><span className="font-semibold">{selSolicitud.mascota_raza}</span></div>}
+              </div>
+              <div className="pt-1">
+                <label className={SOL_LABL}>Sexo (confirmar)</label>
+                <div className="flex gap-2">
+                  {['Macho','Hembra'].map(v => (
+                    <button key={v} type="button"
+                      onClick={() => setConvForm(prev => ({ ...prev, mascota_sexo: v }))}
+                      className={`flex-1 py-2 rounded-lg text-[12px] font-semibold border transition-all ${convForm.mascota_sexo === v ? 'border-[#1A5CD8] bg-[#EFF5FF] text-[#1A5CD8]' : 'border-gray-200 text-gray-400'}`}>
+                      {v === 'Macho' ? '♂' : '♀'} {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Plan y recogida */}
+            <div className="rounded-xl p-4" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Servicio</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
+                <div><span className="text-gray-400">Plan: </span><span className="font-semibold">{solPlanNombre}</span></div>
+                <div><span className="text-gray-400">Recogida: </span><span className="font-semibold">{selSolicitud.tipo_recogida === 'veterinaria' ? '🏥 Veterinaria' : '🏠 Domicilio'}</span></div>
+                {selSolicitud.tipo_recogida === 'domicilio' && selSolicitud.direccion && (
+                  <div className="col-span-2"><span className="text-gray-400">Dirección: </span><span className="font-semibold">{selSolicitud.barrio ? `${selSolicitud.barrio} · ` : ''}{selSolicitud.direccion}</span></div>
+                )}
+                {selSolicitud.tipo_recogida === 'veterinaria' && (
+                  <div className="col-span-2">
+                    <span className="text-gray-400">Veterinaria: </span>
+                    <span className="font-semibold">{solAliadoNombre}</span>
+                    {selSolicitud.aliado_nombre_otro && <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Posible nuevo aliado</span>}
+                  </div>
+                )}
+                {selSolicitud.hora_aproximada && <div><span className="text-gray-400">Hora aprox: </span><span className="font-semibold">{selSolicitud.hora_aproximada}</span></div>}
+                {selSolicitud.notas_cliente && <div className="col-span-2"><span className="text-gray-400">Notas: </span><span className="font-semibold">{selSolicitud.notas_cliente}</span></div>}
+              </div>
+            </div>
+
+            {/* Campos a completar */}
+            <div className="rounded-xl p-4 space-y-3" style={{ border: '2px solid #EFF5FF', background: '#FAFCFF' }}>
+              <p className="text-[11px] font-bold text-[#1A5CD8] uppercase tracking-wider">Completar para crear el servicio</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={SOL_LABL}>Técnico asignado</label>
+                  <select value={convForm.tecnico_id} onChange={e => setConvForm(prev => ({ ...prev, tecnico_id: e.target.value }))} className={SOL_INP}>
+                    <option value="">Sin asignar</option>
+                    {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido || ''}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Acompañamiento</label>
+                  <select value={convForm.tipo_acompanamiento} onChange={e => setConvForm(prev => ({ ...prev, tipo_acompanamiento: e.target.value }))} className={SOL_INP}>
+                    <option value="PRESENCIAL">Presencial</option>
+                    <option value="VIDEOLLAMADA">Videollamada</option>
+                    <option value="EVIDENCIA">Solo evidencias</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Valor total (COP)</label>
+                  <input type="number" className={SOL_INP} placeholder="0" value={convForm.valor_total}
+                    onChange={e => setConvForm(prev => ({ ...prev, valor_total: e.target.value }))} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Estado de pago</label>
+                  <select value={convForm.estado_pago} onChange={e => setConvForm(prev => ({ ...prev, estado_pago: e.target.value }))} className={SOL_INP}>
+                    <option value="PENDIENTE">Pendiente</option>
+                    <option value="PARCIAL">Parcial</option>
+                    <option value="COMPLETO">Completo</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Método de pago</label>
+                  <select value={convForm.metodo_pago} onChange={e => setConvForm(prev => ({ ...prev, metodo_pago: e.target.value }))} className={SOL_INP}>
+                    <option value="">— Sin especificar —</option>
+                    <option value="EFECTIVO">Efectivo</option>
+                    <option value="TRANSFERENCIA">Transferencia</option>
+                    <option value="TARJETA">Tarjeta</option>
+                    <option value="NEQUI">Nequi / Daviplata</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
     </>

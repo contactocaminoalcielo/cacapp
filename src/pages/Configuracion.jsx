@@ -12,6 +12,7 @@ import { db, dbAdmin } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
 const nullify = (obj, keys) => {
   const out = { ...obj }
@@ -349,7 +350,7 @@ function TabVeterinarias() {
       telefono: item.telefono || '', email: item.email || '',
       ciudad: item.ciudad || 'Bogotá', localidad: item.localidad || '',
       barrio: item.barrio || '', direccion: item.direccion || '',
-      horario_atencion: item.horario_atencion || '',
+      horario: item.horario || {},
       vip: item.vip || false,
       modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
       saldo_comision: item.saldo_comision || 0,
@@ -358,7 +359,7 @@ function TabVeterinarias() {
       nombre: '', identificacion_nit: '', contacto_nombre: '',
       whatsapp: '', telefono: '', email: '',
       ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '',
-      horario_atencion: '',
+      horario: {},
       vip: false, modalidad_comision: 'FACTURACION_MENSUAL',
       saldo_comision: 0, notas: '', activo: true,
     })
@@ -428,7 +429,7 @@ function TabVeterinarias() {
                   <Td className="text-gray-600 text-[12px]">{a.contacto_nombre || '—'}</Td>
                   <Td className="text-gray-500 text-[12px]">{a.whatsapp || '—'}</Td>
                   <Td className="text-gray-500 text-[12px]">{a.ciudad || '—'}</Td>
-                  <Td className="text-gray-500 text-[11px]">{a.horario_atencion || '—'}</Td>
+                  <Td className="text-gray-500 text-[11px]">{resumenHorario(a.horario)}</Td>
                   <Td>
                     {a.vip
                       ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">VIP</span>
@@ -535,11 +536,9 @@ function TabVeterinarias() {
                 </div>
                 <div className="col-span-2">
                   <label className={LABEL}>Horario de atención</label>
-                  <Input
-                    value={form.horario_atencion || ''}
-                    onChange={e => setForm(p => ({ ...p, horario_atencion: e.target.value }))}
-                    placeholder="Ej: Lun–Vie 8am–6pm, Sáb 9am–1pm"
-                  />
+                  <div className="mt-1.5">
+                    <HorarioEditor value={form.horario || {}} onChange={v => setForm(p => ({ ...p, horario: v }))} />
+                  </div>
                 </div>
                 <div className="col-span-2">
                   <label className={LABEL}>Notas internas</label>

@@ -396,9 +396,6 @@ function Checklist({ svc, fotoUrl, checked, onChange }) {
     { id: 'id_ok',  emoji: '🪪', label: 'Identidad de la mascota verificada' },
     { id: 'foto_ok',emoji: '📸', label: 'Foto de evidencia tomada', auto: !!fotoUrl },
     { id: 'rec_ok', emoji: '📦', label: 'Recordatorio básico entregado al cliente' },
-    ...(svc.estado_pago !== 'COMPLETO'
-      ? [{ id: 'cobro_ok', emoji: '💰', label: `Cobro realizado: ${fmt((svc.valor_total || 0) - (svc.valor_pagado || 0))}` }]
-      : []),
   ]
   return (
     <div className="mb-4">
@@ -536,8 +533,51 @@ function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT })
   )
 }
 
+// ─── CONTACTO SHEET ─────────────────────────────────────────────────────
+// modal = { nombre, numero } | null
+function ContactoSheet({ modal, onClose }) {
+  if (!modal) return null
+  const numero = String(modal.numero || '').replace(/\D/g, '')
+  return (
+    <div className="fixed inset-0 z-[80] flex flex-col justify-end"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={onClose}>
+      <div className="rounded-t-3xl bg-white px-5 pt-5 pb-8 safe-area-bottom"
+        onClick={e => e.stopPropagation()}>
+        {/* Handle */}
+        <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto mb-4" />
+        {/* Encabezado */}
+        <p className="text-[13px] text-gray-400 text-center mb-0.5">Contactar</p>
+        <p className="text-[16px] font-bold text-gray-900 text-center mb-1">{modal.nombre}</p>
+        <p className="text-[13px] text-gray-500 text-center mb-5">{modal.numero}</p>
+        {/* Opciones */}
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <a href={`tel:${numero}`} onClick={onClose}
+            className="flex flex-col items-center gap-2 py-4 rounded-2xl font-bold text-white active:opacity-80 transition-opacity"
+            style={{ background: '#1A5CD8' }}>
+            <Phone size={22} />
+            <span className="text-[13px]">Llamar</span>
+          </a>
+          <a href={`https://wa.me/57${numero}`} target="_blank" rel="noreferrer" onClick={onClose}
+            className="flex flex-col items-center gap-2 py-4 rounded-2xl font-bold text-white active:opacity-80 transition-opacity"
+            style={{ background: '#25D366' }}>
+            <MessageSquare size={22} />
+            <span className="text-[13px]">WhatsApp</span>
+          </a>
+        </div>
+        <button onClick={onClose}
+          className="w-full py-3.5 rounded-2xl text-[14px] font-semibold text-gray-500"
+          style={{ background: '#F3F4F6' }}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
 function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+  const [contactoModal, setContactoModal] = useState(null)
   const [sheetOpen, setSheetOpen]     = useState(false)
   const [declinarOpen, setDeclinarOpen] = useState(false)
   const [motivoDeclina, setMotivoDeclina] = useState('')
@@ -636,30 +676,6 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
         </div>
 
         {/* Monto */}
-        <div className="mb-3">
-          {svc.estado_pago === 'COMPLETO' ? (
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold"
-              style={{ background: '#D1FAE5', color: '#065F46' }}>
-              <CheckCircle size={13} /> Pagado completo
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5"
-              style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
-              <CreditCard size={15} style={{ color: '#D97706', flexShrink: 0 }} />
-              <div>
-                <div className="text-[11px] text-amber-700 font-medium">Cobrar al cliente</div>
-                <div className="text-xl font-extrabold" style={{ color: '#92400E' }}>
-                  {fmt((svc.valor_total || 0) - (svc.valor_pagado || 0))}
-                </div>
-              </div>
-              {svc.metodo_pago && (
-                <span className="ml-auto text-[11px] font-medium" style={{ color: '#92400E' }}>
-                  {svc.metodo_pago}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
 
         {/* Cliente */}
         {cliente && (
@@ -671,11 +687,11 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
             <div>
               <div className="text-sm font-semibold text-gray-800 leading-tight">{cliente.nombre} {cliente.apellido}</div>
               {cliente.whatsapp && (
-                <a href={`https://wa.me/57${String(cliente.whatsapp).replace(/\D/g,'')}`}
-                  target="_blank" rel="noreferrer"
+                <button
+                  onClick={() => setContactoModal({ nombre: `${cliente.nombre} ${cliente.apellido}`.trim(), numero: cliente.whatsapp })}
                   className="text-xs font-medium flex items-center gap-1" style={{ color: '#25D366' }}>
                   <Phone size={10} /> {cliente.whatsapp}
-                </a>
+                </button>
               )}
             </div>
           </div>
@@ -696,10 +712,11 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
             <Phone size={12} className="text-gray-400 flex-shrink-0" />
             <span className="text-xs text-gray-600">{recogida.contacto_nombre}</span>
             {recogida.contacto_telefono && (
-              <a href={`tel:${recogida.contacto_telefono}`}
+              <button
+                onClick={() => setContactoModal({ nombre: recogida.contacto_nombre, numero: recogida.contacto_telefono })}
                 className="text-xs font-semibold ml-1" style={{ color: '#1A5CD8' }}>
                 {recogida.contacto_telefono}
-              </a>
+              </button>
             )}
           </div>
         )}
@@ -846,19 +863,21 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
         {/* ── COMENTARIOS ── siempre visibles */}
         <ComentariosSection servicioId={svc.id} personalId={tecnico?.id} />
       </div>
+
+      <ContactoSheet modal={contactoModal} onClose={() => setContactoModal(null)} />
     </>
   )
 }
 
 // ─── CARD ENTREGA ───────────────────────────────────────────────────────
 function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
+  const [contactoModal,  setContactoModal]  = useState(null)
   const [actErr,         setActErr]         = useState('')
   const [aceptando,      setAceptando]      = useState(false)
   const [completando,    setCompletando]    = useState(false)
   const [fotoUrl,        setFotoUrl]        = useState(ent.foto_entrega_url || null)
   const [firmaDataUrl,   setFirmaDataUrl]   = useState(null)
   const [nombreCliente,  setNombreCliente]  = useState('')
-  const [valorCobrado,   setValorCobrado]   = useState('')
   const [genCert,        setGenCert]        = useState(false)
 
   const mascota = ent.servicios?.mascotas
@@ -885,7 +904,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
 
   async function completar() {
     setCompletando(true); setActErr('')
-    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente, valorCobrado }) }
+    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente }) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompletando(false) }
   }
@@ -934,11 +953,11 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
           <div>
             <div className="text-sm font-semibold text-gray-800 leading-tight">{cliente.nombre} {cliente.apellido}</div>
             {cliente.whatsapp && (
-              <a href={`https://wa.me/57${String(cliente.whatsapp).replace(/\D/g,'')}`}
-                target="_blank" rel="noreferrer"
+              <button
+                onClick={() => setContactoModal({ nombre: `${cliente.nombre} ${cliente.apellido}`.trim(), numero: cliente.whatsapp })}
                 className="text-xs font-medium flex items-center gap-1" style={{ color: '#25D366' }}>
                 <Phone size={10} /> {cliente.whatsapp}
-              </a>
+              </button>
             )}
           </div>
         </div>
@@ -965,22 +984,6 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
         </div>
       )}
 
-      {/* Saldo a cobrar */}
-      {saldo > 0 ? (
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 mb-3"
-          style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
-          <CreditCard size={15} style={{ color: '#D97706', flexShrink: 0 }} />
-          <div>
-            <div className="text-[11px] text-amber-700 font-medium">Cobrar al entregar</div>
-            <div className="text-xl font-extrabold" style={{ color: '#92400E' }}>{fmt(saldo)}</div>
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3 text-xs font-semibold"
-          style={{ background: '#D1FAE5', color: '#065F46' }}>
-          <CheckCircle size={13} /> Pagado completo — sin cobro en entrega
-        </div>
-      )}
 
       {/* Botón certificado */}
       <button onClick={descargarCertificado} disabled={genCert}
@@ -1038,20 +1041,6 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
               style={{ borderColor: nombreCliente ? '#1A5CD8' : '#E5E7EB' }} />
           </div>
 
-          {/* Cobro en entrega (si hay saldo) */}
-          {saldo > 0 && (
-            <div>
-              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                <CreditCard size={11} /> Valor cobrado en entrega
-              </div>
-              <input type="number" inputMode="numeric" step="100" value={valorCobrado}
-                onChange={e => setValorCobrado(e.target.value)}
-                placeholder={`Máx. ${fmt(saldo)}`}
-                className="w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-lg"
-                style={{ borderColor: valorCobrado ? '#1A5CD8' : '#E5E7EB', color: '#111827' }} />
-            </div>
-          )}
-
           <button onClick={completar} disabled={!puedeCompletar || completando}
             className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-50"
             style={{ background: puedeCompletar ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
@@ -1063,6 +1052,8 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
       )}
 
       <ComentariosSection servicioId={ent.servicio_id} personalId={tecnico?.id} />
+
+      <ContactoSheet modal={contactoModal} onClose={() => setContactoModal(null)} />
     </div>
   )
 }
@@ -1549,7 +1540,7 @@ export default function TecnicoApp() {
     await cargar()
   }
 
-  async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente, valorCobrado }) {
+  async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente }) {
     const now = new Date()
     const patch = {
       estado:           'ENTREGADA',
@@ -1576,23 +1567,6 @@ export default function TecnicoApp() {
 
     await db.from('servicios').update({ estado: 'ENTREGADO' }).eq('id', ent.servicio_id)
 
-    // Cobro en entrega
-    const cobrado = parseFloat(valorCobrado) || 0
-    if (cobrado > 0) {
-      const svc = ent.servicios || {}
-      const nuevoPagado = (svc.valor_pagado || 0) + cobrado
-      const total = svc.valor_total || 0
-      const nuevoEstadoPago = nuevoPagado >= total ? 'COMPLETO' : 'PARCIAL'
-      await db.from('servicios').update({ valor_pagado: nuevoPagado, estado_pago: nuevoEstadoPago }).eq('id', ent.servicio_id)
-      await db.from('novedades_servicio').insert({
-        servicio_id:    ent.servicio_id,
-        tipo_novedad:   'PAGO_RECIBIDO',
-        descripcion:    `Mensajero cobró ${fmt(cobrado)} en entrega${nuevoEstadoPago === 'COMPLETO' ? ' — pago completo' : `. Queda: ${fmt(total - nuevoPagado)}`}`,
-        valor_ajuste:   cobrado,
-        registrado_por: tecnico?.id || null,
-      })
-    }
-
     // Notificar coordinadores
     const coords = await getCoordinadores()
     const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
@@ -1601,7 +1575,7 @@ export default function TecnicoApp() {
       de_personal_id:   tecnico?.id,
       tipo:             'ENTREGA_COMPLETADA',
       titulo:           'Entrega completada',
-      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.${cobrado > 0 ? ` Cobró: ${fmt(cobrado)}.` : ''}`,
+      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.`,
       servicio_id:      ent.servicio_id,
     })))
 
@@ -2184,6 +2158,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   const valorVet      = Math.max(0, precioOriginal - comisionMonto)
 
   const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE') // CLIENTE | VETERINARIA
+  const [tipoFijado, setTipoFijado]   = useState(false)     // true tras guardar → bloquea selector
   const [form, setForm] = useState({
     fecha:              fechaHoy,
     hora:               horaActual,
@@ -2304,6 +2279,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       }
 
       setGuardado(true)
+      setTipoFijado(true)
       if (onGuardado) onGuardado(data.id)
     } catch (e) {
       setErr('Error al guardar: ' + (e.message || e))
@@ -2386,8 +2362,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       y = Math.max(field('Nombre completo', form.propietario, M, yP, CW), yP + 10)
       const yP2 = y
       if (tipo !== 'VETERINARIA') {
-        field('Correo', form.email, M, yP2)
-        field('Teléfono', form.telefono, M + CW / 2, yP2)
+        field('Teléfono', form.telefono, M, yP2)
         y = yP2 + 12
         y = Math.max(field('Dirección de recogida', form.casa, M, y, CW), y + 10)
       } else {
@@ -2613,23 +2588,31 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         )}
       </div>
 
-      {/* Selector tipo de recibo */}
-      <div className="flex gap-2 mb-3">
-        {[
-          { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(form.valor_servicio)}` },
-          ...(aliado ? [{ key: 'VETERINARIA', label: '🏥 Para veterinaria', desc: `Cobrar: ${fmt(valorVet)}` }] : []),
-        ].map(op => (
-          <button key={op.key} onClick={() => setTipoRecibo(op.key)}
-            className="flex-1 py-2.5 px-3 rounded-xl border-2 text-left transition-all active:scale-98"
-            style={{
-              borderColor: tipoRecibo === op.key ? '#1A5CD8' : '#E5E7EB',
-              background:  tipoRecibo === op.key ? '#EEF3FB' : '#FAFAFA',
-            }}>
-            <div className="text-[12px] font-bold" style={{ color: tipoRecibo === op.key ? '#1A5CD8' : '#374151' }}>{op.label}</div>
-            <div className="text-[10px] text-gray-400 mt-0.5">{op.desc}</div>
-          </button>
-        ))}
-      </div>
+      {/* Selector tipo de recibo — se oculta tras guardar */}
+      {!tipoFijado ? (
+        <div className="flex gap-2 mb-3">
+          {[
+            { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(form.valor_servicio)}` },
+            ...(aliado ? [{ key: 'VETERINARIA', label: '🏥 Para veterinaria', desc: `Cobrar: ${fmt(valorVet)}` }] : []),
+          ].map(op => (
+            <button key={op.key} onClick={() => setTipoRecibo(op.key)}
+              className="flex-1 py-2.5 px-3 rounded-xl border-2 text-left transition-all active:scale-98"
+              style={{
+                borderColor: tipoRecibo === op.key ? '#1A5CD8' : '#E5E7EB',
+                background:  tipoRecibo === op.key ? '#EEF3FB' : '#FAFAFA',
+              }}>
+              <div className="text-[12px] font-bold" style={{ color: tipoRecibo === op.key ? '#1A5CD8' : '#374151' }}>{op.label}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">{op.desc}</div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[12px] font-semibold"
+          style={{ background: '#EEF3FB', color: '#1A5CD8', border: '1.5px solid #BFDBFE' }}>
+          {tipoRecibo === 'VETERINARIA' ? '🏥 Recibo veterinaria' : '📄 Recibo cliente'}
+          <span className="ml-auto text-[10px] text-blue-400">Generado ✓</span>
+        </div>
+      )}
 
       {/* Configurar comisión — solo visible para vet */}
       {tipoRecibo === 'VETERINARIA' && aliado && (
@@ -2693,7 +2676,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           <RField label="Mascota" value={form.mascota_nombre} onChange={v => f('mascota_nombre',v)} />
           <RField label="Especie" value={form.especie} onChange={v => f('especie',v)} />
           <RField label="Propietario" value={form.propietario} onChange={v => f('propietario',v)} span2 />
-          {tipoRecibo !== 'VETERINARIA' && <><RField label="Correo" value={form.email} onChange={v => f('email',v)} span2 /><RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} /></>}
+          {tipoRecibo !== 'VETERINARIA' && <RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} />}
           <RField label="Plan" value={form.servicio} onChange={v => f('servicio',v)} span2 />
         </div>
 
@@ -2840,7 +2823,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                             <Check size={12} /> Comprobante guardado
                           </span>
                           <button
-                            onClick={() => uploadRefs.current[idx]?.click()}
+                            onClick={e => { e.stopPropagation(); e.preventDefault(); uploadRefs.current[idx]?.click() }}
                             className="text-white text-[10px] font-semibold px-2 py-1 rounded-full"
                             style={{ background: 'rgba(255,255,255,0.25)' }}>
                             Cambiar
@@ -2855,7 +2838,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                       </div>
                     ) : (
                       <button
-                        onClick={() => uploadRefs.current[idx]?.click()}
+                        onClick={e => { e.stopPropagation(); e.preventDefault(); uploadRefs.current[idx]?.click() }}
                         className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
                         style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
                         <UploadIcon size={20} style={{ color: '#D97706' }} />
@@ -2921,7 +2904,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
       {/* Botones de acción */}
       <div className="space-y-2">
-        {/* Guardar primero */}
+        {/* Guardar */}
         {!guardado ? (
           <button onClick={guardarRecibo} disabled={guardando}
             className="w-full py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-60"
@@ -2937,30 +2920,37 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           </div>
         )}
 
-        {/* Descargar PDF - cliente */}
-        <button onClick={async () => { await descargarPDF('CLIENTE'); cerrar() }} disabled={generando || !guardado}
+        {/* Descargar PDF — solo el del tipo actual */}
+        <button onClick={async () => { await descargarPDF(tipoRecibo) }} disabled={generando || !guardado}
           className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
-          style={{ background: '#7C3AED', color: '#fff' }}>
+          style={{ background: tipoRecibo === 'VETERINARIA' ? '#0B1D4F' : '#7C3AED', color: '#fff' }}>
           <Download size={16} />
-          {generando ? 'Generando…' : '📄 Descargar recibo CLIENTE'}
+          {generando ? 'Generando…' : tipoRecibo === 'VETERINARIA'
+            ? `🏥 Descargar recibo veterinaria (${fmt(valorVet)})`
+            : '📄 Descargar recibo cliente'}
         </button>
 
-        {/* Descargar PDF - veterinaria (solo si hay aliado y comisión) */}
-        {aliado && (
-          <button onClick={async () => { await descargarPDF('VETERINARIA'); cerrar() }} disabled={generando || !guardado}
-            className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
-            style={{ background: '#0B1D4F', color: '#fff' }}>
-            <Download size={16} />
-            🏥 Descargar recibo VETERINARIA ({fmt(valorVet)})
-          </button>
-        )}
-
-        {/* Enviar por WA oficial */}
-        <button onClick={async () => { await enviarPorWA(); cerrar() }} disabled={generando || !guardado}
+        {/* Enviar por WA */}
+        <button onClick={async () => { await enviarPorWA() }} disabled={generando || !guardado}
           className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
           style={{ background: '#25D366', color: '#fff' }}>
           <MessageSquare size={16} /> Enviar por WhatsApp (línea oficial)
         </button>
+
+        {/* Generar el otro tipo (solo disponible tras guardar + si aplica) */}
+        {guardado && aliado && (
+          <button
+            onClick={() => {
+              const otroTipo = tipoRecibo === 'CLIENTE' ? 'VETERINARIA' : 'CLIENTE'
+              setTipoRecibo(otroTipo)
+              setTipoFijado(false)
+              setGuardado(false)
+            }}
+            className="w-full py-3 rounded-2xl text-sm font-bold flex items-center justify-center gap-2"
+            style={{ background: '#F3F4F6', color: '#374151' }}>
+            {tipoRecibo === 'CLIENTE' ? '🏥 También generar recibo veterinaria' : '📄 También generar recibo cliente'}
+          </button>
+        )}
 
         {/* Volver sin cerrar — para cuando solo quieran guardar y volver después */}
         <button onClick={cerrar}
