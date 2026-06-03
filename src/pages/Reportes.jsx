@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
-import { fmt } from '@/lib/utils'
+import { fmt, waLink } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from 'recharts'
 import { Download, CalendarDays } from 'lucide-react'
 
@@ -174,7 +174,7 @@ function TabContabilidad({ rango }) {
                   </Td>
                   <Td>
                     {s.cliente_wa && (
-                      <a href={`https://wa.me/57${s.cliente_wa.replace(/\D/g,'')}?text=Hola, le recordamos que tiene un saldo pendiente de ${fmt(s.saldo_pendiente)} por el servicio de ${s.mascota}`}
+                      <a href={waLink(s.cliente_wa, `Hola, le recordamos que tiene un saldo pendiente de ${fmt(s.saldo_pendiente)} por el servicio de ${s.mascota}`)}
                         target="_blank" rel="noreferrer"
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold"
                         style={{ background: '#25D366', color: 'white' }}>WA</a>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { db, dbAdmin } from '@/lib/supabase'
-import { petEmoji, fmt } from '@/lib/utils'
+import { petEmoji, fmt, waLink, calcularEstadoVet } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion } from '@/lib/notificaciones'
 import {
@@ -558,7 +558,7 @@ function ContactoSheet({ modal, onClose }) {
             <Phone size={22} />
             <span className="text-[13px]">Llamar</span>
           </a>
-          <a href={`https://wa.me/57${numero}`} target="_blank" rel="noreferrer" onClick={onClose}
+          <a href={waLink(numero)} target="_blank" rel="noreferrer" onClick={onClose}
             className="flex flex-col items-center gap-2 py-4 rounded-2xl font-bold text-white active:opacity-80 transition-opacity"
             style={{ background: '#25D366' }}>
             <MessageSquare size={22} />
@@ -576,11 +576,14 @@ function ContactoSheet({ modal, onClose }) {
 }
 
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
-function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
   const [contactoModal, setContactoModal] = useState(null)
-  const [sheetOpen, setSheetOpen]     = useState(false)
-  const [declinarOpen, setDeclinarOpen] = useState(false)
+  const [sheetOpen, setSheetOpen]         = useState(false)
+  const [declinarOpen, setDeclinarOpen]   = useState(false)
   const [motivoDeclina, setMotivoDeclina] = useState('')
+  const [problemaOpen, setProblemaOpen]   = useState(false)
+  const [motivoProblema, setMotivoProblema] = useState('')
+  const [enviandoProblema, setEnviandoProblema] = useState(false)
   const [fotoUrl, setFotoUrl]         = useState(
     svc.recogidas?.[0]?.foto_recogida_url || null
   )
@@ -613,14 +616,14 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   }
 
   async function abrirRecibo() {
-    // Si ya hay datos cacheados (recibo guardado), reusar sin recargar desde DB
-    // para que los valores del recibo no cambien después de registrar el pago
-    if (svcDataRecibo) { setReciboOpen(true); return }
+    // Solo reusar caché si el recibo ya fue guardado (el pago quedó registrado en DB)
+    if (reciboGuardado && svcDataRecibo) { setReciboOpen(true); return }
+    // Sin guardar: siempre recarga desde DB (refleja cambios del coordinador como comision_aliado)
     setLoadingRecibo(true)
     try {
       const { data } = await db.from('servicios')
-        .select(`id, valor_total, valor_pagado, estado_pago, comision_aliado, tipo_acompanamiento,
-          mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,whatsapp,direccion,ciudad)),
+        .select(`id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
+          mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,telefono2,whatsapp,direccion,ciudad)),
           planes:plan_id(nombre,codigo,tipo_proceso), aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)`)
         .eq('id', svc.id).single()
       const { data: cfData } = await db.from('cuarto_frio').select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
@@ -669,11 +672,39 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
               <div className="text-xs text-gray-500">
                 {especie}{mascota?.tamano ? ` · ${mascota.tamano}` : ''}{mascota?.peso_kg ? ` · ${mascota.peso_kg} kg` : ''}
               </div>
+              {svc.planes?.nombre && (
+                <div className="text-[11px] font-semibold mt-0.5" style={{ color: '#3D5A27' }}>
+                  📦 {svc.planes.nombre}
+                </div>
+              )}
+              {svc.fecha_ingreso && (
+                <div className="text-[10px] text-gray-400 mt-0.5">
+                  📅 Ingreso: {new Date(svc.fecha_ingreso + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </div>
+              )}
             </div>
           </div>
           <span className="text-[10px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
             style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
         </div>
+
+        {/* Alerta horario veterinaria */}
+        {recogida?.tipo_lugar === 'CLINICA_ALIADA' && svc.aliados && (() => {
+          const est = calcularEstadoVet(svc.aliados.horario)
+          if (!est.tieneHorario) return null
+          const COLOR = { verde: { bg: '#DCFCE7', border: '#86EFAC', text: '#166534' }, naranja: { bg: '#FFF7ED', border: '#FED7AA', text: '#92400E' }, rojo: { bg: '#FEE2E2', border: '#FECACA', text: '#991B1B' } }
+          const c = COLOR[est.nivel] || COLOR.rojo
+          return (
+            <div className="mb-3 flex items-start gap-2 px-3 py-2.5 rounded-xl text-[12px] font-semibold"
+              style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text }}>
+              <span className="shrink-0">🏥</span>
+              <div className="min-w-0">
+                <span className="block font-bold truncate">{svc.aliados.nombre}</span>
+                <span className="font-medium">{est.textoEstado}</span>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Monto */}
 
@@ -785,12 +816,67 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
           </div>
         )}
 
+        {/* Modal problema en ruta */}
+        {problemaOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+            onClick={() => { if (!enviandoProblema) setProblemaOpen(false) }}>
+            <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xl">⚠️</span>
+                <h3 className="text-base font-bold text-gray-900">Reportar problema en ruta</h3>
+              </div>
+              <p className="text-xs text-gray-500 mb-1">El servicio volverá a <strong>pendiente</strong> y el coordinador recibirá una alerta urgente para reasignar.</p>
+              <p className="text-xs text-amber-600 mb-4 font-medium">Tu asignación será liberada.</p>
+              <textarea
+                value={motivoProblema}
+                onChange={e => setMotivoProblema(e.target.value)}
+                placeholder="Ej: Problema mecánico, accidente, emergencia personal..."
+                className="w-full border rounded-xl px-4 py-3 text-sm outline-none mb-4 resize-none"
+                rows={3}
+                style={{ borderColor: '#FCA5A5' }}
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setProblemaOpen(false); setMotivoProblema('') }}
+                  disabled={enviandoProblema}
+                  className="flex-1 py-3 rounded-2xl text-sm font-semibold border"
+                  style={{ borderColor: '#E5E7EB', color: '#374151' }}>
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    setEnviandoProblema(true)
+                    try {
+                      await onReportarProblema(svc, motivoProblema)
+                      setProblemaOpen(false)
+                      setMotivoProblema('')
+                    } finally {
+                      setEnviandoProblema(false)
+                    }
+                  }}
+                  disabled={enviandoProblema}
+                  className="flex-1 py-3 rounded-2xl text-sm font-bold disabled:opacity-60"
+                  style={{ background: '#DC2626', color: '#fff' }}>
+                  {enviandoProblema ? 'Enviando…' : 'Reportar problema'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── FASE 2: EN CAMINO ── */}
         {enCamino && !reciboOpen && (
           <div className="mt-2">
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-4 text-sm font-semibold"
-              style={{ background: '#DBEAFE', color: '#1E40AF' }}>
-              🚐 En camino a la recogida
+            <div className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 mb-4"
+              style={{ background: '#DBEAFE' }}>
+              <span className="text-sm font-semibold" style={{ color: '#1E40AF' }}>🚐 En camino a la recogida</span>
+              <button
+                onClick={() => setProblemaOpen(true)}
+                className="text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all active:scale-95"
+                style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>
+                ⚠️ Reportar problema
+              </button>
             </div>
             <FotoEvidencia
               storagePath={recogida?.id ? `recogidas/${recogida.id}` : `recogidas/temp_${svc.id}`}
@@ -852,7 +938,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
               servicioSel={svc}
               tecnico={tecnico}
               yaGuardado={reciboGuardado}
-              onVolver={() => setReciboOpen(false)}
+              onVolver={() => { setReciboOpen(false); if (!reciboGuardado) setSvcDataRecibo(null) }}
               onGuardado={() => setReciboGuardado(true)}
             />
           </div>
@@ -1296,16 +1382,16 @@ export default function TecnicoApp() {
       const { data: svcData, error: svcErr } = await db.from('servicios')
         .select(`
           id, estado, estado_pago, metodo_pago, valor_total, valor_pagado,
-          mascota_id,
+          mascota_id, fecha_ingreso,
           direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
           mascotas:mascota_id (
             id_mascota, nombre, tamano, especie_id, peso_kg,
             especies ( nombre ),
-            clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono )
+            clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono, telefono2 )
           ),
           recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas, foto_recogida_url ),
           planes:plan_id ( nombre, codigo ),
-          aliados:aliado_origen_id ( nombre )
+          aliados:aliado_origen_id ( nombre, horario, telefono, whatsapp )
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
@@ -1456,7 +1542,6 @@ export default function TecnicoApp() {
   }
 
   async function declinarRecogida(svc, motivo) {
-    // Notificar a coordinadores
     const coords = await getCoordinadores()
     const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
     await Promise.all(coords.map(c => crearNotificacion({
@@ -1468,6 +1553,39 @@ export default function TecnicoApp() {
       servicio_id:      svc.id,
       datos:            { motivo },
     })))
+  }
+
+  async function reportarProblemaRuta(svc, motivo) {
+    const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+
+    // 1. Revertir a INGRESADO y limpiar técnico asignado
+    await db.from('servicios').update({
+      estado:     'INGRESADO',
+      tecnico_id: null,
+    }).eq('id', svc.id)
+    await db.from('recogidas').update({ tecnico_id: null }).eq('servicio_id', svc.id)
+
+    // 2. Registrar novedad en el servicio
+    await db.from('novedades_servicio').insert({
+      servicio_id:    svc.id,
+      tipo_novedad:   'NOTA',
+      descripcion:    `⚠️ Problema en ruta reportado por ${tecnico?.nombre || 'el técnico'}. ${motivo ? `Motivo: ${motivo}` : ''} Servicio devuelto a INGRESADO para reasignación.`,
+      registrado_por: tecnico?.id || null,
+    })
+
+    // 3. Notificar coordinadores con alerta urgente
+    const coords = await getCoordinadores()
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'TECNICO_PROBLEMA_RUTA',
+      titulo:           `⚠️ Problema en ruta — ${tecnico?.nombre}`,
+      mensaje:          `No puede completar la recogida de ${mascotaNombre}. ${motivo ? `Motivo: ${motivo}` : ''} Reasignar urgente.`,
+      servicio_id:      svc.id,
+      datos:            { motivo, mascota: mascotaNombre },
+    })))
+
+    await cargar()
   }
 
   async function completarRecogida(svc, recogidaId, valorCobrado = 0) {
@@ -1667,6 +1785,7 @@ export default function TecnicoApp() {
                 onCompletar={completarRecogida}
                 onCuartoFrio={confirmarCuartoFrio}
                 onDeclinar={declinarRecogida}
+                onReportarProblema={reportarProblemaRuta}
               />
         ) : tab === 'entregas' ? (
           entregas.length === 0
@@ -1761,12 +1880,12 @@ function SeccionHeader({ color, dot, emoji, titulo, count }) {
   )
 }
 
-function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar }) {
+function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
   const porRecoger   = recogidas.filter(s => s.estado === 'INGRESADO')
   const enCamino     = recogidas.filter(s => s.estado === 'EN_RECOGIDA')
   const cuartoFrio   = recogidas.filter(s => s.estado === 'EN_CUARTO_FRIO')
 
-  const cardProps = { tecnico, neverasList, onIniciar, onCompletar, onCuartoFrio, onDeclinar }
+  const cardProps = { tecnico, neverasList, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }
 
   return (
     <div>
@@ -2062,7 +2181,7 @@ function ReciboTab({ recogidas, tecnico }) {
           mascotas:mascota_id (
             nombre, peso_kg, especie_id, sexo,
             especies(nombre),
-            clientes:cliente_id(nombre,apellido,email,telefono,whatsapp,direccion,ciudad)
+            clientes:cliente_id(nombre,apellido,email,telefono,telefono2,whatsapp,direccion,ciudad)
           ),
           planes:plan_id(nombre,codigo,tipo_proceso),
           aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)
@@ -2137,25 +2256,36 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   const saldoPendiente = Math.max(0, (svcData.valor_total || 0) - (svcData.valor_pagado || 0))
 
   // ── Lógica recibo veterinaria ────────────────────────────────────────────
-  // La comisión se aplica SIEMPRE sobre el precio bruto original del servicio.
-  // Para DESCUENTO_INMEDIATO: valor_total ya tiene el descuento aplicado.
-  //   → precio_original = valor_total + comision_aliado
-  //   → lo que la vet paga a Camino = valor_total (NO se vuelve a deducir)
-  // Para FACTURACION_MENSUAL / CREDITO_ACUMULADO: valor_total es el precio completo.
-  //   → lo que la vet paga a Camino = valor_total (comisión se gestiona aparte)
-  const modalidad     = aliado?.modalidad_comision || ''
-  const comisionGuardada = svcData.comision_aliado || 0
-  const precioOriginal   = modalidad === 'DESCUENTO_INMEDIATO'
-    ? (svcData.valor_total || 0) + comisionGuardada   // reconstruimos el bruto
-    : (svcData.valor_total || 0)                       // ya es el bruto
+  // Usamos `comision_descontada` como fuente de verdad:
+  //   true  → la comisión YA fue restada de valor_total al registrar el servicio
+  //           → precioOriginal = valor_total + comision_aliado (reconstruimos el bruto)
+  //           → valorVet = precioOriginal - comision (lo que el aliado paga a Camino)
+  //   false → valor_total ya es el precio completo; comisión se gestiona por separado
+  //           → precioOriginal = valor_total
+  //           → valorVet = precioOriginal (sin deducción en este recibo)
+  const modalidad           = aliado?.modalidad_comision || ''
+  const comisionGuardada    = svcData.comision_aliado || 0
+  const comisionFueDescontada = svcData.comision_descontada === true
 
-  // Porcentaje real = comision / precio_original (NO sobre valor_total)
+  const precioOriginal = comisionFueDescontada
+    ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
+    : (svcData.valor_total || 0)                      // ya es el precio completo
+
+  // Porcentaje real sobre precio bruto (solo relevante cuando comisionFueDescontada)
   const [comisionPct, setComisionPct] = useState(
-    precioOriginal > 0 ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1)) : 0
+    comisionFueDescontada && precioOriginal > 0
+      ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1))
+      : 0
   )
-  const comisionMonto = Math.round(precioOriginal * comisionPct / 100)
-  // El vet siempre paga precio_original - comision (= valor_total para DESCUENTO_INMEDIATO)
-  const valorVet      = Math.max(0, precioOriginal - comisionMonto)
+  const comisionMonto = comisionFueDescontada ? Math.round(precioOriginal * comisionPct / 100) : 0
+  // Solo se deduce en recibo cuando la comisión fue aplicada inmediatamente
+  const valorVet = comisionFueDescontada
+    ? Math.max(0, precioOriginal - comisionMonto)
+    : precioOriginal
+
+  // Para el flujo !comisionFueDescontada (solicitud pública), usa directamente el valor de DB
+  const comisionManual    = comisionGuardada
+  const comisionManualPct = precioOriginal > 0 ? Math.round(comisionManual / precioOriginal * 100) : 0
 
   const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE') // CLIENTE | VETERINARIA
   const [tipoFijado, setTipoFijado]   = useState(false)     // true tras guardar → bloquea selector
@@ -2169,7 +2299,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     veterinaria:        aliado?.nombre || '',
     propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
     email:              cliente?.email || '',
-    telefono:           cliente?.telefono || cliente?.whatsapp || '',
+    telefono:           cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
     casa:               servicioSel.direccion_recogida || '',
     servicio:           plan?.nombre || '',
     valor_servicio:     precioOriginal,
@@ -2183,14 +2313,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   })
 
   // Multi-medios de pago: [{metodo, monto, referencia, comprobanteUrl, subiendoComprobante}]
-  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: saldoPendiente, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+  // Para DESCUENTO_INMEDIATO en recibo CLIENTE: el monto a cobrar es el precio bruto completo
+  // (no el valor_total descontado que recibe Camino de la clínica)
+  const montoClienteDefault = comisionFueDescontada ? precioOriginal : saldoPendiente
+  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
   const totalMedios = mediosPago.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0)
 
   const [firma, setFirma]           = useState(null)
   const [generando, setGenerando]   = useState(false)
   const [guardando, setGuardando]   = useState(false)
-  const [guardado,  setGuardado]    = useState(yaGuardado)
-  const [reciboId,  setReciboId]    = useState(null)
+  const [guardado,        setGuardado]        = useState(yaGuardado)
+  const [pagoRegistrado,  setPagoRegistrado]  = useState(false) // true tras primer pago — no se resetea al generar 2do recibo
+  const [reciboId,        setReciboId]        = useState(null)
   const [err, setErr]               = useState('')
 
   const uploadRefs = useRef({})
@@ -2230,8 +2364,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   // Métodos que requieren comprobante/referencia
   const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
 
+  const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
+
   async function guardarRecibo() {
-    if (totalMedios <= 0 && saldoPendiente > 0) {
+    // Para FACTURACION_MENSUAL vet: no se requiere pago inmediato
+    if (!esFacturacionMensual && totalMedios <= 0 && saldoPendiente > 0) {
       setErr('Registra al menos un medio de pago con monto.')
       return
     }
@@ -2254,10 +2391,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       if (error) throw error
       setReciboId(data.id)
 
-      // Actualizar pago en servicios si hubo cobro
-      if (totalMedios > 0) {
-        const nuevoPagado   = (svcData.valor_pagado || 0) + totalMedios
-        const nuevoEstado   = nuevoPagado >= (svcData.valor_total || 0) ? 'COMPLETO' : 'PARCIAL'
+      if (esFacturacionMensual) {
+        // No se registra cobro ahora — dejar estado_pago como PENDIENTE
+        await db.from('novedades_servicio').insert({
+          servicio_id:    servicioSel.id,
+          tipo_novedad:   'NOTA',
+          descripcion:    `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionGuardada)} pendiente de facturación mensual. No. ${form.numero_recibo}.`,
+          registrado_por: tecnico?.id || null,
+        })
+      } else if (!pagoRegistrado && totalMedios > 0) {
+        // Solo registrar el pago UNA VEZ — los recibos adicionales son solo documentos
+        const nuevoPagado = (svcData.valor_pagado || 0) + totalMedios
+        const nuevoEstado = nuevoPagado >= (svcData.valor_total || 0) ? 'COMPLETO' : 'PARCIAL'
         await db.from('servicios').update({
           valor_pagado: nuevoPagado,
           estado_pago:  nuevoEstado,
@@ -2276,6 +2421,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           valor_ajuste:   totalMedios,
           registrado_por: tecnico?.id || null,
         })
+        setPagoRegistrado(true)
       }
 
       setGuardado(true)
@@ -2383,33 +2529,72 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         t(fmt(Number(value) || 0), x + bw / 2, yy + 11, { align: 'center' })
       }
       if (tipo === 'VETERINARIA') {
-        // Desglose comisión para recibo VET
-        // precioOriginal = precio bruto (antes del descuento de comisión)
-        // valorVet       = lo que el aliado paga a Camino al Cielo
         const lineH = 6.5
-        pdf.setFillColor(255, 251, 235); pdf.rect(M, y, CW, lineH * 3 + 4, 'F')
-        pdf.setDrawColor(253, 230, 138); pdf.setLineWidth(0.3)
-        pdf.rect(M, y, CW, lineH * 3 + 4, 'D')
+        if (comisionFueDescontada) {
+          // DESCUENTO_INMEDIATO: desglose completo bruto → comisión → total
+          const rows = 3
+          pdf.setFillColor(255, 251, 235); pdf.rect(M, y, CW, lineH * rows + 4, 'F')
+          pdf.setDrawColor(253, 230, 138); pdf.setLineWidth(0.3)
+          pdf.rect(M, y, CW, lineH * rows + 4, 'D')
 
-        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
-        t('Precio bruto del servicio:', M + 3, y + lineH)
-        pdf.setFont('helvetica', 'bold')
-        t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
+          t('Precio bruto del servicio:', M + 3, y + lineH)
+          pdf.setFont('helvetica', 'bold')
+          t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
 
-        pdf.setFont('helvetica', 'normal'); pdf.setTextColor(180, 50, 0)
-        t(`Comisión aliado (${comisionPct}%):`, M + 3, y + lineH * 2)
-        pdf.setFont('helvetica', 'bold')
-        t(`– ${fmt(comisionMonto)}`, W - M - 3, y + lineH * 2, { align: 'right' })
+          pdf.setFont('helvetica', 'normal'); pdf.setTextColor(180, 50, 0)
+          t(`Comisión aliado (${comisionPct}%):`, M + 3, y + lineH * 2)
+          pdf.setFont('helvetica', 'bold')
+          t(`– ${fmt(comisionMonto)}`, W - M - 3, y + lineH * 2, { align: 'right' })
 
-        pdf.setFillColor(254, 240, 138); pdf.rect(M, y + lineH * 2 + 1, CW, lineH + 3, 'F')
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(120, 50, 0)
-        t('TOTAL A COBRAR:', M + 3, y + lineH * 3 + 1)
-        t(fmt(valorVet), W - M - 3, y + lineH * 3 + 1, { align: 'right' })
-        y += lineH * 3 + 8
+          pdf.setFillColor(254, 240, 138); pdf.rect(M, y + lineH * 2 + 1, CW, lineH + 3, 'F')
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(120, 50, 0)
+          t('TOTAL A COBRAR:', M + 3, y + lineH * 3 + 1)
+          t(fmt(valorVet), W - M - 3, y + lineH * 3 + 1, { align: 'right' })
+          y += lineH * 3 + 8
+        } else {
+          // CREDITO_ACUMULADO / FACTURACION_MENSUAL: aliado paga precio completo
+          // Usa comisionManual (editable en UI) para permitir corregir servicios con comision=0 en DB
+          const comisionPDF = comisionManual
+          const rows = comisionPDF > 0 ? 2 : 1
+          pdf.setFillColor(255, 251, 235); pdf.rect(M, y, CW, lineH * rows + 4, 'F')
+          pdf.setDrawColor(253, 230, 138); pdf.setLineWidth(0.3)
+          pdf.rect(M, y, CW, lineH * rows + 4, 'D')
+
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
+          t('Valor del servicio:', M + 3, y + lineH)
+          pdf.setFont('helvetica', 'bold')
+          t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
+
+          if (comisionPDF > 0) {
+            const pctInfo = precioOriginal > 0 ? Math.round(comisionPDF / precioOriginal * 100) : 0
+            pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(150, 80, 0)
+            t(`Comisión ${pctInfo}% (${fmt(comisionPDF)}) — se gestiona por separado`, M + 3, y + lineH * 2)
+          }
+
+          pdf.setFillColor(254, 240, 138); pdf.rect(M, y + lineH * rows + 1, CW, lineH + 3, 'F')
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(120, 50, 0)
+          t('TOTAL A COBRAR:', M + 3, y + lineH * (rows + 1) + 1)
+          t(fmt(valorVet), W - M - 3, y + lineH * (rows + 1) + 1, { align: 'right' })
+          y += lineH * (rows + 1) + 8
+        }
       } else {
-        // Recibo cliente: solo muestra el valor del servicio, sin detalles de cobro
+        // Recibo cliente: valor del servicio + nota de comisión si viene de solicitud con aliado
         drawBox('Valor del servicio', valorMostrar, M, y)
         y += 18
+        if (comisionGuardada > 0 && !comisionFueDescontada && aliado) {
+          const pctCom = precioOriginal > 0 ? Math.round(comisionGuardada / precioOriginal * 100) : 0
+          const modCom = aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual'
+                       : aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'
+                       : 'gestion separada'
+          pdf.setFillColor(255, 247, 237); pdf.rect(M, y, CW, 9, 'F')
+          pdf.setDrawColor(253, 215, 170); pdf.setLineWidth(0.3); pdf.rect(M, y, CW, 9, 'D')
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(146, 64, 14)
+          t(`Comision aliado: ${aliado.nombre}`, M + 2, y + 3.5)
+          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7)
+          t(`${fmt(comisionGuardada)}${pctCom > 0 ? ` (${pctCom}%)` : ''} — ${modCom}`, M + 2, y + 7)
+          y += 12
+        }
       }
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(80, 80, 80)
       t(`Medios de pago: ${mediosPagoTexto}`, M, y); y += 6
@@ -2526,8 +2711,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         `📅 Fecha: ${form.fecha}`,
         `📦 Plan: ${form.servicio}`,
         ``,
-        `💵 Precio bruto: ${fmt(precioOriginal)}`,
-        `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
+        ...(comisionFueDescontada ? [
+          `💵 Precio bruto: ${fmt(precioOriginal)}`,
+          `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
+        ] : [
+          `💵 Valor del servicio: ${fmt(precioOriginal)}`,
+          ...(comisionGuardada > 0 ? [`ℹ️ Comisión ${Math.round(comisionGuardada/precioOriginal*100)}% (${fmt(comisionGuardada)}) — se gestiona por separado`] : []),
+        ]),
         `✅ *Total a cobrar: ${fmt(valorVet)}*`,
         ``,
         `Medios de pago recibidos:\n${mediosTxt}`,
@@ -2618,38 +2808,61 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       {tipoRecibo === 'VETERINARIA' && aliado && (
         <div className="rounded-2xl mb-4 overflow-hidden"
           style={{ border: '1.5px solid #FDE68A' }}>
-          <div className="px-4 py-2.5" style={{ background: '#FFF3DC' }}>
-            <div className="text-[11px] font-bold text-amber-800 mb-2">Desglose comisión del aliado</div>
-            <div className="flex justify-between text-[12px] mb-1">
-              <span className="text-amber-700">Precio bruto del servicio</span>
-              <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
-            </div>
-            <div className="flex items-center justify-between text-[12px] mb-1">
-              <span className="text-amber-700">Comisión aliado</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-red-600 font-bold">– {fmt(comisionMonto)}</span>
-                <div className="flex items-center gap-1 ml-2">
-                  <input
-                    type="number" min={0} max={100} step={0.5}
-                    value={comisionPct}
-                    onChange={e => setComisionPct(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                    className="w-14 text-center px-1 py-0.5 rounded-lg border text-[12px] font-bold outline-none"
-                    style={{ borderColor: '#F59E0B', color: '#92400E' }}
-                  />
-                  <span className="text-[11px] font-bold text-amber-700">%</span>
+          {comisionFueDescontada ? (
+            /* DESCUENTO_INMEDIATO: desglose completo con deducción */
+            <>
+              <div className="px-4 py-2.5" style={{ background: '#FFF3DC' }}>
+                <div className="text-[11px] font-bold text-amber-800 mb-2">Desglose comisión del aliado</div>
+                <div className="flex justify-between text-[12px] mb-1">
+                  <span className="text-amber-700">Precio bruto del servicio</span>
+                  <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[12px] mb-1">
+                  <span className="text-amber-700">Comisión aliado</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-red-600 font-bold">– {fmt(comisionMonto)}</span>
+                    <div className="flex items-center gap-1 ml-2">
+                      <input
+                        type="number" min={0} max={100} step={0.5}
+                        value={comisionPct}
+                        onChange={e => setComisionPct(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                        className="w-14 text-center px-1 py-0.5 rounded-lg border text-[12px] font-bold outline-none"
+                        style={{ borderColor: '#F59E0B', color: '#92400E' }}
+                      />
+                      <span className="text-[11px] font-bold text-amber-700">%</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-          <div className="flex justify-between px-4 py-2.5" style={{ background: '#FEF08A' }}>
-            <span className="text-[13px] font-bold text-amber-900">Total a cobrar</span>
-            <span className="text-[16px] font-extrabold text-amber-900">{fmt(valorVet)}</span>
-          </div>
-          {modalidad === 'FACTURACION_MENSUAL' || modalidad === 'CREDITO_ACUMULADO' ? (
-            <div className="px-4 py-2 text-[10px] text-amber-700" style={{ background: '#FFFBEB' }}>
-              ℹ️ Modalidad <strong>{modalidad.replace('_', ' ')}</strong> — la comisión se gestiona por separado, el aliado paga el valor total.
-            </div>
-          ) : null}
+              <div className="flex justify-between px-4 py-2.5" style={{ background: '#FEF08A' }}>
+                <span className="text-[13px] font-bold text-amber-900">Total a cobrar</span>
+                <span className="text-[16px] font-extrabold text-amber-900">{fmt(valorVet)}</span>
+              </div>
+            </>
+          ) : (
+            /* CREDITO_ACUMULADO / FACTURACION_MENSUAL: aliado paga precio completo */
+            <>
+              <div className="px-4 py-2.5" style={{ background: '#FFF3DC' }}>
+                <div className="text-[11px] font-bold text-amber-800 mb-1">Recibo veterinaria / aliado</div>
+                <div className="flex justify-between text-[12px]">
+                  <span className="text-amber-700">Valor del servicio</span>
+                  <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
+                </div>
+                {comisionManual > 0 && (
+                  <div className="text-[10px] text-amber-600 mt-1">
+                    Comisión {comisionManualPct}% ({fmt(comisionManual)}) — se gestiona por separado
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-between px-4 py-2.5" style={{ background: '#FEF08A' }}>
+                <span className="text-[13px] font-bold text-amber-900">Total a cobrar</span>
+                <span className="text-[16px] font-extrabold text-amber-900">{fmt(valorVet)}</span>
+              </div>
+              <div className="px-4 py-2 text-[10px] text-amber-700" style={{ background: '#FFFBEB' }}>
+                Modalidad <strong>{modalidad.replace(/_/g, ' ')}</strong> — la comisión se liquida aparte, el aliado paga el precio completo aquí.
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -2685,25 +2898,58 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           /* Desglose comisión para vet */
           <div style={{ marginBottom: '10px', border: '1.5px solid #FDE68A', borderRadius: '10px', overflow: 'hidden', background: '#FFFBEB' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
-              <span style={{ fontSize: '11px', color: '#92400E' }}>Precio bruto del servicio</span>
+              <span style={{ fontSize: '11px', color: '#92400E' }}>Precio del servicio</span>
               <span style={{ fontSize: '13px', fontWeight: '700', color: '#0B1D4F' }}>{fmt(precioOriginal)}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
-              <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}%)</span>
-              <span style={{ fontSize: '13px', fontWeight: '700', color: '#DC2626' }}>– {fmt(comisionMonto)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
-              <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>Total a cobrar</span>
-              <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(valorVet)}</span>
-            </div>
+            {/* DESCUENTO_INMEDIATO: muestra deducción; CREDITO/FACTURACION: muestra comisión informativa */}
+            {comisionFueDescontada ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
+                  <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}%)</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#DC2626' }}>– {fmt(comisionMonto)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>Total a cobrar</span>
+                  <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(valorVet)}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                {comisionManual > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
+                    <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionManualPct}%) — se factura aparte</span>
+                    <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>{fmt(comisionManual)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>Total a cobrar al aliado</span>
+                  <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(precioOriginal)}</span>
+                </div>
+              </>
+            )}
           </div>
         ) : (
-          /* Recibo cliente: solo valor del servicio, sin detalles de cobro */
+          /* Recibo cliente: valor del servicio + nota de comisión si aplica */
           <div style={{ marginBottom: '10px' }}>
             <div style={{ border: '1.5px solid #C4A87A', borderRadius: '8px', padding: '8px 12px', textAlign: 'center', background: '#FFFDF8' }}>
               <div style={{ fontSize: '8px', fontWeight: '700', color: '#8C6C3C', textTransform: 'uppercase', marginBottom: '2px' }}>Valor del servicio</div>
               <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(form.valor_servicio)}</div>
             </div>
+            {/* Nota de comisión — solo visible cuando el servicio viene de solicitud de cliente con aliado */}
+            {comisionGuardada > 0 && !comisionFueDescontada && aliado && (
+              <div style={{ marginTop: '6px', padding: '6px 10px', borderRadius: '8px', background: '#FFF7ED', border: '1px solid #FED7AA' }}>
+                <div style={{ fontSize: '9px', fontWeight: '700', color: '#92400E', marginBottom: '1px' }}>
+                  Comision aliado registrada — {aliado.nombre}
+                </div>
+                <div style={{ fontSize: '9px', color: '#B45309' }}>
+                  {fmt(comisionGuardada)}
+                  {precioOriginal > 0 ? ` (${Math.round(comisionGuardada / precioOriginal * 100)}%)` : ''}
+                  {' — '}
+                  {aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' :
+                   aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'  : 'gestion separada'}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2735,24 +2981,37 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
       {/* ── Medios de pago ── */}
       <div className="mb-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
-            <CreditCard size={11} /> Medios de pago recibidos
+        {esFacturacionMensual ? (
+          /* FACTURACION_MENSUAL: no se cobra ahora */
+          <div className="rounded-2xl px-4 py-3 flex items-start gap-3"
+            style={{ background: '#EFF6FF', border: '1.5px solid #BFDBFE' }}>
+            <span className="text-xl flex-shrink-0">📋</span>
+            <div>
+              <p className="text-[12px] font-bold text-blue-800">Facturación mensual — sin cobro en este momento</p>
+              <p className="text-[11px] text-blue-600 mt-0.5">El pago de {fmt(saldoPendiente)} quedará pendiente y se facturará al aliado al cierre del mes. El recibo se guarda como constancia del servicio.</p>
+            </div>
           </div>
-          <span className="text-[10px] text-gray-400">
-            Pendiente: <strong style={{ color: '#92400E' }}>{fmt(saldoPendiente)}</strong>
-          </span>
-        </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                <CreditCard size={11} /> Medios de pago recibidos
+              </div>
+              <span className="text-[10px] text-gray-400">
+                Pendiente: <strong style={{ color: '#92400E' }}>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioOriginal : saldoPendiente)}</strong>
+              </span>
+            </div>
+            {/* Tip pago mixto */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[11px]"
+              style={{ background: '#EEF3FB', color: '#1E40AF' }}>
+              <span className="text-base">💡</span>
+              <span><strong>Pago mixto:</strong> podés combinar efectivo + transferencia + Nequi, etc. Agregá un medio por cada forma recibida.</span>
+            </div>
+          </>
+        )}
 
-        {/* Tip pago mixto */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[11px]"
-          style={{ background: '#EEF3FB', color: '#1E40AF' }}>
-          <span className="text-base">💡</span>
-          <span><strong>Pago mixto:</strong> podés combinar efectivo + transferencia + Nequi, etc. Agregá un medio por cada forma recibida.</span>
-        </div>
-
-        <div className="space-y-3">
+        {!esFacturacionMensual && (<><div className="space-y-3">
           {mediosPago.map((m, idx) => {
             const necesitaComprobante = METODOS_CON_COMPROBANTE.includes(m.metodo)
             const tieneComprobante    = !!m.comprobanteUrl
@@ -2894,6 +3153,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
             </div>
           )}
         </div>
+        </>)}
       </div>
 
       {err && (

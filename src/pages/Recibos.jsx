@@ -59,7 +59,7 @@ function buildReciboData(svc, pesoConfirmado) {
     veterinaria:    svc.aliados?.nombre || '',
     propietario:    `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
     email:          cliente?.email || '',
-    telefono:       cliente?.telefono || cliente?.whatsapp || '',
+    telefono:       cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
     direccion:      svc.direccion_recogida || '',
     servicio:       svc.planes?.nombre || '',
     valor_total:              svc.valor_total  || 0,
@@ -400,7 +400,7 @@ export default function Recibos() {
           mascotas:mascota_id(
             nombre, peso_kg,
             especies(nombre),
-            clientes:cliente_id(nombre, apellido, email, telefono, whatsapp, direccion, ciudad)
+            clientes:cliente_id(nombre, apellido, email, telefono, telefono2, whatsapp, direccion, ciudad)
           ),
           planes:plan_id(nombre, codigo),
           aliados:aliado_origen_id(nombre),

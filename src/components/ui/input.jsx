@@ -5,7 +5,7 @@ export const Input = forwardRef(({ className, ...props }, ref) => (
   <input
     ref={ref}
     className={cn(
-      'w-full px-3 py-2 text-[13px] font-medium text-gray-900 bg-white',
+      'w-full px-3 py-2.5 text-[13px] font-medium text-gray-900 bg-white',
       'border border-gray-200 rounded-lg',
       'placeholder:text-gray-400 placeholder:font-normal',
       'outline-none transition-all duration-150',

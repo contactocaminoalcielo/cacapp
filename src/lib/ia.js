@@ -1,6 +1,6 @@
 // Claude Haiku — extracción de datos con IA
-// Configura VITE_CLAUDE_KEY en el archivo .env (ver .env.example)
-const CLAUDE_KEY = import.meta.env.VITE_CLAUDE_KEY
+// API key de Anthropic: console.anthropic.com
+const CLAUDE_KEY = 'CLAVE_REMOVIDA'
 const MODELO     = 'claude-haiku-4-5-20251001'
 
 const PROMPT = `Eres el asistente de Camino al Cielo, funeraria de mascotas en Colombia.
@@ -57,6 +57,7 @@ async function llamarClaude(content) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err?.error?.message || `Error ${res.status}`)
   }
+
   const json = await res.json()
   const texto = json.content?.[0]?.text ?? ''
   const limpio = texto.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()

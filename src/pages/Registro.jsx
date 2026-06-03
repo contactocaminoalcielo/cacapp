@@ -14,10 +14,51 @@ import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
-  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare
+  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle
 } from 'lucide-react'
 
 const ESPECIE_NOMBRE_A_ID = { 'Perro':1, 'Gato':2, 'Conejo':3, 'Ave':4, 'Hámster':5, 'Pez':6, 'Reptil':7, 'Otro':8 }
+
+// ─── Validaciones ─────────────────────────────────────────────────────────────
+function validarTel(v, requerido = false) {
+  const val = (v || '').trim()
+  if (!val) return requerido ? 'Campo requerido' : null
+  if (val.startsWith('+') || val.startsWith('00')) {
+    const d = (val.startsWith('+') ? val.slice(1) : val.slice(2)).replace(/\D/g,'')
+    if (d.length < 7 || d.length > 15) return 'Número internacional inválido — ej: +1 555 1234567'
+    return null
+  }
+  const d = val.replace(/\D/g,'')
+  if (d.length !== 10) return '10 dígitos requeridos — ej: 3001234567'
+  if (!d.startsWith('3')) return 'Los celulares colombianos empiezan por 3'
+  return null
+}
+
+const REGLAS_REG = {
+  nombre:         v => !v?.trim() ? 'El nombre es requerido' : null,
+  whatsapp:       v => validarTel(v, true),
+  telefono:       v => validarTel(v, false),
+  telefono2:      v => validarTel(v, false),
+  email:          v => v?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? 'Correo inválido' : null,
+  mascota_nombre: v => !v?.trim() ? 'El nombre de la mascota es requerido' : null,
+  peso_kg: v => {
+    if (!v) return 'El peso es requerido'
+    const n = parseFloat(String(v).replace(',','.'))
+    if (isNaN(n) || n <= 0) return 'Ingresa un peso válido (ej: 4.5)'
+    if (n > 120) return '¿Está en kg? El valor parece muy alto'
+    return null
+  },
+}
+
+function ErrMsgR({ msg }) {
+  if (!msg) return null
+  return (
+    <div className="flex items-start gap-1.5 mt-1.5">
+      <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
+      <p className="text-[11px] text-red-600 font-medium leading-tight">{msg}</p>
+    </div>
+  )
+}
 
 // ─── constants ────────────────────────────────────────────────────────────────
 const PASOS = [
@@ -52,8 +93,8 @@ const CIUDADES = [
   { value: 'Otro',        label: 'Otro municipio',        recargo: { MOTO: 40000, CAMIONETA: 60000 } },
 ]
 
-const LABEL = 'text-[11px] font-bold text-gray-400 uppercase tracking-wider block mb-1'
-const CARD  = 'bg-white rounded-2xl shadow-sm border border-gray-100 p-6'
+const LABEL = 'text-[11px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5'
+const CARD  = 'bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6'
 const SUB   = 'text-[13px] font-semibold text-gray-700 mb-3'
 const SELECTED_CARD = 'bg-blue-50 border border-blue-200 rounded-xl p-4'
 
@@ -69,7 +110,7 @@ function Avatar({ nombre, apellido, size = 8 }) {
 // ─── Stepper ──────────────────────────────────────────────────────────────────
 function Stepper({ paso, setPaso }) {
   return (
-    <div className="flex items-start mb-8">
+    <div className="flex items-start mb-4 sm:mb-8">
       {PASOS.map((p, i) => (
         <div key={i} className="flex items-center flex-1 min-w-0">
           <div className="flex flex-col items-center gap-1">
@@ -130,6 +171,26 @@ export default function Registro() {
   const [error, setError]     = useState(null)
   const [success, setSuccess] = useState(false)
   const [iaOpen, setIaOpen]       = useState(false)
+
+  // Validación campo a campo
+  const [errReg, setErrReg]     = useState({})
+  const [tocReg, setTocReg]     = useState({})
+
+  function vldR(campo, valor) {
+    const e = REGLAS_REG[campo]?.(valor) ?? null
+    setErrReg(p => ({ ...p, [campo]: e }))
+    return e
+  }
+  function tocarR(campo, valor) {
+    setTocReg(p => ({ ...p, [campo]: true }))
+    vldR(campo, valor)
+  }
+  // Clase de Input con feedback visual
+  function icR(campo) {
+    if (!tocReg[campo]) return ''
+    if (errReg[campo])  return 'border-red-400 bg-red-50/40 focus:border-red-500 focus:ring-red-400/10'
+    return 'border-green-400 focus:border-green-500 focus:ring-green-400/10'
+  }
   const [iaDatos, setIaDatos]     = useState(false)
   const [borradorRestaurado, setBorradorRestaurado] = useState(!!borrador)
 
@@ -189,7 +250,7 @@ export default function Registro() {
   const [cedulaDuplicada, setCedulaDuplicada]           = useState(null)
   const [formCliente, setFormCliente] = useState(borrador?.formCliente ?? {
     nombre: '', apellido: '', cedula_nit: '', whatsapp: '',
-    telefono: '', email: '', direccion: '', barrio: '',
+    telefono: '', telefono2: '', email: '', direccion: '', barrio: '',
     localidad: '', ciudad: 'Bogotá', tipo_cliente: 'NORMAL',
   })
 
@@ -290,6 +351,7 @@ export default function Registro() {
   const comisionCalculada  = comisionPorcentaje > 0
     ? Math.round(valorBase * comisionPorcentaje / 100) : 0
   const aplicaDescuento    = !!aliadoSeleccionado &&
+    aliadoSeleccionado?.modalidad_comision === 'DESCUENTO_INMEDIATO' &&
     formRecogida.tipo_lugar === 'CLINICA_ALIADA' && comisionCalculada > 0
   const comisionMonto      = aplicaDescuento ? comisionCalculada : 0
   const recargoPrioridad  = planSeleccionado?.codigo === 'DESAMPARADO' && desamparadoPrioridad ? 16000 : 0
@@ -391,19 +453,19 @@ export default function Registro() {
   }
 
   // ── cargar precios por especie + peso ──
-  // FELINO (id=2) usa el rango 'FELINO'; demás especies usan rangos por kg.
+  // FELINO (id=2) y CONEJO (id=3) usan el rango 'FELINO'; demás especies usan rangos por kg.
   // PETIT (< 1 kg) aplica a todas las especies.
   async function cargarPreciosTodosPlanes(peso, especieIdActual) {
-    const pesoG   = Math.round(peso * 1000)
-    const esGato  = especieIdActual === 2
+    const pesoG        = Math.round(peso * 1000)
+    const usaFelino    = especieIdActual === 2 || especieIdActual === 3  // Gato o Conejo
     setCargandoPrecios(true)
     try {
       let q = db.from('planes_precios').select('plan_id,precio,rango_nombre')
       if (pesoG < 1000) {
         // < 1 kg: todos los animales → PETIT
         q = q.eq('rango_nombre', 'PETIT')
-      } else if (esGato) {
-        // Gato >= 1 kg → FELINO
+      } else if (usaFelino) {
+        // Gato o Conejo >= 1 kg → FELINO
         q = q.eq('rango_nombre', 'FELINO')
       } else {
         // Perros y otras especies >= 1 kg → rangos por peso (excluye FELINO)
@@ -424,7 +486,7 @@ export default function Registro() {
       const angelP = planByCode['ANGEL']
       if (angelP && map[angelP.id] === undefined) {
         if (pesoG < 1000)        map[angelP.id] = 69000
-        else if (esGato)         map[angelP.id] = 79000
+        else if (usaFelino)      map[angelP.id] = 79000  // Gato o Conejo
         else if (pesoG <= 10000) map[angelP.id] = 89000
         else if (pesoG <= 20000) map[angelP.id] = 119000
         else if (pesoG <= 35000) map[angelP.id] = 139000
@@ -543,7 +605,7 @@ export default function Registro() {
           ciudad_recogida:            cli.ciudad    || prev.ciudad_recogida,
           barrio_recogida:            prev.barrio_recogida,
           nombre_contacto_recogida:   `${cli.nombre} ${cli.apellido}`,
-          telefono_contacto_recogida: cli.whatsapp || cli.telefono || prev.telefono_contacto_recogida,
+          telefono_contacto_recogida: cli.whatsapp || cli.telefono || cli.telefono2 || prev.telefono_contacto_recogida,
         }))
         setAutoFilledRecogida(true)
       } else if (isNuevo && fCli.nombre) {
@@ -552,7 +614,7 @@ export default function Registro() {
           direccion_recogida:         fCli.direccion || prev.direccion_recogida,
           ciudad_recogida:            fCli.ciudad    || prev.ciudad_recogida,
           nombre_contacto_recogida:   `${fCli.nombre} ${fCli.apellido}`.trim() || prev.nombre_contacto_recogida,
-          telefono_contacto_recogida: fCli.whatsapp || fCli.telefono || prev.telefono_contacto_recogida,
+          telefono_contacto_recogida: fCli.whatsapp || fCli.telefono || fCli.telefono2 || prev.telefono_contacto_recogida,
         }))
         setAutoFilledRecogida(true)
       } else {
@@ -675,6 +737,7 @@ export default function Registro() {
             cedula_nit:   formCliente.cedula_nit  || null,
             whatsapp:     formCliente.whatsapp,
             telefono:     formCliente.telefono    || null,
+            telefono2:    formCliente.telefono2   || null,
             email:        formCliente.email       || null,
             direccion:    formCliente.direccion   || null,
             ciudad:       formCliente.ciudad      || 'Bogotá',
@@ -813,7 +876,7 @@ export default function Registro() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Topbar />
-      <div className="max-w-2xl mx-auto px-4 py-6">
+      <div className="max-w-2xl mx-auto px-4 py-3 sm:py-6">
         {/* Botón IA — visible solo en paso 0 */}
         {paso === 0 && (
           <button
@@ -921,7 +984,9 @@ export default function Registro() {
                     <div className="font-semibold text-gray-900">{clienteSeleccionado.nombre} {clienteSeleccionado.apellido}</div>
                     <div className="text-[12px] text-gray-500">
                       {clienteSeleccionado.whatsapp}
-                      {clienteSeleccionado.cedula_nit && ` · ${clienteSeleccionado.cedula_nit}`}
+                      {clienteSeleccionado.telefono && ` · ${clienteSeleccionado.telefono}`}
+                      {clienteSeleccionado.telefono2 && ` · ${clienteSeleccionado.telefono2}`}
+                      {clienteSeleccionado.cedula_nit && ` · CC ${clienteSeleccionado.cedula_nit}`}
                     </div>
                   </div>
                   <button className="text-[11px] text-red-500 hover:text-red-700 font-semibold"
@@ -934,10 +999,17 @@ export default function Registro() {
               <div>
                 <div className={`${SUB} mb-4`}>Datos del nuevo cliente</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div><label className={LABEL}>Nombre *</label>
-                    <Input value={formCliente.nombre} onChange={e => setFormCliente(p => ({ ...p, nombre: e.target.value.toUpperCase() }))} maxLength={80} /></div>
-                  <div><label className={LABEL}>Apellido *</label>
-                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value.toUpperCase() }))} maxLength={80} /></div>
+                  <div>
+                    <label className={LABEL}>Nombre *</label>
+                    <Input className={icR('nombre')} value={formCliente.nombre}
+                      onChange={e => { const v = e.target.value.toUpperCase(); setFormCliente(p => ({ ...p, nombre: v })); if (tocReg.nombre) vldR('nombre', v) }}
+                      onBlur={e => tocarR('nombre', e.target.value)} maxLength={80} />
+                    <ErrMsgR msg={tocReg.nombre && errReg.nombre} />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Apellido</label>
+                    <Input value={formCliente.apellido} onChange={e => setFormCliente(p => ({ ...p, apellido: e.target.value.toUpperCase() }))} maxLength={80} />
+                  </div>
                   <div>
                     <label className={LABEL}>Cédula / NIT</label>
                     <Input
@@ -968,13 +1040,34 @@ export default function Registro() {
                       </div>
                     )}
                   </div>
-                  <div><label className={LABEL}>WhatsApp *</label>
-                    <Input value={formCliente.whatsapp} placeholder="3001234567"
-                      onChange={e => setFormCliente(p => ({ ...p, whatsapp: e.target.value }))} maxLength={20} /></div>
-                  <div><label className={LABEL}>Teléfono</label>
-                    <Input value={formCliente.telefono} onChange={e => setFormCliente(p => ({ ...p, telefono: e.target.value }))} maxLength={20} /></div>
-                  <div><label className={LABEL}>Email</label>
-                    <Input value={formCliente.email} type="email" onChange={e => setFormCliente(p => ({ ...p, email: e.target.value }))} /></div>
+                  <div>
+                    <label className={LABEL}>WhatsApp *</label>
+                    <Input className={icR('whatsapp')} value={formCliente.whatsapp} placeholder="3001234567 · +1 555 1234"
+                      onChange={e => { const v = e.target.value; setFormCliente(p => ({ ...p, whatsapp: v })); if (tocReg.whatsapp) vldR('whatsapp', v) }}
+                      onBlur={e => tocarR('whatsapp', e.target.value)} maxLength={25} />
+                    <ErrMsgR msg={tocReg.whatsapp && errReg.whatsapp} />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Segundo contacto</label>
+                    <Input className={icR('telefono')} value={formCliente.telefono} placeholder="3001234567 · +57 601 1234"
+                      onChange={e => { const v = e.target.value; setFormCliente(p => ({ ...p, telefono: v })); if (tocReg.telefono) vldR('telefono', v) }}
+                      onBlur={e => tocarR('telefono', e.target.value)} maxLength={25} />
+                    <ErrMsgR msg={tocReg.telefono && errReg.telefono} />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Tercer contacto</label>
+                    <Input className={icR('telefono2')} value={formCliente.telefono2} placeholder="3001234567 · +34 612 345 678"
+                      onChange={e => { const v = e.target.value; setFormCliente(p => ({ ...p, telefono2: v })); if (tocReg.telefono2) vldR('telefono2', v) }}
+                      onBlur={e => tocarR('telefono2', e.target.value)} maxLength={25} />
+                    <ErrMsgR msg={tocReg.telefono2 && errReg.telefono2} />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Email</label>
+                    <Input className={icR('email')} value={formCliente.email} type="email"
+                      onChange={e => { const v = e.target.value; setFormCliente(p => ({ ...p, email: v })); if (tocReg.email) vldR('email', v) }}
+                      onBlur={e => tocarR('email', e.target.value)} />
+                    <ErrMsgR msg={tocReg.email && errReg.email} />
+                  </div>
                   <div><label className={LABEL}>Ciudad</label>
                     <Select value={formCliente.ciudad} onChange={e => setFormCliente(p => ({ ...p, ciudad: e.target.value }))}>
                       {CIUDADES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
@@ -1055,11 +1148,15 @@ export default function Registro() {
                 </div>
                 <div>
                   <label className={LABEL}>Peso (kg) *</label>
-                  <Input type="text" inputMode="decimal"
+                  <Input className={icR('peso_kg')} type="text" inputMode="decimal"
                     value={pesoKgOverride !== '' ? pesoKgOverride : (mascotaSeleccionada.peso_kg || '')}
                     placeholder="Ej: 28.5"
-                    onChange={e => setPesoKgOverride(e.target.value.replace(',', '.'))} />
-                  <p className="text-[10px] text-gray-400 mt-1">El peso determina el precio del plan. Corrígelo si es necesario.</p>
+                    onChange={e => { const v = e.target.value.replace(',', '.'); setPesoKgOverride(v); if (tocReg.peso_kg) vldR('peso_kg', v) }}
+                    onBlur={e => tocarR('peso_kg', e.target.value)} />
+                  {tocReg.peso_kg && errReg.peso_kg
+                    ? <ErrMsgR msg={errReg.peso_kg} />
+                    : <p className="text-[10px] text-gray-400 mt-1">El peso determina el precio del plan. Corrígelo si es necesario.</p>
+                  }
                 </div>
               </div>
             )}
@@ -1068,16 +1165,25 @@ export default function Registro() {
               <div>
                 <div className={`${SUB} mb-4`}>Datos de la mascota</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div><label className={LABEL}>Nombre *</label>
-                    <Input value={formMascota.nombre} onChange={e => setFormMascota(p => ({ ...p, nombre: e.target.value.toUpperCase() }))} /></div>
+                  <div>
+                    <label className={LABEL}>Nombre *</label>
+                    <Input className={icR('mascota_nombre')} value={formMascota.nombre}
+                      onChange={e => { const v = e.target.value.toUpperCase(); setFormMascota(p => ({ ...p, nombre: v })); if (tocReg.mascota_nombre) vldR('mascota_nombre', v) }}
+                      onBlur={e => tocarR('mascota_nombre', e.target.value)} />
+                    <ErrMsgR msg={tocReg.mascota_nombre && errReg.mascota_nombre} />
+                  </div>
                   <div><label className={LABEL}>Especie</label>
                     <Select value={formMascota.especie_id} onChange={e => setFormMascota(p => ({ ...p, especie_id: e.target.value }))}>
                       <option value="">Seleccionar...</option>
                       {especies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
                     </Select></div>
-                  <div><label className={LABEL}>Peso (kg) *</label>
-                    <Input type="text" inputMode="decimal" placeholder="Ej: 28.5" value={formMascota.peso_kg}
-                      onChange={e => setFormMascota(p => ({ ...p, peso_kg: e.target.value.replace(',', '.') }))} /></div>
+                  <div>
+                    <label className={LABEL}>Peso (kg) *</label>
+                    <Input className={icR('peso_kg')} type="text" inputMode="decimal" placeholder="Ej: 28.5" value={formMascota.peso_kg}
+                      onChange={e => { const v = e.target.value.replace(',', '.'); setFormMascota(p => ({ ...p, peso_kg: v })); if (tocReg.peso_kg) vldR('peso_kg', v) }}
+                      onBlur={e => tocarR('peso_kg', e.target.value)} />
+                    <ErrMsgR msg={tocReg.peso_kg && errReg.peso_kg} />
+                  </div>
                   <div><label className={LABEL}>Sexo</label>
                     <Select value={formMascota.sexo} onChange={e => setFormMascota(p => ({ ...p, sexo: e.target.value }))}>
                       <option value="Macho">Macho</option>
@@ -1283,15 +1389,15 @@ export default function Registro() {
                   {/* Cabecera */}
                   <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-2 pb-1 border-b border-gray-100">
                     <span className="text-[10px] font-bold text-gray-400 uppercase">Producto</span>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase text-right w-20">Precio</span>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase text-center w-16">Cant.</span>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase text-right w-16 sm:w-20">Precio</span>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase text-center w-14 sm:w-16">Cant.</span>
                     <span className="w-5" />
                   </div>
                   {adicionales.map(a => (
                     <div key={a.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-[12px] text-gray-800 truncate">{a.nombre}</span>
-                      <span className="text-[12px] font-semibold text-[#1A5CD8] w-20 text-right">{fmt(a.precio_base)}</span>
-                      <Input type="number" min="1" className="w-16 text-center"
+                      <span className="text-[12px] font-semibold text-[#1A5CD8] w-16 sm:w-20 text-right">{fmt(a.precio_base)}</span>
+                      <Input type="number" min="1" className="w-14 sm:w-16 text-center"
                         value={a.cantidad}
                         onChange={e => updateAdicionalCantidad(a.id, e.target.value)} />
                       <button className="text-gray-400 hover:text-red-500 w-5" onClick={() => removeAdicional(a.id)}>
@@ -1521,11 +1627,11 @@ export default function Registro() {
                     <span className="font-semibold text-gray-800">{fmt(valorBruto)}</span>
                   </div>
                   {aplicaDescuento && comisionMonto > 0 && (
-                    <div className="flex justify-between text-[12px]">
-                      <span className="text-amber-600">
-                        - Comisión {comisionPorcentaje}% · {aliadoSeleccionado?.nombre} (sobre plan base {fmt(valorBase)})
+                    <div className="flex justify-between gap-2 text-[12px]">
+                      <span className="text-amber-600 min-w-0 break-words">
+                        - Comisión {comisionPorcentaje}% · {aliadoSeleccionado?.nombre}
                       </span>
-                      <span className="font-medium text-amber-600">- {fmt(comisionMonto)}</span>
+                      <span className="font-medium text-amber-600 shrink-0">- {fmt(comisionMonto)}</span>
                     </div>
                   )}
                   {recargoCiudad > 0 && (
@@ -1541,8 +1647,8 @@ export default function Registro() {
                     </div>
                   )}
                   {descuentoAdicionalNum > 0 && (
-                    <div className="flex justify-between text-[12px]">
-                      <span className="text-orange-600 truncate pr-2">
+                    <div className="flex justify-between gap-2 text-[12px]">
+                      <span className="text-orange-600 min-w-0 truncate">
                         - Descuento{descuentoAdicionalMotivo ? `: ${descuentoAdicionalMotivo}` : ' adicional'}
                       </span>
                       <span className="font-medium text-orange-600 shrink-0">- {fmt(descuentoAdicionalNum)}</span>
@@ -1667,9 +1773,9 @@ export default function Registro() {
                     </div>
                   )}
                   {aplicaDescuento && comisionMonto > 0 && (
-                    <div className="flex justify-between gap-3 text-[12px]">
-                      <span className="text-amber-600">Comisión aliado ({comisionPorcentaje}%)</span>
-                      <span className="text-amber-600">- {fmt(comisionMonto)}</span>
+                    <div className="flex justify-between gap-2 text-[12px]">
+                      <span className="text-amber-600 min-w-0 truncate">Comisión aliado ({comisionPorcentaje}%)</span>
+                      <span className="text-amber-600 shrink-0">- {fmt(comisionMonto)}</span>
                     </div>
                   )}
                   {recargoCiudad > 0 && (
@@ -1691,9 +1797,9 @@ export default function Registro() {
                     </div>
                   )}
                   {descuentoAdicionalNum > 0 && (
-                    <div className="flex justify-between gap-3 text-[12px]">
-                      <span className="text-orange-600">Descuento{descuentoAdicionalMotivo ? `: ${descuentoAdicionalMotivo}` : ' adicional'}</span>
-                      <span className="text-orange-600">- {fmt(descuentoAdicionalNum)}</span>
+                    <div className="flex justify-between gap-2 text-[12px]">
+                      <span className="text-orange-600 min-w-0 truncate">Descuento{descuentoAdicionalMotivo ? `: ${descuentoAdicionalMotivo}` : ' adicional'}</span>
+                      <span className="text-orange-600 shrink-0">- {fmt(descuentoAdicionalNum)}</span>
                     </div>
                   )}
                   <div className="flex justify-between gap-3">
@@ -1717,20 +1823,51 @@ export default function Registro() {
         )}
 
         {/* Navegación */}
-        <div className="flex justify-between mt-5 gap-3">
-          <Button variant="secondary"
+        <div className="flex justify-between mt-4 sm:mt-5 gap-3">
+          <Button variant="secondary" size="lg" className="flex-1 sm:flex-none"
             onClick={() => paso > 0 ? setPaso(p => p - 1) : navigate('/kanban')}
             disabled={saving}>
-            <ChevronLeft size={15} />
+            <ChevronLeft size={16} />
             {paso === 0 ? 'Cancelar' : 'Anterior'}
           </Button>
           {paso < PASOS.length - 1 ? (
-            <Button onClick={() => setPaso(p => p + 1)} disabled={!canNext[paso]?.()}>
-              Siguiente <ChevronRight size={15} />
+            <Button size="lg" className="flex-1 sm:flex-none"
+              onClick={() => {
+                // Validar campos del paso actual antes de avanzar
+                if (paso === 0 && clienteNuevo) {
+                  const campos = { nombre: formCliente.nombre, whatsapp: formCliente.whatsapp, telefono: formCliente.telefono, telefono2: formCliente.telefono2, email: formCliente.email }
+                  let hayErr = false
+                  const newToc = { ...tocReg }; const newErr = { ...errReg }
+                  Object.entries(campos).forEach(([k, v]) => {
+                    newToc[k] = true
+                    const e = REGLAS_REG[k]?.(v) ?? null
+                    newErr[k] = e
+                    if (e) hayErr = true
+                  })
+                  setTocReg(newToc); setErrReg(newErr)
+                  if (hayErr) return
+                }
+                if (paso === 1 && mascotaNueva) {
+                  const campos = { mascota_nombre: formMascota.nombre, peso_kg: formMascota.peso_kg }
+                  let hayErr = false
+                  const newToc = { ...tocReg }; const newErr = { ...errReg }
+                  Object.entries(campos).forEach(([k, v]) => {
+                    newToc[k] = true
+                    const e = REGLAS_REG[k]?.(v) ?? null
+                    newErr[k] = e
+                    if (e) hayErr = true
+                  })
+                  setTocReg(newToc); setErrReg(newErr)
+                  if (hayErr) return
+                }
+                if (!canNext[paso]?.()) return
+                setPaso(p => p + 1)
+              }}>
+              Siguiente <ChevronRight size={16} />
             </Button>
           ) : (
-            <Button onClick={guardar} disabled={saving} size="lg">
-              {saving ? <><Spinner size={14} /> Guardando...</> : <><CheckCircle size={15} /> Guardar servicio</>}
+            <Button onClick={guardar} disabled={saving} size="lg" className="flex-1 sm:flex-none">
+              {saving ? <><Spinner size={14} /> Guardando...</> : <><CheckCircle size={16} /> Guardar servicio</>}
             </Button>
           )}
         </div>

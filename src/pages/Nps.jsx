@@ -7,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji, today } from '@/lib/utils'
+import { petEmoji, today, waLink } from '@/lib/utils'
 import { Star, MessageCircle, RefreshCw } from 'lucide-react'
 
 const FILTROS = [
@@ -161,7 +161,7 @@ export default function Nps() {
                           </Button>
                         )}
                         {c?.whatsapp && (
-                          <a href={`https://wa.me/57${c.whatsapp.replace(/\D/g,'')}?text=Hola, queremos saber cómo estuvo el servicio de ${m?.nombre}`}
+                          <a href={waLink(c.whatsapp, `Hola, queremos saber cómo estuvo el servicio de ${m?.nombre}`)}
                             target="_blank" rel="noreferrer"
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold"
                             style={{ background: '#25D366', color: 'white' }}>

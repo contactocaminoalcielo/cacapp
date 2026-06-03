@@ -112,11 +112,11 @@ export function LocalidadSelect({
         </span>
       </div>
 
-      {/* ── Lista desplegable (inline, no flotante) ── */}
+      {/* ── Lista desplegable (flotante, sobre el contenido) ── */}
       {showList && (
         <div
-          className="w-full bg-white rounded-xl border shadow-lg mt-1"
-          style={{ borderColor: '#E5E7EB', zIndex: 9999, position: 'relative' }}
+          className="absolute w-full bg-white rounded-xl border shadow-lg mt-1"
+          style={{ borderColor: '#E5E7EB', zIndex: 9999, left: 0, minWidth: 200 }}
         >
           {/* Búsqueda */}
           <div className="p-2 border-b border-gray-100">

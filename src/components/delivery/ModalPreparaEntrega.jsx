@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { db } from '@/lib/supabase'
-import { fmt } from '@/lib/utils'
+import { fmt, waLink } from '@/lib/utils'
 import { crearNotificacion } from '@/lib/notificaciones'
 import { generarCertificadoEntrega } from '@/lib/certificadoEntrega'
 import { X, Truck, MapPin, User, Calendar, MessageCircle, Download, Check, AlertCircle } from 'lucide-react'
@@ -230,12 +230,11 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
     const wa = String(cliente.whatsapp).replace(/\D/g, '')
     const mascota = svc?.mascotas?.nombre || 'tu mascota'
     const dirRef = direccionEntrega || svc?.direccion_recogida || 'la registrada'
-    const msg = encodeURIComponent(
+    const msg =
       `¡Hola ${cliente.nombre}! 🐾\n\nTus recordatorios de *${mascota}* ya están listos.\n\n` +
       `¿Confirmamos la dirección de entrega: *${dirRef}*?\n` +
       `Si deseas otra dirección, cuéntanos. En Camino al Cielo te acompañamos 🕊️`
-    )
-    window.open(`https://wa.me/57${wa}?text=${msg}`, '_blank')
+    window.open(waLink(cliente.whatsapp, msg), '_blank')
   }
 
   const saldo = svc ? Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0)) : 0

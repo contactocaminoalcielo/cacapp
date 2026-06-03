@@ -391,10 +391,10 @@ function TabClientes({ isAdmin }) {
     setForm(item ? {
       nombre: item.nombre || '', apellido: item.apellido || '',
       cedula_nit: item.cedula_nit || '', whatsapp: item.whatsapp || '',
-      telefono: item.telefono || '', email: item.email || '',
+      telefono: item.telefono || '', telefono2: item.telefono2 || '', email: item.email || '',
       direccion: item.direccion || '', ciudad: item.ciudad || 'Bogotá',
       tipo_cliente: item.tipo_cliente || 'NORMAL', activo: item.activo !== false,
-    } : { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
+    } : { nombre:'',apellido:'',cedula_nit:'',whatsapp:'',telefono:'',telefono2:'',email:'',direccion:'',ciudad:'Bogotá',tipo_cliente:'NORMAL',activo:true })
   }
   async function guardar() {
     if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
@@ -465,7 +465,7 @@ function TabClientes({ isAdmin }) {
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              {[['nombre','Nombre',80,true],['apellido','Apellido',80,true],['cedula_nit','Cédula/NIT',30,false],['whatsapp','WhatsApp',20,false],['telefono','Teléfono',20,false],['email','Email',null,false],['ciudad','Ciudad',80,true],['direccion','Dirección',null,true]].map(([k,l,ml,uc]) => (
+              {[['nombre','Nombre',80,true],['apellido','Apellido',80,true],['cedula_nit','Cédula/NIT',30,false],['whatsapp','WhatsApp',20,false],['telefono','2do contacto',20,false],['telefono2','3er contacto',20,false],['email','Email',null,false],['ciudad','Ciudad',80,true],['direccion','Dirección',null,true]].map(([k,l,ml,uc]) => (
                 <div key={k} className={k === 'direccion' ? 'col-span-2' : ''}>
                   <label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label>
                   <Input value={form[k] || ''} onChange={e => setForm(p => ({ ...p, [k]: uc ? e.target.value.toUpperCase() : e.target.value }))} {...(ml ? { maxLength: ml } : {})} />

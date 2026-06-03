@@ -6,7 +6,7 @@ import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { db, dbAdmin } from '@/lib/supabase'
-import { petEmoji, fmt, parsearErrorDB, today } from '@/lib/utils'
+import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
@@ -14,12 +14,13 @@ import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
-  Camera, Download, Images, Truck,
+  Camera, Download, Images, Truck, ArrowRightLeft, UserX,
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
+import { LocalidadSelect } from '@/components/ui/localidad-select'
 
 // ── Columnas por tablero ──────────────────────────────────────────────────────
-const COLS_COORDINACION = ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
+const COLS_COORDINACION = ['SOLICITUDES', 'INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
 const COLS_PRODUCCION   = ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION', 'LISTO', 'EN_ENTREGA', 'ENTREGADO']
 const TODAS_COLS        = ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION', 'LISTO', 'EN_ENTREGA', 'ENTREGADO']
 
@@ -29,6 +30,7 @@ const COLS_POR_ROL = {
 }
 
 const COL_STYLE = {
+  SOLICITUDES:    { bar: '#C4A87A', dot: '#FFF9ED' },
   INGRESADO:      { bar: '#3B82F6', dot: '#DBEAFE' },
   EN_RECOGIDA:    { bar: '#F59E0B', dot: '#FEF3C7' },
   EN_CUARTO_FRIO: { bar: '#06B6D4', dot: '#CFFAFE' },
@@ -100,7 +102,11 @@ export default function Kanban() {
     : (COLS_POR_ROL[rol] ?? TODAS_COLS)
 
   const esVistaProd = esProductor || (esAdmin && tableroActivo === 'produccion')
-  const colLabel    = col => (esVistaProd && col === 'EN_CUARTO_FRIO') ? 'Pendiente' : ESTADO_LABEL[col]
+  const colLabel    = col => {
+    if (col === 'SOLICITUDES') return 'Solicitudes'
+    if (esVistaProd && col === 'EN_CUARTO_FRIO') return 'Pendiente'
+    return ESTADO_LABEL[col]
+  }
 
   // ── Estado botones Contactar / Notificar técnico ──
   const [contactarLoadingId,  setContactarLoadingId]  = useState(null)
@@ -114,8 +120,16 @@ export default function Kanban() {
   const [especiesKanban, setEspeciesKanban] = useState([])
   const [aliados,        setAliados]        = useState([])
   const [convForm, setConvForm] = useState({
-    tipo_acompanamiento: 'PRESENCIAL', estado_pago: 'PENDIENTE',
-    metodo_pago: '', tecnico_id: '', valor_total: '', mascota_sexo: 'Macho',
+    // Cliente
+    cliente_nombre: '', cliente_apellido: '', cliente_whatsapp: '', cliente_telefono: '', cliente_telefono2: '', cliente_email: '',
+    cliente_cedula: '', cliente_ciudad: 'Bogotá', cliente_localidad: '', cliente_barrio: '', cliente_direccion: '',
+    // Mascota
+    mascota_nombre: '', especie_id: '', mascota_peso_kg: '', mascota_raza: '', mascota_sexo: 'Macho',
+    // Plan y recogida
+    plan_id: '', tipo_recogida: 'domicilio',
+    ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '', hora_aproximada: '', notas_cliente: '',
+    // Servicio
+    tipo_acompanamiento: 'PRESENCIAL', tecnico_id: '', valor_total: '', estado_pago: 'PENDIENTE', metodo_pago: '',
   })
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -152,9 +166,52 @@ export default function Kanban() {
   const [editTecnicoId, setEditTecnicoId] = useState('')
   const [editEstadoPago, setEditEstadoPago] = useState('')
   const [editNotas, setEditNotas]         = useState('')
+  const [editComisionAliado, setEditComisionAliado] = useState('')
   const [novedades, setNovedades]         = useState([])
   const [nuevoComentario, setNuevoComentario] = useState('')
   const [guardandoComentario, setGuardandoComentario] = useState(false)
+
+  // ── Horario aliado (para alerta en modal) ────────────────────────────────
+  const [aliadoHorario, setAliadoHorario] = useState(null) // { nombre, horario }
+
+  // ── Comisión en conversión de solicitud ───────────────────────────────────
+  const [comisionSol,     setComisionSol]     = useState(0)    // monto editable ($)
+  const [comisionSolPct,  setComisionSolPct]  = useState(0)    // porcentaje calculado
+  const [aliadoSolData,   setAliadoSolData]   = useState(null) // datos del aliado de la solicitud
+
+  async function calcularComisionPct(aliadoId, esVip, planId, tipoProceso) {
+    if (!aliadoId || !planId) return 0
+    if (esVip) {
+      if (tipoProceso === 'COMPOSTAJE_GRUPAL')    return 10
+      if (['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(tipoProceso)) return 27
+      return 32
+    }
+    const hoy = new Date()
+    const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
+    const [{ count }, { data: filas }] = await Promise.all([
+      db.from('servicios').select('*', { count:'exact', head:true })
+        .eq('aliado_origen_id', aliadoId).gte('fecha_ingreso', inicioMes),
+      db.from('config_comisiones').select('porcentaje,plan_id,rango_min,rango_max').eq('es_vip', false),
+    ])
+    const vol = count || 0
+    const match = (filas || [])
+      .filter(c => (c.plan_id === planId || c.plan_id === null) && c.rango_min <= vol && (c.rango_max === null || c.rango_max >= vol))
+      .sort((a,b) => { if (a.plan_id && !b.plan_id) return -1; if (!a.plan_id && b.plan_id) return 1; return b.rango_min - a.rango_min })[0]
+    return parseFloat(match?.porcentaje) || 0
+  }
+
+  // ── Cambio de plan ────────────────────────────────────────────────────────
+  const [editPlanId,      setEditPlanId]      = useState('')
+  const [nuevoPrecio,     setNuevoPrecio]     = useState('')
+  const [cambiandoPlan,   setCambiandoPlan]   = useState(false)
+  const [mascotaParaPlan, setMascotaParaPlan] = useState(null) // { peso_kg, especie_id }
+  // ── Alertas técnico declina ───────────────────────────────────────────────
+  const [alertasDeclinas, setAlertasDeclinas] = useState([])
+  // ── Agregar recordatorio adicional ───────────────────────────────────────
+  const [recListOpts,  setRecListOpts]  = useState([]) // {id,nombre,precio_base,categoria}
+  const [addRecId,     setAddRecId]     = useState('')
+  const [addRecQty,    setAddRecQty]    = useState(1)
+  const [addingRec,    setAddingRec]    = useState(false)
 
   async function cargarSolicitudes() {
     const { data } = await db.from('solicitudes_servicio')
@@ -162,42 +219,205 @@ export default function Kanban() {
     setSolicitudes(data || [])
   }
 
-  function abrirSolicitud(s) {
-    const precio = planesKanban.find(p => p.id === s.plan_id)
-    setConvForm({
-      tipo_acompanamiento: 'PRESENCIAL', estado_pago: 'PENDIENTE',
-      metodo_pago: '', tecnico_id: '', mascota_sexo: s.mascota_sexo || 'Macho',
-      valor_total: precio ? String(precio.precio_referencia || '') : '',
-    })
+  function planPorId(planId) {
+    return planesKanban.find(p => String(p.id) === String(planId))
+  }
+
+  function aliadoPorId(aliadoId) {
+    return aliados.find(a => String(a.id_aliado) === String(aliadoId))
+  }
+
+  async function calcularPrecioPara(planId, pesoKgRaw, especieIdRaw) {
+    const pesoKg = parseFloat(pesoKgRaw) || 0
+    if (!planId || pesoKg <= 0) return null
+
+    const pesoG = Math.round(pesoKg * 1000)
+    const especieId = parseInt(especieIdRaw) || 0
+    const esGato = especieId === 2
+
+    let q = db.from('planes_precios').select('precio').eq('plan_id', planId)
+    if (pesoG < 1000) {
+      q = q.eq('rango_nombre', 'PETIT')
+    } else if (esGato) {
+      q = q.eq('rango_nombre', 'FELINO')
+    } else {
+      q = q.lte('peso_min_gr', pesoG).gte('peso_max_gr', pesoG).neq('rango_nombre', 'FELINO')
+    }
+
+    const { data } = await q.maybeSingle()
+    if (data?.precio != null) return data.precio
+
+    const planActual = planPorId(planId)
+    const planByCode = {}
+    planesKanban.forEach(p => { planByCode[p.codigo] = p })
+
+    if (planActual?.codigo === 'ANGEL') {
+      if (pesoG < 1000) return 69000
+      if (esGato) return 79000
+      if (pesoG <= 10000) return 89000
+      if (pesoG <= 20000) return 119000
+      if (pesoG <= 35000) return 139000
+      return 189000
+    }
+
+    if (planActual?.codigo === 'BASICO_SIN_REC' && planByCode.BASICO) {
+      const base = await calcularPrecioPara(planByCode.BASICO.id, pesoKg, especieId)
+      return base ? Math.round(base * 0.8) : null
+    }
+
+    if (planActual?.codigo === 'COMPETS_SIN_REC' && planByCode.COMPETS_EVIDENCIA) {
+      const base = await calcularPrecioPara(planByCode.COMPETS_EVIDENCIA.id, pesoKg, especieId)
+      return base ? Math.round(base * 0.8) : null
+    }
+
+    if (planActual?.codigo === 'DESAMPARADO') {
+      if (pesoG <= 10000) return 46000
+      const kgExtra = Math.max(0, pesoKg - 10)
+      return Math.round(44000 + kgExtra * 4000)
+    }
+
+    return null
+  }
+
+  async function abrirSolicitud(s) {
+    const planId = s.plan_id || ''
     setSelSolicitud(s)
+
+    // Consultar datos completos del aliado si el cliente seleccionó una vet registrada
+    let aliado = null
+    setComisionSol(0); setComisionSolPct(0); setAliadoSolData(null)
+    if (s.aliado_id) {
+      const { data } = await db.from('aliados')
+        .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision')
+        .eq('id_aliado', s.aliado_id)
+        .maybeSingle()
+      aliado = data
+      setAliadoSolData(data)
+    }
+
+    setConvForm({
+      // Cliente — pre-llenado desde la solicitud, editable
+      cliente_nombre:    s.cliente_nombre    || '',
+      cliente_apellido:  s.cliente_apellido  || '',
+      cliente_whatsapp:  s.cliente_whatsapp  || '',
+      cliente_telefono:  s.cliente_telefono  || '',
+      cliente_telefono2: s.cliente_telefono2 || '',
+      cliente_email:     s.cliente_email     || '',
+      cliente_cedula:    s.cliente_cedula    || '',
+      cliente_ciudad:    s.cliente_ciudad    || 'Bogotá',
+      cliente_localidad: s.cliente_localidad || '',
+      cliente_barrio:    s.cliente_barrio    || '',
+      cliente_direccion: s.cliente_direccion || '',
+      // Mascota
+      mascota_nombre:    s.mascota_nombre    || '',
+      especie_id:        s.especie_id        ? String(s.especie_id) : '',
+      mascota_peso_kg:   s.mascota_peso_kg   ? String(s.mascota_peso_kg) : '',
+      mascota_raza:      s.mascota_raza      || '',
+      mascota_sexo:      s.mascota_sexo      || 'Macho',
+      // Recogida — si hay aliado, precargar su dirección
+      plan_id:         planId,
+      tipo_recogida:   s.tipo_recogida   || 'domicilio',
+      ciudad:          aliado?.ciudad    || s.ciudad    || 'Bogotá',
+      localidad:       aliado?.localidad || s.localidad || '',
+      barrio:          aliado?.barrio    || s.barrio    || '',
+      direccion:       aliado?.direccion || s.direccion || '',
+      hora_aproximada: s.hora_aproximada || '',
+      notas_cliente:   s.notas_cliente   || '',
+      // Servicio
+      tipo_acompanamiento: 'PRESENCIAL', tecnico_id: '', valor_total: '',
+      estado_pago: 'PENDIENTE', metodo_pago: '',
+    })
+
+    calcularPrecioPara(planId, s.mascota_peso_kg, s.especie_id).then(precio => {
+      if (!precio) return
+      setConvForm(prev => String(prev.plan_id) === String(planId)
+        ? { ...prev, valor_total: String(precio) }
+        : prev)
+      // Calcular comisión si hay aliado
+      if (aliado && planId) {
+        const plan = planesKanban.find(p => String(p.id) === String(planId))
+        calcularComisionPct(aliado.id_aliado, aliado.vip, planId, plan?.tipo_proceso).then(pct => {
+          setComisionSolPct(pct)
+          setComisionSol(pct > 0 ? Math.round(precio * pct / 100) : 0)
+        })
+      }
+    })
   }
 
   async function convertirSolicitud() {
     if (!selSolicitud) return
     setConvirtiendo(true)
     try {
-      // 1. Buscar o crear cliente
+      const telefonoCliente = convForm.cliente_whatsapp.replace(/\D/g,'')
+      const pesoKg = parseFloat(convForm.mascota_peso_kg) || 0
+      const direccionDomicilio = convForm.direccion || convForm.cliente_direccion
+
+      if (!convForm.cliente_nombre.trim()) {
+        await showAlert('La solicitud no tiene nombre del cliente.', { title: 'Datos incompletos' })
+        return
+      }
+      if (telefonoCliente.length < 10) {
+        await showAlert('La solicitud no tiene un WhatsApp valido del cliente.', { title: 'Datos incompletos' })
+        return
+      }
+      if (!convForm.mascota_nombre.trim() || !convForm.especie_id || pesoKg <= 0) {
+        await showAlert('Revisa nombre, especie y peso de la mascota antes de aceptar.', { title: 'Datos incompletos' })
+        return
+      }
+      if (!convForm.plan_id) {
+        await showAlert('Selecciona el plan solicitado antes de aceptar.', { title: 'Datos incompletos' })
+        return
+      }
+      if (convForm.tipo_recogida === 'domicilio' && !direccionDomicilio.trim()) {
+        await showAlert('La solicitud de domicilio necesita direccion de recogida.', { title: 'Datos incompletos' })
+        return
+      }
+
+      // 1. Buscar o crear cliente (usa datos editados del convForm)
       const { data: clis } = await db.from('clientes')
-        .select('id_cliente,tipo_cliente').eq('whatsapp', selSolicitud.cliente_whatsapp).limit(1)
+        .select('id_cliente,tipo_cliente').eq('whatsapp', telefonoCliente).limit(1)
       let clienteId
       if (clis?.length) {
         clienteId = clis[0].id_cliente
+        // Actualizar datos del cliente existente con los datos corregidos
+        await db.from('clientes').update({
+          nombre:     convForm.cliente_nombre,
+          apellido:   convForm.cliente_apellido  || null,
+          telefono:   convForm.cliente_telefono  || null,
+          telefono2:  convForm.cliente_telefono2 || null,
+          email:      convForm.cliente_email     || null,
+          cedula_nit: convForm.cliente_cedula    || null,
+          ciudad:     convForm.cliente_ciudad    || null,
+          localidad:  convForm.cliente_localidad || null,
+          barrio:     convForm.cliente_barrio    || null,
+          direccion:  convForm.cliente_direccion || null,
+        }).eq('id_cliente', clienteId)
       } else {
         const { data: nc, error: ce } = await db.from('clientes').insert({
-          nombre: selSolicitud.cliente_nombre, apellido: selSolicitud.cliente_apellido || null,
-          whatsapp: selSolicitud.cliente_whatsapp, email: selSolicitud.cliente_email || null,
+          nombre:       convForm.cliente_nombre,
+          apellido:     convForm.cliente_apellido  || null,
+          whatsapp:     telefonoCliente,
+          telefono:     convForm.cliente_telefono  || null,
+          telefono2:    convForm.cliente_telefono2 || null,
+          email:        convForm.cliente_email     || null,
+          cedula_nit:   convForm.cliente_cedula    || null,
+          ciudad:       convForm.cliente_ciudad    || null,
+          localidad:    convForm.cliente_localidad || null,
+          barrio:       convForm.cliente_barrio    || null,
+          direccion:    convForm.cliente_direccion || null,
           tipo_cliente: 'NORMAL',
         }).select('id_cliente')
         if (ce) throw ce
         clienteId = nc[0].id_cliente
       }
 
-      // 2. Crear mascota
-      const pesoKg = parseFloat(selSolicitud.mascota_peso_kg) || 0
+      // 2. Crear mascota (con datos editados)
       const tamano = pesoKg < 1 ? 'Mini' : pesoKg <= 10 ? 'Pequeño' : pesoKg <= 20 ? 'Mediano' : pesoKg <= 35 ? 'Grande' : 'Gigante'
       const { data: nm, error: me } = await db.from('mascotas').insert({
-        nombre: selSolicitud.mascota_nombre, especie_id: selSolicitud.especie_id || null,
-        raza: selSolicitud.mascota_raza || null, sexo: convForm.mascota_sexo,
+        nombre:     convForm.mascota_nombre,
+        especie_id: parseInt(convForm.especie_id) || null,
+        raza:       convForm.mascota_raza || null,
+        sexo:       convForm.mascota_sexo,
         tamano, peso_kg: pesoKg, cliente_id: clienteId,
         fallecida: true, fecha_fallecimiento: today(),
       }).select('id_mascota')
@@ -205,34 +425,77 @@ export default function Kanban() {
       const mascotaId = nm[0].id_mascota
 
       // 3. Crear servicio (el trigger de DB crea recogida, entrega y cuarto_frio)
-      const valorTotal = parseFloat(convForm.valor_total) || 0
-      const puntoRecogida = selSolicitud.tipo_recogida === 'veterinaria' ? 'VETERINARIA' : 'DOMICILIO'
+      const precioCalculado = await calcularPrecioPara(convForm.plan_id, pesoKg, convForm.especie_id)
+      const valorTotal = parseFloat(convForm.valor_total) || precioCalculado || 0
+      if (valorTotal <= 0) {
+        await showAlert('No se pudo calcular el valor del plan. Ingresa el valor total antes de aceptar.', { title: 'Precio requerido' })
+        return
+      }
+
+      const esVeterinaria = convForm.tipo_recogida === 'veterinaria'
+      const puntoRecogida = esVeterinaria ? 'CLINICA_ALIADA' : 'DOMICILIO'
+      const aliadoActual = aliadoPorId(selSolicitud.aliado_id)
+      const clienteCompleto = `${convForm.cliente_nombre} ${convForm.cliente_apellido || ''}`.trim()
+      const direccionRecogida = esVeterinaria
+        ? (aliadoActual?.direccion || convForm.direccion || null)
+        : (direccionDomicilio || null)
+      const ciudadRecogida = esVeterinaria
+        ? (aliadoActual?.ciudad || convForm.ciudad || 'Bogotá')
+        : (convForm.ciudad || convForm.cliente_ciudad || 'Bogotá')
+      const barrioRecogida = esVeterinaria
+        ? (aliadoActual?.barrio || aliadoActual?.localidad || convForm.barrio || null)
+        : (convForm.barrio || convForm.localidad || convForm.cliente_barrio || null)
+      const contactoRecogidaNombre = esVeterinaria
+        ? (aliadoActual?.contacto_nombre || aliadoActual?.nombre || selSolicitud.aliado_nombre_otro || clienteCompleto)
+        : clienteCompleto
+      const contactoRecogidaTelefono = esVeterinaria
+        ? (aliadoActual?.whatsapp || aliadoActual?.telefono || telefonoCliente)
+        : telefonoCliente
+      const notasRecogida = [
+        convForm.hora_aproximada ? `Hora aprox. recogida: ${convForm.hora_aproximada}` : '',
+        convForm.notas_cliente || '',
+      ].filter(Boolean).join('. ') || null
+      const notasServicio = [
+        selSolicitud.aliado_nombre_otro ? `Veterinaria indicada por cliente: ${selSolicitud.aliado_nombre_otro}` : '',
+        convForm.hora_aproximada ? `Hora aprox. recogida: ${convForm.hora_aproximada}` : '',
+      ].filter(Boolean).join('. ') || null
+      const planSeleccionado = planPorId(convForm.plan_id)
+      const esIndividual  = ['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(planSeleccionado?.tipo_proceso)
+
       const { data: sv, error: se } = await db.from('servicios').insert({
-        mascota_id: mascotaId, plan_id: selSolicitud.plan_id || null,
-        estado: 'INGRESADO', fecha_ingreso: today(),
-        tipo_acompanamiento: convForm.tipo_acompanamiento,
-        canal_entrada: 'DIRECTO',
-        aliado_origen_id: selSolicitud.aliado_id || null,
-        valor_total: valorTotal, valor_pagado: 0,
-        estado_pago: convForm.estado_pago,
-        metodo_pago: convForm.metodo_pago || null,
-        tecnico_id: convForm.tecnico_id || null,
-        punto_recogida: puntoRecogida,
-        direccion_recogida: selSolicitud.direccion || null,
-        ciudad_recogida: selSolicitud.ciudad || 'Bogotá',
-        barrio_recogida: selSolicitud.barrio || null,
-        indicaciones_recogida: selSolicitud.notas_cliente || null,
-        tipo_cliente: 'NORMAL', comision_aliado: 0, comision_descontada: false,
-        notas: selSolicitud.aliado_nombre_otro
-          ? `Veterinaria indicada por cliente: ${selSolicitud.aliado_nombre_otro}` : null,
+        mascota_id:            mascotaId,
+        plan_id:               convForm.plan_id || null,
+        estado:                'INGRESADO',
+        fecha_ingreso:         today(),
+        tipo_acompanamiento:   esIndividual ? convForm.tipo_acompanamiento : 'EVIDENCIA',
+        canal_entrada:         selSolicitud.aliado_id ? 'ALIADO' : 'DIRECTO',
+        aliado_origen_id:      selSolicitud.aliado_id || null,
+        valor_total:           valorTotal,
+        valor_pagado:          0,
+        estado_pago:           convForm.estado_pago,
+        metodo_pago:           convForm.metodo_pago || null,
+        tecnico_id:            convForm.tecnico_id || null,
+        punto_recogida:        puntoRecogida,
+        direccion_recogida:    direccionRecogida,
+        ciudad_recogida:       ciudadRecogida,
+        barrio_recogida:       barrioRecogida,
+        indicaciones_recogida: notasRecogida,
+        tipo_cliente:          'NORMAL',
+        comision_aliado:       comisionSol || 0,
+        comision_descontada:   false,  // Solicitudes públicas: cliente paga completo siempre
+        notas:                 notasServicio,
       }).select('id')
       if (se) throw se
       const servicioId = sv[0].id
 
       // 4. Actualizar recogida con info adicional
       await db.from('recogidas').update({
-        aliado_id: selSolicitud.aliado_id || null,
-        tecnico_id: convForm.tecnico_id || null,
+        tipo_lugar:        puntoRecogida,
+        contacto_nombre:   contactoRecogidaNombre || null,
+        contacto_telefono: contactoRecogidaTelefono || null,
+        aliado_id:         selSolicitud.aliado_id || null,
+        tecnico_id:        convForm.tecnico_id || null,
+        notas:             notasRecogida,
       }).eq('servicio_id', servicioId)
 
       // 5. Marcar solicitud como convertida
@@ -243,7 +506,12 @@ export default function Kanban() {
       setSelSolicitud(null)
       await Promise.all([cargar(), cargarSolicitudes()])
     } catch (err) {
-      await showAlert(parsearErrorDB(err), { title: 'Error al crear servicio' })
+      const parsed = parsearErrorDB(err)
+      const raw = err?.message || err?.details || ''
+      await showAlert(
+        raw && raw !== parsed ? `${parsed}\n\nDetalle técnico: ${raw}` : parsed,
+        { title: 'Error al crear servicio' }
+      )
     } finally {
       setConvirtiendo(false)
     }
@@ -262,9 +530,9 @@ export default function Kanban() {
     cargar()
     cargarSolicitudes()
     Promise.all([
-      db.from('planes').select('id,nombre').order('nombre'),
+      db.from('planes').select('id,nombre,codigo,tipo_proceso').order('nombre'),
       db.from('especies').select('id,nombre').order('nombre'),
-      db.from('aliados').select('id_aliado,nombre').eq('activo', true).order('nombre'),
+      db.from('aliados').select('id_aliado,nombre,direccion,ciudad,localidad,barrio,contacto_nombre,whatsapp,telefono').eq('activo', true).order('nombre'),
     ]).then(([p, e, a]) => {
       setPlanesKanban(p.data || [])
       setEspeciesKanban(e.data || [])
@@ -277,6 +545,9 @@ export default function Kanban() {
         setTecnicos(all.filter(p => p.rol_principal_id === 2))
         setMensajeros(all.filter(p => p.rol_principal_id === 3))
       })
+    db.from('recordatorios').select('id,nombre,precio_base,categoria')
+      .eq('activo', true).order('nombre')
+      .then(({ data }) => setRecListOpts(data || []))
 
     // Realtime: recarga el tablero cuando un servicio cambia de estado
     // (ej: cliente sube fotos → EN_PROCESO, técnico avanza estado, etc.)
@@ -299,6 +570,8 @@ export default function Kanban() {
       const notifs = await obtenerNoLeidas(personalData.id)
       const rutaNotif = notifs.find(n => n.tipo === 'TECNICO_INICIO_RUTA')
       if (rutaNotif && !alertaRuta) setAlertaRuta(rutaNotif)
+      const declinas = notifs.filter(n => ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo))
+      setAlertasDeclinas(declinas)
     }
     verificar()
     const iv = setInterval(verificar, 20_000)
@@ -342,13 +615,15 @@ export default function Kanban() {
   }
 
   async function abrirModal(s) {
-    setSelected(s); setMensajeroId(''); setDetalle(null)
+    setSelected(s); setMensajeroId(''); setDetalle(null); setAliadoHorario(null)
     setEditTecnicoId(s.tecnico_id || ''); setEditEstadoPago(s.estado_pago || '')
-    setEditNotas(s.notas || '')
+    setEditNotas(s.notas || ''); setEditComisionAliado('')
+    setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
+    setAddRecId(''); setAddRecQty(1)
 
     const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }] = await Promise.all([
       db.from('servicios')
-        .select('punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, comision_aliado, comision_descontada, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id')
+        .select('punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, comision_aliado, comision_descontada, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at')
         .eq('id', s.servicio_id).maybeSingle(),
       db.from('recogidas')
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
@@ -370,6 +645,19 @@ export default function Kanban() {
     setRecordatorios(recs || [])
     setNovedades(novs || [])
     setNuevoComentario('')
+    setEditPlanId(svcFull?.plan_id || '')
+
+    if (svcFull?.mascota_id) {
+      db.from('mascotas').select('peso_kg, especie_id')
+        .eq('id_mascota', svcFull.mascota_id).maybeSingle()
+        .then(({ data }) => setMascotaParaPlan(data))
+    }
+    // Cargar horario del aliado si viene de veterinaria
+    if (svcFull?.aliado_origen_id) {
+      db.from('aliados').select('nombre, horario, telefono, whatsapp')
+        .eq('id_aliado', svcFull.aliado_origen_id).maybeSingle()
+        .then(({ data }) => { if (data) setAliadoHorario(data) })
+    }
   }
 
   async function guardarCambios() {
@@ -379,6 +667,7 @@ export default function Kanban() {
     if (editTecnicoId !== (selected.tecnico_id || ''))   updates.tecnico_id  = editTecnicoId  || null
     if (editEstadoPago !== (selected.estado_pago || '')) updates.estado_pago = editEstadoPago
     if (editNotas !== (selected.notas || ''))            updates.notas       = editNotas       || null
+    // comision_aliado se guarda con su propio botón dedicado en la sección Financiero
 
     if (Object.keys(updates).length > 0) {
       const { error } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
@@ -416,6 +705,147 @@ export default function Kanban() {
       setSelected(prev => ({ ...prev, ...updates }))
     }
     setGuardando(false)
+  }
+
+  async function calcularPrecioPlan(planId) {
+    if (!planId) return null
+    return calcularPrecioPara(planId, mascotaParaPlan?.peso_kg || 0, mascotaParaPlan?.especie_id || 0)
+  }
+
+  async function cambiarPlan() {
+    if (!editPlanId || editPlanId === detalle?.plan_id || !selected) return
+    const planAnterior = planPorId(detalle?.plan_id)?.nombre || 'plan anterior'
+    const planNuevo    = planPorId(editPlanId)?.nombre        || 'nuevo plan'
+    const precioFinal  = nuevoPrecio ? parseFloat(nuevoPrecio) : null
+
+    const fuera = detalle?.fecha_limite_cambio_plan && parseDate(detalle.fecha_limite_cambio_plan) < new Date()
+    const msg = [
+      fuera ? `⚠️ Este servicio está fuera del plazo de cambio de plan (${parseDate(detalle.fecha_limite_cambio_plan)?.toLocaleDateString('es-CO')}).` : null,
+      `Plan: "${planAnterior}" → "${planNuevo}"`,
+      precioFinal ? `Nuevo valor total: ${fmt(precioFinal)}` : null,
+      'Se actualizarán los ítems de producción del servicio.',
+    ].filter(Boolean).join('\n\n')
+
+    if (!await confirm(msg, { title: '¿Confirmar cambio de plan?', confirmLabel: 'Sí, cambiar' })) return
+    setCambiandoPlan(true)
+    try {
+      const updates = { plan_id: editPlanId }
+      if (precioFinal) updates.valor_total = precioFinal
+
+      const { error: svErr } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
+      if (svErr) throw svErr
+
+      // Marcar REMOVIDO los ítems del plan anterior
+      await db.from('servicio_recordatorios')
+        .update({ origen: 'REMOVIDO' })
+        .eq('servicio_id', selected.servicio_id)
+        .eq('origen', 'PLAN')
+
+      // Cargar ítems del nuevo plan e insertar
+      const { data: nuevosItems } = await db.from('plan_recordatorios')
+        .select('recordatorio_id')
+        .eq('plan_id', editPlanId)
+
+      if (nuevosItems?.length) {
+        await db.from('servicio_recordatorios').insert(
+          nuevosItems.map(r => ({
+            servicio_id:     selected.servicio_id,
+            recordatorio_id: r.recordatorio_id,
+            origen:          'PLAN',
+            estado:          'PENDIENTE',
+          }))
+        )
+      }
+
+      // Registrar novedad
+      const { data: novInserted } = await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `Plan cambiado: ${planAnterior} → ${planNuevo}` +
+                        (precioFinal ? ` · Nuevo valor: ${fmt(precioFinal)}` : '') +
+                        '. Cambio realizado por coordinador.',
+        registrado_por: personalData?.id || null,
+      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+
+      // Recargar recordatorios frescos
+      const { data: recsNuevos } = await db.from('servicio_recordatorios')
+        .select('*, recordatorios(nombre)')
+        .eq('servicio_id', selected.servicio_id)
+        .neq('origen', 'REMOVIDO')
+      setRecordatorios(recsNuevos || [])
+      if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
+
+      // Update local state
+      const upd = {
+        plan: planNuevo,
+        ...(precioFinal ? { valor_total: precioFinal, saldo_pendiente: precioFinal - (selected.valor_pagado || 0) } : {}),
+      }
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
+      setSelected(prev => ({ ...prev, ...upd }))
+      setDetalle(prev => ({ ...prev, plan_id: editPlanId }))
+      setNuevoPrecio('')
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al cambiar plan' })
+    } finally {
+      setCambiandoPlan(false)
+    }
+  }
+
+  async function agregarAdicional() {
+    if (!addRecId || !selected) return
+    const rec      = recListOpts.find(r => r.id === addRecId)
+    if (!rec) return
+    const qty      = Math.max(1, parseInt(addRecQty) || 1)
+    const subtotal = (rec.precio_base || 0) * qty
+
+    setAddingRec(true)
+    try {
+      // Insertar ítem adicional
+      const { error: recErr } = await db.from('servicio_recordatorios').insert({
+        servicio_id:     selected.servicio_id,
+        recordatorio_id: addRecId,
+        origen:          'ADICIONAL',
+        estado:          'PENDIENTE',
+      })
+      if (recErr) throw recErr
+
+      // Actualizar valor_total del servicio
+      const nuevoTotal = (selected.valor_total || 0) + subtotal
+      const { error: svErr } = await db.from('servicios')
+        .update({ valor_total: nuevoTotal })
+        .eq('id', selected.servicio_id)
+      if (svErr) throw svErr
+
+      // Registrar novedad
+      const { data: novInserted } = await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. Pendiente de cobro en entrega.`,
+        valor_ajuste:   subtotal,
+        registrado_por: personalData?.id || null,
+      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+
+      // Recargar ítems
+      const { data: recsNuevos } = await db.from('servicio_recordatorios')
+        .select('*, recordatorios(nombre)')
+        .eq('servicio_id', selected.servicio_id)
+        .neq('origen', 'REMOVIDO')
+      setRecordatorios(recsNuevos || [])
+      if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
+
+      // Update local state
+      const saldoNuevo = nuevoTotal - (selected.valor_pagado || 0)
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id
+        ? { ...s, valor_total: nuevoTotal, saldo_pendiente: saldoNuevo }
+        : s
+      ))
+      setSelected(prev => ({ ...prev, valor_total: nuevoTotal, saldo_pendiente: saldoNuevo }))
+      setAddRecId(''); setAddRecQty(1)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
+    } finally {
+      setAddingRec(false)
+    }
   }
 
   async function cambiarEstado(servicioId, nuevoEstado) {
@@ -538,7 +968,7 @@ export default function Kanban() {
         `${portalUrl}\n\n` +
         `Si prefiere, puede ingresar el código: *${codigo}*\n\n` +
         `Gracias por confiar en nosotros 🙏`
-      window.open(`https://wa.me/57${s.cliente_wa.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`, '_blank')
+      window.open(waLink(s.cliente_wa, msg), '_blank')
     } finally { setContactarLoadingId(null) }
   }
 
@@ -553,36 +983,42 @@ export default function Kanban() {
     setNotifTecLoadingId(s.servicio_id)
     try {
       const { data: svc } = await db.from('servicios')
-        .select('direccion_recogida, barrio_recogida, ciudad_recogida, notas')
+        .select('direccion_recogida, barrio_recogida, ciudad_recogida, indicaciones_recogida, notas')
         .eq('id', s.servicio_id).maybeSingle()
       const { data: rec } = await db.from('recogidas')
-        .select('hora_aproximada')
+        .select('notas')
         .eq('servicio_id', s.servicio_id).maybeSingle()
 
-      const direccion = svc?.direccion_recogida || ''
-      const barrio    = svc?.barrio_recogida ? ` · ${svc.barrio_recogida}` : ''
-      const ciudad    = svc?.ciudad_recogida && svc.ciudad_recogida !== 'Bogotá' ? ` (${svc.ciudad_recogida})` : ''
-      const horaAprox = rec?.hora_aproximada ? `\n⏰ Hora aprox: *${rec.hora_aproximada}*` : ''
-      const contacto  = s.cliente_wa ? `\n📞 Contacto: ${s.cliente_wa}` : ''
-      const indicac   = svc?.notas ? `\n📋 Indicaciones: ${svc.notas}` : ''
+      const fechaHoy  = new Date().toLocaleDateString('es-CO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+      const direccion = [svc?.direccion_recogida, svc?.barrio_recogida, svc?.ciudad_recogida].filter(Boolean).join(', ')
+      const notasRec  = rec?.notas || svc?.indicaciones_recogida || ''
+      const horaMatch = notasRec.match(/Hora aprox\. recogida: ([^.]+)/)
+      const horaAprox = horaMatch?.[1]?.trim() || ''
+      const indicaciones = svc?.indicaciones_recogida?.replace(/Hora aprox\. recogida:[^.]+\.\s*/i, '').trim() || ''
 
-      const mensaje = [
-        `🐾 *Nueva recogida asignada — Camino al Cielo*`,
+      const lineas = [
+        `Camino al Cielo - Asignacion de servicio`,
+        `Fecha: ${fechaHoy}`,
         ``,
-        `Se te asignó un servicio:`,
+        `Se le ha asignado un nuevo servicio de recogida con los siguientes datos:`,
         ``,
-        `🐾 Mascota: *${s.mascota}* (${s.especie || ''})`,
-        `👤 Propietario: ${s.cliente}${contacto}`,
-        `📍 Dirección: ${direccion}${barrio}${ciudad}`,
-        `📦 Plan: ${s.plan}`,
-        horaAprox,
-        indicac,
+        `Mascota: ${s.mascota}${s.especie ? ` (${s.especie})` : ''}`,
+        `Propietario: ${s.cliente}`,
+        s.cliente_wa ? `Contacto: ${s.cliente_wa}` : '',
+        `Plan: ${s.plan}`,
         ``,
-        `Ingresa a la app para confirmar y ver los detalles. ¡Mucho éxito! 🙏`,
-      ].filter(Boolean).join('\n')
+        `Direccion de recogida: ${direccion || 'Por confirmar'}`,
+        horaAprox ? `Hora aproximada: ${horaAprox}` : '',
+        indicaciones ? `Indicaciones: ${indicaciones}` : '',
+        ``,
+        `Por favor ingrese a la aplicacion para confirmar la recogida y ver el detalle completo del servicio.`,
+        ``,
+        `Camino al Cielo`,
+      ].filter(v => v !== null && v !== undefined)
 
-      const numero = tec.whatsapp.replace(/\D/g, '')
-      window.open(`https://wa.me/57${numero}?text=${encodeURIComponent(mensaje)}`, '_blank')
+      const mensaje = lineas.join('\n')
+
+      window.open(waLink(tec.whatsapp, mensaje), '_blank')
     } finally {
       setNotifTecLoadingId(null)
     }
@@ -602,12 +1038,6 @@ export default function Kanban() {
   // ── Valores derivados del modal de solicitud (evita IIFE en JSX) ─────────
   const SOL_LABL = 'block text-[11px] font-bold text-gray-500 mb-1'
   const SOL_INP  = 'w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10 transition-all bg-white'
-  const solPlanNombre    = selSolicitud ? (planesKanban.find(p => p.id === selSolicitud.plan_id)?.nombre || '—') : ''
-  const solEspecieNombre = selSolicitud ? (especiesKanban.find(e => e.id === selSolicitud.especie_id)?.nombre || '') : ''
-  const solAliadoNombre  = selSolicitud?.aliado_id
-    ? (aliados.find(a => a.id_aliado === selSolicitud.aliado_id)?.nombre || '—')
-    : (selSolicitud?.aliado_nombre_otro || '—')
-
   const filtrados = servicios.filter(s => {
     if (!COLUMNAS.includes(s.estado)) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
@@ -705,7 +1135,7 @@ export default function Kanban() {
               return (
                 <div className="space-y-2">
                   {waNum ? (
-                    <a href={`https://wa.me/57${waNum.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`}
+                    <a href={waLink(waNum, msg)}
                       target="_blank" rel="noreferrer"
                       onClick={async () => { await marcarLeida(alertaRuta.id); setAlertaRuta(null) }}
                       className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold"
@@ -764,44 +1194,39 @@ export default function Kanban() {
           )
         })()}
 
-        {/* ── Solicitudes de clientes (solo COORDINADOR / ADMIN) ──────────── */}
-        {(esAdmin || rol === 'COORDINADOR') && solicitudes.length > 0 && (
-          <div className="rounded-2xl border-2 overflow-hidden" style={{ borderColor: '#C4A87A33', background: '#FFFDF7' }}>
-            <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: '#C4A87A33', background: '#FFF9ED' }}>
-              <span className="text-base">📋</span>
-              <span className="text-[13px] font-bold text-[#9A5500]">Solicitudes de clientes</span>
-              <span className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#C4A87A', color: '#fff' }}>
-                {solicitudes.length}
-              </span>
-            </div>
-            <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-              {solicitudes.map(s => {
-                const planNombre    = planesKanban.find(p => p.id === s.plan_id)?.nombre || '—'
-                const especieNombre = especiesKanban.find(e => e.id === s.especie_id)?.nombre || ''
-                return (
-                  <button key={s.id} onClick={() => abrirSolicitud(s)}
-                    className="text-left bg-white border rounded-xl p-3 shadow-sm hover:shadow-md hover:-translate-y-px transition-all"
-                    style={{ borderColor: '#F3E8CC' }}>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-lg">{petEmoji(especieNombre)}</span>
-                      <div>
-                        <div className="text-[13px] font-bold text-gray-900 leading-tight">{s.mascota_nombre}</div>
-                        <div className="text-[11px] text-gray-400">{s.cliente_nombre} {s.cliente_apellido || ''}</div>
-                      </div>
-                    </div>
-                    <div className="text-[11px] text-gray-500 truncate mb-1">{planNombre}</div>
-                    <div className="text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1"
-                      style={{ background: s.tipo_recogida === 'veterinaria' ? '#EFF5FF' : '#F0F7EB', color: s.tipo_recogida === 'veterinaria' ? '#1A5CD8' : '#3D5A27' }}>
-                      {s.tipo_recogida === 'veterinaria' ? '🏥' : '🏠'}{' '}
-                      {s.tipo_recogida === 'veterinaria' ? (s.aliado_nombre_otro || 'Veterinaria') : (s.barrio || s.ciudad || 'Domicilio')}
-                    </div>
-                    <div className="text-[10px] text-gray-300 mt-1.5">{new Date(s.created_at).toLocaleDateString('es-CO')}</div>
-                  </button>
-                )
-              })}
+        {/* ── Alertas técnico declina / problema en ruta ───────────────────── */}
+        {alertasDeclinas.length > 0 && (
+          <div className="rounded-xl border-2 px-4 py-3 flex items-start gap-3" style={{ borderColor: '#FECACA', background: '#FEF2F2' }}>
+            <UserX size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] font-bold text-red-800 mb-1.5">
+                Reasignación urgente — {alertasDeclinas.length} alerta{alertasDeclinas.length > 1 ? 's' : ''}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {alertasDeclinas.map(n => {
+                  const svc = servicios.find(s => s.servicio_id === n.servicio_id)
+                  const esProblema = n.tipo === 'TECNICO_PROBLEMA_RUTA'
+                  return (
+                    <button key={n.id}
+                      onClick={async () => {
+                        await marcarLeida(n.id)
+                        setAlertasDeclinas(prev => prev.filter(a => a.id !== n.id))
+                        if (svc) abrirModal(svc)
+                      }}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all hover:opacity-80 flex items-center gap-1"
+                      style={esProblema
+                        ? { background: '#FFF7ED', color: '#92400E', borderColor: '#FED7AA' }
+                        : { background: '#FEE2E2', color: '#991B1B', borderColor: '#FECACA' }}>
+                      {esProblema ? '⚠️' : '❌'} {n.titulo} · Reasignar
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </div>
         )}
+
+        {/* Solicitudes movidas a columna del tablero */}
 
         {/* ── Selector de tablero (solo ADMIN) ─────────────────────────────── */}
         {esAdmin && (
@@ -868,26 +1293,73 @@ export default function Kanban() {
           <div className="overflow-x-auto flex-1 pb-2 min-h-0">
             <div className="flex gap-3 h-full" style={{ minWidth: `${COLUMNAS.length * 256}px` }}>
               {COLUMNAS.map(col => {
-                const items  = filtrados.filter(s => s.estado === col)
+                const esSolicitudes = col === 'SOLICITUDES'
+                const items  = esSolicitudes ? [] : filtrados.filter(s => s.estado === col)
+                const count  = esSolicitudes ? solicitudes.length : items.length
                 const cs     = COL_STYLE[col]
                 const isOver = dragOverCol === col
 
                 return (
                   <div key={col} className="w-[248px] flex-shrink-0 flex flex-col gap-2"
-                    onDragOver={e => onDragOver(e, col)} onDragLeave={onDragLeave} onDrop={e => onDrop(e, col)}>
+                    onDragOver={e => { if (!esSolicitudes) onDragOver(e, col) }}
+                    onDragLeave={onDragLeave}
+                    onDrop={e => { if (!esSolicitudes) onDrop(e, col) }}>
 
                     {/* Cabecera columna */}
                     <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl transition-all duration-150"
                       style={{ backgroundColor: isOver ? cs.bar + '22' : cs.dot, outline: isOver ? `2px dashed ${cs.bar}66` : '2px solid transparent', outlineOffset: '-2px' }}>
                       <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: cs.bar }} />
                       <span className="text-[12px] font-bold flex-1 truncate" style={{ color: cs.bar }}>{colLabel(col)}</span>
-                      <span className="text-[11px] font-bold min-w-[20px] h-5 flex items-center justify-center rounded-full" style={{ backgroundColor: cs.bar, color: '#fff' }}>{items.length}</span>
+                      <span className="text-[11px] font-bold min-w-[20px] h-5 flex items-center justify-center rounded-full" style={{ backgroundColor: cs.bar, color: '#fff' }}>{count}</span>
                     </div>
 
                     {/* Área de tarjetas */}
                     <div className="space-y-2 flex-1 rounded-xl p-1 -m-1 transition-colors duration-150 min-h-[80px]"
                       style={{ backgroundColor: isOver ? '#F9FAFB' : 'transparent' }}>
-                      {(() => {
+
+                      {/* ── Columna SOLICITUDES ── */}
+                      {esSolicitudes && (
+                        <div className="space-y-2">
+                          {solicitudes.length === 0 ? (
+                            <div className="text-center py-8 text-[12px] text-gray-400">Sin solicitudes pendientes</div>
+                          ) : solicitudes.map(s => {
+                            const planNombre    = planPorId(s.plan_id)?.nombre || '—'
+                            const especieNombre = especiesKanban.find(e => e.id === s.especie_id)?.nombre || ''
+                            return (
+                              <div key={s.id}
+                                onClick={() => abrirSolicitud(s)}
+                                className="bg-white border-2 rounded-xl p-3.5 shadow-sm cursor-pointer hover:shadow-md hover:-translate-y-px transition-all"
+                                style={{ borderColor: '#F3E8CC' }}>
+                                <div className="flex items-start gap-2 mb-2">
+                                  <span className="text-xl leading-none flex-shrink-0">{petEmoji(especieNombre)}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota_nombre}</div>
+                                    <div className="text-[11px] text-gray-400 truncate">{s.cliente_nombre} {s.cliente_apellido || ''}</div>
+                                  </div>
+                                </div>
+                                <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{planNombre}</div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                                    style={{ background: s.tipo_recogida === 'veterinaria' ? '#EFF5FF' : '#F0F7EB', color: s.tipo_recogida === 'veterinaria' ? '#1A5CD8' : '#3D5A27' }}>
+                                    {s.tipo_recogida === 'veterinaria' ? '🏥' : '🏠'} {s.tipo_recogida === 'veterinaria' ? (aliados.find(a => a.id_aliado === s.aliado_id)?.nombre || s.aliado_nombre_otro || 'Veterinaria') : (s.barrio || s.ciudad || 'Domicilio')}
+                                  </span>
+                                  <span className="text-[10px] text-gray-300 shrink-0">
+                                    {new Date(s.created_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={e => { e.stopPropagation(); abrirSolicitud(s) }}
+                                  className="mt-2.5 w-full py-1.5 rounded-lg text-[11px] font-bold transition-all hover:opacity-90"
+                                  style={{ background: '#C4A87A', color: '#fff' }}>
+                                  Revisar y convertir →
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {!esSolicitudes && (() => {
                         const TIERS = [
                           { key: 'vencido', label: 'Vencidos',    color: '#C03030', bg: '#FEE2E2', urgent: true,  test: s => s.dias_para_vencer != null && s.dias_para_vencer < 0 },
                           { key: 'hoy',    label: 'Vence hoy',   color: '#B45309', bg: '#FEF3C7', urgent: true,  test: s => s.dias_para_vencer === 0 },
@@ -910,14 +1382,22 @@ export default function Kanban() {
                               style={{ borderColor: al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6', opacity: draggingId === s.servicio_id ? 0.35 : 1 }}
                               onClick={() => draggingId === null && abrirModal(s)}
                             >
-                              <div className="flex items-start gap-2 mb-2.5">
+                              <div className="flex items-start gap-2 mb-2">
                                 <span className="text-xl leading-none flex-shrink-0">{petEmoji(s.especie)}</span>
                                 <div className="flex-1 min-w-0">
                                   <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
                                   <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
                                 </div>
                               </div>
-                              <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{s.plan}</div>
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <div className="text-[11px] text-gray-500 font-medium truncate flex-1">{s.plan}</div>
+                                {s.fecha_ingreso && (
+                                  <div className="flex items-center gap-1 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
+                                    style={{ background: '#F1F5F9', color: '#64748B' }}>
+                                    📅 {new Date(s.fecha_ingreso + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                                  </div>
+                                )}
+                              </div>
                               {al && (
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
                                   <AlertTriangle size={9} />
@@ -1073,7 +1553,7 @@ export default function Kanban() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-[12px] text-gray-500 whitespace-nowrap">
-                          {s.fecha_ingreso ? new Date(s.fecha_ingreso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'}
+                          {s.fecha_ingreso ? parseDate(s.fecha_ingreso)?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'}
                         </td>
                         <td className="px-4 py-3">
                           {s.dias_para_vencer != null ? (
@@ -1121,9 +1601,9 @@ export default function Kanban() {
                   <Camera size={11} /> Imágenes recibidas
                 </span>
               )}
-              <span className="text-[11px] text-gray-400">Ingreso: <strong className="text-gray-700">{selected.fecha_ingreso ? new Date(selected.fecha_ingreso).toLocaleDateString('es-CO') : '—'}</strong></span>
+              <span className="text-[11px] text-gray-400">Ingreso: <strong className="text-gray-700">{detalle?.created_at ? fmtDateTime(detalle.created_at) : (selected.fecha_ingreso ? parseDate(selected.fecha_ingreso)?.toLocaleDateString('es-CO') : '—')}</strong></span>
               {selected.fecha_limite_entrega && (
-                <span className="text-[11px] text-gray-400">Límite: <strong className="text-gray-700">{new Date(selected.fecha_limite_entrega).toLocaleDateString('es-CO')}</strong></span>
+                <span className="text-[11px] text-gray-400">Límite: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
               )}
               {selected.dias_para_vencer != null && (
                 <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${selected.dias_para_vencer < 0 ? 'bg-red-50 text-red-600' : selected.dias_para_vencer <= 2 ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'}`}>
@@ -1131,6 +1611,24 @@ export default function Kanban() {
                 </span>
               )}
             </div>
+
+            {/* ── Alerta horario veterinaria ── */}
+            {aliadoHorario && (() => {
+              const est = calcularEstadoVet(aliadoHorario.horario)
+              if (!est.tieneHorario) return null
+              const COLOR = { verde: { bg: '#DCFCE7', border: '#86EFAC', text: '#166534' }, naranja: { bg: '#FFF7ED', border: '#FED7AA', text: '#92400E' }, rojo: { bg: '#FEE2E2', border: '#FECACA', text: '#991B1B' } }
+              const c = COLOR[est.nivel] || COLOR.rojo
+              return (
+                <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
+                  style={{ background: c.bg, border: `1.5px solid ${c.border}` }}>
+                  <span className="text-lg shrink-0">🏥</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] font-bold" style={{ color: c.text }}>{aliadoHorario.nombre}</p>
+                    <p className="text-[12px] font-semibold mt-0.5" style={{ color: c.text }}>{est.textoEstado}</p>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* ── Galería de imágenes del cliente (productor y admin) ── */}
             {puedeVerImagenes && imagenesDelCliente.length > 0 && (
@@ -1250,7 +1748,70 @@ export default function Kanban() {
                     <option value="">Sin asignar</option>
                     {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido}</option>)}
                   </Select>
+                  {editTecnicoId !== (selected.tecnico_id || '') && editTecnicoId && (
+                    <p className="text-[10px] text-blue-600 font-medium">↳ Reasignación pendiente · guarda los cambios abajo</p>
+                  )}
                 </div>
+
+                {/* ── Cambiar plan (solo COORDINADOR / ADMIN) ── */}
+                {(esAdmin || rol === 'COORDINADOR') && !['CANCELADO','ENTREGADO'].includes(selected.estado) && detalle && (
+                  <div className="rounded-xl p-3 space-y-2" style={{ background: '#F0FFF4', border: '1.5px solid #86EFAC' }}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#15803D' }}>
+                      <ArrowRightLeft size={10} /> Cambiar plan
+                    </div>
+                    {detalle?.fecha_limite_cambio_plan && (
+                      <div className={`text-[10px] px-2 py-1 rounded-lg font-medium ${parseDate(detalle.fecha_limite_cambio_plan) < new Date() ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                        {parseDate(detalle.fecha_limite_cambio_plan) < new Date()
+                          ? `⚠️ Plazo vencido: ${parseDate(detalle.fecha_limite_cambio_plan)?.toLocaleDateString('es-CO')}`
+                          : `Límite cambio: ${parseDate(detalle.fecha_limite_cambio_plan)?.toLocaleDateString('es-CO')}`}
+                      </div>
+                    )}
+                    <Select
+                      value={editPlanId}
+                      onChange={async e => {
+                        const pid = e.target.value
+                        setEditPlanId(pid)
+                        setNuevoPrecio('')
+                        if (pid && pid !== detalle?.plan_id) {
+                          const precio = await calcularPrecioPlan(pid)
+                          if (precio) setNuevoPrecio(String(precio))
+                        }
+                      }}
+                      className="w-full text-[12px]"
+                    >
+                      <option value="">Seleccionar plan…</option>
+                      {planesKanban
+                        .filter(p => !['BRONCE','PLATA','ORO_EXCLUSIVO','DIAMANTE','VITALICIO'].includes(p.codigo))
+                        .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                    </Select>
+                    {editPlanId && editPlanId !== detalle?.plan_id && (
+                      <div className="space-y-2">
+                        <div>
+                          <div className="text-[10px] text-gray-500 mb-1">Nuevo valor total</div>
+                          <input
+                            type="number"
+                            value={nuevoPrecio}
+                            onChange={e => setNuevoPrecio(e.target.value)}
+                            placeholder="Precio del nuevo plan…"
+                            className="w-full px-2.5 py-2 rounded-lg border text-[12px] outline-none focus:ring-2"
+                            style={{ borderColor: '#BBF7D0', focusRingColor: '#86EFAC' }}
+                          />
+                          {!nuevoPrecio && (
+                            <p className="text-[10px] text-amber-600 mt-1">⚠️ Ingresa el precio si no fue calculado automáticamente</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={cambiarPlan}
+                          disabled={cambiandoPlan}
+                          className="w-full py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50"
+                          style={{ background: '#15803D', color: '#fff' }}>
+                          <ArrowRightLeft size={12} />
+                          {cambiandoPlan ? 'Cambiando…' : 'Confirmar cambio de plan'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="bg-gray-50 rounded-xl p-3 space-y-2">
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><CreditCard size={10} /> Financiero</div>
@@ -1258,9 +1819,56 @@ export default function Kanban() {
                     <div><span className="text-gray-400">Total:</span> <span className="font-bold text-gray-900">{fmt(selected.valor_total)}</span></div>
                     <div><span className="text-gray-400">Pagado:</span> <span className="font-semibold text-green-700">{fmt(selected.valor_pagado)}</span></div>
                     {selected.saldo_pendiente > 0 && <div><span className="text-gray-400">Saldo:</span> <span className="font-bold text-red-600">{fmt(selected.saldo_pendiente)}</span></div>}
-                    {detalle?.comision_aliado > 0 && <div><span className="text-gray-400">Comisión:</span> <span className="font-semibold text-amber-700">{fmt(detalle.comision_aliado)}</span></div>}
                     {detalle?.metodo_pago && <div><span className="text-gray-400">Método:</span> <span className="font-semibold">{detalle.metodo_pago}</span></div>}
                   </div>
+
+                  {/* Comisión aliado — visible cuando viene de aliado y no fue descontada del precio */}
+                  {detalle?.aliado_origen_id && !detalle?.comision_descontada && (
+                    <div className="rounded-lg px-3 py-2.5 space-y-2" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                      <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Comisión aliado</div>
+                      <div className="text-[11px] text-amber-700">
+                        {detalle.comision_aliado > 0
+                          ? <>Actual: <strong>{fmt(detalle.comision_aliado)}</strong> ({Math.round(detalle.comision_aliado / selected.valor_total * 100)}%)</>
+                          : 'Sin comisión registrada'}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1 flex-1">
+                          <input
+                            type="number" min="0" max="100" step="0.5"
+                            placeholder={detalle.comision_aliado > 0
+                              ? String(Math.round(detalle.comision_aliado / selected.valor_total * 100))
+                              : 'Ej: 15'}
+                            value={editComisionAliado}
+                            onChange={e => setEditComisionAliado(e.target.value)}
+                            className="w-16 px-2 py-1 text-[12px] font-bold text-amber-800 bg-white border border-amber-300 rounded-lg outline-none focus:border-amber-500 text-right"
+                          />
+                          <span className="text-[12px] font-bold text-amber-700">%</span>
+                          {editComisionAliado !== '' && (
+                            <span className="text-[11px] text-amber-600 ml-1">
+                              = {fmt(Math.round(selected.valor_total * (parseFloat(editComisionAliado) || 0) / 100))}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          disabled={editComisionAliado === '' || guardando}
+                          onClick={async () => {
+                            const monto = Math.round(selected.valor_total * (parseFloat(editComisionAliado) || 0) / 100)
+                            const { error } = await db.from('servicios')
+                              .update({ comision_aliado: monto })
+                              .eq('id', selected.servicio_id)
+                            if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
+                            setDetalle(prev => prev ? { ...prev, comision_aliado: monto } : prev)
+                            setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, comision_aliado: monto } : s))
+                            setEditComisionAliado('')
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all disabled:opacity-40"
+                          style={{ background: '#F59E0B', color: '#fff' }}>
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Estado de pago</div>
                     <Select value={editEstadoPago} onChange={e => setEditEstadoPago(e.target.value)} className="w-full text-[12px]">
@@ -1354,6 +1962,57 @@ export default function Kanban() {
               </div>
             )}
 
+            {/* ── Agregar recordatorio adicional (solo COORDINADOR/ADMIN) ── */}
+            {(esAdmin || rol === 'COORDINADOR') && !['CANCELADO','ENTREGADO'].includes(selected.estado) && (
+              <div className="rounded-xl p-3 space-y-2" style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A' }}>
+                <div className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#92400E' }}>
+                  <Package size={10} /> Agregar ítem adicional
+                </div>
+                <div className="flex gap-2">
+                  <Select
+                    value={addRecId}
+                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1) }}
+                    className="flex-1 text-[12px]"
+                  >
+                    <option value="">Seleccionar ítem…</option>
+                    {recListOpts.map(r => (
+                      <option key={r.id} value={r.id}>
+                        {r.nombre}{r.precio_base ? ` — ${fmt(r.precio_base)}` : ''}
+                      </option>
+                    ))}
+                  </Select>
+                  <input
+                    type="number" min={1} max={99}
+                    value={addRecQty}
+                    onChange={e => setAddRecQty(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-14 px-2 py-2 rounded-lg border text-[12px] text-center outline-none"
+                    style={{ borderColor: '#FDE68A' }}
+                    title="Cantidad"
+                  />
+                </div>
+                {addRecId && (() => {
+                  const r = recListOpts.find(x => x.id === addRecId)
+                  if (!r) return null
+                  const sub = (r.precio_base || 0) * addRecQty
+                  return (
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-amber-700">
+                        {sub > 0 ? `+${fmt(sub)} — pendiente de cobro en entrega` : 'Sin costo adicional'}
+                      </p>
+                      <button
+                        onClick={agregarAdicional}
+                        disabled={addingRec}
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-50"
+                        style={{ background: '#D97706', color: '#fff' }}>
+                        <Package size={11} />
+                        {addingRec ? 'Agregando…' : 'Agregar'}
+                      </button>
+                    </div>
+                  )
+                })()}
+              </div>
+            )}
+
             {/* Comentarios del proceso */}
             <div className="pt-2" style={{ borderTop: '1px solid #F0F0F0' }}>
               <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
@@ -1394,7 +2053,7 @@ export default function Kanban() {
 
             {/* WhatsApp */}
             {selected.cliente_wa && (
-              <a href={`https://wa.me/57${selected.cliente_wa.replace(/\D/g, '')}?text=${encodeURIComponent(`Hola, le escribimos de Camino al Cielo sobre el servicio de ${selected.mascota}`)}`}
+              <a href={waLink(selected.cliente_wa, `Hola, le escribimos de Camino al Cielo sobre el servicio de ${selected.mascota}`)}
                 target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-bold text-white transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#25D366' }}>
@@ -1415,10 +2074,16 @@ export default function Kanban() {
       )}
 
       {/* ── Modal revisión / conversión de solicitud ─────────────────────── */}
-      {selSolicitud && (
+      {selSolicitud && (() => {
+        const cf  = convForm
+        const set = (k, v) => setConvForm(p => ({ ...p, [k]: v }))
+        const planActual = planPorId(cf.plan_id)
+        const esIndividual = ['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(planActual?.tipo_proceso)
+
+        return (
         <Modal open={!!selSolicitud} onClose={() => setSelSolicitud(null)}
-          title="Revisión de solicitud"
-          maxWidth="max-w-xl"
+          title="Revisión y corrección de solicitud"
+          maxWidth="max-w-2xl"
           footer={
             <div className="flex items-center justify-between w-full gap-3">
               <button onClick={() => descartarSolicitud(selSolicitud.id)}
@@ -1432,7 +2097,7 @@ export default function Kanban() {
                 </button>
                 <button onClick={convertirSolicitud} disabled={convirtiendo}
                   className="px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
-                  style={{ background: 'linear-gradient(135deg,#0B1D4F,#1A5CD8)' }}>
+                  style={{ background: 'linear-gradient(135deg,#3D5A27,#1A5CD8)' }}>
                   {convirtiendo
                     ? <><div className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin mr-1.5" />Creando...</>
                     : '✅ Crear servicio'}
@@ -1441,87 +2106,161 @@ export default function Kanban() {
             </div>
           }>
           <div className="space-y-4">
-            {/* Datos del cliente */}
-            <div className="rounded-xl p-4 space-y-2" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Propietario</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
-                <div><span className="text-gray-400">Nombre: </span><span className="font-semibold">{selSolicitud.cliente_nombre} {selSolicitud.cliente_apellido || ''}</span></div>
-                <div><span className="text-gray-400">WhatsApp: </span><span className="font-semibold">{selSolicitud.cliente_whatsapp}</span></div>
-                {selSolicitud.cliente_email && <div className="col-span-2"><span className="text-gray-400">Email: </span><span className="font-semibold">{selSolicitud.cliente_email}</span></div>}
-              </div>
-            </div>
 
-            {/* Datos de la mascota */}
-            <div className="rounded-xl p-4 space-y-2" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Mascota</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
-                <div><span className="text-gray-400">Nombre: </span><span className="font-semibold">{petEmoji(solEspecieNombre)} {selSolicitud.mascota_nombre}</span></div>
-                <div><span className="text-gray-400">Especie: </span><span className="font-semibold">{solEspecieNombre}</span></div>
-                <div><span className="text-gray-400">Peso: </span><span className="font-semibold">{selSolicitud.mascota_peso_kg ? `${selSolicitud.mascota_peso_kg} kg` : '—'}</span></div>
-                {selSolicitud.mascota_raza && <div><span className="text-gray-400">Raza: </span><span className="font-semibold">{selSolicitud.mascota_raza}</span></div>}
-              </div>
-              <div className="pt-1">
-                <label className={SOL_LABL}>Sexo (confirmar)</label>
-                <div className="flex gap-2">
-                  {['Macho','Hembra'].map(v => (
-                    <button key={v} type="button"
-                      onClick={() => setConvForm(prev => ({ ...prev, mascota_sexo: v }))}
-                      className={`flex-1 py-2 rounded-lg text-[12px] font-semibold border transition-all ${convForm.mascota_sexo === v ? 'border-[#1A5CD8] bg-[#EFF5FF] text-[#1A5CD8]' : 'border-gray-200 text-gray-400'}`}>
-                      {v === 'Macho' ? '♂' : '♀'} {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Plan y recogida */}
-            <div className="rounded-xl p-4" style={{ background: '#F8F9FA', border: '1px solid #F0F2F0' }}>
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Servicio</p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
-                <div><span className="text-gray-400">Plan: </span><span className="font-semibold">{solPlanNombre}</span></div>
-                <div><span className="text-gray-400">Recogida: </span><span className="font-semibold">{selSolicitud.tipo_recogida === 'veterinaria' ? '🏥 Veterinaria' : '🏠 Domicilio'}</span></div>
-                {selSolicitud.tipo_recogida === 'domicilio' && selSolicitud.direccion && (
-                  <div className="col-span-2"><span className="text-gray-400">Dirección: </span><span className="font-semibold">{selSolicitud.barrio ? `${selSolicitud.barrio} · ` : ''}{selSolicitud.direccion}</span></div>
-                )}
-                {selSolicitud.tipo_recogida === 'veterinaria' && (
-                  <div className="col-span-2">
-                    <span className="text-gray-400">Veterinaria: </span>
-                    <span className="font-semibold">{solAliadoNombre}</span>
-                    {selSolicitud.aliado_nombre_otro && <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Posible nuevo aliado</span>}
-                  </div>
-                )}
-                {selSolicitud.hora_aproximada && <div><span className="text-gray-400">Hora aprox: </span><span className="font-semibold">{selSolicitud.hora_aproximada}</span></div>}
-                {selSolicitud.notas_cliente && <div className="col-span-2"><span className="text-gray-400">Notas: </span><span className="font-semibold">{selSolicitud.notas_cliente}</span></div>}
-              </div>
-            </div>
-
-            {/* Campos a completar */}
-            <div className="rounded-xl p-4 space-y-3" style={{ border: '2px solid #EFF5FF', background: '#FAFCFF' }}>
-              <p className="text-[11px] font-bold text-[#1A5CD8] uppercase tracking-wider">Completar para crear el servicio</p>
+            {/* ── Propietario ── */}
+            <section className="rounded-xl p-4 space-y-3" style={{ background: '#F8F9FA', border: '1px solid #E5E7EB' }}>
+              <p className={SOL_LABL} style={{ fontSize: 11 }}>PROPIETARIO</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={SOL_LABL}>Técnico asignado</label>
-                  <select value={convForm.tecnico_id} onChange={e => setConvForm(prev => ({ ...prev, tecnico_id: e.target.value }))} className={SOL_INP}>
-                    <option value="">Sin asignar</option>
-                    {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido || ''}</option>)}
+                  <label className={SOL_LABL}>Nombre *</label>
+                  <input className={SOL_INP} value={cf.cliente_nombre} onChange={e => set('cliente_nombre', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Apellido</label>
+                  <input className={SOL_INP} value={cf.cliente_apellido} onChange={e => set('cliente_apellido', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>WhatsApp *</label>
+                  <input className={SOL_INP} inputMode="tel" value={cf.cliente_whatsapp} onChange={e => set('cliente_whatsapp', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>2do contacto</label>
+                  <input className={SOL_INP} inputMode="tel" placeholder="Cel / fijo alternativo" value={cf.cliente_telefono} onChange={e => set('cliente_telefono', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>3er contacto</label>
+                  <input className={SOL_INP} inputMode="tel" placeholder="Otro número" value={cf.cliente_telefono2} onChange={e => set('cliente_telefono2', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Cédula</label>
+                  <input className={SOL_INP} value={cf.cliente_cedula} onChange={e => set('cliente_cedula', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Email</label>
+                  <input className={SOL_INP} type="email" value={cf.cliente_email} onChange={e => set('cliente_email', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Ciudad residencia</label>
+                  <input className={SOL_INP} value={cf.cliente_ciudad} onChange={e => set('cliente_ciudad', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Localidad</label>
+                  <LocalidadSelect value={cf.cliente_localidad} onChange={v => set('cliente_localidad', v)} placeholder="Seleccionar…" />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Barrio</label>
+                  <input className={SOL_INP} value={cf.cliente_barrio} onChange={e => set('cliente_barrio', e.target.value)} />
+                </div>
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Dirección residencia</label>
+                  <input className={SOL_INP} value={cf.cliente_direccion} onChange={e => set('cliente_direccion', e.target.value)} />
+                </div>
+              </div>
+            </section>
+
+            {/* ── Mascota ── */}
+            <section className="rounded-xl p-4 space-y-3" style={{ background: '#F8F9FA', border: '1px solid #E5E7EB' }}>
+              <p className={SOL_LABL} style={{ fontSize: 11 }}>MASCOTA</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={SOL_LABL}>Nombre *</label>
+                  <input className={SOL_INP} value={cf.mascota_nombre} onChange={e => set('mascota_nombre', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Especie</label>
+                  <select className={SOL_INP} value={cf.especie_id} onChange={e => set('especie_id', e.target.value)}>
+                    <option value="">— Seleccionar —</option>
+                    {especiesKanban.map(e => <option key={e.id} value={String(e.id)}>{petEmoji(e.nombre)} {e.nombre}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className={SOL_LABL}>Acompañamiento</label>
-                  <select value={convForm.tipo_acompanamiento} onChange={e => setConvForm(prev => ({ ...prev, tipo_acompanamiento: e.target.value }))} className={SOL_INP}>
-                    <option value="PRESENCIAL">Presencial</option>
-                    <option value="VIDEOLLAMADA">Videollamada</option>
-                    <option value="EVIDENCIA">Solo evidencias</option>
+                  <label className={SOL_LABL}>Peso (kg) *</label>
+                  <input className={SOL_INP} type="number" inputMode="decimal" step="0.1"
+                    value={cf.mascota_peso_kg} onChange={e => set('mascota_peso_kg', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Raza</label>
+                  <input className={SOL_INP} value={cf.mascota_raza} onChange={e => set('mascota_raza', e.target.value)} />
+                </div>
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Sexo</label>
+                  <div className="flex gap-2">
+                    {['Macho','Hembra'].map(v => (
+                      <button key={v} type="button" onClick={() => set('mascota_sexo', v)}
+                        className={`flex-1 py-2 rounded-lg text-[12px] font-semibold border transition-all ${cf.mascota_sexo === v ? 'border-[#1A5CD8] bg-[#EFF5FF] text-[#1A5CD8]' : 'border-gray-200 text-gray-400'}`}>
+                        {v === 'Macho' ? '♂' : '♀'} {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Plan y precio ── */}
+            <section className="rounded-xl p-4 space-y-3" style={{ background: '#F8F9FA', border: '1px solid #E5E7EB' }}>
+              <p className={SOL_LABL} style={{ fontSize: 11 }}>PLAN Y PRECIO</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Plan *</label>
+                  <select className={SOL_INP} value={cf.plan_id} onChange={async e => {
+                    const pid = e.target.value
+                    set('plan_id', pid)
+                    set('valor_total', '')
+                    const precio = await calcularPrecioPara(pid, cf.mascota_peso_kg, cf.especie_id)
+                    if (!precio) return
+                    setConvForm(prev => String(prev.plan_id) === String(pid)
+                      ? { ...prev, valor_total: String(precio) }
+                      : prev)
+                    // Recalcular comisión con el nuevo plan
+                    if (aliadoSolData && pid) {
+                      const plan = planesKanban.find(p => String(p.id) === String(pid))
+                      const pct  = await calcularComisionPct(aliadoSolData.id_aliado, aliadoSolData.vip, pid, plan?.tipo_proceso)
+                      setComisionSolPct(pct)
+                      setComisionSol(pct > 0 ? Math.round(precio * pct / 100) : 0)
+                    }
+                  }}>
+                    <option value="">— Seleccionar plan —</option>
+                    {planesKanban.filter(p => !['BRONCE','PLATA','ORO_EXCLUSIVO','DIAMANTE','VITALICIO'].includes(p.codigo))
+                      .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className={SOL_LABL}>Valor total (COP)</label>
-                  <input type="number" className={SOL_INP} placeholder="0" value={convForm.valor_total}
-                    onChange={e => setConvForm(prev => ({ ...prev, valor_total: e.target.value }))} />
+                  <input type="number" className={SOL_INP} placeholder="0" value={cf.valor_total}
+                    onChange={e => set('valor_total', e.target.value)} />
                 </div>
+
+                {/* Comisión aliado — solo visible si hay aliado en la solicitud */}
+                {selSolicitud?.aliado_id && (
+                  <div className="col-span-2">
+                    <div className="rounded-xl p-3 space-y-2" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-amber-800">
+                            Comision aliado{comisionSolPct > 0 ? ` (${comisionSolPct}% calculado automaticamente)` : ''}
+                          </p>
+                          <p className="text-[10px] text-amber-600 mt-0.5">
+                            El cliente paga el valor completo. Esta comision se registra para {aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : aliadoSolData?.modalidad_comision === 'CREDITO_ACUMULADO' ? 'credito acumulado' : 'seguimiento'} al aliado.
+                          </p>
+                        </div>
+                        <input type="number" min="0"
+                          className="w-28 px-3 py-2 text-[13px] font-bold text-amber-800 bg-white border border-amber-300 rounded-lg outline-none focus:border-amber-500 text-right"
+                          value={comisionSol}
+                          onChange={e => setComisionSol(Math.max(0, parseFloat(e.target.value) || 0))}
+                        />
+                      </div>
+                      {comisionSol > 0 && cf.valor_total && (
+                        <p className="text-[10px] text-amber-700">
+                          Neto para Camino al Cielo: <strong>{fmt(parseFloat(cf.valor_total) - comisionSol)}</strong> de <strong>{fmt(parseFloat(cf.valor_total))}</strong> cobrados al cliente
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label className={SOL_LABL}>Estado de pago</label>
-                  <select value={convForm.estado_pago} onChange={e => setConvForm(prev => ({ ...prev, estado_pago: e.target.value }))} className={SOL_INP}>
+                  <select className={SOL_INP} value={cf.estado_pago} onChange={e => set('estado_pago', e.target.value)}>
                     <option value="PENDIENTE">Pendiente</option>
                     <option value="PARCIAL">Parcial</option>
                     <option value="COMPLETO">Completo</option>
@@ -1529,7 +2268,7 @@ export default function Kanban() {
                 </div>
                 <div className="col-span-2">
                   <label className={SOL_LABL}>Método de pago</label>
-                  <select value={convForm.metodo_pago} onChange={e => setConvForm(prev => ({ ...prev, metodo_pago: e.target.value }))} className={SOL_INP}>
+                  <select className={SOL_INP} value={cf.metodo_pago} onChange={e => set('metodo_pago', e.target.value)}>
                     <option value="">— Sin especificar —</option>
                     <option value="EFECTIVO">Efectivo</option>
                     <option value="TRANSFERENCIA">Transferencia</option>
@@ -1538,10 +2277,102 @@ export default function Kanban() {
                   </select>
                 </div>
               </div>
-            </div>
+              {selSolicitud.notas_cliente && (
+                <div className="rounded-lg px-3 py-2 text-[12px]" style={{ background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }}>
+                  💬 Notas del cliente: <span className="font-semibold">{selSolicitud.notas_cliente}</span>
+                </div>
+              )}
+            </section>
+
+            {/* ── Recogida ── */}
+            <section className="rounded-xl p-4 space-y-3" style={{ background: '#F8F9FA', border: '1px solid #E5E7EB' }}>
+              <p className={SOL_LABL} style={{ fontSize: 11 }}>RECOGIDA</p>
+
+              {/* Banner veterinaria seleccionada por el cliente */}
+              {cf.tipo_recogida === 'veterinaria' && selSolicitud?.aliado_id && (() => {
+                const al = aliados.find(a => a.id_aliado === selSolicitud.aliado_id)
+                if (!al) return null
+                return (
+                  <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl"
+                    style={{ background: '#EFF5FF', border: '1px solid #BFDBFE' }}>
+                    <span className="text-base shrink-0">🏥</span>
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-bold text-blue-800 leading-tight">{al.nombre}</p>
+                      {(al.direccion || al.ciudad) && (
+                        <p className="text-[11px] text-blue-600 mt-0.5 truncate">
+                          {[al.direccion, al.barrio, al.ciudad].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
+                      {al.telefono && <p className="text-[11px] text-blue-500">{al.telefono}</p>}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Punto de recogida</label>
+                  <div className="flex gap-2">
+                    {[{v:'domicilio',l:'🏠 Domicilio'},{v:'veterinaria',l:'🏥 Veterinaria'}].map(o => (
+                      <button key={o.v} type="button" onClick={() => set('tipo_recogida', o.v)}
+                        className={`flex-1 py-2 rounded-lg text-[12px] font-semibold border transition-all ${cf.tipo_recogida === o.v ? 'border-[#3D5A27] bg-[#F0F7EB] text-[#3D5A27]' : 'border-gray-200 text-gray-400'}`}>
+                        {o.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Ciudad</label>
+                  <input className={SOL_INP} value={cf.ciudad} onChange={e => set('ciudad', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Barrio</label>
+                  <input className={SOL_INP} value={cf.barrio} onChange={e => set('barrio', e.target.value)} />
+                </div>
+                <div className="col-span-2">
+                  <label className={SOL_LABL}>Dirección de recogida</label>
+                  <input className={SOL_INP} value={cf.direccion} onChange={e => set('direccion', e.target.value)} />
+                </div>
+                <div>
+                  <label className={SOL_LABL}>Hora aproximada</label>
+                  <input type="time" className={SOL_INP} value={cf.hora_aproximada} onChange={e => set('hora_aproximada', e.target.value)} />
+                </div>
+                {cf.tipo_recogida === 'veterinaria' && selSolicitud?.aliado_nombre_otro && (
+                  <div className="flex items-center gap-2 col-span-2">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">⚠️ Vet no registrada: {selSolicitud.aliado_nombre_otro}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* ── Asignación ── */}
+            <section className="rounded-xl p-4 space-y-3" style={{ border: '2px solid #EFF5FF', background: '#FAFCFF' }}>
+              <p className="text-[11px] font-bold text-[#1A5CD8] uppercase tracking-wider">Asignación</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className={esIndividual ? '' : 'col-span-2'}>
+                  <label className={SOL_LABL}>Técnico asignado</label>
+                  <select className={SOL_INP} value={cf.tecnico_id} onChange={e => set('tecnico_id', e.target.value)}>
+                    <option value="">Sin asignar</option>
+                    {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido || ''}</option>)}
+                  </select>
+                </div>
+                {esIndividual && (
+                  <div>
+                    <label className={SOL_LABL}>Tipo de acompañamiento</label>
+                    <select className={SOL_INP} value={cf.tipo_acompanamiento} onChange={e => set('tipo_acompanamiento', e.target.value)}>
+                      <option value="PRESENCIAL">Presencial</option>
+                      <option value="VIDEOLLAMADA">Videollamada</option>
+                      <option value="EVIDENCIA">Solo evidencias</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+            </section>
+
           </div>
         </Modal>
-      )}
+        )
+      })()}
     </div>
     </>
   )

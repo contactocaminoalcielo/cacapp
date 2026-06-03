@@ -1,5 +1,5 @@
 import { db } from './supabase'
-import { today } from './utils'
+import { today, waLink } from './utils'
 
 // ─── Generar PDF con jsPDF y subir a Supabase Storage ────────────────────────
 // Devuelve la URL pública del PDF subido
@@ -455,11 +455,10 @@ export function abrirWhatsApp(whatsapp, mascota, tipo) {
   const numero = (whatsapp || '').replace(/\D/g, '')
   if (!numero) return false
   const tipoLabel = tipo.toLowerCase().replace(/_/g, ' ')
-  const msg = encodeURIComponent(
+  const msg =
     `Hola, le compartimos el certificado de ${tipoLabel} de ${mascota}. ` +
     `Por favor guárdelo como constancia del servicio prestado por Camino al Cielo. ` +
     `Si tiene alguna pregunta, estamos a su disposición.`
-  )
-  window.open(`https://wa.me/57${numero}?text=${msg}`, '_blank')
+  window.open(waLink(numero, msg), '_blank')
   return true
 }
