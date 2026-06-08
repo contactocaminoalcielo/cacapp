@@ -1,6 +1,6 @@
 // Claude Haiku — extracción de datos con IA
 // API key de Anthropic: console.anthropic.com
-const CLAUDE_KEY = 'CLAVE_REMOVIDA'
+const CLAUDE_KEY = import.meta.env.VITE_CLAUDE_KEY
 const MODELO     = 'claude-haiku-4-5-20251001'
 
 const PROMPT = `Eres el asistente de Camino al Cielo, funeraria de mascotas en Colombia.
