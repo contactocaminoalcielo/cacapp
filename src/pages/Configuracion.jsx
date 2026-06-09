@@ -117,6 +117,20 @@ function TabPersonal() {
       : await db.from('personal').insert(body)
     setSaving(false)
     if (error) { setFormError('Error al guardar: ' + error.message); return }
+
+    // Si el email cambió y tiene cuenta de acceso, sincronizar en auth.users
+    if (selected?.id && selected?.auth_user_id && form.email && form.email !== selected.email) {
+      try {
+        await callEdgeFunction('admin-auth', {
+          action: 'updateUserEmail',
+          userId: selected.auth_user_id,
+          email: form.email,
+        })
+      } catch (e) {
+        console.warn('Email actualizado en personal pero no en auth:', e.message)
+      }
+    }
+
     await cargar()
     setSelected(null)
   }

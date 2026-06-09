@@ -83,6 +83,21 @@ Deno.serve(async (req) => {
       })
     }
 
+    if (action === 'updateUserEmail') {
+      if (!userId || !email) {
+        return new Response(JSON.stringify({ error: 'userId y email requeridos' }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      const { data, error } = await adminClient.auth.admin.updateUserById(userId, {
+        email, email_confirm: true,
+      })
+      if (error) throw error
+      return new Response(JSON.stringify({ user: data.user }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     return new Response(JSON.stringify({ error: 'Acción no reconocida' }), {
       status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
