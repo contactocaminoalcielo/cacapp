@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 
 export default function Login() {
   const { login } = useAuth()
-  const [email,    setEmail]    = useState('')
-  const [password, setPassword] = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState('')
+  const [email,       setEmail]       = useState('')
+  const [password,    setPassword]    = useState('')
+  const [showPw,      setShowPw]      = useState(false)
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState('')
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -150,18 +152,29 @@ export default function Login() {
                   style={{ color: '#64748B' }}>
                   Contraseña
                 </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => { setPassword(e.target.value); setError('') }}
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                  required
-                  className="w-full h-12 px-4 rounded-xl border text-[14px] text-gray-900 placeholder:text-gray-300 transition-all duration-150"
-                  style={{ borderColor: '#E2E8F0', outline: 'none', background: '#FAFBFC' }}
-                  onFocus={e => { e.target.style.borderColor = '#1A5CD8'; e.target.style.boxShadow = '0 0 0 3px rgba(26,92,216,0.12)'; e.target.style.background = '#fff' }}
-                  onBlur={e  => { e.target.style.borderColor = '#E2E8F0'; e.target.style.boxShadow = 'none'; e.target.style.background = '#FAFBFC' }}
-                />
+                <div className="relative">
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => { setPassword(e.target.value); setError('') }}
+                    placeholder="••••••••"
+                    autoComplete="current-password"
+                    required
+                    className="w-full h-12 px-4 pr-11 rounded-xl border text-[14px] text-gray-900 placeholder:text-gray-300 transition-all duration-150"
+                    style={{ borderColor: '#E2E8F0', outline: 'none', background: '#FAFBFC' }}
+                    onFocus={e => { e.target.style.borderColor = '#1A5CD8'; e.target.style.boxShadow = '0 0 0 3px rgba(26,92,216,0.12)'; e.target.style.background = '#fff' }}
+                    onBlur={e  => { e.target.style.borderColor = '#E2E8F0'; e.target.style.boxShadow = 'none'; e.target.style.background = '#FAFBFC' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-lg transition-colors"
+                    style={{ color: '#94A3B8' }}
+                    tabIndex={-1}
+                  >
+                    {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
               </div>
             </div>
 

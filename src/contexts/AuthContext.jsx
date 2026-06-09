@@ -8,7 +8,6 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [session,      setSession]      = useState(undefined)
   const [personalData, setPersonalData] = useState(undefined)
-  const [debug,        setDebug]        = useState('')
 
   useEffect(() => {
     db.auth.getSession().then(({ data: { session } }) => {
@@ -27,8 +26,7 @@ export function AuthProvider({ children }) {
 
   async function loadPersonal(user) {
     const { data: todos, error } = await db.from('personal').select('*')
-    // Debug temporal — borrar después
-    setDebug(`user.id=${user.id} | user.email=${user.email} | rows=${todos?.length ?? 0} | err=${error?.message ?? 'none'}`)
+    if (error) { setPersonalData(null); return }
     const email = user.email?.toLowerCase().trim()
     const data = (todos || []).find(p =>
       p.auth_user_id === user.id ||
@@ -56,7 +54,6 @@ export function AuthProvider({ children }) {
       login,
       logout,
       loading: session === undefined,
-      debug,
     }}>
       {children}
     </AuthContext.Provider>
