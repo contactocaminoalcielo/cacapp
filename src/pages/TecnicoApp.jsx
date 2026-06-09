@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { db, dbAdmin } from '@/lib/supabase'
+import { db } from '@/lib/supabase'
 import { petEmoji, fmt, waLink, calcularEstadoVet } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion } from '@/lib/notificaciones'
@@ -219,7 +219,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
     try {
       const ext  = file.name.split('.').pop() || 'jpg'
       const path = `${storagePath}/${Date.now()}.${ext}`
-      const { data, error: upErr } = await dbAdmin.storage
+      const { data, error: upErr } = await db.storage
         .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
@@ -1183,13 +1183,13 @@ function ReporteCuartoFrio({ tecnico, neverasActivas, reporteHoy, onGuardado }) 
     try {
       let reporteId
       if (reporteHoy) {
-        await dbAdmin.from('estado_cuarto_frio').update({
+        await db.from('estado_cuarto_frio').update({
           ...checklist, comentario: comentario || null,
         }).eq('id', reporteHoy.id)
         reporteId = reporteHoy.id
-        await dbAdmin.from('estado_nevera_reporte').delete().eq('reporte_id', reporteId)
+        await db.from('estado_nevera_reporte').delete().eq('reporte_id', reporteId)
       } else {
-        const { data, error } = await dbAdmin.from('estado_cuarto_frio').insert({
+        const { data, error } = await db.from('estado_cuarto_frio').insert({
           registrado_por: tecnico?.id || null,
           ...checklist,
           comentario: comentario || null,
@@ -1199,7 +1199,7 @@ function ReporteCuartoFrio({ tecnico, neverasActivas, reporteHoy, onGuardado }) 
       }
       const neveras = Object.entries(neveraData).filter(([, v]) => v.capacidad_pct || v.funcionamiento)
       if (neveras.length > 0) {
-        const { error: nErr } = await dbAdmin.from('estado_nevera_reporte').insert(
+        const { error: nErr } = await db.from('estado_nevera_reporte').insert(
           neveras.map(([codigo, v]) => ({
             reporte_id:    reporteId,
             nevera_codigo: codigo,
@@ -1453,7 +1453,7 @@ export default function TecnicoApp() {
       // ── 5. Reporte del día y neveras activas (desde tabla neveras) ──
       const todayStr = new Date().toISOString().split('T')[0]
       const [{ data: reporteData }, { data: neverasData }] = await Promise.all([
-        dbAdmin.from('estado_cuarto_frio')
+        db.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*)')
           .eq('fecha', todayStr)
           .order('created_at', { ascending: false })
@@ -1672,7 +1672,7 @@ export default function TecnicoApp() {
       try {
         const blob  = await (await fetch(firmaDataUrl)).blob()
         const path  = `entregas/firmas/${ent.id}_${Date.now()}.png`
-        const { data: up } = await dbAdmin.storage.from('evidencias').upload(path, blob, { upsert: true, contentType: 'image/png' })
+        const { data: up } = await db.storage.from('evidencias').upload(path, blob, { upsert: true, contentType: 'image/png' })
         if (up) {
           const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(up.path)
           patch.foto_firma_url = publicUrl
@@ -2349,7 +2349,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     try {
       const ext  = file.name.split('.').pop() || 'jpg'
       const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
-      const { data, error: upErr } = await dbAdmin.storage
+      const { data, error: upErr } = await db.storage
         .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
@@ -2738,7 +2738,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         try {
           const suffix   = tipoRecibo === 'VETERINARIA' ? '_VET' : '_CLI'
           const fileName = `recibos/${servicioSel.id}/${form.numero_recibo}${suffix}_${Date.now()}.pdf`
-          const { data: up, error: upErr } = await dbAdmin.storage
+          const { data: up, error: upErr } = await db.storage
             .from('evidencias')
             .upload(fileName, pdfBlob, { upsert: true, contentType: 'application/pdf' })
           if (!upErr && up) {

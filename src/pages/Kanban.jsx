@@ -5,7 +5,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
-import { db, dbAdmin } from '@/lib/supabase'
+import { db } from '@/lib/supabase'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
@@ -944,20 +944,20 @@ export default function Kanban() {
     if (contactarLoadingId || !s.cliente_wa) return
     setContactarLoadingId(s.servicio_id)
     try {
-      const { data: svcRow, error: selErr } = await dbAdmin
+      const { data: svcRow, error: selErr } = await db
         .from('servicios').select('codigo_fotos, fecha_codigo_enviado').eq('id', s.servicio_id).single()
       if (selErr) { await showAlert(parsearErrorDB(selErr), { title: 'Error al leer servicio' }); return }
       let codigo = svcRow?.codigo_fotos
       if (!codigo) {
         codigo = generateCodigo()
-        const { error: updErr } = await dbAdmin.from('servicios').update({
+        const { error: updErr } = await db.from('servicios').update({
           codigo_fotos: codigo,
           fecha_codigo_enviado: new Date().toISOString().split('T')[0],
         }).eq('id', s.servicio_id)
         if (updErr) { await showAlert(parsearErrorDB(updErr), { title: 'Error al generar código' }); return }
       } else if (!svcRow?.fecha_codigo_enviado) {
         // El código ya existía pero no se había registrado la fecha de envío
-        await dbAdmin.from('servicios').update({ fecha_codigo_enviado: new Date().toISOString().split('T')[0] }).eq('id', s.servicio_id)
+        await db.from('servicios').update({ fecha_codigo_enviado: new Date().toISOString().split('T')[0] }).eq('id', s.servicio_id)
       }
       const base = window.location.href.split('#')[0]
       const portalUrl = `${base}#/fotos/${codigo}`

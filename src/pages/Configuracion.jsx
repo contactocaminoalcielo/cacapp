@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { db, dbAdmin } from '@/lib/supabase'
+import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -630,16 +630,10 @@ function TabAccesos() {
     const { persona, mode } = modal
     try {
       if (mode === 'crear') {
-        // Crear nuevo usuario en Supabase Auth
-        const { data, error } = await dbAdmin.auth.admin.createUser({
-          email: persona.email,
-          password: pw,
-          email_confirm: true,
+        const result = await callEdgeFunction('admin-auth', {
+          action: 'createUser', email: persona.email, password: pw,
         })
-        if (error) { setModalError('Error: ' + error.message); setSaving(false); return }
-
-        // Vincular auth_user_id en personal
-        await db.from('personal').update({ auth_user_id: data.user.id }).eq('id', persona.id)
+        await db.from('personal').update({ auth_user_id: result.user.id }).eq('id', persona.id)
         await cargar()
         setModal(null)
         setSuccess({
@@ -647,9 +641,9 @@ function TabAccesos() {
           nombre: persona.nombre, email: persona.email, pw, whatsapp: persona.whatsapp,
         })
       } else {
-        // Cambiar contraseña de usuario existente
-        const { error } = await dbAdmin.auth.admin.updateUserById(persona.auth_user_id, { password: pw })
-        if (error) { setModalError('Error: ' + error.message); setSaving(false); return }
+        await callEdgeFunction('admin-auth', {
+          action: 'updateUser', userId: persona.auth_user_id, password: pw,
+        })
         setModal(null)
         setSuccess({
           texto: `✓ Contraseña actualizada para ${persona.nombre}.\n\nEmail: ${persona.email}\nNueva contraseña: ${pw}`,
@@ -1990,9 +1984,9 @@ function TabPreciosPlanes() {
         if (isNaN(precio)) continue
         const existing = precios.find(p => p.plan_id === planSel.id && p.rango_nombre === rango)
         if (existing) {
-          await dbAdmin.from('planes_precios').update({ precio }).eq('id', existing.id)
+          await db.from('planes_precios').update({ precio }).eq('id', existing.id)
         } else {
-          await dbAdmin.from('planes_precios').insert({
+          await db.from('planes_precios').insert({
             plan_id:    planSel.id,
             rango_nombre: rango,
             precio,
@@ -2012,7 +2006,7 @@ function TabPreciosPlanes() {
     if (!planSel) return
     const existing = precios.find(p => p.plan_id === planSel.id && p.rango_nombre === rango)
     if (!existing) return
-    await dbAdmin.from('planes_precios').delete().eq('id', existing.id)
+    await db.from('planes_precios').delete().eq('id', existing.id)
     setEditForm(prev => { const n = {...prev}; delete n[rango]; return n })
     await cargar()
   }

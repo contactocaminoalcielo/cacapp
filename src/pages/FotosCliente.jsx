@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { db, dbAdmin } from '@/lib/supabase'
+import { db } from '@/lib/supabase'
 import { Camera, Check, ChevronLeft, ChevronRight, Loader2, Send, X, Plus } from 'lucide-react'
 
 const G      = '#1A5CD8'
@@ -128,8 +128,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
             const f   = validos[i]
             const ext = f.name.split('.').pop().toLowerCase() || 'jpg'
             const p   = `${servicio.id}/${srId}_${i}.${ext}`
-            await dbAdmin.storage.from('fotos-clientes').upload(p, f, { upsert: true })
-            const { data: { publicUrl } } = dbAdmin.storage.from('fotos-clientes').getPublicUrl(p)
+            await db.storage.from('fotos-clientes').upload(p, f, { upsert: true })
+            const { data: { publicUrl } } = db.storage.from('fotos-clientes').getPublicUrl(p)
             urls.push(publicUrl)
           }
           upd.imagen_cliente_url    = urls[0]
@@ -137,15 +137,15 @@ export default function FotosCliente({ codigo: codigoProp }) {
         }
         if (hasTexto) upd.datos_cliente = txtData
         upd.estado = 'EN_PROCESO'
-        const { error: e } = await dbAdmin.from('servicio_recordatorios').update(upd).eq('id', srId)
+        const { error: e } = await db.from('servicio_recordatorios').update(upd).eq('id', srId)
         if (e) throw new Error('Error guardando: ' + e.message)
       }
 
       for (const srId of removidos)
-        await dbAdmin.from('servicio_recordatorios').update({ estado: 'NA' }).eq('id', srId)
+        await db.from('servicio_recordatorios').update({ estado: 'NA' }).eq('id', srId)
 
       for (const extra of extras) {
-        const { data: ns, error: ie } = await dbAdmin
+        const { data: ns, error: ie } = await db
           .from('servicio_recordatorios')
           .insert({ servicio_id: servicio.id, recordatorio_id: extra.rec_id, origen: 'ADICIONAL', estado: 'PENDIENTE' })
           .select('id').single()
@@ -158,8 +158,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
             const f   = vals[i]
             const ext = f.name.split('.').pop().toLowerCase() || 'jpg'
             const p   = `${servicio.id}/${ns.id}_${i}.${ext}`
-            await dbAdmin.storage.from('fotos-clientes').upload(p, f, { upsert: true })
-            const { data: { publicUrl } } = dbAdmin.storage.from('fotos-clientes').getPublicUrl(p)
+            await db.storage.from('fotos-clientes').upload(p, f, { upsert: true })
+            const { data: { publicUrl } } = db.storage.from('fotos-clientes').getPublicUrl(p)
             urls.push(publicUrl)
           }
           upd.imagen_cliente_url = urls[0]; upd.imagenes_cliente_urls = urls
@@ -168,7 +168,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         if (ht) upd.datos_cliente = extra.textos
         upd.estado = 'EN_PROCESO'
         if (Object.keys(upd).length)
-          await dbAdmin.from('servicio_recordatorios').update(upd).eq('id', ns.id)
+          await db.from('servicio_recordatorios').update(upd).eq('id', ns.id)
       }
 
       const svcUpd = {
@@ -177,7 +177,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         ...(comentarios.trim() ? { comentarios_cliente: comentarios.trim() } : {}),
         ...(esCompostaje && anticipados !== null ? { recordatorios_anticipados: anticipados } : {}),
       }
-      const { error: se } = await dbAdmin.from('servicios').update(svcUpd).eq('id', servicio.id)
+      const { error: se } = await db.from('servicios').update(svcUpd).eq('id', servicio.id)
       if (se) throw new Error('No se pudo guardar: ' + se.message)
       setFase('enviado')
     } catch (e) {
