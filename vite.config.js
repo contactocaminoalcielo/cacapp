@@ -29,8 +29,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Solo cachea assets estáticos — la data de Supabase siempre va a la red
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Limpiar caches viejos de Workbox al activar nuevo SW
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             // Fuentes de Google — cache por 1 año
@@ -39,8 +40,13 @@ export default defineConfig({
             options: { cacheName: 'google-fonts-cache', expiration: { maxAgeSeconds: 60 * 60 * 24 * 365 } },
           },
           {
-            // Supabase — siempre red, sin cache (datos en tiempo real)
-            urlPattern: /^https:\/\/gfnvrmpcwchqdyozwygd\.supabase\.co\/.*/i,
+            // Supabase Contabo (producción) — siempre red, nunca cachear datos
+            urlPattern: /^https:\/\/db\.orbitacac\.com\/.*/i,
+            handler: 'NetworkOnly',
+          },
+          {
+            // Anthropic API — siempre red
+            urlPattern: /^https:\/\/api\.anthropic\.com\/.*/i,
             handler: 'NetworkOnly',
           },
         ],
