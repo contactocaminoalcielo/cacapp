@@ -94,14 +94,15 @@ export default function Kanban() {
 
   // Derivados de rol
   const esAdmin     = rol === 'ADMIN'
+  const esCoord     = rol === 'COORDINADOR'
   const esProductor = rol === 'PRODUCTOR'
   const puedeVerImagenes = esAdmin || esProductor
 
-  const COLUMNAS = esAdmin
+  const COLUMNAS = (esAdmin || esCoord)
     ? (tableroActivo === 'produccion' ? COLS_PRODUCCION : COLS_COORDINACION)
     : (COLS_POR_ROL[rol] ?? TODAS_COLS)
 
-  const esVistaProd = esProductor || (esAdmin && tableroActivo === 'produccion')
+  const esVistaProd = esProductor || ((esAdmin || esCoord) && tableroActivo === 'produccion')
   const colLabel    = col => {
     if (col === 'SOLICITUDES') return 'Solicitudes'
     if (esVistaProd && col === 'EN_CUARTO_FRIO') return 'Pendiente'
@@ -1229,8 +1230,8 @@ export default function Kanban() {
 
         {/* Solicitudes movidas a columna del tablero */}
 
-        {/* ── Selector de tablero (solo ADMIN) ─────────────────────────────── */}
-        {esAdmin && (
+        {/* ── Selector de tablero (ADMIN y COORDINADOR) ────────────────────── */}
+        {(esAdmin || esCoord) && (
           <div className="flex gap-1 bg-gray-100 rounded-xl p-1 self-start">
             <button
               onClick={() => setTableroActivo('coordinacion')}
