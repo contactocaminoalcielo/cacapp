@@ -17,6 +17,15 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Backups de base de datos y artefactos con datos/secretos — NUNCA al repo
+*.sql.gz
+*.bundle
+orbit_backup*.sql
+orbit_contabo_*.sql*
+replacements.txt
+gk.js
+jwt_secret*.txt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

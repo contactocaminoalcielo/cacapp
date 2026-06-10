@@ -1,0 +1,60 @@
+-- ============================================================
+-- ORBIT — BACKUP ESTADO ORIGINAL DE RLS Y POLICIES
+-- Capturado: 2026-06-04 | Proyecto: gfnvrmpcwchqdyozwygd
+-- Fuente: pg_tables + pg_policies + information_schema.role_table_grants
+-- ============================================================
+
+-- ESTADO RLS POR TABLA (antes del hardening)
+-- rowsecurity = false (33 tablas):
+--   aliados, canal_origen, clientes, comisiones_aliados, config_comisiones,
+--   cuarto_frio, entregas, especies, flujos_proceso, inventario,
+--   maquinas_produccion, mascotas, movimientos_inventario, novedades_servicio,
+--   nps_seguimiento, personal, personal_roles, plan_recordatorios, planes,
+--   planes_precios, planes_presequiales, procesos_disposicion, recogidas,
+--   recordatorio_materiales, recordatorios, roles_personal, seguimiento_compostaje,
+--   servicio_recordatorios, servicios, solicitudes_imagenes, tipo_establecimiento,
+--   traslados_tenjo, vip_recordatorios
+--
+-- rowsecurity = true (10 tablas):
+--   certificados_emitidos, config_sistema, cuarto_frio_movimientos,
+--   estado_cuarto_frio, estado_nevera_reporte, lotes_grupales, neveras,
+--   notificaciones, recibos_tecnico, solicitudes_servicio
+
+-- POLICIES ORIGINALES EN TABLAS RLS=OFF (dead code — no se ejecutaban)
+-- aliados:              "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true]
+-- canal_origen:         "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true]
+-- clientes:             "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- cuarto_frio:          "lectura_publica"[anon/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- entregas:             "lectura_publica"[anon/SELECT/true], "actualizacion_publica"[anon/UPDATE/true], "escritura_publica"[anon/INSERT/check:true]
+-- especies:             "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true]
+-- flujos_proceso:       "lectura_publica"[anon/SELECT/true]
+-- mascotas:             "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- novedades_servicio:   "lectura_publica"[anon/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- personal:             "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true], "personal_lectura_autenticados"[authenticated/SELECT/true]
+-- plan_recordatorios:   "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true]
+-- planes:               "lectura_publica"[anon/SELECT/true], "permitir lectura publica"[public/SELECT/true]
+-- recogidas:            "lectura_publica"[anon/SELECT/true], "actualizacion_publica"[anon/UPDATE/true], "escritura_publica"[anon/INSERT/check:true]
+-- seguimiento_compostaje: "lectura_publica"[anon/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- servicio_recordatorios: "lectura_publica"[anon/SELECT/true], "actualizacion_publica"[anon/UPDATE/true], "escritura_publica"[anon/INSERT/check:true]
+-- servicios:            "lectura_publica"[anon/SELECT/true], "actualizacion_publica"[anon/UPDATE/true], "escritura_publica"[anon/INSERT/check:true]
+-- tipo_establecimiento: "lectura_publica"[anon/SELECT/true]
+-- (resto sin policies: comisiones_aliados, config_comisiones, inventario, maquinas_produccion,
+--  movimientos_inventario, nps_seguimiento, personal_roles, planes_precios, planes_presequiales,
+--  procesos_disposicion, recordatorio_materiales, recordatorios, roles_personal, solicitudes_imagenes,
+--  traslados_tenjo, vip_recordatorios)
+
+-- POLICIES ORIGINALES EN TABLAS RLS=ON (se ejecutaban activamente)
+-- certificados_emitidos: "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- config_sistema:        "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- cuarto_frio_movimientos: "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- estado_cuarto_frio:    "allow_all"[public/ALL/USING(true)/CHECK(true)], "lectura_publica"[anon/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- estado_nevera_reporte: "allow_all"[public/ALL/USING(true)/CHECK(true)], "lectura_publica"[anon/SELECT/true], "escritura_publica"[anon/INSERT/check:true]
+-- lotes_grupales:        "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- neveras:               "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- notificaciones:        "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- recibos_tecnico:       "allow_all"[public/ALL/USING(true)/CHECK(true)]
+-- solicitudes_servicio:  "solicitudes_anon_insert"[anon/INSERT/check:true], "solicitudes_auth_all"[authenticated/ALL/USING(true)/CHECK(true)], "solicitudes_anon_select"[anon/SELECT/USING(true)]
+
+-- GRANTS ORIGINALES (todos los campos — resumido)
+-- 42/43 tablas: anon, authenticated, service_role → SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER, TRUNCATE
+-- solicitudes_servicio excepción: anon solo tiene SELECT e INSERT
