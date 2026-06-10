@@ -33,12 +33,13 @@ Deno.serve(async (req) => {
     }
 
     // Verificar rol admin en tabla personal
+    // personal NO tiene columna `rol` — el rol vive en rol_principal_id (FK roles_personal; ADMIN = 6)
     const { data: persona, error: rolErr } = await userClient
       .from('personal')
-      .select('rol')
+      .select('rol_principal_id, activo')
       .eq('auth_user_id', user.id)
       .single()
-    if (rolErr || !persona || persona.rol !== 'ADMIN') {
+    if (rolErr || !persona || persona.rol_principal_id !== 6 || persona.activo === false) {
       return new Response(JSON.stringify({ error: 'Requiere rol ADMIN' }), {
         status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
