@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { db } from '@/lib/supabase'
 import { petEmoji, fmt, waLink, calcularEstadoVet } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -13,6 +13,23 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 
 const POLL = 30_000
+
+// ─── ERROR BOUNDARY — evita pantalla en blanco si ReciboForm lanza ─────
+class ReciboErrorBoundary extends Component {
+  state = { hasError: false, message: '' }
+  static getDerivedStateFromError(e) { return { hasError: true, message: e?.message || '' } }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 16, background: '#FEF2F2', borderRadius: 12, border: '1px solid #FECACA', color: '#991B1B', fontSize: 13 }}>
+          <strong>Error al mostrar el recibo.</strong> Recarga la página o contacta soporte.
+          {this.state.message ? <div style={{ fontSize: 11, marginTop: 4, color: '#DC2626' }}>{this.state.message}</div> : null}
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // ─── DIRECCIÓN NAVEGABLE ───────────────────────────────────────────────
 function DireccionLink({ direccion, barrio, ciudad }) {
@@ -640,15 +657,19 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
     if (reciboGuardado && svcDataRecibo) { setReciboOpen(true); return }
     // Sin guardar: siempre recarga desde DB (refleja cambios del coordinador como comision_aliado)
     setLoadingRecibo(true)
+    setActErr('')
     try {
-      const { data } = await db.from('servicios')
+      const { data, error: dbErr } = await db.from('servicios')
         .select(`id, plan_id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
           mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,telefono2,whatsapp,direccion,ciudad)),
           planes:plan_id(nombre,codigo,tipo_proceso), aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)`)
         .eq('id', svc.id).single()
+      if (dbErr) throw new Error(dbErr.message || 'Error al cargar servicio')
       const { data: cfData } = await db.from('cuarto_frio').select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
       setSvcDataRecibo({ ...data, peso_confirmado: cfData?.peso_kg || null })
       setReciboOpen(true)
+    } catch (e) {
+      setActErr('No se pudo cargar el recibo: ' + (e.message || 'error de conexión'))
     } finally { setLoadingRecibo(false) }
   }
 
@@ -953,14 +974,16 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
         {/* ── MODAL RECIBO dentro del flujo ── */}
         {reciboOpen && svcDataRecibo && (
           <div className="mt-2">
-            <ReciboForm
-              svcData={svcDataRecibo}
-              servicioSel={svc}
-              tecnico={tecnico}
-              yaGuardado={reciboGuardado}
-              onVolver={() => { setReciboOpen(false); if (!reciboGuardado) setSvcDataRecibo(null) }}
-              onGuardado={() => { setReciboGuardado(true); setReciboOpen(false) }}
-            />
+            <ReciboErrorBoundary>
+              <ReciboForm
+                svcData={svcDataRecibo}
+                servicioSel={svc}
+                tecnico={tecnico}
+                yaGuardado={reciboGuardado}
+                onVolver={() => { setReciboOpen(false); if (!reciboGuardado) setSvcDataRecibo(null) }}
+                onGuardado={() => { setReciboGuardado(true); setReciboOpen(false) }}
+              />
+            </ReciboErrorBoundary>
           </div>
         )}
 
@@ -2448,6 +2471,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   const [err, setErr]               = useState('')
 
   const uploadRefs = useRef({})
+  const topRef     = useRef(null)
+
+  useEffect(() => {
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
 
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -2895,7 +2923,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   }
 
   return (
-    <div>
+    <div ref={topRef}>
       <div className="flex items-center gap-2 mb-4">
         <span className="text-[13px] font-bold text-gray-800">
           📄 Recibo — {form.mascota_nombre}
