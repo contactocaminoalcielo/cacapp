@@ -622,7 +622,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
     setLoadingRecibo(true)
     try {
       const { data } = await db.from('servicios')
-        .select(`id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
+        .select(`id, plan_id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
           mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,telefono2,whatsapp,direccion,ciudad)),
           planes:plan_id(nombre,codigo,tipo_proceso), aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)`)
         .eq('id', svc.id).single()
@@ -2189,7 +2189,7 @@ function ReciboTab({ recogidas, tecnico }) {
     try {
       const { data } = await db.from('servicios')
         .select(`
-          id, valor_total, valor_pagado, tipo_acompanamiento,
+          id, plan_id, valor_total, valor_pagado, tipo_acompanamiento,
           mascotas:mascota_id (
             nombre, peso_kg, especie_id, sexo,
             especies(nombre),
@@ -2283,12 +2283,30 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
     : (svcData.valor_total || 0)                      // ya es el precio completo
 
-  // Porcentaje real sobre precio bruto (solo relevante cuando comisionFueDescontada)
+  // Porcentaje real: se consulta de config_comisiones para evitar distorsión por recargos
   const [comisionPct, setComisionPct] = useState(
     comisionFueDescontada && precioOriginal > 0
       ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1))
       : 0
   )
+  useEffect(() => {
+    if (!comisionFueDescontada || !svcData.plan_id || comisionGuardada <= 0) return
+    db.from('config_comisiones')
+      .select('porcentaje, rango_min, rango_max')
+      .eq('plan_id', svcData.plan_id)
+      .eq('es_vip', aliado?.vip ?? false)
+      .then(({ data: rows }) => {
+        if (!rows?.length) return
+        // Elegir la fila cuyo porcentaje al aplicarlo da el monto más cercano al guardado
+        const best = rows.reduce((acc, r) => {
+          const base = precioOriginal > 0 ? precioOriginal : 1
+          const diffAcc = Math.abs(base * parseFloat(acc.porcentaje) / 100 - comisionGuardada)
+          const diffR   = Math.abs(base * parseFloat(r.porcentaje)   / 100 - comisionGuardada)
+          return diffR < diffAcc ? r : acc
+        })
+        setComisionPct(parseFloat(best.porcentaje))
+      })
+  }, [])
   const comisionMonto = comisionFueDescontada ? Math.round(precioOriginal * comisionPct / 100) : 0
   // Solo se deduce en recibo cuando la comisión fue aplicada inmediatamente
   const valorVet = comisionFueDescontada
