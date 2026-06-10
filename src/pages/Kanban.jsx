@@ -549,12 +549,13 @@ export default function Kanban() {
       .eq('activo', true).order('nombre')
       .then(({ data }) => setRecListOpts(data || []))
 
-    // Realtime: recarga el tablero cuando un servicio cambia de estado
-    // (ej: cliente sube fotos → EN_PROCESO, técnico avanza estado, etc.)
     const canal = db
       .channel('kanban-servicios-cambios')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, () => {
         cargar()
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'solicitudes_servicio' }, () => {
+        cargarSolicitudes()
       })
       .subscribe()
 

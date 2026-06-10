@@ -44,7 +44,14 @@ export default function Dashboard() {
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState(null)
 
-  useEffect(() => { cargar() }, [esProductor])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('dashboard-servicios-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [esProductor])
 
   async function cargar() {
     try {

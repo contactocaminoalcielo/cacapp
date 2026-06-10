@@ -526,14 +526,16 @@ export default function SolicitudCliente() {
                     <label className={LABEL}>Ciudad</label>
                     <input className="w-full px-3.5 py-3 text-[14px] font-medium text-gray-900 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#3D5A27] focus:ring-2 focus:ring-[#3D5A27]/10 transition-all"
                       value={cliente.ciudad}
-                      onChange={e => setCliente(p => ({ ...p, ciudad: e.target.value }))} />
+                      onChange={e => setCliente(p => ({ ...p, ciudad: e.target.value, localidad: '' }))} />
                   </div>
-                  <div>
-                    <label className={LABEL}>Localidad</label>
-                    <LocalidadSelect value={cliente.localidad}
-                      onChange={v => setCliente(p => ({ ...p, localidad: v }))}
-                      placeholder="Seleccionar…" />
-                  </div>
+                  {cliente.ciudad === 'Bogotá' && (
+                    <div>
+                      <label className={LABEL}>Localidad</label>
+                      <LocalidadSelect value={cliente.localidad}
+                        onChange={v => setCliente(p => ({ ...p, localidad: v }))}
+                        placeholder="Seleccionar…" />
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className={LABEL}>Barrio</label>
@@ -831,7 +833,7 @@ export default function SolicitudCliente() {
                   <select
                     className="w-full px-3.5 py-3 text-[14px] font-medium text-gray-900 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#3D5A27] focus:ring-2 focus:ring-[#3D5A27]/10 transition-all"
                     value={recogida.ciudad}
-                    onChange={e => setRecogida(p => ({ ...p, ciudad: e.target.value }))}>
+                    onChange={e => setRecogida(p => ({ ...p, ciudad: e.target.value, localidad: '' }))}>
                     {CIUDADES.map(c => (
                       <option key={c.value} value={c.value}>{c.label}</option>
                     ))}
@@ -864,12 +866,14 @@ export default function SolicitudCliente() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={LABEL}>Localidad</label>
-                    <LocalidadSelect value={recogida.localidad}
-                      onChange={v => setRecogida(p => ({ ...p, localidad: v }))}
-                      placeholder="Seleccionar…" />
-                  </div>
+                  {recogida.ciudad === 'Bogotá' && (
+                    <div>
+                      <label className={LABEL}>Localidad</label>
+                      <LocalidadSelect value={recogida.localidad}
+                        onChange={v => setRecogida(p => ({ ...p, localidad: v }))}
+                        placeholder="Seleccionar…" />
+                    </div>
+                  )}
                   <div>
                     <label className={LABEL}>Barrio</label>
                     <input className="w-full px-3.5 py-3 text-[14px] font-medium text-gray-900 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#3D5A27] focus:ring-2 focus:ring-[#3D5A27]/10 transition-all placeholder:text-gray-400"

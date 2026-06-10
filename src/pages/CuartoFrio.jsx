@@ -474,7 +474,15 @@ export default function CuartoFrio() {
   const [movimientos, setMovimientos] = useState([])
   const [busqueda,    setBusqueda]    = useState('')
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('cuartofrio-registros-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cuarto_frio' }, () => { cargar() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
 
   async function cargar() {
     try {

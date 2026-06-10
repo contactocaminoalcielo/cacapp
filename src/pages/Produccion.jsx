@@ -521,7 +521,15 @@ export default function Produccion() {
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('produccion-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, () => { cargar() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
 
   async function cargar() {
     try {

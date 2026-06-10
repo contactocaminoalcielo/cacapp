@@ -565,11 +565,11 @@ export default function Registro() {
       // 1. Contar servicios de este aliado en el mes actual
       const hoy = new Date()
       const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
-      const { count } = await db.from('servicios')
-        .select('*', { count: 'exact', head: true })
+      const { data: svcsDelMes } = await db.from('servicios')
+        .select('id, planes(codigo)')
         .eq('aliado_origen_id', aliadoSeleccionado.id_aliado)
         .gte('fecha_ingreso', inicioMes)
-      const serviciosMes = count || 0
+      const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
       // 2. Traer todas las comisiones y filtrar en JS (evita problemas con OR doble en PostgREST)
       const { data: filas } = await db.from('config_comisiones')
         .select('porcentaje, plan_id, rango_min, rango_max')
@@ -1069,7 +1069,7 @@ export default function Registro() {
                     <ErrMsgR msg={tocReg.email && errReg.email} />
                   </div>
                   <div><label className={LABEL}>Ciudad</label>
-                    <Select value={formCliente.ciudad} onChange={e => setFormCliente(p => ({ ...p, ciudad: e.target.value }))}>
+                    <Select value={formCliente.ciudad} onChange={e => setFormCliente(p => ({ ...p, ciudad: e.target.value, localidad: '' }))}>
                       {CIUDADES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                     </Select></div>
                   <div><label className={LABEL}>Tipo cliente</label>
@@ -1083,8 +1083,10 @@ export default function Registro() {
                   <div><label className={LABEL}>Barrio</label>
                     <Input value={formCliente.barrio} placeholder="Ej: CHAPINERO ALTO"
                       onChange={e => setFormCliente(p => ({ ...p, barrio: e.target.value.toUpperCase() }))} /></div>
-                  <div><label className={LABEL}>Localidad</label>
-                    <LocalidadSelect value={formCliente.localidad} onChange={v => setFormCliente(p => ({ ...p, localidad: v }))} /></div>
+                  {formCliente.ciudad === 'Bogotá' && (
+                    <div><label className={LABEL}>Localidad</label>
+                      <LocalidadSelect value={formCliente.localidad} onChange={v => setFormCliente(p => ({ ...p, localidad: v }))} /></div>
+                  )}
                 </div>
                 <button className="text-[11px] text-red-500 hover:text-red-700 mt-3 font-semibold"
                   onClick={() => setClienteNuevo(false)}>Cancelar</button>

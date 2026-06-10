@@ -192,7 +192,16 @@ export default function Tenjo() {
   const [modalCubiculo,     setModalCubiculo]     = useState(null) // seguimiento_compostaje para registrar cubículo
   const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('tenjo-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'traslados_tenjo' }, () => { cargar() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cuarto_frio' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
 
   async function cargar() {
     try {

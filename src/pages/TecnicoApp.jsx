@@ -1493,7 +1493,19 @@ export default function TecnicoApp() {
     if (!tecnico) return
     cargar()
     const id = setInterval(() => cargar(true), POLL)
-    return () => clearInterval(id)
+    const canal = db
+      .channel(`tecnico-servicios-${tecnico.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'servicios',
+        filter: `tecnico_id=eq.${tecnico.id}`,
+      }, () => { cargar(true) })
+      .subscribe()
+    return () => {
+      clearInterval(id)
+      db.removeChannel(canal)
+    }
   }, [tecnico, cargar])
 
   // Obtener IDs de coordinadores/admins para notificarlos
