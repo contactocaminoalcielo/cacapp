@@ -27,10 +27,8 @@ jobs:
           VITE_SUPABASE_URL:    ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON:   ${{ secrets.VITE_SUPABASE_ANON }}
           VITE_APP_URL:         ${{ secrets.VITE_APP_URL }}
-          VITE_CLAUDE_KEY:      ${{ secrets.VITE_CLAUDE_KEY }}
-          VITE_GEMINI_KEY:      ${{ secrets.VITE_GEMINI_KEY }}
-          VITE_GHL_TOKEN:       ${{ secrets.VITE_GHL_TOKEN }}
-          VITE_GHL_LOCATION_ID: ${{ secrets.VITE_GHL_LOCATION_ID }}
+          # CLAUDE / GEMINI / GHL ya NO se hornean en el bundle.
+          # Viven server-side en las Edge Functions extraer-datos y send-whatsapp.
 
       - name: Deploy a Contabo via SSH
         uses: appleboy/scp-action@v0.1.7

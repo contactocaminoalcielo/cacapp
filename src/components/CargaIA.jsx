@@ -188,8 +188,8 @@ export default function CargaIA({ onDatos, onClose }) {
       setTimeout(() => { onDatos(datos); onClose() }, 800)
     } catch (e) {
       const msg = e.message || ''
-      if (msg.includes('API_KEY') || msg.includes('401'))
-        setError('API key inválida. Revisa CLAUDE_KEY en src/lib/ia.js')
+      if (msg.includes('API_KEY') || msg.includes('401') || msg.includes('CLAUDE_KEY'))
+        setError('Servicio de IA no disponible. Contacta al administrador.')
       else if (msg.includes('Failed to fetch') || msg.includes('NetworkError'))
         setError('Sin conexión. Verifica tu internet.')
       else
