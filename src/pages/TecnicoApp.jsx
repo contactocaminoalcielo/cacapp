@@ -2401,7 +2401,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     observaciones:      '',
   })
   const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
-  const [guardado, setGuardado]       = useState(yaGuardado)
+  const [guardado, setGuardado]         = useState(yaGuardado)
+  const [pagoPendiente, setPagoPendiente] = useState(false)
 
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
   const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
@@ -2411,18 +2412,19 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       const raw = localStorage.getItem(DRAFT_KEY)
       if (!raw) return
       const draft = JSON.parse(raw)
-      if (draft.form)       setForm(f => ({ ...f, ...draft.form }))
-      if (draft.mediosPago) setMediosPago(draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false })))
-      if (draft.tipoRecibo) setTipoRecibo(draft.tipoRecibo)
+      if (draft.form)                         setForm(f => ({ ...f, ...draft.form }))
+      if (draft.mediosPago)                   setMediosPago(draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false })))
+      if (draft.tipoRecibo)                   setTipoRecibo(draft.tipoRecibo)
+      if (draft.pagoPendiente !== undefined)  setPagoPendiente(draft.pagoPendiente)
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
     if (guardado) { localStorage.removeItem(DRAFT_KEY); return }
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, mediosPago, tipoRecibo }))
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, mediosPago, tipoRecibo, pagoPendiente }))
     } catch (_) {}
-  }, [form, mediosPago, tipoRecibo, guardado])
+  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente])
 
   // Porcentaje real: se consulta de config_comisiones para evitar distorsión por recargos
   const [comisionPct, setComisionPct] = useState(
@@ -2514,24 +2516,24 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
 
   async function guardarRecibo() {
-    // Para FACTURACION_MENSUAL vet: no se requiere pago inmediato
-    if (!esFacturacionMensual && totalMedios <= 0 && saldoPendiente > 0) {
+    // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
+    if (!esFacturacionMensual && !pagoPendiente && totalMedios <= 0 && saldoPendiente > 0) {
       setErr('Registra al menos un medio de pago con monto.')
       return
     }
-    // Comprobante obligatorio para métodos digitales
+    // Comprobante obligatorio para métodos digitales (solo si hay cobro)
     const sinComprobante = mediosPago.filter(m =>
       METODOS_CON_COMPROBANTE.includes(m.metodo) &&
       parseFloat(m.monto) > 0 &&
       !m.comprobanteUrl
     )
-    if (!esFacturacionMensual && sinComprobante.length > 0) {
+    if (!esFacturacionMensual && !pagoPendiente && sinComprobante.length > 0) {
       setErr(`Falta adjuntar el comprobante de pago para: ${sinComprobante.map(m => m.metodo).join(', ')}.`)
       return
     }
     setGuardando(true); setErr('')
     try {
-      const valorCobrado  = tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios
+      const valorCobrado  = pagoPendiente ? 0 : (tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios)
       const { data, error } = await db.from('recibos_tecnico').insert({
         servicio_id:     servicioSel.id,
         tecnico_id:      tecnico?.id || null,
@@ -2541,14 +2543,22 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         hora_emision:    horaActual,
         valor_total:     form.valor_servicio,
         valor_cobrado:   valorCobrado,
-        medios_pago:     mediosPago,
-        datos_form:      form,
+        medios_pago:     pagoPendiente ? [] : mediosPago,
+        datos_form:      { ...form, pago_pendiente: pagoPendiente },
         estado:          'GUARDADO',
       }).select('id').single()
       if (error) throw error
       setReciboId(data.id)
 
-      if (esFacturacionMensual) {
+      if (pagoPendiente) {
+        // Pago diferido — no se registra cobro ahora
+        await db.from('novedades_servicio').insert({
+          servicio_id:    servicioSel.id,
+          tipo_novedad:   'NOTA',
+          descripcion:    `Recibo generado con pago pendiente — ${fmt(svcData.valor_total || 0)}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`,
+          registrado_por: tecnico?.id || null,
+        })
+      } else if (esFacturacionMensual) {
         // No se registra cobro ahora — dejar estado_pago como PENDIENTE
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
@@ -2650,6 +2660,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(80, 80, 80)
       t(`Fecha: ${form.fecha}  Hora: ${form.hora}`, W - M, 37.5, { align: 'right' })
       y = 46
+
+      // Banner pago pendiente
+      if (pagoPendiente) {
+        pdf.setFillColor(254, 243, 199); pdf.setDrawColor(251, 191, 36)
+        pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 13, 'FD')
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(146, 64, 14)
+        t('PAGO PENDIENTE', W / 2, y + 5.5, { align: 'center' })
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(180, 100, 20)
+        t('El cliente liquidara el valor del servicio posteriormente', W / 2, y + 10.5, { align: 'center' })
+        y += 17
+      }
 
       y = sec('DATOS DE LA MASCOTA', y)
       const yM = y
@@ -3138,6 +3159,31 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
       {/* ── Medios de pago ── */}
       <div className="mb-4">
+        {/* Toggle pago pendiente */}
+        {!esFacturacionMensual && !guardado && (
+          <button
+            onClick={() => setPagoPendiente(p => !p)}
+            className="w-full flex items-center justify-between px-4 py-3 rounded-2xl mb-3 transition-all active:scale-98"
+            style={{
+              background:   pagoPendiente ? '#FEF3C7' : '#F9FAFB',
+              border:       `1.5px solid ${pagoPendiente ? '#F59E0B' : '#E5E7EB'}`,
+            }}>
+            <div className="text-left">
+              <div className="text-[12px] font-bold" style={{ color: pagoPendiente ? '#92400E' : '#374151' }}>
+                Pago pendiente
+              </div>
+              <div className="text-[10px] mt-0.5" style={{ color: pagoPendiente ? '#B45309' : '#9CA3AF' }}>
+                {pagoPendiente ? 'El cliente pagará después — sin cobro ahora' : 'El cliente paga ahora'}
+              </div>
+            </div>
+            <div className="w-9 h-5 rounded-full relative flex-shrink-0 transition-all"
+              style={{ background: pagoPendiente ? '#F59E0B' : '#D1D5DB' }}>
+              <div className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
+                style={{ left: pagoPendiente ? '19px' : '2px' }} />
+            </div>
+          </button>
+        )}
+
         {esFacturacionMensual ? (
           /* FACTURACION_MENSUAL: no se cobra ahora */
           <div className="rounded-2xl px-4 py-3 flex items-start gap-3"
@@ -3146,6 +3192,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
             <div>
               <p className="text-[12px] font-bold text-blue-800">Facturación mensual — sin cobro en este momento</p>
               <p className="text-[11px] text-blue-600 mt-0.5">El pago de {fmt(saldoPendiente)} quedará pendiente y se facturará al aliado al cierre del mes. El recibo se guarda como constancia del servicio.</p>
+            </div>
+          </div>
+        ) : pagoPendiente ? (
+          /* Pago diferido — sin cobro ahora */
+          <div className="rounded-2xl px-4 py-3 flex items-start gap-3"
+            style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A' }}>
+            <span className="text-xl flex-shrink-0">⏳</span>
+            <div>
+              <p className="text-[12px] font-bold text-amber-800">Pago pendiente — sin cobro en este momento</p>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                El valor de <strong>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioOriginal : saldoPendiente)}</strong> quedará pendiente. El recibo se guarda como constancia del servicio.
+              </p>
             </div>
           </div>
         ) : (
@@ -3168,7 +3226,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           </>
         )}
 
-        {!esFacturacionMensual && (<><div className="space-y-3">
+        {!esFacturacionMensual && !pagoPendiente && (<><div className="space-y-3">
           {mediosPago.map((m, idx) => {
             const necesitaComprobante = METODOS_CON_COMPROBANTE.includes(m.metodo)
             const tieneComprobante    = !!m.comprobanteUrl
