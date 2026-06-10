@@ -2375,6 +2375,34 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
     : (svcData.valor_total || 0)                      // ya es el precio completo
 
+  // ── Estado: declarados ANTES de useEffects para evitar TDZ en sus dependency arrays ──
+  const montoClienteDefault = comisionFueDescontada ? precioOriginal : saldoPendiente
+  const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE')
+  const [form, setForm] = useState({
+    fecha:              fechaHoy,
+    hora:               horaActual,
+    numero_recibo:      numeroRecibo,
+    mascota_nombre:     mascota?.nombre || '',
+    peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
+    especie:            mascota?.especies?.nombre || '',
+    veterinaria:        aliado?.nombre || '',
+    propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
+    email:              cliente?.email || '',
+    telefono:           cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
+    casa:               servicioSel.direccion_recogida || '',
+    servicio:           plan?.nombre || '',
+    valor_servicio:     precioOriginal,
+    total_recibido:     saldoPendiente,
+    toma_huella:        false,
+    toma_mechon:        false,
+    entrega_rec_basicos: false,
+    nombre_recibe:      '',
+    confirmacion_foto:  false,
+    observaciones:      '',
+  })
+  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+  const [guardado, setGuardado]       = useState(yaGuardado)
+
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
   const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
   useEffect(() => {
@@ -2430,43 +2458,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   const comisionManual    = comisionGuardada
   const comisionManualPct = precioOriginal > 0 ? Math.round(comisionManual / precioOriginal * 100) : 0
 
-  const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE') // CLIENTE | VETERINARIA
-  const [tipoFijado, setTipoFijado]   = useState(false)     // true tras guardar → bloquea selector
-  const [form, setForm] = useState({
-    fecha:              fechaHoy,
-    hora:               horaActual,
-    numero_recibo:      numeroRecibo,
-    mascota_nombre:     mascota?.nombre || '',
-    peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
-    especie:            mascota?.especies?.nombre || '',
-    veterinaria:        aliado?.nombre || '',
-    propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
-    email:              cliente?.email || '',
-    telefono:           cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
-    casa:               servicioSel.direccion_recogida || '',
-    servicio:           plan?.nombre || '',
-    valor_servicio:     precioOriginal,
-    total_recibido:     saldoPendiente,
-    toma_huella:        false,
-    toma_mechon:        false,
-    entrega_rec_basicos: false,
-    nombre_recibe:      '',
-    confirmacion_foto:  false,
-    observaciones:      '',
-  })
+  const [tipoFijado, setTipoFijado]   = useState(false)
 
-  // Multi-medios de pago: [{metodo, monto, referencia, comprobanteUrl, subiendoComprobante}]
-  // Para DESCUENTO_INMEDIATO en recibo CLIENTE: el monto a cobrar es el precio bruto completo
-  // (no el valor_total descontado que recibe Camino de la clínica)
-  const montoClienteDefault = comisionFueDescontada ? precioOriginal : saldoPendiente
-  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
   const totalMedios = mediosPago.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0)
 
   const [firma, setFirma]           = useState(null)
   const [generando, setGenerando]   = useState(false)
   const [guardando, setGuardando]   = useState(false)
-  const [guardado,        setGuardado]        = useState(yaGuardado)
-  const [pagoRegistrado,  setPagoRegistrado]  = useState(false) // true tras primer pago — no se resetea al generar 2do recibo
+  const [pagoRegistrado,  setPagoRegistrado]  = useState(false)
   const [reciboId,        setReciboId]        = useState(null)
   const [err, setErr]               = useState('')
 
