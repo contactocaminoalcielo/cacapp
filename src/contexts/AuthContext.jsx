@@ -25,10 +25,16 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function loadPersonal(user) {
-    const { data: todos, error } = await db.from('personal').select('*')
-    if (error) { setPersonalData(null); return }
     const email = user.email?.toLowerCase().trim()
-    const data = (todos || []).find(p =>
+    // Solo la fila de este usuario y solo las columnas que la app usa
+    // (antes bajaba toda la tabla personal con cédulas, direcciones y docs de todos)
+    const filtros = [`auth_user_id.eq.${user.id}`]
+    if (email) filtros.push(`email.ilike.${email}`)
+    const { data: rows, error } = await db.from('personal')
+      .select('id, nombre, apellido, email, rol_principal_id, auth_user_id, activo')
+      .or(filtros.join(','))
+    if (error) { setPersonalData(null); return }
+    const data = (rows || []).find(p =>
       p.auth_user_id === user.id ||
       p.email?.toLowerCase().trim() === email
     ) ?? null

@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { BadgesProvider } from '@/contexts/BadgesContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
-import { getRoleConfig } from '@/lib/roles'
+import { getRoleConfig, esRolValido } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
@@ -141,6 +141,18 @@ function InnerApp() {
         <h2 className="font-bold text-gray-900 mb-2">Usuario sin perfil</h2>
         <p className="text-sm text-gray-500 mb-4">Tu correo no tiene un registro en <strong>personal</strong>. Contacta al administrador.</p>
         {debug && <p className="text-[10px] text-gray-400 break-all mb-3 bg-gray-50 p-2 rounded">{debug}</p>}
+        <button onClick={logout} className="text-sm font-medium text-red-500">Cerrar sesión</button>
+      </div>
+    </div>
+  )
+
+  // Rol no reconocido → fail-closed (no asumir COORDINADOR)
+  if (!esRolValido(personalData.rol)) return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: '#0B1D4F' }}>
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center">
+        <div className="text-3xl mb-3">⚠️</div>
+        <h2 className="font-bold text-gray-900 mb-2">Rol no configurado</h2>
+        <p className="text-sm text-gray-500 mb-4">Tu usuario no tiene un rol válido asignado. Contacta al administrador.</p>
         <button onClick={logout} className="text-sm font-medium text-red-500">Cerrar sesión</button>
       </div>
     </div>

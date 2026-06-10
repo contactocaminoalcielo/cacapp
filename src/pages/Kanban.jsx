@@ -1377,6 +1377,7 @@ export default function Kanban() {
                           const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
                           const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
                           const puedeNotifTec  = !esVistaProd && col === 'INGRESADO' && !!s.tecnico_id
+                          const sinTecnico     = !esVistaProd && ['INGRESADO','EN_RECOGIDA'].includes(col) && !s.tecnico_id
                           return (
                             <div key={s.servicio_id} draggable
                               onDragStart={e => onDragStart(e, s)} onDragEnd={onDragEnd}
@@ -1409,6 +1410,11 @@ export default function Kanban() {
                               {tieneImagenes && (
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
                                   <Camera size={9} /> Imágenes listas
+                                </div>
+                              )}
+                              {sinTecnico && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-orange-100 text-orange-700">
+                                  <AlertTriangle size={9} /> Sin técnico
                                 </div>
                               )}
                               {puedeContactar && (

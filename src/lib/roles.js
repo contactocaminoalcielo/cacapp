@@ -43,8 +43,17 @@ export const ROLE_CONFIG = {
   },
 }
 
+// Config cerrada para roles desconocidos: sin acceso a nada (fail-closed).
+// Antes caía a COORDINADOR, lo que daba acceso operativo a un rol no reconocido.
+const SIN_ACCESO = { isTecnico: false, redirectTo: '/', routes: new Set() }
+
 export function getRoleConfig(rol) {
-  return ROLE_CONFIG[rol] ?? ROLE_CONFIG.COORDINADOR
+  return ROLE_CONFIG[rol] ?? SIN_ACCESO
+}
+
+// True solo si el rol está explícitamente configurado
+export function esRolValido(rol) {
+  return rol != null && Object.prototype.hasOwnProperty.call(ROLE_CONFIG, rol)
 }
 
 // Filtra los grupos del sidebar según el rol del usuario
