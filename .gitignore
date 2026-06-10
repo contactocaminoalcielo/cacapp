@@ -26,6 +26,14 @@ replacements.txt
 gk.js
 jwt_secret*.txt
 
+# Docs con infraestructura sensible (IP, rutas, credenciales) — repo es público
+docs/ORBIT_INFRAESTRUCTURA_CTO.md
+docs/ORBIT_INFRAESTRUCTURA_CTO.html
+docs/ORBIT_Deploy_Contabo_Completo.md
+docs/DEPLOYMENT.md
+docs/ORBIT_Resumen_Ejecutivo_Jefe.md
+docs/ORBIT_Resumen_Ejecutivo_Jefe.html
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
