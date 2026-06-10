@@ -30,8 +30,10 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Limpiar caches viejos de Workbox al activar nuevo SW
         cleanupOutdatedCaches: true,
+        // Toma control inmediato de todas las pestañas al activarse
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
             // Fuentes de Google — cache por 1 año
