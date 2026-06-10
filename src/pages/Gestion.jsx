@@ -618,7 +618,7 @@ function TabMascotas({ isAdmin }) {
 }
 
 // --- ALIADOS TAB ---
-function TabAliados({ isAdmin }) {
+function TabAliados({ isAdmin, canEdit }) {
   const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
@@ -689,18 +689,20 @@ function TabAliados({ isAdmin }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        {isAdmin && (
+        {(canEdit || isAdmin) && (
           <>
-            <Button size="sm" variant="secondary" onClick={() => setModalImport(true)}>
-              <Upload size={14} /> Importar CSV
-            </Button>
-            <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo</Button>
+            {isAdmin && (
+              <Button size="sm" variant="secondary" onClick={() => setModalImport(true)}>
+                <Upload size={14} /> Importar CSV
+              </Button>
+            )}
+            <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo aliado</Button>
           </>
         )}
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th>{isAdmin && <Th></Th>}</tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(a => (
               <Tr key={a.id_aliado}>
@@ -710,13 +712,15 @@ function TabAliados({ isAdmin }) {
                 <Td className="text-ink3">{a.ciudad}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${a.vip ? 'bg-[#FFF3DC] text-[#9A5500]' : 'bg-[#F0F0F0] text-[#555]'}`}>{a.vip ? 'VIP' : 'No'}</span></Td>
                 <Td className="font-semibold text-ink">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(a.saldo_comision||0)}</Td>
-                {isAdmin && (
+                {(canEdit || isAdmin) && (
                   <Td>
                     <div className="flex items-center gap-1">
                       <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Editar</Button>
-                      <button onClick={() => eliminar(a)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
-                        <Trash2 size={13} />
-                      </button>
+                      {isAdmin && (
+                        <button onClick={() => eliminar(a)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </Td>
                 )}
@@ -1139,9 +1143,178 @@ function TabInventario({ isAdmin }) {
   )
 }
 
+// --- SERVICIOS (PLANES) TAB ---
+function TabServicios({ canEdit }) {
+  const { confirm, alert: showAlert } = useConfirm()
+  const [data, setData]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [form, setForm]       = useState({})
+  const [saving, setSaving]   = useState(false)
+  const [formErr, setFormErr] = useState('')
+  const { q, setQ, filtered } = useSearch(data, ['nombre', 'codigo', 'tipo_proceso'])
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data: d } = await db.from('planes').select('*').order('nombre')
+    setData(d || []); setLoading(false)
+  }
+
+  function abrir(item) {
+    setSelected(item || { _nuevo: true }); setFormErr('')
+    setForm(item ? {
+      codigo: item.codigo || '', nombre: item.nombre || '',
+      categoria: item.categoria || '', tipo_proceso: item.tipo_proceso || '',
+      requiere_imagenes: item.requiere_imagenes !== false,
+      dias_entrega_prometidos: item.dias_entrega_prometidos ?? 8,
+      precio_base: item.precio_base ?? 0,
+      descripcion: item.descripcion || '', activo: item.activo !== false,
+    } : {
+      codigo: '', nombre: '', categoria: '', tipo_proceso: '',
+      requiere_imagenes: true, dias_entrega_prometidos: 8,
+      precio_base: 0, descripcion: '', activo: true,
+    })
+  }
+
+  async function guardar() {
+    if (!form.codigo?.trim()) return setFormErr('El código es requerido.')
+    if (!form.nombre?.trim()) return setFormErr('El nombre es requerido.')
+    setFormErr(''); setSaving(true)
+    const body = nullify({
+      ...form,
+      codigo: form.codigo.trim().toUpperCase(),
+      dias_entrega_prometidos: parseInt(form.dias_entrega_prometidos) || null,
+      precio_base: parseFloat(form.precio_base) || 0,
+    }, ['tipo_proceso', 'categoria'])
+    const { error } = selected?.id
+      ? await db.from('planes').update(body).eq('id', selected.id)
+      : await db.from('planes').insert(body)
+    setSaving(false)
+    if (error) { setFormErr(parsearErrorDB(error)); return }
+    await cargar(); setSelected(null)
+  }
+
+  async function eliminar(p) {
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar "${p.nombre}"?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
+    const { error } = await db.from('planes').delete().eq('id', p.id)
+    if (error) {
+      if (error.code === '23503') {
+        if (await confirm('Este plan tiene servicios vinculados y no se puede eliminar.\n¿Marcarlo como INACTIVO?', { title: 'No se puede eliminar', variant: 'warning', confirmLabel: 'Marcar inactivo', cancelLabel: 'Cancelar' }))
+          await db.from('planes').update({ activo: false }).eq('id', p.id)
+      } else await showAlert(parsearErrorDB(error), { title: 'Error' })
+    }
+    await cargar()
+  }
+
+  const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
+          <Input className="pl-8" placeholder="Buscar por nombre o código..." value={q} onChange={e => setQ(e.target.value)} />
+        </div>
+        {canEdit && <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo plan</Button>}
+      </div>
+      {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
+        <TableWrap><Table>
+          <thead><tr><Th>Código</Th><Th>Nombre</Th><Th>Tipo proceso</Th><Th>Días</Th><Th>Precio base</Th><Th>Estado</Th>{canEdit && <Th></Th>}</tr></thead>
+          <tbody>
+            {filtered.map(p => (
+              <Tr key={p.id}>
+                <Td><span className="font-mono text-[11px] bg-[#F3F4F6] px-2 py-0.5 rounded">{p.codigo}</span></Td>
+                <Td className="font-semibold text-ink">{p.nombre}</Td>
+                <Td className="text-ink3 text-[12px]">{p.tipo_proceso?.replace(/_/g, ' ') || '—'}</Td>
+                <Td className="text-ink3 text-[12px]">{p.dias_entrega_prometidos ?? '—'}</Td>
+                <Td className="text-ink3 text-[12px]">{COP(p.precio_base)}</Td>
+                <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.activo !== false ? 'bg-green-50 text-green-700' : 'bg-[#F0F0F0] text-[#555]'}`}>{p.activo !== false ? 'Activo' : 'Inactivo'}</span></Td>
+                {canEdit && (
+                  <Td>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => abrir(p)}>Editar</Button>
+                      <button onClick={() => eliminar(p)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={13} /></button>
+                    </div>
+                  </Td>
+                )}
+              </Tr>
+            ))}
+            {filtered.length === 0 && <tr><td colSpan={7} className="text-center py-10 text-ink3 text-sm">Sin planes registrados</td></tr>}
+          </tbody>
+        </Table></TableWrap>
+      )}
+      {selected && (
+        <Modal open={!!selected} onClose={() => setSelected(null)}
+          title={selected?.id ? `Editar — ${selected.nombre}` : 'Nuevo plan de servicio'} maxWidth="max-w-lg"
+          footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
+          {formErr && <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{formErr}</div>}
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Código *</label>
+                <Input value={form.codigo || ''} onChange={e => setForm(p => ({ ...p, codigo: e.target.value.toUpperCase() }))} placeholder="BASICO" maxLength={60} />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Nombre *</label>
+                <Input value={form.nombre || ''} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Tipo de proceso</label>
+                <Select value={form.tipo_proceso || ''} onChange={e => setForm(p => ({ ...p, tipo_proceso: e.target.value }))}>
+                  <option value="">Sin definir</option>
+                  <option value="CREMACION_GRUPAL">Cremación grupal</option>
+                  <option value="CREMACION_INDIVIDUAL">Cremación individual</option>
+                  <option value="COMPOSTAJE_GRUPAL">Compostaje grupal</option>
+                  <option value="COMPOSTAJE_INDIVIDUAL">Compostaje individual</option>
+                </Select>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Categoría</label>
+                <Select value={form.categoria || ''} onChange={e => setForm(p => ({ ...p, categoria: e.target.value }))}>
+                  <option value="">— Sin categoría —</option>
+                  <option value="individual">Individual</option>
+                  <option value="grupal">Grupal</option>
+                  <option value="especial">Especial</option>
+                  <option value="presequial">Presequial</option>
+                </Select>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Días de entrega</label>
+                <Input type="number" min="1" value={form.dias_entrega_prometidos || ''} onChange={e => setForm(p => ({ ...p, dias_entrega_prometidos: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Precio base ($)</label>
+                <Input type="number" min="0" value={form.precio_base || ''} onChange={e => setForm(p => ({ ...p, precio_base: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Descripción</label>
+              <Textarea value={form.descripcion || ''} onChange={e => setForm(p => ({ ...p, descripcion: e.target.value }))} rows={2} />
+            </div>
+            <div className="flex gap-5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={!!form.requiere_imagenes} onChange={e => setForm(p => ({ ...p, requiere_imagenes: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" />
+                <span className="text-[12px] font-semibold text-ink2">Requiere imágenes</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" />
+                <span className="text-[12px] font-semibold text-ink2">Activo</span>
+              </label>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 export default function Gestion() {
   const { personalData } = useAuth()
   const isAdmin = personalData?.rol === 'ADMIN'
+  const isCoord = personalData?.rol === 'COORDINADOR'
+  const canEdit = isAdmin || isCoord
 
   return (
     <div>
@@ -1154,12 +1327,14 @@ export default function Gestion() {
             <TabsTrigger value="aliados">Aliados</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="inventario">Inventario</TabsTrigger>
+            <TabsTrigger value="servicios">Servicios</TabsTrigger>
           </TabsList>
           <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} /></TabsContent>
-          <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="personal"><TabPersonal isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="inventario"><TabInventario isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="servicios"><TabServicios canEdit={canEdit} /></TabsContent>
         </Tabs>
       </div>
     </div>
