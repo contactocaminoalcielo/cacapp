@@ -75,23 +75,8 @@ const TIPOS_ACOMP = [
   { value: 'EVIDENCIA',    label: 'Evidencia (fotos/video)' },
 ]
 
-// Ciudades con recargo de transporte (en pesos COP)
-// { MOTO, CAMIONETA } — Bogotá = sin recargo
-const CIUDADES = [
-  { value: 'Bogotá',      label: 'Bogotá (sin recargo)',  recargo: { MOTO: 0,     CAMIONETA: 0     } },
-  { value: 'Soacha',      label: 'Soacha',                recargo: { MOTO: 12000, CAMIONETA: 20000 } },
-  { value: 'Chía',        label: 'Chía',                  recargo: { MOTO: 18000, CAMIONETA: 30000 } },
-  { value: 'Cajicá',      label: 'Cajicá',                recargo: { MOTO: 20000, CAMIONETA: 35000 } },
-  { value: 'Zipaquirá',   label: 'Zipaquirá',             recargo: { MOTO: 28000, CAMIONETA: 45000 } },
-  { value: 'Facatativá',  label: 'Facatativá',            recargo: { MOTO: 28000, CAMIONETA: 45000 } },
-  { value: 'La Calera',   label: 'La Calera',             recargo: { MOTO: 22000, CAMIONETA: 35000 } },
-  { value: 'Sopó',        label: 'Sopó',                  recargo: { MOTO: 22000, CAMIONETA: 35000 } },
-  { value: 'Madrid',      label: 'Madrid',                recargo: { MOTO: 22000, CAMIONETA: 35000 } },
-  { value: 'Mosquera',    label: 'Mosquera',              recargo: { MOTO: 22000, CAMIONETA: 35000 } },
-  { value: 'Funza',       label: 'Funza',                 recargo: { MOTO: 22000, CAMIONETA: 35000 } },
-  { value: 'Tabio',       label: 'Tabio',                 recargo: { MOTO: 30000, CAMIONETA: 50000 } },
-  { value: 'Otro',        label: 'Otro municipio',        recargo: { MOTO: 40000, CAMIONETA: 60000 } },
-]
+// Bogotá siempre como primera opción (sin recargo). Municipios vienen de DB (tarifas_transporte).
+const BOGOTA_OPCION = { value: 'Bogotá', label: 'Bogotá (sin recargo)', tarifa_moto: 0, tarifa_camioneta: 0 }
 
 const LABEL = 'text-[11px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5'
 const CARD  = 'bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6'
@@ -240,6 +225,7 @@ export default function Registro() {
   const [aliados, setAliados]             = useState([])
   const [personal, setPersonal]           = useState([])
   const [recordatoriosAdic, setRecordatoriosAdic] = useState([])
+  const [tarifasTransporte, setTarifasTransporte] = useState([])
 
   // paso 0: cliente
   const [clienteBusqueda, setClienteBusqueda]           = useState('')
@@ -342,9 +328,11 @@ export default function Registro() {
   // adicionales: cantidad × precio_base (precio fijo de DB, no editable)
   const valorAdicionales = adicionales.reduce((s, a) => s + ((a.precio_base || 0) * (a.cantidad || 1)), 0)
   const valorBruto       = valorBase + valorAdicionales
-  const ciudadInfo       = CIUDADES.find(c => c.value === formRecogida.ciudad_recogida)
-  const recargoCiudad    = ciudadInfo && ciudadInfo.value !== 'Bogotá'
-    ? (ciudadInfo.recargo?.[vehiculoTipo] || 0) : 0
+  const ciudadesList     = [BOGOTA_OPCION, ...tarifasTransporte.map(t => ({ value: t.ciudad, label: t.ciudad, tarifa_moto: t.tarifa_moto, tarifa_camioneta: t.tarifa_camioneta }))]
+  const ciudadInfo       = ciudadesList.find(c => c.value === formRecogida.ciudad_recogida) || ciudadesList[0]
+  const recargoCiudad    = ciudadInfo.value !== 'Bogotá'
+    ? (vehiculoTipo === 'MOTO' ? (ciudadInfo.tarifa_moto || 0) : (ciudadInfo.tarifa_camioneta || 0))
+    : 0
   const modalidadComision  = aliadoSeleccionado?.modalidad_comision
   // La comisión siempre reduce el valor del servicio cuando hay aliado en clínica
   // La modalidad solo afecta CÓMO se registra/cobra la comisión después
@@ -364,7 +352,7 @@ export default function Registro() {
   useEffect(() => { cargarCatalogos() }, [])
 
   async function cargarCatalogos() {
-    const [{ data: esp }, { data: pls }, { data: als }, { data: per }, { data: rec }] =
+    const [{ data: esp }, { data: pls }, { data: als }, { data: per }, { data: rec }, { data: tar }] =
       await Promise.all([
         db.from('especies').select('*').order('nombre'),
         db.from('planes').select('*')
@@ -373,12 +361,14 @@ export default function Registro() {
         db.from('aliados').select('*').eq('activo', true).order('nombre'),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         db.from('recordatorios').select('id,nombre,precio_base,categoria').eq('activo', true).order('nombre'),
+        db.from('tarifas_transporte').select('ciudad,tarifa_moto,tarifa_camioneta').eq('activo', true).order('ciudad'),
       ])
     setEspecies(esp || [])
     setPlanes(pls || [])
     setAliados(als || [])
     setPersonal(per || [])
     setRecordatoriosAdic(rec || [])
+    setTarifasTransporte(tar || [])
 
     // Auto-cargar desde plan presequial activado
     const pre = location.state?.presequial
@@ -593,6 +583,9 @@ export default function Registro() {
 
   // ── auto-fill recogida ──
   useEffect(() => {
+    // Solo ejecutar en el paso de recogida — evita que al avanzar al paso 4
+    // se resetee ciudad_recogida al valor del cliente (borrando el municipio y su recargo)
+    if (paso !== 3) return
     const { tipo_lugar } = formRecogida
     if (tipo_lugar === 'DOMICILIO') {
       const cli = clienteSeleccionado
@@ -1070,7 +1063,7 @@ export default function Registro() {
                   </div>
                   <div><label className={LABEL}>Ciudad</label>
                     <Select value={formCliente.ciudad} onChange={e => setFormCliente(p => ({ ...p, ciudad: e.target.value, localidad: '' }))}>
-                      {CIUDADES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      {ciudadesList.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                     </Select></div>
                   <div><label className={LABEL}>Tipo cliente</label>
                     <Select value={formCliente.tipo_cliente} onChange={e => setFormCliente(p => ({ ...p, tipo_cliente: e.target.value }))}>
@@ -1517,7 +1510,7 @@ export default function Registro() {
                           }`}
                           onClick={() => setVehiculoTipo(v)}>
                           {v === 'MOTO' ? '🏍 Moto' : '🚙 Camioneta'}
-                          <span className="ml-1 text-[10px]">+{fmt(ciudadInfo.recargo[v])}</span>
+                          <span className="ml-1 text-[10px]">+{fmt(v === 'MOTO' ? ciudadInfo.tarifa_moto : ciudadInfo.tarifa_camioneta)}</span>
                         </button>
                       ))}
                     </div>

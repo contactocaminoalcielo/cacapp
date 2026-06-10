@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -2289,6 +2289,124 @@ function TabWhatsApp() {
   )
 }
 
+// ─── TARIFAS TRANSPORTE ───────────────────────────────────────────────────────
+function TabTransporte() {
+  const { confirm, alert: showAlert } = useConfirm()
+  const [data, setData]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [form, setForm]       = useState({})
+  const [saving, setSaving]   = useState(false)
+  const [formErr, setFormErr] = useState('')
+  const { q, setQ, filtered } = useSearch(data, ['ciudad'])
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data: d } = await db.from('tarifas_transporte').select('*').order('ciudad')
+    setData(d || []); setLoading(false)
+  }
+
+  function abrir(item) {
+    setSelected(item || { _nuevo: true }); setFormErr('')
+    setForm(item
+      ? { ciudad: item.ciudad || '', tarifa_moto: item.tarifa_moto ?? 0, tarifa_camioneta: item.tarifa_camioneta ?? 0, activo: item.activo !== false }
+      : { ciudad: '', tarifa_moto: 0, tarifa_camioneta: 0, activo: true })
+  }
+
+  async function guardar() {
+    if (!form.ciudad?.trim()) return setFormErr('El nombre de la ciudad es requerido.')
+    setFormErr(''); setSaving(true)
+    const body = {
+      ciudad: form.ciudad.trim(),
+      tarifa_moto: parseInt(form.tarifa_moto) || 0,
+      tarifa_camioneta: parseInt(form.tarifa_camioneta) || 0,
+      activo: form.activo !== false,
+    }
+    const { error } = selected?.id
+      ? await db.from('tarifas_transporte').update(body).eq('id', selected.id)
+      : await db.from('tarifas_transporte').insert(body)
+    setSaving(false)
+    if (error) {
+      setFormErr(error.code === '23505' ? 'Ya existe una tarifa para esa ciudad.' : parsearErrorDB(error))
+      return
+    }
+    await cargar(); setSelected(null)
+  }
+
+  async function eliminar(t) {
+    if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar tarifa de ${t.ciudad}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
+    const { error } = await db.from('tarifas_transporte').delete().eq('id', t.id)
+    if (error) await showAlert(parsearErrorDB(error), { title: 'Error' })
+    await cargar()
+  }
+
+  const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
+
+  return (
+    <div>
+      <p className="text-[12px] text-gray-400 mb-4">Recargos de transporte que se suman automáticamente al registrar un servicio fuera de Bogotá.</p>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Input className="pl-8" placeholder="Buscar ciudad..." value={q} onChange={e => setQ(e.target.value)} />
+        </div>
+        <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nueva ciudad</Button>
+      </div>
+      {loading ? <div className="text-center py-8 text-gray-400">Cargando...</div> : (
+        <TableWrap><Table>
+          <thead><tr><Th>Ciudad / Municipio</Th><Th>Tarifa Moto</Th><Th>Tarifa Camioneta</Th><Th>Estado</Th><Th></Th></tr></thead>
+          <tbody>
+            {filtered.map(t => (
+              <Tr key={t.id}>
+                <Td className="font-semibold text-gray-900">{t.ciudad}</Td>
+                <Td className="text-gray-700">{COP(t.tarifa_moto)}</Td>
+                <Td className="text-gray-700">{COP(t.tarifa_camioneta)}</Td>
+                <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${t.activo !== false ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{t.activo !== false ? 'Activo' : 'Inactivo'}</span></Td>
+                <Td>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => abrir(t)}>Editar</Button>
+                    <button onClick={() => eliminar(t)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={13} /></button>
+                  </div>
+                </Td>
+              </Tr>
+            ))}
+            {filtered.length === 0 && <tr><td colSpan={5} className="text-center py-10 text-gray-400 text-sm">Sin tarifas configuradas</td></tr>}
+          </tbody>
+        </Table></TableWrap>
+      )}
+      {selected && (
+        <Modal open={!!selected} onClose={() => setSelected(null)}
+          title={selected?.id ? `Editar — ${selected.ciudad}` : 'Nueva tarifa de transporte'} maxWidth="max-w-sm"
+          footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
+          {formErr && <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{formErr}</div>}
+          <div className="space-y-3">
+            <div>
+              <label className={LABEL}>Ciudad / Municipio *</label>
+              <Input value={form.ciudad || ''} onChange={e => setForm(p => ({ ...p, ciudad: e.target.value }))} placeholder="Ej: Soacha, Chía, Otro..." maxLength={80} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={LABEL}>Tarifa Moto ($)</label>
+                <Input type="number" min="0" step="1000" value={form.tarifa_moto ?? ''} onChange={e => setForm(p => ({ ...p, tarifa_moto: e.target.value }))} placeholder="0" />
+              </div>
+              <div>
+                <label className={LABEL}>Tarifa Camioneta ($)</label>
+                <Input type="number" min="0" step="1000" value={form.tarifa_camioneta ?? ''} onChange={e => setForm(p => ({ ...p, tarifa_camioneta: e.target.value }))} placeholder="0" />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" />
+              <span className="text-[12px] font-semibold text-gray-700">Activo (aparece en Registro)</span>
+            </label>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -2327,6 +2445,9 @@ export default function Configuracion() {
             <TabsTrigger value="whatsapp">
               <MessageCircle size={13} className="mr-1.5" /> WhatsApp
             </TabsTrigger>
+            <TabsTrigger value="transporte">
+              <Truck size={13} className="mr-1.5" /> Transporte
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2339,6 +2460,7 @@ export default function Configuracion() {
           <TabsContent value="catalogos"><TabCatalogos /></TabsContent>
           <TabsContent value="precios"><TabPreciosPlanes /></TabsContent>
           <TabsContent value="whatsapp"><TabWhatsApp /></TabsContent>
+          <TabsContent value="transporte"><TabTransporte /></TabsContent>
         </Tabs>
       </div>
     </div>
