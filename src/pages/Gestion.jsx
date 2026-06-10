@@ -379,7 +379,14 @@ function TabClientes({ isAdmin }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','apellido','cedula_nit','whatsapp','email'])
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('gestion-clientes-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clientes' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
   async function cargar() {
     setLoading(true)
     const { data: d } = await db.from('clientes').select('*').order('nombre')
@@ -498,7 +505,14 @@ function TabMascotas({ isAdmin }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','raza'])
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('gestion-mascotas-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mascotas' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
   async function cargar() {
     setLoading(true)
     const [{ data: d }, { data: esp }] = await Promise.all([
@@ -614,7 +628,14 @@ function TabAliados({ isAdmin }) {
   const [modalImport, setModalImport] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','contacto_nombre','ciudad'])
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('gestion-aliados-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'aliados' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
   async function cargar() {
     setLoading(true)
     const { data: d } = await db.from('aliados').select('*').order('nombre')
@@ -759,7 +780,14 @@ function TabPersonal({ isAdmin }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','apellido','cedula'])
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const canal = db
+      .channel('gestion-personal-cambios')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personal' }, () => { cargar() })
+      .subscribe()
+    return () => { db.removeChannel(canal) }
+  }, [])
   async function cargar() {
     setLoading(true)
     const [{ data: d }, { data: r }] = await Promise.all([
