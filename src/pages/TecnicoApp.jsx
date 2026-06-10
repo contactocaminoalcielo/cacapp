@@ -206,6 +206,26 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 }
 
 // ─── FOTO EVIDENCIA (reutilizable) ─────────────────────────────────────
+// Comprime una imagen antes de subirla (máx 1200px, calidad 0.82)
+async function compressImage(file, maxW = 1200, quality = 0.82) {
+  if (!file.type.startsWith('image/')) return file
+  return new Promise(resolve => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const scale = Math.min(1, maxW / img.width)
+      const canvas = document.createElement('canvas')
+      canvas.width  = Math.round(img.width  * scale)
+      canvas.height = Math.round(img.height * scale)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', quality)
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
+
 function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
@@ -217,10 +237,10 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
     if (!file) return
     setUploading(true); setErr('')
     try {
-      const ext  = file.name.split('.').pop() || 'jpg'
-      const path = `${storagePath}/${Date.now()}.${ext}`
+      const compressed = await compressImage(file)
+      const path = `${storagePath}/${Date.now()}.jpg`
       const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
+        .from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       if (dbSave) {
@@ -939,7 +959,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
               tecnico={tecnico}
               yaGuardado={reciboGuardado}
               onVolver={() => { setReciboOpen(false); if (!reciboGuardado) setSvcDataRecibo(null) }}
-              onGuardado={() => setReciboGuardado(true)}
+              onGuardado={() => { setReciboGuardado(true); setReciboOpen(false) }}
             />
           </div>
         )}
@@ -1722,22 +1742,27 @@ export default function TecnicoApp() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
-      <div style={{ background: '#0B1D4F' }} className="px-5 pb-4 pt-3">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="text-[11px] font-semibold mb-0.5" style={{ color: '#C4A87A' }}>
-              Portal técnico · Camino al Cielo
+
+      {/* ── Header ── */}
+      <div style={{ background: '#0B1D4F' }} className="px-5 pb-4 pt-safe pt-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-black"
+              style={{ background: '#C4A87A', color: '#0B1D4F' }}>
+              🐾
             </div>
-            <div className="text-white font-bold text-lg leading-tight">{tecnico.nombre} {tecnico.apellido}</div>
-            {tecnico.tipo_vehiculo && (
-              <div className="text-[12px] mt-0.5" style={{ color: '#9CA3AF' }}>{tecnico.tipo_vehiculo}</div>
-            )}
+            <div>
+              <div className="text-white font-bold text-[15px] leading-tight">{tecnico.nombre} {tecnico.apellido}</div>
+              <div className="text-[11px]" style={{ color: '#C4A87A' }}>
+                Técnico · Camino al Cielo{tecnico.tipo_vehiculo ? ` · ${tecnico.tipo_vehiculo}` : ''}
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-1 mt-1">
-            <button onClick={() => cargar()} className="p-2 rounded-full" style={{ color: '#9CA3AF' }}>
+          <div className="flex items-center gap-1">
+            <button onClick={() => cargar()} className="p-2 rounded-full active:opacity-70" style={{ color: '#9CA3AF' }}>
               <RefreshCw size={16} />
             </button>
-            <button onClick={logout} className="p-2 rounded-full" style={{ color: '#9CA3AF' }}>
+            <button onClick={logout} className="p-2 rounded-full active:opacity-70" style={{ color: '#9CA3AF' }}>
               <LogOut size={16} />
             </button>
           </div>
@@ -1763,26 +1788,8 @@ export default function TecnicoApp() {
         </div>
       )}
 
-      <div className="flex bg-white border-b border-gray-100">
-        {TABS.map(({ key, label, Icon, count, color }) => (
-          <button key={key} onClick={() => setTab(key)}
-            className="flex-1 py-3.5 flex items-center justify-center gap-2 text-sm font-semibold transition-colors"
-            style={{
-              color: tab === key ? color : '#9CA3AF',
-              borderBottom: tab === key ? `2px solid ${color}` : '2px solid transparent',
-            }}>
-            <Icon size={15} /> {label}
-            {count > 0 && (
-              <span className="ml-0.5 text-[10px] font-bold min-w-[18px] h-[18px] rounded-full inline-flex items-center justify-center px-1"
-                style={{ background: color, color: '#fff' }}>
-                {count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 p-4">
+      {/* ── Contenido — padding-bottom para no quedar tapado por la nav ── */}
+      <div className="flex-1 p-4 pb-24">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400">
             <div className="spinner" /><span className="text-sm">Cargando…</span>
@@ -1868,9 +1875,30 @@ export default function TecnicoApp() {
         ) : null}
       </div>
 
-      <div className="text-center pb-6 pt-2 text-[11px] text-gray-400">
-        Se actualiza cada 30 s ·{' '}
-        <button onClick={() => cargar()} className="underline">Actualizar ahora</button>
+      {/* ── Nav inferior fija ── */}
+      <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full"
+        style={{ maxWidth: 520, background: '#fff', borderTop: '1px solid #E5E7EB', paddingBottom: 'env(safe-area-inset-bottom, 8px)' }}>
+        <div className="flex">
+          {TABS.map(({ key, Icon, count, color }) => (
+            <button key={key} onClick={() => setTab(key)}
+              className="flex-1 py-3 flex flex-col items-center justify-center gap-0.5 relative transition-colors"
+              style={{ color: tab === key ? color : '#9CA3AF' }}>
+              <div className="relative">
+                <Icon size={22} />
+                {count > 0 && (
+                  <span className="absolute -top-1.5 -right-2 text-[9px] font-bold min-w-[16px] h-[16px] rounded-full inline-flex items-center justify-center px-0.5"
+                    style={{ background: color, color: '#fff' }}>
+                    {count}
+                  </span>
+                )}
+              </div>
+              {tab === key && (
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full"
+                  style={{ background: color }} />
+              )}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -1893,14 +1921,55 @@ function SeccionHeader({ color, dot, emoji, titulo, count }) {
 }
 
 function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
-  const porRecoger   = recogidas.filter(s => s.estado === 'INGRESADO')
-  const enCamino     = recogidas.filter(s => s.estado === 'EN_RECOGIDA')
-  const cuartoFrio   = recogidas.filter(s => s.estado === 'EN_CUARTO_FRIO')
+  const [busqueda,    setBusqueda]    = useState('')
+  const [filtroFecha, setFiltroFecha] = useState('')
+
+  const filtradas = recogidas.filter(s => {
+    if (filtroFecha && s.fecha_ingreso?.slice(0, 10) !== filtroFecha) return false
+    if (busqueda) {
+      const q = busqueda.toLowerCase()
+      const nombre   = s.mascotas?.nombre?.toLowerCase() || ''
+      const cliente  = `${s.mascotas?.clientes?.nombre || ''} ${s.mascotas?.clientes?.apellido || ''}`.toLowerCase()
+      const plan     = s.planes?.nombre?.toLowerCase() || ''
+      if (!nombre.includes(q) && !cliente.includes(q) && !plan.includes(q)) return false
+    }
+    return true
+  })
+
+  const porRecoger = filtradas.filter(s => s.estado === 'INGRESADO')
+  const enCamino   = filtradas.filter(s => s.estado === 'EN_RECOGIDA')
+  const cuartoFrio = filtradas.filter(s => s.estado === 'EN_CUARTO_FRIO')
 
   const cardProps = { tecnico, neverasList, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }
 
   return (
     <div>
+      {/* Barra de filtros */}
+      <div className="flex gap-2 mb-3">
+        <div className="relative flex-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[13px]">🔍</span>
+          <input
+            type="text" value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Mascota, cliente o plan…"
+            className="w-full pl-8 pr-3 py-2 rounded-xl border text-[12px] outline-none"
+            style={{ borderColor: busqueda ? '#1A5CD8' : '#E5E7EB', background: '#fff' }}
+          />
+        </div>
+        <input
+          type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
+          className="px-2 py-2 rounded-xl border text-[12px] outline-none"
+          style={{ borderColor: filtroFecha ? '#1A5CD8' : '#E5E7EB', background: '#fff', width: 130 }}
+        />
+        {(busqueda || filtroFecha) && (
+          <button onClick={() => { setBusqueda(''); setFiltroFecha('') }}
+            className="px-2 py-2 rounded-xl text-gray-400 hover:text-gray-600 text-[13px]">✕</button>
+        )}
+      </div>
+
+      {filtradas.length === 0 && (busqueda || filtroFecha) && (
+        <div className="text-center py-8 text-gray-400 text-sm">Sin resultados para el filtro aplicado</div>
+      )}
+
       {porRecoger.length > 0 && (
         <div>
           <SeccionHeader color="#D97706" dot="#FEF3C7" emoji="🕐" titulo="Por recoger" count={porRecoger.length} />
@@ -2283,6 +2352,27 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
     : (svcData.valor_total || 0)                      // ya es el precio completo
 
+  // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
+  const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
+  useEffect(() => {
+    if (yaGuardado) return
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (!raw) return
+      const draft = JSON.parse(raw)
+      if (draft.form)       setForm(f => ({ ...f, ...draft.form }))
+      if (draft.mediosPago) setMediosPago(draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false })))
+      if (draft.tipoRecibo) setTipoRecibo(draft.tipoRecibo)
+    } catch (_) {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (guardado) { localStorage.removeItem(DRAFT_KEY); return }
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, mediosPago, tipoRecibo }))
+    } catch (_) {}
+  }, [form, mediosPago, tipoRecibo, guardado])
+
   // Porcentaje real: se consulta de config_comisiones para evitar distorsión por recargos
   const [comisionPct, setComisionPct] = useState(
     comisionFueDescontada && precioOriginal > 0
@@ -2377,10 +2467,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     if (!file) return
     updateMedio(idx, 'subiendoComprobante', true)
     try {
-      const ext  = file.name.split('.').pop() || 'jpg'
-      const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
+      const compressed = await compressImage(file)
+      const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.jpg`
       const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, file, { upsert: false, contentType: file.type })
+        .from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       updateMedio(idx, 'comprobanteUrl', publicUrl)
@@ -2400,6 +2490,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     // Para FACTURACION_MENSUAL vet: no se requiere pago inmediato
     if (!esFacturacionMensual && totalMedios <= 0 && saldoPendiente > 0) {
       setErr('Registra al menos un medio de pago con monto.')
+      return
+    }
+    // Comprobante obligatorio para métodos digitales
+    const sinComprobante = mediosPago.filter(m =>
+      METODOS_CON_COMPROBANTE.includes(m.metodo) &&
+      parseFloat(m.monto) > 0 &&
+      !m.comprobanteUrl
+    )
+    if (!esFacturacionMensual && sinComprobante.length > 0) {
+      setErr(`Falta adjuntar el comprobante de pago para: ${sinComprobante.map(m => m.metodo).join(', ')}.`)
       return
     }
     setGuardando(true); setErr('')
@@ -3093,7 +3193,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
                     {/* Upload comprobante */}
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                      Comprobante de pago {!tieneComprobante && <span className="text-amber-600">(recomendado)</span>}
+                      Comprobante de pago {!tieneComprobante && <span className="text-red-600 font-bold">(requerido ✱)</span>}
                     </div>
                     <input type="file" accept="image/*,application/pdf"
                       ref={el => uploadRefs.current[idx] = el}
