@@ -1,7 +1,7 @@
 {
-  "name": "Camino al Cielo",
-  "short_name": "CACapp",
-  "description": "Sistema de gestión interno — Camino al Cielo",
+  "name": "Orbit · Sistema",
+  "short_name": "Orbit",
+  "description": "Orbit — Sistema de gestión interno",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F8F9FA",
