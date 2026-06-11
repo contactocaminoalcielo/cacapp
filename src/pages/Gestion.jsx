@@ -13,7 +13,8 @@ import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB } from '@/lib/utils'
-import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
+import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
+import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
 const nullify = (obj, keys) => {
@@ -1310,6 +1311,246 @@ function TabServicios({ canEdit }) {
   )
 }
 
+// --- HISTORIAL DE SERVICIOS TAB ---
+const PAGO_COLOR = {
+  PENDIENTE: { bg: '#FEE8E8', text: '#C03030' },
+  PARCIAL:   { bg: '#FFF3DC', text: '#9A5500' },
+  COMPLETO:  { bg: '#E8F3EB', text: '#1D8A55' },
+}
+
+const SELECT_HISTORIAL = `
+  id, estado, fecha_ingreso, valor_total, valor_pagado, estado_pago,
+  canal_entrada, ciudad_recogida,
+  mascotas:mascota_id(
+    nombre, peso_kg, raza,
+    especies(nombre),
+    clientes:cliente_id(nombre, apellido, whatsapp, telefono, telefono2, email)
+  ),
+  planes:plan_id(nombre, codigo),
+  aliados:aliado_origen_id(nombre),
+  tecnico:tecnico_id(nombre, apellido)
+`
+
+function TabHistorialServicios() {
+  const [data, setData]               = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [total, setTotal]             = useState(0)
+  const [exporting, setExporting]     = useState(false)
+  const [busqueda, setBusqueda]       = useState('')
+  const [filtroEstado, setFiltroEstado] = useState('')
+  const [filtroPago, setFiltroPago]   = useState('')
+  const [desde, setDesde]             = useState('')
+  const [hasta, setHasta]             = useState('')
+  const PAGE_SIZE = 100
+
+  function buildQuery(base) {
+    if (filtroEstado) base = base.eq('estado', filtroEstado)
+    if (filtroPago)   base = base.eq('estado_pago', filtroPago)
+    if (desde)        base = base.gte('fecha_ingreso', desde)
+    if (hasta)        base = base.lte('fecha_ingreso', hasta)
+    return base
+  }
+
+  async function cargar(offsetInicial = 0) {
+    setLoading(true)
+    const q = buildQuery(
+      db.from('servicios')
+        .select(SELECT_HISTORIAL, { count: 'exact' })
+        .order('fecha_ingreso', { ascending: false })
+        .range(offsetInicial, offsetInicial + PAGE_SIZE - 1)
+    )
+    const { data: d, count } = await q
+    setData(prev => offsetInicial === 0 ? (d || []) : [...prev, ...(d || [])])
+    setTotal(count || 0)
+    setLoading(false)
+  }
+
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, desde, hasta])
+
+  async function exportarCSV() {
+    setExporting(true)
+    const q = buildQuery(
+      db.from('servicios').select(SELECT_HISTORIAL).order('fecha_ingreso', { ascending: false }).limit(5000)
+    )
+    const { data: d } = await q
+    const filas = d || []
+    const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Técnico','Estado','Estado pago','Valor total','Valor pagado']
+    const rows = filas.map(s => {
+      const cli = s.mascotas?.clientes || {}
+      const tec = s.tecnico
+      return [
+        s.fecha_ingreso || '',
+        `${cli.nombre || ''} ${cli.apellido || ''}`.trim(),
+        cli.whatsapp || '', cli.telefono || '', cli.telefono2 || '', cli.email || '',
+        s.mascotas?.nombre || '',
+        s.mascotas?.especies?.nombre || '',
+        s.mascotas?.raza || '',
+        s.mascotas?.peso_kg ?? '',
+        s.planes?.nombre || '',
+        s.aliados?.nombre || '',
+        s.ciudad_recogida || '',
+        tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '',
+        ESTADO_LABEL[s.estado] || s.estado || '',
+        s.estado_pago || '',
+        s.valor_total ?? 0,
+        s.valor_pagado ?? 0,
+      ]
+    })
+    const csv = [headers, ...rows]
+      .map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `servicios_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
+    setExporting(false)
+  }
+
+  const filtrados = busqueda.trim()
+    ? data.filter(s => {
+        const txt = busqueda.toLowerCase()
+        const cli = s.mascotas?.clientes || {}
+        return (
+          `${cli.nombre || ''} ${cli.apellido || ''}`.toLowerCase().includes(txt) ||
+          (cli.whatsapp || '').includes(txt) ||
+          (cli.email || '').toLowerCase().includes(txt) ||
+          (s.mascotas?.nombre || '').toLowerCase().includes(txt) ||
+          (s.aliados?.nombre || '').toLowerCase().includes(txt) ||
+          (s.planes?.nombre || '').toLowerCase().includes(txt)
+        )
+      })
+    : data
+
+  const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
+  const fmtFecha = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
+
+  return (
+    <div>
+      {/* Filtros */}
+      <div className="flex flex-wrap items-end gap-2 mb-4">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
+          <Input className="pl-8 w-52" placeholder="Cliente, mascota, aliado..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+        </div>
+        <Select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} className="w-40">
+          <option value="">Todos los estados</option>
+          {Object.entries(ESTADO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </Select>
+        <Select value={filtroPago} onChange={e => setFiltroPago(e.target.value)} className="w-36">
+          <option value="">Todo pago</option>
+          <option value="PENDIENTE">Pendiente</option>
+          <option value="PARCIAL">Parcial</option>
+          <option value="COMPLETO">Completo</option>
+        </Select>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Desde</span>
+          <Input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="w-36" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Hasta</span>
+          <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="w-36" />
+        </div>
+        <Button size="sm" variant="secondary" onClick={exportarCSV} disabled={exporting}>
+          <FileDown size={14} /> {exporting ? 'Exportando...' : 'Exportar CSV'}
+        </Button>
+      </div>
+
+      {/* Conteo */}
+      {!loading && total > 0 && (
+        <p className="text-[12px] text-ink3 mb-3">
+          {data.length < total ? `${data.length} de ${total}` : total} servicios
+          {busqueda && filtrados.length !== data.length && ` · ${filtrados.length} coinciden`}
+        </p>
+      )}
+
+      {loading && data.length === 0 ? (
+        <div className="text-center py-12 text-ink3">Cargando historial...</div>
+      ) : (
+        <>
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Fecha</Th>
+                  <Th>Cliente</Th>
+                  <Th>Contacto</Th>
+                  <Th>Mascota</Th>
+                  <Th>Plan</Th>
+                  <Th>Aliado</Th>
+                  <Th>Ciudad</Th>
+                  <Th>Técnico</Th>
+                  <Th>Estado</Th>
+                  <Th>Pago</Th>
+                  <Th>Valor</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map(s => {
+                  const cli = s.mascotas?.clientes || {}
+                  const ec  = ESTADO_COLOR[s.estado] || {}
+                  const pc  = PAGO_COLOR[s.estado_pago] || {}
+                  const tec = s.tecnico
+                  return (
+                    <Tr key={s.id}>
+                      <Td className="text-[11px] text-ink3 whitespace-nowrap">{fmtFecha(s.fecha_ingreso)}</Td>
+                      <Td>
+                        <div className="font-semibold text-ink text-[12px] whitespace-nowrap">{cli.nombre} {cli.apellido}</div>
+                        {cli.email && <div className="text-[10px] text-ink3 max-w-[140px] truncate">{cli.email}</div>}
+                      </Td>
+                      <Td className="text-[11px] text-ink3 space-y-0.5">
+                        {cli.whatsapp  && <div>{cli.whatsapp}</div>}
+                        {cli.telefono  && <div>{cli.telefono}</div>}
+                        {cli.telefono2 && <div>{cli.telefono2}</div>}
+                      </Td>
+                      <Td>
+                        <div className="font-medium text-ink text-[12px]">{s.mascotas?.nombre}</div>
+                        <div className="text-[10px] text-ink3">
+                          {s.mascotas?.especies?.nombre}
+                          {s.mascotas?.peso_kg ? ` · ${s.mascotas.peso_kg} kg` : ''}
+                        </div>
+                        {s.mascotas?.raza && <div className="text-[10px] text-ink3">{s.mascotas.raza}</div>}
+                      </Td>
+                      <Td className="text-[12px] text-ink2 whitespace-nowrap">{s.planes?.nombre || '—'}</Td>
+                      <Td className="text-[11px] text-ink3">{s.aliados?.nombre || '—'}</Td>
+                      <Td className="text-[11px] text-ink3 whitespace-nowrap">{s.ciudad_recogida || '—'}</Td>
+                      <Td className="text-[11px] text-ink3 whitespace-nowrap">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</Td>
+                      <Td>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                          style={{ background: ec.bg, color: ec.text, border: `1px solid ${ec.border || ec.bg}` }}>
+                          {ESTADO_LABEL[s.estado] || s.estado}
+                        </span>
+                      </Td>
+                      <Td>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                          style={{ background: pc.bg, color: pc.text }}>
+                          {s.estado_pago || '—'}
+                        </span>
+                      </Td>
+                      <Td className="text-[12px] font-semibold text-ink whitespace-nowrap">{COP(s.valor_total)}</Td>
+                    </Tr>
+                  )
+                })}
+                {filtrados.length === 0 && !loading && (
+                  <tr><td colSpan={11} className="text-center py-10 text-ink3 text-sm">Sin servicios para los filtros aplicados</td></tr>
+                )}
+              </tbody>
+            </Table>
+          </TableWrap>
+
+          {data.length < total && (
+            <div className="flex justify-center mt-5">
+              <Button variant="secondary" onClick={() => cargar(data.length)} disabled={loading}>
+                {loading ? 'Cargando...' : `Cargar más — ${total - data.length} restantes`}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function Gestion() {
   const { personalData } = useAuth()
   const isAdmin = personalData?.rol === 'ADMIN'
@@ -1320,21 +1561,23 @@ export default function Gestion() {
     <div>
       <Topbar />
       <div className="p-7">
-        <Tabs defaultValue="clientes">
+        <Tabs defaultValue="historial">
           <TabsList className="mb-6">
+            <TabsTrigger value="historial">Historial</TabsTrigger>
             <TabsTrigger value="clientes">Clientes</TabsTrigger>
             <TabsTrigger value="mascotas">Mascotas</TabsTrigger>
             <TabsTrigger value="aliados">Aliados</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="inventario">Inventario</TabsTrigger>
-            <TabsTrigger value="servicios">Servicios</TabsTrigger>
+            <TabsTrigger value="planes">Planes</TabsTrigger>
           </TabsList>
+          <TabsContent value="historial"><TabHistorialServicios /></TabsContent>
           <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="personal"><TabPersonal isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="inventario"><TabInventario isAdmin={isAdmin} /></TabsContent>
-          <TabsContent value="servicios"><TabServicios canEdit={canEdit} /></TabsContent>
+          <TabsContent value="planes"><TabServicios canEdit={canEdit} /></TabsContent>
         </Tabs>
       </div>
     </div>
