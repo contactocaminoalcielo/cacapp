@@ -151,7 +151,9 @@ function LogMovimientos({ movimientos }) {
             const fecha = new Date(m.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) +
                           ' · ' + new Date(m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
             const tipoLabel = m.tipo === 'CAMBIO_NEVERA' ? '❄️ Cambio de nevera'
-              : m.tipo === 'CAMBIO_ESTADO' ? '📋 Cambio de estado' : m.tipo
+              : m.tipo === 'CAMBIO_ESTADO' ? '📋 Cambio de estado'
+              : m.tipo === 'SALIDA_TENJO' ? '🚚 Salida a Tenjo'
+              : m.tipo === 'SALIDA_LOTE_GRUPAL' ? '📦 Salida en lote grupal' : m.tipo
             return (
               <div key={m.id} className="text-[11px] bg-gray-50 rounded-xl px-3 py-2">
                 <div className="flex items-center justify-between mb-0.5">

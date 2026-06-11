@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { useAuth } from '@/contexts/AuthContext'
 import { parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import {
@@ -578,6 +579,15 @@ export default function LotesGrupales() {
         .update({ estado: 'ENVIADO', fecha_envio: today(), observaciones: obsText || null })
         .eq('id', loteId)
       if (errEstado) throw errEstado
+
+      // Salida física del cuarto frío para todas las mascotas del lote:
+      // TRASLADADO + fecha_salida + movimiento de auditoría por cada una.
+      const svcIdsLote = (svcsActivos[loteId] || []).map(s => s.servicio_id)
+      await registrarSalidaCuartoFrio(svcIdsLote, {
+        personalId: personalData?.id,
+        tipo:       'SALIDA_LOTE_GRUPAL',
+        motivo:     'Lote grupal enviado a proceso',
+      })
 
       // Guardar duración por separado (columna añadida recientemente — puede necesitar schema reload)
       if (duracionLote) {
