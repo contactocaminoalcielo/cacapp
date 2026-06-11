@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,12 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { EstadoBadge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
+import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
+import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/lib/tenjo'
+import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
+import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock } from 'lucide-react'
 
@@ -172,6 +178,7 @@ function CertificadoIndividualModal({ traslado, onClose }) {
 
 export default function Tenjo() {
   const { confirm, alert: showAlert } = useConfirm()
+  const { personalData } = useAuth()
   const [traslados,         setTraslados]         = useState([])
   const [aptosTraslado,     setAptosTraslado]     = useState([])
   const [cenizasEspera,     setCenizasEspera]     = useState([])   // < 5 días desde cremación
@@ -191,6 +198,11 @@ export default function Tenjo() {
   const [certIndModal,      setCertIndModal]      = useState(null)
   const [modalCubiculo,     setModalCubiculo]     = useState(null) // seguimiento_compostaje para registrar cubículo
   const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
+  const [tab,               setTab]               = useState('planificacion')
+  const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
+  const [candidatas,        setCandidatas]        = useState([]) // null = migración 003 sin aplicar
+
+  const canPlan = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
 
   useEffect(() => {
     cargar()
@@ -295,6 +307,19 @@ export default function Tenjo() {
         return d != null && d <= 0 && !c.planta_lista
       }))
       setPersonal(per || [])
+
+      // ── Planificación (Fase 1): config + candidatas desde v_candidatos_tenjo ──
+      const cfg = await cargarConfigTenjo()
+      setConfig(cfg)
+      const { data: cand, error: errCand } = await db.from('v_candidatos_tenjo').select('*')
+        .order('fecha_ingreso', { ascending: true })
+      if (errCand) {
+        setCandidatas(null) // migración 003 sin aplicar — las tabs nuevas muestran el aviso
+      } else {
+        setCandidatas(cand || [])
+        // Alertas persistentes con dedupe (best-effort; el job del backend tomará el relevo)
+        sincronizarAlertasTenjo(cand || [], cfg).catch(() => {})
+      }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -302,14 +327,42 @@ export default function Tenjo() {
     }
   }
 
+  // Actualiza el estado del item de lote vinculado (si la migración 003 ya corrió)
+  async function actualizarItemLote(servicioId, estadoItem) {
+    const { error } = await db.from('lotes_tenjo_items')
+      .update({ estado: estadoItem })
+      .eq('servicio_id', servicioId)
+      .in('estado', ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA', 'EN_TRASLADO'])
+    if (error && error.code !== '42P01') console.error('[tenjo items]', error.message)
+  }
+
   async function actualizarTraslado(id, estado, servicioId) {
     try {
-      await db.from('traslados_tenjo').update({
+      const { error } = await db.from('traslados_tenjo').update({
         estado,
         ...(estado === 'COMPLETADO' && { fecha_completado: today() }),
       }).eq('id', id)
+      if (error) throw error
+      if (estado === 'EN_CAMINO' && servicioId) {
+        // Retiro físico del cuarto frío: el camión sale con la mascota.
+        // TRASLADADO + fecha_salida + movimiento de auditoría.
+        await registrarSalidaCuartoFrio(servicioId, {
+          personalId: personalData?.id,
+          tipo:       'SALIDA_TENJO',
+          motivo:     'Salida física — traslado a Tenjo en camino',
+        })
+        await actualizarItemLote(servicioId, 'EN_TRASLADO')
+      }
       if (estado === 'COMPLETADO' && servicioId) {
-        await db.from('servicios').update({ estado: 'EN_PROCESO' }).eq('id', servicioId)
+        const { error: errSvc } = await db.from('servicios').update({ estado: 'EN_PROCESO' }).eq('id', servicioId)
+        if (errSvc) throw errSvc
+        // Respaldo idempotente: si el paso EN_CAMINO se saltó, registrar la salida aquí
+        await registrarSalidaCuartoFrio(servicioId, {
+          personalId: personalData?.id,
+          tipo:       'SALIDA_TENJO',
+          motivo:     'Traslado a Tenjo completado',
+        })
+        await actualizarItemLote(servicioId, 'RECIBIDA')
       }
       await cargar()
     } catch (e) {
@@ -371,13 +424,22 @@ export default function Tenjo() {
     if (!mascotaParaTraslado) return
     setSaving(true)
     try {
-      await db.from('traslados_tenjo').insert({
+      const { error } = await db.from('traslados_tenjo').insert({
         servicio_id: mascotaParaTraslado.servicio_id,
         estado: 'PROGRAMADO',
         fecha_traslado: formTraslado.fecha_programada,
         tecnico_id: formTraslado.tecnico_id || null,
         notas: formTraslado.notas,
       })
+      if (error) {
+        // 23505 = índice único uq_traslados_tenjo_activo (traslado activo duplicado)
+        if (error.code === '23505') {
+          await showAlert('Esta mascota ya tiene un traslado activo a Tenjo. Revisa la lista de traslados.', { title: 'Traslado duplicado', variant: 'danger' })
+          await cargar()
+          return
+        }
+        throw error
+      }
       setModalNuevo(false)
       setMascotaParaTraslado(null)
       await cargar()
@@ -398,7 +460,32 @@ export default function Tenjo() {
           <RefreshCw size={15} />
         </button>
       } />
-      <div className="p-7 space-y-7">
+      <div className="p-7">
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="mb-5">
+            <TabsTrigger value="planificacion">📋 Planificación</TabsTrigger>
+            <TabsTrigger value="candidatas">
+              🐾 Candidatas{Array.isArray(candidatas) && candidatas.length > 0 ? ` (${candidatas.length})` : ''}
+            </TabsTrigger>
+            <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="planificacion">
+            <PlanificacionTab
+              config={config}
+              candidatas={candidatas}
+              personalData={personalData}
+              canPlan={canPlan}
+              onChanged={cargar}
+            />
+          </TabsContent>
+
+          <TabsContent value="candidatas">
+            <CandidatasTab candidatas={candidatas} config={config} />
+          </TabsContent>
+
+          <TabsContent value="operacion">
+          <div className="space-y-7">
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="Traslados programados" value={traslados.filter(t => t.estado === 'PROGRAMADO').length} valueColor="#3B6FBF" />
@@ -735,6 +822,9 @@ export default function Tenjo() {
             </div>
           </div>
         )}
+          </div>
+          </TabsContent>
+        </Tabs>
       </div>
 
       {/* Modal nuevo traslado */}
