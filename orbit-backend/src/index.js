@@ -5,6 +5,7 @@ import { pool, log } from './db.js'
 import { requireJob, requireAuth, requireRol } from './auth.js'
 import { generarPropuesta } from './jobs/propuesta.js'
 import { motorAlertas } from './jobs/alertas.js'
+import { confirmarLote, cerrarLote } from './lotes.js'
 
 const app = express()
 app.use(express.json())
@@ -65,6 +66,27 @@ app.post('/tenjo/generar-propuesta', requireAuth, requireRol('COORDINADOR', 'ADM
   try {
     res.json(await generarPropuesta({ force: true }))
   } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Escrituras críticas — transaccionales, solo vía backend (Fase 3)
+app.post('/tenjo/lotes/:id/confirmar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await confirmarLote({ loteId: req.params.id, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[confirmar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/tenjo/lotes/:id/cerrar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await cerrarLote({ loteId: req.params.id, personalId: req.personal.id, body: req.body })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[cerrar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

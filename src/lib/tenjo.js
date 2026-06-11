@@ -18,6 +18,70 @@ export const CONFIG_DEFAULTS = {
   horas_max_cargar_evidencia:       24,
   planes_evidencia_obligatoria:     ['COMPETS_EVIDENCIA', 'COMPETS_PRESENCIAL'],
   planes_confirmacion_cliente:      ['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA', 'COMPETS_PRESENCIAL'],
+  checklist_plantillas: {
+    INDIVIDUAL_ESTANDAR: [
+      { campo: 'observaciones', label: 'Observaciones del proceso', tipo: 'texto', obligatorio: false },
+    ],
+    EXCLUSIVO_PRESENCIAL: [
+      { campo: 'fecha_hora_acordada', label: 'Fecha y hora acordada con el cliente', tipo: 'texto', obligatorio: true },
+      { campo: 'asistencia_cliente', label: 'El cliente asistió al proceso', tipo: 'bool', obligatorio: true },
+      { campo: 'observacion_cierre', label: 'Observación de cierre del acompañamiento', tipo: 'texto', obligatorio: true },
+    ],
+    EXCLUSIVO_VIDEOLLAMADA: [
+      { campo: 'medio_conexion', label: 'Medio de conexión (Meet, WhatsApp, etc.)', tipo: 'texto', obligatorio: true },
+      { campo: 'hora_acordada', label: 'Hora acordada con el cliente', tipo: 'texto', obligatorio: true },
+      { campo: 'registro_ejecucion', label: 'Videollamada realizada con el cliente', tipo: 'bool', obligatorio: true },
+      { campo: 'observacion_cierre', label: 'Observación de cierre', tipo: 'texto', obligatorio: false },
+    ],
+    COMPETS_EVIDENCIA: [
+      { campo: 'evidencia_validada', label: 'Evidencia revisada y validada por coordinación', tipo: 'bool', obligatorio: true },
+      { campo: 'observacion_final', label: 'Observación final', tipo: 'texto', obligatorio: false },
+    ],
+  },
+}
+
+// ─── Variantes de proceso individual y validación de cierre ──────────────────
+// Espejo de orbit-backend/src/checklists.js — el backend es la compuerta real;
+// esto da feedback inmediato en la UI.
+export function varianteProceso(codigoPlan, tipoAcompanamiento) {
+  if (codigoPlan === 'EXCLUSIVO_PRESENCIAL' || tipoAcompanamiento === 'PRESENCIAL')
+    return 'EXCLUSIVO_PRESENCIAL'
+  if (codigoPlan === 'EXCLUSIVO_VIDEOLLAMADA' || tipoAcompanamiento === 'VIDEOLLAMADA')
+    return 'EXCLUSIVO_VIDEOLLAMADA'
+  if (['COMPETS_EVIDENCIA', 'COMPETS_PRESENCIAL'].includes(codigoPlan) || tipoAcompanamiento === 'EVIDENCIA')
+    return 'COMPETS_EVIDENCIA'
+  return 'INDIVIDUAL_ESTANDAR'
+}
+
+export const VARIANTE_LABEL = {
+  INDIVIDUAL_ESTANDAR:    'Individual estándar',
+  EXCLUSIVO_PRESENCIAL:   'Exclusivo presencial',
+  EXCLUSIVO_VIDEOLLAMADA: 'Exclusivo videollamada',
+  COMPETS_EVIDENCIA:      'Compets evidencia',
+}
+
+/** Faltantes que bloquearían el cierre de un item PROCESADO (vacío = ok) */
+export function validarItemCierre(item, codigoPlan, tipoAcompanamiento, config) {
+  const faltantes = []
+  const variante = varianteProceso(codigoPlan, tipoAcompanamiento)
+  const checklist = item.checklist || {}
+  const evidencias = Array.isArray(item.evidencia_urls) ? item.evidencia_urls : []
+
+  if (!item.responsable_proceso_id) faltantes.push('Sin responsable de proceso asignado')
+  if (!item.fecha_inicio_proceso)   faltantes.push('Sin fecha/hora de inicio de proceso')
+  if (!item.fecha_fin_proceso)      faltantes.push('Sin fecha/hora de finalización')
+  if (evidencias.length < 1)        faltantes.push('Sin evidencia cargada (mínimo 1 foto)')
+  if (['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA'].includes(variante) && item.confirmacion_cliente !== true)
+    faltantes.push('Sin confirmación del cliente registrada')
+
+  const plantillas = config.checklist_plantillas || CONFIG_DEFAULTS.checklist_plantillas
+  for (const campo of (plantillas[variante] || [])) {
+    if (!campo.obligatorio) continue
+    const v = checklist[campo.campo]
+    const vacio = campo.tipo === 'bool' ? v !== true : !(typeof v === 'string' && v.trim())
+    if (vacio) faltantes.push(`Falta "${campo.label}"`)
+  }
+  return faltantes
 }
 
 export async function cargarConfigTenjo() {

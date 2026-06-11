@@ -1,0 +1,413 @@
+// Pestaña "Jornada" — ejecución del lote Tenjo del día:
+// recepción → proceso → evidencias/checklist por variante → cierre de lote.
+// El cierre es la compuerta dura: lo valida el backend (orbit-backend) en una
+// transacción; aquí solo se muestra feedback inmediato con las mismas reglas.
+import { useState, useEffect, useCallback } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
+import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/dialog'
+import { Select } from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { db } from '@/lib/supabase'
+import { orbitApi } from '@/lib/orbitApi'
+import { subirEvidencia } from '@/lib/evidencias'
+import { petEmoji, parsearErrorDB } from '@/lib/utils'
+import {
+  varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
+  ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS,
+} from '@/lib/tenjo'
+import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import SetupNotice from './SetupNotice'
+
+const fmtFechaLarga = f => f
+  ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
+  : '—'
+const ahoraISO = () => new Date().toISOString()
+
+function Chip({ cfg, fallback }) {
+  return (
+    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={{ background: cfg?.bg || '#F3F4F6', color: cfg?.text || '#374151' }}>
+      {cfg?.label || fallback}
+    </span>
+  )
+}
+
+export default function JornadaTab({ config, personalData, canPlan, personal, onChanged }) {
+  const { confirm, alert: showAlert } = useConfirm()
+  const [lotes,    setLotes]    = useState(undefined)
+  const [items,    setItems]    = useState({}) // { lote_id: [...] }
+  const [sinTabla, setSinTabla] = useState(false)
+  const [saving,   setSaving]   = useState(false)
+
+  const [modalIniciar,   setModalIniciar]   = useState(null) // item
+  const [respId,         setRespId]         = useState('')
+  const [modalChecklist, setModalChecklist] = useState(null) // item
+  const [chkForm,        setChkForm]        = useState({})
+  const [subiendo,       setSubiendo]       = useState(false)
+  const [modalCerrar,    setModalCerrar]    = useState(null) // lote
+  const [motivos,        setMotivos]        = useState({})
+  const [obsCierre,      setObsCierre]      = useState('')
+  const [novCierre,      setNovCierre]      = useState('')
+
+  const cargar = useCallback(async () => {
+    const { data: ls, error } = await db.from('lotes_tenjo')
+      .select('*')
+      .in('estado', ['CONFIRMADO', 'EN_EJECUCION'])
+      .order('fecha_jornada', { ascending: true })
+    if (error) { setSinTabla(true); setLotes(null); return }
+    setLotes(ls || [])
+    const map = {}
+    for (const l of (ls || [])) {
+      const { data: its } = await db.from('lotes_tenjo_items')
+        .select('*, servicios(tipo_acompanamiento, planes(nombre, codigo), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
+        .eq('lote_id', l.id)
+        .order('created_at', { ascending: true })
+      map[l.id] = its || []
+    }
+    setItems(map)
+  }, [])
+
+  useEffect(() => { cargar() }, [cargar])
+
+  if (sinTabla) return <SetupNotice />
+  if (lotes === undefined) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando jornada…</span></div>
+
+  async function updateItem(item, cambios, recargar = true) {
+    setSaving(true)
+    try {
+      const { error } = await db.from('lotes_tenjo_items')
+        .update({ ...cambios, decidido_por: personalData?.id || null }).eq('id', item.id)
+      if (error) throw error
+      if (recargar) { await cargar(); onChanged?.() }
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  async function iniciarProceso() {
+    const item = modalIniciar
+    if (!item) return
+    if (!respId) { await showAlert('Selecciona el responsable del proceso.', { title: 'Responsable requerido' }); return }
+    await updateItem(item, {
+      estado: 'EN_PROCESO',
+      responsable_proceso_id: respId,
+      fecha_inicio_proceso: ahoraISO(),
+    }, false)
+    // Primer proceso iniciado → el lote pasa a EN_EJECUCION (best-effort)
+    await db.from('lotes_tenjo').update({ estado: 'EN_EJECUCION' })
+      .eq('id', item.lote_id).eq('estado', 'CONFIRMADO')
+    setModalIniciar(null); setRespId('')
+    await cargar(); onChanged?.()
+  }
+
+  function abrirChecklist(item) {
+    setModalChecklist(item)
+    setChkForm(item.checklist || {})
+  }
+
+  async function guardarChecklist() {
+    if (!modalChecklist) return
+    await updateItem(modalChecklist, { checklist: chkForm })
+    setModalChecklist(null)
+  }
+
+  async function agregarEvidencias(item, files) {
+    if (!files?.length) return
+    setSubiendo(true)
+    try {
+      const urls = [...(item.evidencia_urls || [])]
+      for (const f of files) urls.push(await subirEvidencia(f, item.id))
+      const { error } = await db.from('lotes_tenjo_items')
+        .update({ evidencia_urls: urls }).eq('id', item.id)
+      if (error) throw error
+      setModalChecklist(m => m && { ...m, evidencia_urls: urls })
+      await cargar()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error subiendo evidencia', variant: 'danger' })
+    } finally { setSubiendo(false) }
+  }
+
+  async function cerrarLote() {
+    const lote = modalCerrar
+    if (!lote) return
+    setSaving(true)
+    try {
+      const r = await orbitApi(`/tenjo/lotes/${lote.id}/cerrar`, {
+        method: 'POST',
+        body: { no_ejecutados: motivos, observaciones: obsCierre || null, novedades: novCierre || null },
+      })
+      setModalCerrar(null); setMotivos({}); setObsCierre(''); setNovCierre('')
+      await cargar(); onChanged?.()
+      await showAlert(
+        `Lote ${r.numero_lote} cerrado: ${r.ejecutados} ejecutado${r.ejecutados !== 1 ? 's' : ''} de ${r.programados}.`
+        + (r.no_ejecutados?.length ? ` No ejecutados: ${r.no_ejecutados.map(n => n.mascota).join(', ')}.` : ''),
+        { title: '✅ Lote cerrado' }
+      )
+    } catch (e) {
+      if (e.status === 422 && e.detalle?.bloqueos) {
+        const lineas = e.detalle.bloqueos.map(b => `• ${b.mascota}: ${b.faltantes.join('; ')}`).join('\n')
+        await showAlert(`El backend bloqueó el cierre:\n${lineas}`, { title: 'No se puede cerrar el lote', variant: 'danger' })
+      } else {
+        await showAlert(e.message, { title: 'Error cerrando lote', variant: 'danger' })
+      }
+    } finally { setSaving(false) }
+  }
+
+  // ── Render por item ──
+  function ItemRow({ item, lote }) {
+    const m = item.servicios?.mascotas
+    const plan = item.servicios?.planes
+    const variante = varianteProceso(plan?.codigo, item.servicios?.tipo_acompanamiento)
+    const faltantes = item.estado === 'PROCESADO'
+      ? validarItemCierre(item, plan?.codigo, item.servicios?.tipo_acompanamiento, config)
+      : []
+    const resp = personal?.find(p => p.id === item.responsable_proceso_id)
+    const nEvid = (item.evidencia_urls || []).length
+
+    return (
+      <div className="flex items-start gap-3 p-3.5 rounded-xl border hover:bg-surface2 transition-all"
+        style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+        <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-ink">{m?.nombre || '—'}</span>
+            <Chip cfg={ITEM_ESTADO_CFG[item.estado]} fallback={item.estado} />
+            <span className="text-[10px] text-ink3">{VARIANTE_LABEL[variante]}</span>
+          </div>
+          <div className="text-[11px] text-ink3 mt-0.5">
+            {m?.clientes?.nombre} {m?.clientes?.apellido} · {plan?.nombre}
+            {resp && ` · Responsable: ${resp.nombre} ${resp.apellido}`}
+            {nEvid > 0 && ` · 📷 ${nEvid} evidencia${nEvid !== 1 ? 's' : ''}`}
+          </div>
+          {item.estado === 'AUTORIZADA_SALIDA' && (
+            <div className="text-[10px] text-ink3 mt-0.5">Traslado programado — la salida física se gestiona en la pestaña Operación</div>
+          )}
+          {item.estado === 'PROCESADO' && faltantes.length > 0 && (
+            <div className="mt-1">
+              {faltantes.map((f, i) => (
+                <div key={i} className="text-[10px] text-amber-700">⚠ {f}</div>
+              ))}
+            </div>
+          )}
+          {item.estado === 'PROCESADO' && faltantes.length === 0 && (
+            <div className="text-[10px] text-green-700 mt-0.5 font-semibold">✓ Listo para cierre</div>
+          )}
+        </div>
+        <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
+          {item.estado === 'RECIBIDA' && (
+            <Button size="sm" disabled={saving}
+              onClick={() => { setModalIniciar(item); setRespId(item.responsable_proceso_id || personalData?.id || '') }}>
+              <Play size={12} /> Iniciar proceso
+            </Button>
+          )}
+          {item.estado === 'EN_PROCESO' && (
+            <Button size="sm" disabled={saving}
+              onClick={async () => {
+                if (!await confirm(`Se registrará la finalización del proceso de ${m?.nombre}.`, { title: '¿Finalizar proceso?', confirmLabel: 'Finalizar' })) return
+                await updateItem(item, { estado: 'PROCESADO', fecha_fin_proceso: ahoraISO() })
+              }}>
+              <Square size={12} /> Finalizar
+            </Button>
+          )}
+          {['EN_PROCESO', 'PROCESADO'].includes(item.estado) && (
+            <Button size="sm" variant={faltantes.length ? 'primary' : 'secondary'} disabled={saving}
+              onClick={() => abrirChecklist(item)}>
+              <ClipboardCheck size={12} /> Checklist{item.estado === 'PROCESADO' && faltantes.length > 0 ? ` (${faltantes.length})` : ''}
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      {lotes.length === 0 ? (
+        <div className="bg-surface border rounded-2xl py-12 text-center" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div className="text-3xl mb-2">🗓️</div>
+          <p className="text-[14px] font-semibold text-ink2">No hay lotes confirmados en ejecución</p>
+          <p className="text-[12px] text-ink3 mt-1">Confirma un lote en la pestaña Planificación para verlo aquí el día de la jornada.</p>
+        </div>
+      ) : lotes.map(lote => {
+        const its = items[lote.id] || []
+        const activos = its.filter(i => !['REPROGRAMADO', 'RETIRADO_DEL_LOTE', 'NO_EJECUTADO'].includes(i.estado))
+        const procesados = activos.filter(i => i.estado === 'PROCESADO')
+        const listos = procesados.filter(i =>
+          validarItemCierre(i, i.servicios?.planes?.codigo, i.servicios?.tipo_acompanamiento, config).length === 0
+        ).length
+        return (
+          <div key={lote.id} className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+            <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+              <div className="font-serif text-lg text-ink flex-1">
+                Lote {lote.numero_lote} — {fmtFechaLarga(lote.fecha_jornada)}
+              </div>
+              <Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} />
+              <span className="text-[11px] text-ink3">
+                {procesados.length}/{activos.length} procesados · {listos} listos para cierre
+              </span>
+              {canPlan && (
+                <Button size="sm" variant="gold" disabled={saving}
+                  onClick={() => { setModalCerrar(lote); setMotivos({}); setObsCierre(''); setNovCierre('') }}>
+                  <Lock size={12} /> Cerrar lote
+                </Button>
+              )}
+            </div>
+            {activos.length === 0 ? (
+              <div className="py-8 text-center text-ink3 text-sm">Sin mascoticas activas en este lote.</div>
+            ) : (
+              <div className="p-4 space-y-2.5">
+                {activos.map(i => <ItemRow key={i.id} item={i} lote={lote} />)}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* ── Modal iniciar proceso ── */}
+      {modalIniciar && (
+        <Modal open onClose={() => setModalIniciar(null)}
+          title={`Iniciar proceso — ${modalIniciar.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={<>
+            <Button variant="secondary" onClick={() => setModalIniciar(null)}>Cancelar</Button>
+            <Button onClick={iniciarProceso} disabled={saving}>{saving ? 'Guardando…' : 'Iniciar'}</Button>
+          </>}>
+          <div className="space-y-3">
+            <p className="text-[12px] text-ink2">Se registrará la fecha y hora de inicio. El lote pasará a EN EJECUCIÓN.</p>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Responsable del proceso *</label>
+              <Select value={respId} onChange={e => setRespId(e.target.value)}>
+                <option value="">Seleccionar…</option>
+                {(personal || []).map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
+              </Select>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal checklist / evidencias ── */}
+      {modalChecklist && (() => {
+        const item = modalChecklist
+        const plan = item.servicios?.planes
+        const variante = varianteProceso(plan?.codigo, item.servicios?.tipo_acompanamiento)
+        const plantillas = config.checklist_plantillas || CONFIG_DEFAULTS.checklist_plantillas
+        const campos = plantillas[variante] || []
+        const evidencias = item.evidencia_urls || []
+        return (
+          <Modal open onClose={() => setModalChecklist(null)}
+            title={`Checklist — ${item.servicios?.mascotas?.nombre || ''} (${VARIANTE_LABEL[variante]})`}
+            maxWidth="max-w-lg"
+            footer={<>
+              <Button variant="secondary" onClick={() => setModalChecklist(null)}>Cerrar</Button>
+              <Button onClick={guardarChecklist} disabled={saving}>{saving ? 'Guardando…' : 'Guardar checklist'}</Button>
+            </>}>
+            <div className="space-y-4">
+              {/* Evidencias */}
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1.5">
+                  <Camera size={11} className="inline mr-1" />Evidencias ({evidencias.length}) — mínimo 1 para cerrar
+                </label>
+                {evidencias.length > 0 && (
+                  <div className="grid grid-cols-4 gap-2 mb-2">
+                    {evidencias.map((url, i) => (
+                      <a key={i} href={url} target="_blank" rel="noreferrer">
+                        <img src={url} alt="" className="w-full h-16 object-cover rounded-lg border border-gray-100" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+                <input type="file" accept="image/*" multiple disabled={subiendo}
+                  className="text-[12px]"
+                  onChange={e => { agregarEvidencias(item, Array.from(e.target.files || [])); e.target.value = '' }} />
+                {subiendo && <p className="text-[11px] text-ink3 mt-1">Subiendo…</p>}
+              </div>
+
+              {/* Campos por variante */}
+              {campos.map(c => (
+                <div key={c.campo}>
+                  {c.tipo === 'bool' ? (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="w-4 h-4 accent-[#3D5A27]"
+                        checked={chkForm[c.campo] === true}
+                        onChange={e => setChkForm(f => ({ ...f, [c.campo]: e.target.checked }))} />
+                      <span className="text-[12px] font-semibold text-ink2">{c.label}{c.obligatorio && ' *'}</span>
+                    </label>
+                  ) : (
+                    <>
+                      <label className="text-[11px] font-bold text-ink3 block mb-1">{c.label}{c.obligatorio && ' *'}</label>
+                      <Input value={chkForm[c.campo] || ''}
+                        onChange={e => setChkForm(f => ({ ...f, [c.campo]: e.target.value }))} />
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Modal>
+        )
+      })()}
+
+      {/* ── Modal cerrar lote ── */}
+      {modalCerrar && (() => {
+        const its = (items[modalCerrar.id] || []).filter(i => !['REPROGRAMADO', 'RETIRADO_DEL_LOTE', 'NO_EJECUTADO', 'PROPUESTO'].includes(i.estado))
+        const procesados = its.filter(i => i.estado === 'PROCESADO')
+        const pendientes = its.filter(i => i.estado !== 'PROCESADO')
+        const conFaltantes = procesados
+          .map(i => ({ i, f: validarItemCierre(i, i.servicios?.planes?.codigo, i.servicios?.tipo_acompanamiento, config) }))
+          .filter(x => x.f.length)
+        return (
+          <Modal open onClose={() => setModalCerrar(null)}
+            title={`Cerrar lote ${modalCerrar.numero_lote}`}
+            maxWidth="max-w-lg"
+            footer={<>
+              <Button variant="secondary" onClick={() => setModalCerrar(null)}>Cancelar</Button>
+              <Button variant="gold" onClick={cerrarLote} disabled={saving}>
+                {saving ? 'Cerrando…' : 'Cerrar lote'}
+              </Button>
+            </>}>
+            <div className="space-y-4">
+              <p className="text-[12px] text-ink2">
+                {procesados.length} procesado{procesados.length !== 1 ? 's' : ''} · {pendientes.length} sin ejecutar.
+                El backend valida evidencias y checklists antes de cerrar.
+              </p>
+              {conFaltantes.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  <p className="text-[11px] font-bold text-amber-800 mb-1"><AlertTriangle size={11} className="inline mr-1" />Faltantes que bloquearán el cierre:</p>
+                  {conFaltantes.map(({ i, f }) => (
+                    <div key={i.id} className="text-[11px] text-amber-700">• {i.servicios?.mascotas?.nombre}: {f.join('; ')}</div>
+                  ))}
+                </div>
+              )}
+              {pendientes.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-bold text-ink3 mb-2">Motivo por cada proceso no ejecutado * (quedarán NO EJECUTADOS y volverán al ciclo de candidatas)</p>
+                  <div className="space-y-2">
+                    {pendientes.map(i => (
+                      <div key={i.id}>
+                        <label className="text-[11px] font-semibold text-ink2 block mb-0.5">
+                          {i.servicios?.mascotas?.nombre} ({ITEM_ESTADO_CFG[i.estado]?.label || i.estado})
+                        </label>
+                        <Input placeholder="Motivo de no ejecución…"
+                          value={motivos[i.id] || ''}
+                          onChange={e => setMotivos(m => ({ ...m, [i.id]: e.target.value }))} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Novedades de la jornada</label>
+                <Textarea value={novCierre} onChange={e => setNovCierre(e.target.value)} placeholder="Novedades, incidencias…" />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Observaciones de cierre</label>
+                <Textarea value={obsCierre} onChange={e => setObsCierre(e.target.value)} />
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
+    </div>
+  )
+}

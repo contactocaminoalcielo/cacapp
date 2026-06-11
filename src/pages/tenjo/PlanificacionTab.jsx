@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { orbitApi } from '@/lib/orbitApi'
 import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
-  generarPropuestaLote, confirmarLote, evaluarCandidato, mensajeSugerido,
+  generarPropuestaLote, evaluarCandidato, mensajeSugerido,
   proximaJornada, esDiaPlanificacion, nombreDia,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
@@ -186,14 +187,15 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     if (!await confirm(msg, { title: `¿Confirmar lote del ${nombreDia(fechaJornada)}?`, variant: 'warning', confirmLabel: 'Confirmar lote' })) return
     setSaving(true)
     try {
-      const r = await confirmarLote({ lote, items: activos, candidatas, config, personalId: personalData?.id })
+      // Escritura crítica → backend propio (transacción + revalidación + lock)
+      const r = await orbitApi(`/tenjo/lotes/${lote.id}/confirmar`, { method: 'POST' })
       await cargarLote(); onChanged?.()
       let detalle = `✅ ${r.autorizadas} autorizadas para salida.`
       if (r.reprogramadas) detalle += ` ↻ ${r.reprogramadas} reprogramadas sin decisión.`
-      if (r.rechazadas.length) detalle += ` ⚠ ${r.rechazadas.length} rechazadas en revalidación: ${r.rechazadas.map(x => x.item.servicios?.mascotas?.nombre || '').join(', ')}.`
+      if (r.rechazadas?.length) detalle += ` ⚠ ${r.rechazadas.length} rechazadas en revalidación: ${r.rechazadas.map(x => `${x.mascota} (${x.motivo})`).join(', ')}.`
       await showAlert(detalle, { title: 'Lote confirmado' })
     } catch (e) {
-      await showAlert(parsearErrorDB(e), { title: 'Error confirmando lote', variant: 'danger' })
+      await showAlert(e.message, { title: 'Error confirmando lote', variant: 'danger' })
     } finally { setSaving(false) }
   }
 

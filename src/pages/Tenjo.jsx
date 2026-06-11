@@ -15,6 +15,7 @@ import { db } from '@/lib/supabase'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/lib/tenjo'
 import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
+import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock } from 'lucide-react'
@@ -464,6 +465,7 @@ export default function Tenjo() {
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="mb-5">
             <TabsTrigger value="planificacion">📋 Planificación</TabsTrigger>
+            <TabsTrigger value="jornada">🔥 Jornada</TabsTrigger>
             <TabsTrigger value="candidatas">
               🐾 Candidatas{Array.isArray(candidatas) && candidatas.length > 0 ? ` (${candidatas.length})` : ''}
             </TabsTrigger>
@@ -476,6 +478,16 @@ export default function Tenjo() {
               candidatas={candidatas}
               personalData={personalData}
               canPlan={canPlan}
+              onChanged={cargar}
+            />
+          </TabsContent>
+
+          <TabsContent value="jornada">
+            <JornadaTab
+              config={config}
+              personalData={personalData}
+              canPlan={canPlan}
+              personal={personal}
               onChanged={cargar}
             />
           </TabsContent>
