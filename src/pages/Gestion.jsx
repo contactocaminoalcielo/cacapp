@@ -1336,18 +1336,41 @@ function TabHistorialServicios() {
   const [loading, setLoading]         = useState(true)
   const [total, setTotal]             = useState(0)
   const [exporting, setExporting]     = useState(false)
-  const [busqueda, setBusqueda]       = useState('')
-  const [filtroEstado, setFiltroEstado] = useState('')
-  const [filtroPago, setFiltroPago]   = useState('')
-  const [desde, setDesde]             = useState('')
-  const [hasta, setHasta]             = useState('')
+  // catálogos para dropdowns
+  const [catPlanes,   setCatPlanes]   = useState([])
+  const [catAliados,  setCatAliados]  = useState([])
+  const [catPersonal, setCatPersonal] = useState([])
+  // filtros
+  const [busqueda,      setBusqueda]      = useState('')
+  const [filtroEstado,  setFiltroEstado]  = useState('')
+  const [filtroPago,    setFiltroPago]    = useState('')
+  const [filtroPlan,    setFiltroPlan]    = useState('')
+  const [filtroAliado,  setFiltroAliado]  = useState('')
+  const [filtroTecnico, setFiltroTecnico] = useState('')
+  const [desde, setDesde] = useState('')
+  const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
 
+  useEffect(() => {
+    Promise.all([
+      db.from('planes').select('id,nombre').order('nombre'),
+      db.from('aliados').select('id_aliado,nombre').eq('activo', true).order('nombre'),
+      db.from('personal').select('id,nombre,apellido').eq('activo', true).order('nombre'),
+    ]).then(([{ data: pl }, { data: al }, { data: pe }]) => {
+      setCatPlanes(pl || [])
+      setCatAliados(al || [])
+      setCatPersonal(pe || [])
+    })
+  }, [])
+
   function buildQuery(base) {
-    if (filtroEstado) base = base.eq('estado', filtroEstado)
-    if (filtroPago)   base = base.eq('estado_pago', filtroPago)
-    if (desde)        base = base.gte('fecha_ingreso', desde)
-    if (hasta)        base = base.lte('fecha_ingreso', hasta)
+    if (filtroEstado)  base = base.eq('estado', filtroEstado)
+    if (filtroPago)    base = base.eq('estado_pago', filtroPago)
+    if (filtroPlan)    base = base.eq('plan_id', filtroPlan)
+    if (filtroAliado)  base = base.eq('aliado_origen_id', filtroAliado)
+    if (filtroTecnico) base = base.eq('tecnico_id', filtroTecnico)
+    if (desde)         base = base.gte('fecha_ingreso', desde)
+    if (hasta)         base = base.lte('fecha_ingreso', hasta)
     return base
   }
 
@@ -1365,7 +1388,7 @@ function TabHistorialServicios() {
     setLoading(false)
   }
 
-  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, desde, hasta])
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, desde, hasta])
 
   async function exportarCSV() {
     setExporting(true)
@@ -1425,14 +1448,36 @@ function TabHistorialServicios() {
   const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
   const fmtFecha = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
 
+  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || desde || hasta || busqueda
+  function limpiarFiltros() {
+    setBusqueda(''); setFiltroEstado(''); setFiltroPago('')
+    setFiltroPlan(''); setFiltroAliado(''); setFiltroTecnico('')
+    setDesde(''); setHasta('')
+  }
+
   return (
     <div>
-      {/* Filtros */}
-      <div className="flex flex-wrap items-end gap-2 mb-4">
+      {/* Filtros — fila 1 */}
+      <div className="flex flex-wrap items-end gap-2 mb-2">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
-          <Input className="pl-8 w-52" placeholder="Cliente, mascota, aliado..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+          <Input className="pl-8 w-52" placeholder="Cliente, mascota..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
         </div>
+        <Select value={filtroPlan} onChange={e => setFiltroPlan(e.target.value)} className="w-44">
+          <option value="">Todos los planes</option>
+          {catPlanes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </Select>
+        <Select value={filtroAliado} onChange={e => setFiltroAliado(e.target.value)} className="w-44">
+          <option value="">Todos los aliados</option>
+          {catAliados.map(a => <option key={a.id_aliado} value={a.id_aliado}>{a.nombre}</option>)}
+        </Select>
+        <Select value={filtroTecnico} onChange={e => setFiltroTecnico(e.target.value)} className="w-40">
+          <option value="">Todos los técnicos</option>
+          {catPersonal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido || ''}</option>)}
+        </Select>
+      </div>
+      {/* Filtros — fila 2 */}
+      <div className="flex flex-wrap items-end gap-2 mb-4">
         <Select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} className="w-40">
           <option value="">Todos los estados</option>
           {Object.entries(ESTADO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -1451,9 +1496,16 @@ function TabHistorialServicios() {
           <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Hasta</span>
           <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="w-36" />
         </div>
-        <Button size="sm" variant="secondary" onClick={exportarCSV} disabled={exporting}>
-          <FileDown size={14} /> {exporting ? 'Exportando...' : 'Exportar CSV'}
-        </Button>
+        {hayFiltros && (
+          <button onClick={limpiarFiltros} className="text-[11px] font-semibold text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors">
+            × Limpiar filtros
+          </button>
+        )}
+        <div className="ml-auto">
+          <Button size="sm" variant="secondary" onClick={exportarCSV} disabled={exporting}>
+            <FileDown size={14} /> {exporting ? 'Exportando...' : 'Exportar CSV'}
+          </Button>
+        </div>
       </div>
 
       {/* Conteo */}
