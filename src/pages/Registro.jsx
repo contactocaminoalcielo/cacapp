@@ -1481,7 +1481,7 @@ export default function Registro() {
                   <label className={LABEL}>Ciudad / Municipio</label>
                   <Select value={formRecogida.ciudad_recogida}
                     onChange={e => setFormRecogida(p => ({ ...p, ciudad_recogida: e.target.value }))}>
-                    {CIUDADES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    {ciudadesList.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </Select>
                 </div>
                 <div>
