@@ -1,0 +1,18 @@
+# orbit-backend — se une a la red de Supabase para hablar directo con Postgres.
+# El puerto solo se expone en localhost; nginx hace el proxy público (api.orbitacac.com).
+services:
+  orbit-backend:
+    build: .
+    container_name: orbit-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=America/Bogota
+    ports:
+      - "127.0.0.1:8787:8787"
+    networks:
+      - supabase_default
+
+networks:
+  supabase_default:
+    external: true

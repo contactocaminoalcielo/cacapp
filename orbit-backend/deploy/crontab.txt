@@ -1,0 +1,9 @@
+# Instalado como /etc/cron.d/orbit-backend (root). El cron corre en UTC;
+# Bogotá = UTC-5 sin DST. Los jobs se disparan a diario y cada uno decide
+# si aplica según config_operativa (dias_planificacion).
+# 06:00 Bogotá = 11:00 UTC → propuesta de lote (solo actúa lun/mié/vie)
+# 06:30 Bogotá = 11:30 UTC → motor de alertas (todos los días)
+
+# orbit-backend — jobs Tenjo (06:00/06:30 Bogota = 11:00/11:30 UTC)
+0 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/generar-propuesta >> /var/log/orbit-backend-cron.log 2>&1
+30 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/alertas >> /var/log/orbit-backend-cron.log 2>&1
