@@ -648,13 +648,14 @@ function TabAliados({ isAdmin, canEdit }) {
     setForm(item ? {
       nombre: item.nombre || '', identificacion_nit: item.identificacion_nit || '',
       contacto_nombre: item.contacto_nombre || '', whatsapp: item.whatsapp || '',
-      telefono: item.telefono || '', ciudad: item.ciudad || 'Bogotá',
-      localidad: item.localidad || '', barrio: item.barrio || '',
-      direccion: item.direccion || '', vip: item.vip || false,
+      telefono: item.telefono || '', email: item.email || '',
+      ciudad: item.ciudad || 'Bogotá', localidad: item.localidad || '',
+      barrio: item.barrio || '', direccion: item.direccion || '',
+      notas: item.notas || '', vip: item.vip || false,
       modalidad_comision: item.modalidad_comision || 'FACTURACION_MENSUAL',
       saldo_comision: item.saldo_comision || 0, activo: item.activo !== false,
       horario: item.horario || {},
-    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true,horario:{} })
+    } : { nombre:'',identificacion_nit:'',contacto_nombre:'',whatsapp:'',telefono:'',email:'',ciudad:'Bogotá',localidad:'',barrio:'',direccion:'',notas:'',vip:false,modalidad_comision:'FACTURACION_MENSUAL',saldo_comision:0,activo:true,horario:{} })
   }
   async function guardar() {
     if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
@@ -733,33 +734,54 @@ function TabAliados({ isAdmin, canEdit }) {
       {selected && (
         <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.id_aliado ? 'Editar aliado' : 'Nuevo aliado'} maxWidth="max-w-lg"
           footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
-          <div className="grid grid-cols-2 gap-3">
-            {[['nombre','Nombre',null,true],['identificacion_nit','NIT/Cédula',30,false],['contacto_nombre','Contacto',80,true],['whatsapp','WhatsApp',20,false],['telefono','Teléfono',20,false],['ciudad','Ciudad',80,true],['barrio','Barrio',80,true]].map(([k,l,ml,uc]) => (
-              <div key={k}><label className="text-[11px] font-bold text-ink3 block mb-1">{l}</label><Input value={form[k]||''} onChange={e => setForm(p=>({...p,[k]:uc ? e.target.value.toUpperCase() : e.target.value}))} {...(ml ? { maxLength: ml } : {})} /></div>
-            ))}
+          <div className="space-y-4">
+            {/* Establecimiento */}
             <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Localidad</label>
-              <LocalidadSelect value={form.localidad||''} onChange={v => setForm(p=>({...p,localidad:v}))} />
+              <p className="text-[10px] font-bold text-ink3 uppercase tracking-wider mb-2">Establecimiento</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Nombre *</label><Input value={form.nombre||''} onChange={e => setForm(p=>({...p,nombre:e.target.value}))} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">NIT / Cédula</label><Input value={form.identificacion_nit||''} onChange={e => setForm(p=>({...p,identificacion_nit:e.target.value}))} maxLength={30} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Ciudad</label><Input value={form.ciudad||''} onChange={e => setForm(p=>({...p,ciudad:e.target.value.toUpperCase()}))} maxLength={80} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Barrio</label><Input value={form.barrio||''} onChange={e => setForm(p=>({...p,barrio:e.target.value.toUpperCase()}))} maxLength={80} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Localidad</label><LocalidadSelect value={form.localidad||''} onChange={v => setForm(p=>({...p,localidad:v}))} /></div>
+                <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Dirección</label><Input value={form.direccion||''} onChange={e => setForm(p=>({...p,direccion:e.target.value.toUpperCase()}))} placeholder="CALLE, CARRERA, NÚMERO…" /></div>
+              </div>
             </div>
-            <div className="col-span-2">
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Dirección</label>
-              <Input value={form.direccion||''} onChange={e => setForm(p=>({...p,direccion:e.target.value.toUpperCase()}))} placeholder="CALLE, CARRERA, NÚMERO…" />
+            {/* Contacto */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-[10px] font-bold text-ink3 uppercase tracking-wider mb-2">Contacto</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Nombre contacto</label><Input value={form.contacto_nombre||''} onChange={e => setForm(p=>({...p,contacto_nombre:e.target.value}))} maxLength={80} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">WhatsApp</label><Input value={form.whatsapp||''} onChange={e => setForm(p=>({...p,whatsapp:e.target.value}))} maxLength={20} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Teléfono fijo</label><Input value={form.telefono||''} onChange={e => setForm(p=>({...p,telefono:e.target.value}))} maxLength={20} /></div>
+                <div><label className="text-[11px] font-bold text-ink3 block mb-1">Email</label><Input type="email" value={form.email||''} onChange={e => setForm(p=>({...p,email:e.target.value}))} placeholder="contacto@vet.com" /></div>
+                <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-2">Horario de atención</label><HorarioEditor value={form.horario||{}} onChange={v => setForm(p=>({...p,horario:v}))} /></div>
+                <div className="col-span-2"><label className="text-[11px] font-bold text-ink3 block mb-1">Notas internas</label><Input value={form.notas||''} onChange={e => setForm(p=>({...p,notas:e.target.value}))} placeholder="Observaciones, condiciones especiales..." /></div>
+              </div>
             </div>
-            <div className="col-span-2">
-              <label className="text-[11px] font-bold text-ink3 block mb-2">Horario de atención</label>
-              <HorarioEditor value={form.horario||{}} onChange={v => setForm(p=>({...p,horario:v}))} />
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Modalidad comisión</label>
-              <Select value={form.modalidad_comision||'FACTURACION_MENSUAL'} onChange={e => setForm(p=>({...p,modalidad_comision:e.target.value}))}>
-                <option value="FACTURACION_MENSUAL">Facturación mensual</option>
-                <option value="DESCUENTO_INMEDIATO">Descuento inmediato</option>
-                <option value="CREDITO_ACUMULADO">Crédito acumulado</option>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2 pt-4">
-              <input type="checkbox" id="aliado-vip" checked={!!form.vip} onChange={e => setForm(p=>({...p,vip:e.target.checked}))} className="w-4 h-4 accent-[#1A5CD8]" />
-              <label htmlFor="aliado-vip" className="text-[12px] font-semibold text-ink2 cursor-pointer">Aliado VIP</label>
+            {/* Comisiones */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-[10px] font-bold text-ink3 uppercase tracking-wider mb-2">Comisiones y configuración</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Modalidad comisión</label>
+                  <Select value={form.modalidad_comision||'FACTURACION_MENSUAL'} onChange={e => setForm(p=>({...p,modalidad_comision:e.target.value}))}>
+                    <option value="FACTURACION_MENSUAL">Facturación mensual</option>
+                    <option value="DESCUENTO_INMEDIATO">Descuento inmediato</option>
+                    <option value="CREDITO_ACUMULADO">Crédito acumulado</option>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2 pt-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={!!form.vip} onChange={e => setForm(p=>({...p,vip:e.target.checked}))} className="w-4 h-4 accent-[#1A5CD8]" />
+                    <span className="text-[12px] font-semibold text-ink2">Aliado VIP</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p=>({...p,activo:e.target.checked}))} className="w-4 h-4 accent-[#1A5CD8]" />
+                    <span className="text-[12px] font-semibold text-ink2">Activo</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </Modal>
