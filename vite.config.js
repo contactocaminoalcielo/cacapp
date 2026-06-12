@@ -26,7 +26,9 @@ export default defineConfig({
         short_name: 'CACapp',
         description: 'Sistema de gestión interno — Camino al Cielo',
         start_url: '/',
-        display: 'standalone',
+        // 'browser' = NO instalable: el navegador deja de ofrecer "Instalar app"
+        // (decisión 2026-06-12). El SW y el precache siguen funcionando igual.
+        display: 'browser',
         background_color: '#F8F9FA',
         theme_color: '#263218',
         orientation: 'portrait-primary',

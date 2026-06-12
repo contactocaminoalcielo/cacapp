@@ -3,7 +3,7 @@
   "short_name": "Orbit",
   "description": "Orbit — Sistema de gestión interno",
   "start_url": "/",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#F8F9FA",
   "theme_color": "#263218",
   "orientation": "portrait-primary",

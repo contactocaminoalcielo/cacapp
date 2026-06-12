@@ -10,6 +10,11 @@ if ('serviceWorker' in navigator) {
   })
 }
 
+// Suprimir el aviso de "Instalar app" del navegador: Orbit se usa en el
+// navegador, no como app instalada (decisión 2026-06-12). El service worker
+// y su caché siguen activos — esto solo bloquea el prompt de instalación.
+window.addEventListener('beforeinstallprompt', e => e.preventDefault())
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />
