@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
-import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 
 // ── Enlace público del formulario de solicitud ────────────────────────────────
 const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
@@ -119,12 +118,10 @@ export default function Kanban() {
   const [contactarLoadingId,  setContactarLoadingId]  = useState(null)
   const [notifTecLoadingId,   setNotifTecLoadingId]   = useState(null)
 
-  // ── Enviar enlace de solicitud al cliente ─────────────────────────────────
+  // ── Enviar enlace de solicitud al cliente (wa.me, desde el WA propio) ─────
   const [modalEnlace,     setModalEnlace]     = useState(false)
   const [enlaceNombre,    setEnlaceNombre]    = useState('')
   const [enlaceTelefono,  setEnlaceTelefono]  = useState('')
-  const [enlaceLinea,     setEnlaceLinea]     = useState(LINEAS_WHATSAPP[0].numero)
-  const [enviandoEnlace,  setEnviandoEnlace]  = useState(false)
   const [enlaceCopiado,   setEnlaceCopiado]   = useState(false)
 
   function mensajeEnlaceSolicitud(nombre) {
@@ -150,22 +147,11 @@ export default function Kanban() {
       await showAlert('Ingresa un celular colombiano de 10 dígitos (3XX...) o internacional con +.', { title: 'Número inválido' })
       return
     }
-    setEnviandoEnlace(true)
-    try {
-      await enviarWhatsApp({
-        telefono:   enlaceTelefono,
-        nombre:     enlaceNombre.trim(),
-        mensaje:    mensajeEnlaceSolicitud(enlaceNombre),
-        fromNumber: enlaceLinea,
-      })
-      setModalEnlace(false)
-      setEnlaceNombre(''); setEnlaceTelefono('')
-      await showAlert('El cliente recibió el enlace del formulario de solicitud por WhatsApp.', { title: 'Enlace enviado ✅' })
-    } catch (e) {
-      await showAlert(`No se pudo enviar el WhatsApp: ${e.message || e}`, { title: 'Error al enviar' })
-    } finally {
-      setEnviandoEnlace(false)
-    }
+    // Abre WhatsApp (app o web) con el chat del cliente y el mensaje listo —
+    // el coordinador lo envía desde su propio número
+    window.open(waLink(enlaceTelefono, mensajeEnlaceSolicitud(enlaceNombre)), '_blank', 'noopener')
+    setModalEnlace(false)
+    setEnlaceNombre(''); setEnlaceTelefono('')
   }
 
   async function copiarEnlaceSolicitud() {
@@ -2452,29 +2438,27 @@ export default function Kanban() {
       })()}
 
       {/* ── Modal: enviar enlace de solicitud al cliente ──────────────────── */}
-      <Modal open={modalEnlace} onClose={() => !enviandoEnlace && setModalEnlace(false)}
+      <Modal open={modalEnlace} onClose={() => setModalEnlace(false)}
         title="Enviar enlace de solicitud al cliente"
         maxWidth="max-w-md"
         footer={
           <div className="flex items-center justify-end w-full gap-2">
-            <button onClick={() => setModalEnlace(false)} disabled={enviandoEnlace}
-              className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all disabled:opacity-50">
+            <button onClick={() => setModalEnlace(false)}
+              className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all">
               Cancelar
             </button>
-            <button onClick={enviarEnlaceSolicitud} disabled={enviandoEnlace}
-              className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg,#3D5A27,#263218)' }}>
-              {enviandoEnlace
-                ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Enviando...</>
-                : <><Send size={13} /> Enviar por WhatsApp</>}
+            <button onClick={enviarEnlaceSolicitud}
+              className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg,#25D366,#128C7E)' }}>
+              <MessageCircle size={13} /> Abrir WhatsApp
             </button>
           </div>
         }>
         <div className="space-y-4">
           <p className="text-[12px] text-gray-500 leading-relaxed">
-            El cliente recibirá un WhatsApp con el enlace al formulario público para
-            solicitar el servicio. Cuando lo complete, la solicitud aparecerá automáticamente
-            en esta columna.
+            Se abrirá WhatsApp con el chat del cliente y el mensaje listo — solo dale enviar
+            desde tu número. Cuando el cliente complete el formulario, la solicitud aparecerá
+            automáticamente en esta columna.
           </p>
 
           <div>
@@ -2488,25 +2472,6 @@ export default function Kanban() {
             <Input placeholder="3001234567" inputMode="tel" maxLength={25} value={enlaceTelefono}
               onChange={e => setEnlaceTelefono(e.target.value)} />
             <p className="text-[11px] text-gray-400 mt-1">Colombia: 3XX XXX XXXX · Internacional: +1 555 1234</p>
-          </div>
-
-          <div>
-            <label className="block text-[12px] font-semibold text-gray-600 mb-1.5">Enviar desde la línea</label>
-            <div className="flex gap-2">
-              {LINEAS_WHATSAPP.map(l => (
-                <button key={l.numero} type="button"
-                  onClick={() => setEnlaceLinea(l.numero)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-semibold border transition-all"
-                  style={{
-                    background:  enlaceLinea === l.numero ? '#16A34A' : 'white',
-                    color:       enlaceLinea === l.numero ? 'white'   : '#374151',
-                    borderColor: enlaceLinea === l.numero ? '#16A34A' : '#D1D5DB',
-                  }}>
-                  {enlaceLinea === l.numero && <Check size={12} />}
-                  {l.label}
-                </button>
-              ))}
-            </div>
           </div>
 
           {/* Vista previa del mensaje */}
