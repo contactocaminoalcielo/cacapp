@@ -1447,7 +1447,18 @@ function ReporteCuartoFrio({ tecnico, neverasActivas, reporteHoy, onGuardado }) 
 // ─── MAIN ───────────────────────────────────────────────────────────────
 export default function TecnicoApp() {
   const { personalData: tecnico, logout } = useAuth()
-  const [tab, setTab]             = useState('recogidas')
+  // La pestaña activa sobrevive reinicios de la PWA (Android mata la pestaña
+  // al abrir cámara/galería): el técnico vuelve exactamente donde estaba.
+  const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo']
+  const [tab, setTab] = useState(() => {
+    try {
+      const t = localStorage.getItem('tecnico_ui_tab')
+      return TABS_VALIDOS.includes(t) ? t : 'recogidas'
+    } catch (_) { return 'recogidas' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('tecnico_ui_tab', tab) } catch (_) {}
+  }, [tab])
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
   const [loading, setLoading]     = useState(false)
@@ -2315,11 +2326,34 @@ function ReciboTab({ recogidas, tecnico }) {
   const [servicioSel, setServicioSel] = useState(null)
   const [svcData,     setSvcData]     = useState(null)
   const [loading,     setLoading]     = useState(false)
+  const restauradoRef                 = useRef(false)
 
   // Combinar servicios para mostrar: recogidas en camino/cuarto frío + ya en CF
   const opciones = recogidas.filter(s => ['EN_RECOGIDA','EN_CUARTO_FRIO','INGRESADO'].includes(s.estado))
 
+  // Si la PWA se reinició con un recibo abierto, volver a abrirlo solo:
+  // junto con el draft (datos) y el stash (comprobante), el técnico retoma
+  // exactamente donde iba sin navegar de nuevo.
+  useEffect(() => {
+    if (restauradoRef.current || servicioSel) return
+    try {
+      const id = localStorage.getItem('tecnico_recibo_sel')
+      if (!id) { restauradoRef.current = true; return }
+      const svc = opciones.find(s => s.id === id)
+      if (svc) {
+        restauradoRef.current = true
+        seleccionar(svc)
+      } else if (recogidas.length > 0) {
+        // El servicio ya no está activo: limpiar y no insistir
+        restauradoRef.current = true
+        localStorage.removeItem('tecnico_recibo_sel')
+      }
+    } catch (_) { restauradoRef.current = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recogidas])
+
   async function seleccionar(svc) {
+    try { localStorage.setItem('tecnico_recibo_sel', svc.id) } catch (_) {}
     setServicioSel(svc)
     setLoading(true)
     try {
@@ -2496,33 +2530,48 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1))
       : 0
   )
+  // Estados para FACTURACION_MENSUAL — permiten corregir monto/% cuando comision_aliado=0 en DB
+  const [comisionManual,    setComisionManual]    = useState(comisionGuardada)
+  const [comisionManualPct, setComisionManualPct] = useState(
+    precioOriginal > 0 ? Math.round(comisionGuardada / precioOriginal * 100) : 0
+  )
   useEffect(() => {
-    if (!comisionFueDescontada || !svcData.plan_id || comisionGuardada <= 0) return
-    db.from('config_comisiones')
-      .select('porcentaje, rango_min, rango_max')
-      .eq('plan_id', svcData.plan_id)
-      .eq('es_vip', aliado?.vip ?? false)
-      .then(({ data: rows }) => {
-        if (!rows?.length) return
-        // Elegir la fila cuyo porcentaje al aplicarlo da el monto más cercano al guardado
-        const best = rows.reduce((acc, r) => {
-          const base = precioOriginal > 0 ? precioOriginal : 1
-          const diffAcc = Math.abs(base * parseFloat(acc.porcentaje) / 100 - comisionGuardada)
-          const diffR   = Math.abs(base * parseFloat(r.porcentaje)   / 100 - comisionGuardada)
-          return diffR < diffAcc ? r : acc
+    if (!svcData.plan_id) return
+    if (comisionFueDescontada) {
+      // DESCUENTO_INMEDIATO: consultar config para % exacto sin distorsión por recargos
+      if (comisionGuardada <= 0) return
+      db.from('config_comisiones')
+        .select('porcentaje, rango_min, rango_max')
+        .eq('plan_id', svcData.plan_id)
+        .eq('es_vip', aliado?.vip ?? false)
+        .then(({ data: rows }) => {
+          if (!rows?.length) return
+          const best = rows.reduce((acc, r) => {
+            const base = precioOriginal > 0 ? precioOriginal : 1
+            const diffAcc = Math.abs(base * parseFloat(acc.porcentaje) / 100 - comisionGuardada)
+            const diffR   = Math.abs(base * parseFloat(r.porcentaje)   / 100 - comisionGuardada)
+            return diffR < diffAcc ? r : acc
+          })
+          setComisionPct(parseFloat(best.porcentaje))
         })
-        setComisionPct(parseFloat(best.porcentaje))
-      })
+    } else if (aliado?.vip) {
+      // FACTURACION_MENSUAL + VIP: tasas fijas por tipo de proceso (igual que Registro.jsx)
+      const tipo = plan?.tipo_proceso || ''
+      let pct = 32 // CREMACION_GRUPAL
+      if (tipo === 'COMPOSTAJE_GRUPAL') pct = 10
+      else if (tipo === 'CREMACION_INDIVIDUAL' || tipo === 'COMPOSTAJE_INDIVIDUAL') pct = 27
+      setComisionManualPct(pct)
+      if (comisionGuardada <= 0) {
+        // comision_aliado=0 en DB (servicio previo al fix) — calcularlo para mostrar y corregir al guardar
+        setComisionManual(Math.round(precioOriginal * pct / 100))
+      }
+    }
   }, [])
   const comisionMonto = comisionFueDescontada ? Math.round(precioOriginal * comisionPct / 100) : 0
   // Solo se deduce en recibo cuando la comisión fue aplicada inmediatamente
   const valorVet = comisionFueDescontada
     ? Math.max(0, precioOriginal - comisionMonto)
     : precioOriginal
-
-  // Para el flujo !comisionFueDescontada (solicitud pública), usa directamente el valor de DB
-  const comisionManual    = comisionGuardada
-  const comisionManualPct = precioOriginal > 0 ? Math.round(comisionManual / precioOriginal * 100) : 0
 
   const [tipoFijado, setTipoFijado]   = useState(false)
 
@@ -2634,10 +2683,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         })
       } else if (esFacturacionMensual) {
         // No se registra cobro ahora — dejar estado_pago como PENDIENTE
+        // Si comision_aliado=0 en DB (servicio registrado antes del fix VIP) — corregirlo ahora
+        if (comisionGuardada <= 0 && comisionManual > 0) {
+          await db.from('servicios').update({ comision_aliado: comisionManual }).eq('id', servicioSel.id)
+        }
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
-          descripcion:    `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionGuardada)} pendiente de facturación mensual. No. ${form.numero_recibo}.`,
+          descripcion:    `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`,
           registrado_por: tecnico?.id || null,
         })
       } else if (!pagoRegistrado && totalMedios > 0) {
@@ -2819,9 +2872,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
 
           if (comisionPDF > 0) {
-            const pctInfo = precioOriginal > 0 ? Math.round(comisionPDF / precioOriginal * 100) : 0
             pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(150, 80, 0)
-            t(`Comisión ${pctInfo}% (${fmt(comisionPDF)}) — se gestiona por separado`, M + 3, y + lineH * 2)
+            t(`Comisión ${comisionManualPct}% (${fmt(comisionPDF)}) — se gestiona por separado`, M + 3, y + lineH * 2)
           }
 
           pdf.setFillColor(254, 240, 138); pdf.rect(M, y + lineH * rows + 1, CW, lineH + 3, 'F')
@@ -2834,8 +2886,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         // Recibo cliente: valor del servicio + nota de comisión si viene de solicitud con aliado
         drawBox('Valor del servicio', valorMostrar, M, y)
         y += 18
-        if (comisionGuardada > 0 && !comisionFueDescontada && aliado) {
-          const pctCom = precioOriginal > 0 ? Math.round(comisionGuardada / precioOriginal * 100) : 0
+        if (comisionManual > 0 && !comisionFueDescontada && aliado) {
           const modCom = aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual'
                        : aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'
                        : 'gestion separada'
@@ -2844,7 +2895,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(146, 64, 14)
           t(`Comision aliado: ${aliado.nombre}`, M + 2, y + 3.5)
           pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7)
-          t(`${fmt(comisionGuardada)}${pctCom > 0 ? ` (${pctCom}%)` : ''} — ${modCom}`, M + 2, y + 7)
+          t(`${fmt(comisionManual)}${comisionManualPct > 0 ? ` (${comisionManualPct}%)` : ''} — ${modCom}`, M + 2, y + 7)
           y += 12
         }
       }
@@ -2968,7 +3019,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
         ] : [
           `💵 Valor del servicio: ${fmt(precioOriginal)}`,
-          ...(comisionGuardada > 0 ? [`ℹ️ Comisión ${Math.round(comisionGuardada/precioOriginal*100)}% (${fmt(comisionGuardada)}) — se gestiona por separado`] : []),
+          ...(comisionManual > 0 ? [`ℹ️ Comisión ${comisionManualPct}% (${fmt(comisionManual)}) — se gestiona por separado`] : []),
         ]),
         `✅ *Total a cobrar: ${fmt(valorVet)}*`,
         ``,
@@ -3188,14 +3239,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
               <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(form.valor_servicio)}</div>
             </div>
             {/* Nota de comisión — solo visible cuando el servicio viene de solicitud de cliente con aliado */}
-            {comisionGuardada > 0 && !comisionFueDescontada && aliado && (
+            {comisionManual > 0 && !comisionFueDescontada && aliado && (
               <div style={{ marginTop: '6px', padding: '6px 10px', borderRadius: '8px', background: '#FFF7ED', border: '1px solid #FED7AA' }}>
                 <div style={{ fontSize: '9px', fontWeight: '700', color: '#92400E', marginBottom: '1px' }}>
                   Comision aliado registrada — {aliado.nombre}
                 </div>
                 <div style={{ fontSize: '9px', color: '#B45309' }}>
-                  {fmt(comisionGuardada)}
-                  {precioOriginal > 0 ? ` (${Math.round(comisionGuardada / precioOriginal * 100)}%)` : ''}
+                  {fmt(comisionManual)}
+                  {comisionManualPct > 0 ? ` (${comisionManualPct}%)` : ''}
                   {' — '}
                   {aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' :
                    aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'  : 'gestion separada'}
