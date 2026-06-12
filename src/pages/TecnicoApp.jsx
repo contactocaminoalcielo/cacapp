@@ -1511,6 +1511,40 @@ export default function TecnicoApp() {
       localStorage.removeItem(PICKER_FLAG)
     } catch (_) {}
   }, [])
+
+  // Auto-test de almacenamiento: en teléfonos llenos Chrome rechaza escrituras
+  // a localStorage/IndexedDB EN SILENCIO — toda la persistencia de Orbit
+  // (borradores, fotos pendientes, pestaña, detector) muere sin síntoma. Si
+  // pasa, mostrarlo en pantalla con los MB libres del sitio.
+  const [storageRoto, setStorageRoto] = useState(null)
+  useEffect(() => {
+    ;(async () => {
+      let detalle = ''
+      try {
+        localStorage.setItem('orbit_storage_test', '1')
+        const ok = localStorage.getItem('orbit_storage_test') === '1'
+        localStorage.removeItem('orbit_storage_test')
+        if (!ok) detalle = 'localStorage no escribe'
+      } catch (_) { detalle = 'localStorage bloqueado' }
+      if (!detalle) {
+        try {
+          await stashPut('storage_test', new Blob(['x']))
+          const r = await stashGetByPrefix('storage_test')
+          await stashDelete('storage_test')
+          if (!r.length) detalle = 'IndexedDB no escribe'
+        } catch (_) { detalle = 'IndexedDB bloqueado' }
+      }
+      let libresMB = null
+      if (navigator.storage?.estimate) {
+        try {
+          const { quota = 0, usage = 0 } = await navigator.storage.estimate()
+          libresMB = Math.round((quota - usage) / 1048576)
+        } catch (_) {}
+      }
+      if (!detalle && libresMB !== null && libresMB < 50) detalle = 'queda muy poco espacio'
+      if (detalle) setStorageRoto(detalle + (libresMB !== null ? ` · libres ${libresMB} MB` : ''))
+    })()
+  }, [])
   const [reporteHoy,     setReporteHoy]     = useState(null)
   const [neverasActivas, setNeverasActivas] = useState([])
   const [misCF,          setMisCF]          = useState([])
@@ -1907,6 +1941,21 @@ export default function TecnicoApp() {
           <div>
             <p className="text-sm font-semibold" style={{ color: '#991B1B' }}>Error al cargar</p>
             <p className="text-xs mt-0.5" style={{ color: '#B91C1C' }}>{queryErr}</p>
+          </div>
+        </div>
+      )}
+
+      {storageRoto && (
+        <div className="mx-4 mt-3 flex items-start gap-2.5 px-4 py-3 rounded-xl"
+          style={{ background: '#FEE2E2', border: '1px solid #FECACA' }}>
+          <AlertCircle size={15} className="flex-shrink-0 mt-0.5" style={{ color: '#DC2626' }} />
+          <div className="flex-1">
+            <p className="text-sm font-semibold" style={{ color: '#991B1B' }}>Almacenamiento del teléfono casi lleno</p>
+            <p className="text-xs mt-0.5" style={{ color: '#B91C1C' }}>
+              Orbit no puede guardar datos en este teléfono ({storageRoto}). Por eso se
+              pierden fotos y borradores al reiniciarse. <b>Libera espacio en el teléfono</b>
+              (borra videos/apps que no uses) y vuelve a intentar.
+            </p>
           </div>
         </div>
       )}
