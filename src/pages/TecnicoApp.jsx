@@ -708,10 +708,6 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   const [valorCobrado, setValorCobrado] = useState('')
   const [completing, setCompleting]   = useState(false)
   const [actErr, setActErr]           = useState('')
-  const [reciboOpen, setReciboOpen]   = useState(false)
-  const [svcDataRecibo, setSvcDataRecibo] = useState(null)
-  const [reciboGuardado, setReciboGuardado] = useState(false)
-  const [loadingRecibo, setLoadingRecibo] = useState(false)
 
   const mascota  = svc.mascotas
   const especie  = mascota?.especies?.nombre || ''
@@ -726,38 +722,14 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
 
   const itemsReq = ['id_ok']
   const checklistListo = checked.includes('id_ok') && !!fotoUrl
-  const puedeCompletar = checklistListo && reciboGuardado
+  // El recibo ya NO bloquea la recogida: se gestiona aparte en el tab Recibos
+  const puedeCompletar = checklistListo
 
   function toggleCheck(id) {
     setChecked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
-  async function abrirRecibo() {
-    // Solo reusar caché si el recibo ya fue guardado (el pago quedó registrado en DB)
-    if (reciboGuardado && svcDataRecibo) { setReciboOpen(true); return }
-    // Sin guardar: siempre recarga desde DB (refleja cambios del coordinador como comision_aliado)
-    setLoadingRecibo(true)
-    setActErr('')
-    try {
-      const { data, error: dbErr } = await db.from('servicios')
-        .select(`id, plan_id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
-          mascotas:mascota_id(nombre, peso_kg, especie_id, sexo, especies(nombre), clientes:cliente_id(nombre,apellido,email,telefono,telefono2,whatsapp,direccion,ciudad)),
-          planes:plan_id(nombre,codigo,tipo_proceso), aliados:aliado_origen_id(nombre,vip,modalidad_comision,whatsapp,telefono,contacto_nombre)`)
-        .eq('id', svc.id).single()
-      if (dbErr) throw new Error(dbErr.message || 'Error al cargar servicio')
-      const { data: cfData } = await db.from('cuarto_frio').select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
-      setSvcDataRecibo({ ...data, peso_confirmado: cfData?.peso_kg || null })
-      setReciboOpen(true)
-    } catch (e) {
-      setActErr('No se pudo cargar el recibo: ' + (e.message || 'error de conexión'))
-    } finally { setLoadingRecibo(false) }
-  }
-
   async function completar() {
-    if (!reciboGuardado) {
-      setActErr('Debes generar y guardar el recibo antes de completar la recogida.')
-      return
-    }
     setCompleting(true); setActErr('')
     try { await onCompletar(svc, recogida?.id, 0) }
     catch (e) { setActErr(e.message || 'Error al completar') }
@@ -987,7 +959,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
         )}
 
         {/* ── FASE 2: EN CAMINO ── */}
-        {enCamino && !reciboOpen && (
+        {enCamino && (
           <div className="mt-2">
             <div className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 mb-4"
               style={{ background: '#DBEAFE' }}>
@@ -1009,28 +981,13 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
             />
             <Checklist svc={svc} fotoUrl={fotoUrl} checked={checked} onChange={toggleCheck} />
 
-            {/* Botón generar recibo — obligatorio */}
-            <div className="mb-4">
-              {reciboGuardado ? (
-                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
-                  style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
-                  <CheckCircle size={14} style={{ color: '#16A34A' }} />
-                  <span className="text-[12px] font-bold text-green-800 flex-1">Recibo guardado</span>
-                  <button onClick={abrirRecibo} className="text-[10px] font-bold text-green-700 underline">Ver</button>
-                </div>
-              ) : (
-                <button onClick={abrirRecibo} disabled={loadingRecibo}
-                  className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all active:scale-98 disabled:opacity-60"
-                  style={{ background: '#0B1D4F', color: '#fff' }}>
-                  <Receipt size={15} />
-                  {loadingRecibo ? 'Cargando…' : '📄 Generar recibo (requerido)'}
-                </button>
-              )}
-              {!reciboGuardado && (
-                <p className="text-[10px] text-amber-600 mt-1.5 text-center font-medium">
-                  ⚠️ Debes generar y guardar el recibo antes de completar la recogida
-                </p>
-              )}
+            {/* El recibo se genera después, en el tab Recibos — no bloquea la recogida */}
+            <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-4"
+              style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
+              <Receipt size={14} style={{ color: '#7C3AED', flexShrink: 0, marginTop: 1 }} />
+              <span className="text-[11px] font-medium" style={{ color: '#5B21B6' }}>
+                El recibo y el cobro se gestionan después desde el módulo <strong>Recibos</strong>.
+              </span>
             </div>
 
             {actErr && (
@@ -1045,25 +1002,8 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
               {completing ? 'Completando…'
                 : !fotoUrl ? 'Falta: foto de la mascota'
                 : !checked.includes('id_ok') ? 'Falta: verificar identidad'
-                : !reciboGuardado ? 'Falta: generar y guardar recibo'
                 : '✅ Completar recogida'}
             </button>
-          </div>
-        )}
-
-        {/* ── MODAL RECIBO dentro del flujo ── */}
-        {reciboOpen && svcDataRecibo && (
-          <div className="mt-2">
-            <ReciboErrorBoundary>
-              <ReciboForm
-                svcData={svcDataRecibo}
-                servicioSel={svc}
-                tecnico={tecnico}
-                yaGuardado={reciboGuardado}
-                onVolver={() => { setReciboOpen(false); if (!reciboGuardado) setSvcDataRecibo(null) }}
-                onGuardado={() => { setReciboGuardado(true); setReciboOpen(false) }}
-              />
-            </ReciboErrorBoundary>
           </div>
         )}
 
@@ -1549,7 +1489,6 @@ export default function TecnicoApp() {
   const [neverasActivas, setNeverasActivas] = useState([])
   const [misCF,          setMisCF]          = useState([])
   const [pendientesCF,   setPendientesCF]   = useState([])
-  const [reciboSvc,      setReciboSvc]      = useState(null)
 
   const cargar = useCallback(async (silent = false) => {
     if (!tecnico) return
@@ -1809,6 +1748,8 @@ export default function TecnicoApp() {
         hora_realizada:  now.toTimeString().slice(0, 5),
       }).eq('id', recogidaId)
     }
+    setNotif('✅ Servicio guardado correctamente. Ahora puedes generar el recibo desde el módulo Recibos.')
+    setTimeout(() => setNotif(null), 8000)
     await cargar()
   }
 
@@ -1901,7 +1842,7 @@ export default function TecnicoApp() {
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
-    { key: 'recibo',      label: 'Recibo',    Icon: CreditCard, count: 0,                    color: '#7C3AED' },
+    { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: 0,                    color: '#7C3AED' },
   ]
 
   return (
@@ -2065,10 +2006,7 @@ export default function TecnicoApp() {
             />
           </div>
         ) : tab === 'recibo' ? (
-          <ReciboTab
-            recogidas={[...recogidas, ...misCF]}
-            tecnico={tecnico}
-          />
+          <ReciboTab tecnico={tecnico} />
         ) : null}
       </div>
 
@@ -2441,44 +2379,128 @@ function SignaturePad({ onSigned, firmaDataUrl }) {
 }
 
 // ─── RECIBO TAB ────────────────────────────────────────────────────────────
-function ReciboTab({ recogidas, tecnico }) {
+// Estados de servicio donde la recogida ya quedó guardada (recogido o posterior)
+const ESTADOS_RECOGIDO = ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION', 'LISTO', 'EN_ENTREGA', 'ENTREGADO']
+
+// Deriva el estado del recibo de un servicio desde sus filas en recibos_tecnico.
+// La fuente de verdad es SIEMPRE la DB — nunca el estado en memoria de la recogida.
+function estadoReciboDe(recibos) {
+  if (!recibos || recibos.length === 0) return 'PENDIENTE_RECIBO'
+  const comprobantePendiente = recibos.some(r =>
+    (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(m =>
+      METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl
+    )
+  )
+  if (comprobantePendiente) return 'PENDIENTE_COMPROBANTE'
+  if (recibos.some(r => r.datos_form?.pago_pendiente)) return 'PAGO_PENDIENTE'
+  return 'COMPLETO'
+}
+
+const BADGE_RECIBO = {
+  PENDIENTE_RECIBO:      { bg: '#FEF3C7', color: '#92400E', label: 'Por generar recibo' },
+  PENDIENTE_COMPROBANTE: { bg: '#FFEDD5', color: '#9A3412', label: 'Comprobante pendiente' },
+  PAGO_PENDIENTE:        { bg: '#FEF9C3', color: '#854D0E', label: 'Pago pendiente' },
+  COMPLETO:              { bg: '#D1FAE5', color: '#065F46', label: 'Recibo completo' },
+}
+
+function CardServicioRecibo({ item, onSeleccionar, disabled }) {
+  const { svc, estadoRecibo } = item
+  const m     = svc.mascotas
+  const rec   = svc.recogidas?.[0]
+  const badge = BADGE_RECIBO[estadoRecibo]
+  const saldo = Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0))
+  return (
+    <button onClick={() => onSeleccionar(item)} disabled={disabled}
+      className="w-full flex items-center gap-3 bg-white rounded-2xl p-4 border border-gray-100 text-left transition-all active:scale-98 shadow-sm disabled:opacity-60">
+      <span style={{ fontSize: 28 }}>{petEmoji(m?.especies?.nombre)}</span>
+      <div className="flex-1 min-w-0">
+        <div className="font-bold text-gray-900 leading-tight">{m?.nombre || '—'}</div>
+        <div className="text-[11px] text-gray-500 truncate">
+          {svc.planes?.nombre ? `${svc.planes.nombre} · ` : ''}{m?.clientes?.nombre} {m?.clientes?.apellido}
+        </div>
+        {rec?.fecha_realizada && (
+          <div className="text-[10px] text-gray-400 mt-0.5">
+            🚐 Recogido: {rec.fecha_realizada}{rec.hora_realizada ? ` · ${rec.hora_realizada}` : ''}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+            style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
+          {svc.valor_total > 0 && (
+            <span className="text-[10px] font-semibold text-gray-500">
+              {saldo > 0 ? `Por cobrar: ${fmt(saldo)}` : `Cobrado: ${fmt(svc.valor_total)}`}
+            </span>
+          )}
+        </div>
+      </div>
+      <span className="text-xs font-semibold flex-shrink-0 text-[#7C3AED]">
+        {estadoRecibo === 'PENDIENTE_RECIBO' ? 'Generar →' : 'Abrir →'}
+      </span>
+    </button>
+  )
+}
+
+function ReciboTab({ tecnico }) {
+  // El módulo Recibos es independiente del flujo de recogida: consulta la DB
+  // directamente (servicios ya recogidos del técnico + sus recibos guardados)
+  const [items, setItems]             = useState([])
+  const [cargando, setCargando]       = useState(true)
+  const [listErr, setListErr]         = useState('')
   const [servicioSel, setServicioSel] = useState(null)
   const [svcData,     setSvcData]     = useState(null)
+  const [reciboExistente, setReciboExistente] = useState(null)
   const [loading,     setLoading]     = useState(false)
   const restauradoRef                 = useRef(false)
 
-  // Combinar servicios para mostrar: recogidas en camino/cuarto frío + ya en CF
-  const opciones = recogidas.filter(s => ['EN_RECOGIDA','EN_CUARTO_FRIO','INGRESADO'].includes(s.estado))
-
-  // Si la PWA se reinició con un recibo abierto, volver a abrirlo solo:
-  // junto con el draft (datos) y el stash (comprobante), el técnico retoma
-  // exactamente donde iba sin navegar de nuevo.
-  useEffect(() => {
-    if (restauradoRef.current || servicioSel) return
+  const cargarLista = useCallback(async () => {
+    if (!tecnico?.id) return
+    setCargando(true); setListErr('')
     try {
-      const id = localStorage.getItem('tecnico_recibo_sel')
-      if (!id) { restauradoRef.current = true; return }
-      const svc = opciones.find(s => s.id === id)
-      if (svc) {
-        restauradoRef.current = true
-        seleccionar(svc)
-      } else if (recogidas.length > 0) {
-        // El servicio ya no está activo: limpiar y no insistir
-        restauradoRef.current = true
-        localStorage.removeItem('tecnico_recibo_sel')
+      const { data: svcs, error } = await db.from('servicios')
+        .select(`
+          id, estado, estado_pago, valor_total, valor_pagado, fecha_ingreso,
+          mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
+          planes:plan_id ( nombre ),
+          recogidas ( fecha_realizada, hora_realizada )
+        `)
+        .eq('tecnico_id', tecnico.id)
+        .in('estado', ESTADOS_RECOGIDO)
+        .order('fecha_ingreso', { ascending: false })
+        .limit(60)
+      if (error) throw error
+      const ids = (svcs || []).map(s => s.id)
+      const porSvc = {}
+      if (ids.length) {
+        // Query separado + merge client-side (el join inverso falla en silencio)
+        const { data: recs } = await db.from('recibos_tecnico')
+          .select('id, servicio_id, tipo, numero_recibo, valor_cobrado, medios_pago, datos_form, created_at')
+          .in('servicio_id', ids)
+          .order('created_at', { ascending: true })
+        ;(recs || []).forEach(r => {
+          (porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
+        })
       }
-    } catch (_) { restauradoRef.current = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recogidas])
+      setItems((svcs || []).map(svc => ({
+        svc,
+        recibos: porSvc[svc.id] || [],
+        estadoRecibo: estadoReciboDe(porSvc[svc.id]),
+      })))
+    } catch (e) {
+      setListErr(e.message || 'Error al cargar la lista de recibos')
+    } finally { setCargando(false) }
+  }, [tecnico?.id])
 
-  async function seleccionar(svc) {
+  useEffect(() => { cargarLista() }, [cargarLista])
+
+  async function seleccionar(item) {
+    const svc = item.svc
     try { localStorage.setItem('tecnico_recibo_sel', svc.id) } catch (_) {}
     setServicioSel(svc)
     setLoading(true)
     try {
-      const { data } = await db.from('servicios')
+      const { data, error } = await db.from('servicios')
         .select(`
-          id, plan_id, valor_total, valor_pagado, tipo_acompanamiento,
+          id, plan_id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
           mascotas:mascota_id (
             nombre, peso_kg, especie_id, sexo,
             especies(nombre),
@@ -2489,64 +2511,132 @@ function ReciboTab({ recogidas, tecnico }) {
         `)
         .eq('id', svc.id)
         .single()
+      if (error) throw new Error(error.message || 'Error al cargar servicio')
       const { data: cf } = await db.from('cuarto_frio')
         .select('peso_kg').eq('servicio_id', svc.id).maybeSingle()
+      // Reabrir el recibo con comprobante pendiente si lo hay; si no, el último guardado
+      const conPendiente = item.recibos.filter(r =>
+        (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(m =>
+          METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl))
+      setReciboExistente(conPendiente[conPendiente.length - 1] || item.recibos[item.recibos.length - 1] || null)
       setSvcData({ ...data, peso_confirmado: cf?.peso_kg || null })
-    } catch { setSvcData(null) }
-    finally { setLoading(false) }
+    } catch (e) {
+      setServicioSel(null); setSvcData(null)
+      setListErr('No se pudo cargar el servicio: ' + (e.message || 'error de conexión'))
+    } finally { setLoading(false) }
   }
 
+  function volver() {
+    try { localStorage.removeItem('tecnico_recibo_sel') } catch (_) {}
+    setServicioSel(null); setSvcData(null); setReciboExistente(null)
+    cargarLista()
+  }
+
+  // Si la PWA se reinició con un recibo abierto, volver a abrirlo solo:
+  // junto con el draft (datos) y el stash (comprobante), el técnico retoma
+  // exactamente donde iba sin navegar de nuevo.
+  useEffect(() => {
+    if (restauradoRef.current || servicioSel || cargando) return
+    restauradoRef.current = true
+    try {
+      const id = localStorage.getItem('tecnico_recibo_sel')
+      if (!id) return
+      const item = items.find(i => i.svc.id === id)
+      if (item) seleccionar(item)
+      else localStorage.removeItem('tecnico_recibo_sel')
+    } catch (_) {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, cargando])
+
   if (!servicioSel || !svcData) {
+    const pendientes  = items.filter(i => i.estadoRecibo === 'PENDIENTE_RECIBO')
+    const sinComprob  = items.filter(i => i.estadoRecibo === 'PENDIENTE_COMPROBANTE')
+    const resto       = items.filter(i => ['PAGO_PENDIENTE', 'COMPLETO'].includes(i.estadoRecibo)).slice(0, 10)
     return (
       <div>
-        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-3">
-          📄 Selecciona un servicio para generar el recibo
-        </div>
-        {opciones.length === 0 ? (
-          <EmptyState icon="📄" texto="Sin servicios activos" sub="Los servicios asignados aparecerán aquí." />
-        ) : (
-          <div className="space-y-2">
-            {opciones.map(svc => {
-              const m = svc.mascotas
-              return (
-                <button key={svc.id}
-                  onClick={() => seleccionar(svc)}
-                  disabled={loading}
-                  className="w-full flex items-center gap-3 bg-white rounded-2xl p-4 border border-gray-100 text-left transition-all active:scale-98 shadow-sm">
-                  <span style={{ fontSize: 28 }}>{petEmoji(m?.especies?.nombre)}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-gray-900">{m?.nombre || '—'}</div>
-                    <div className="text-[11px] text-gray-500">{m?.clientes?.nombre} {m?.clientes?.apellido}</div>
-                  </div>
-                  <span className="text-xs font-semibold text-[#7C3AED]">Generar →</span>
-                </button>
-              )
-            })}
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+            📄 Recibos de tus servicios recogidos
           </div>
+          <button onClick={cargarLista} disabled={cargando}
+            className="text-[11px] font-bold px-2.5 py-1 rounded-lg disabled:opacity-50"
+            style={{ background: '#F3E8FF', color: '#7C3AED' }}>
+            {cargando ? 'Cargando…' : '↻ Actualizar'}
+          </button>
+        </div>
+
+        {listErr && (
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
+            style={{ background: '#FEE2E2', color: '#991B1B' }}>
+            <AlertCircle size={13} /> {listErr}
+          </div>
+        )}
+
+        {cargando && items.length === 0 ? (
+          <div className="flex justify-center py-10"><div className="spinner" /></div>
+        ) : items.length === 0 ? (
+          <EmptyState icon="📄" texto="Sin servicios recogidos"
+            sub="Cuando completes una recogida, el servicio aparecerá aquí para generar su recibo." />
+        ) : (
+          <>
+            {sinComprob.length > 0 && (
+              <>
+                <SeccionHeader color="#EA580C" emoji="⏳" titulo="Comprobante pendiente" count={sinComprob.length} />
+                <div className="space-y-2 mb-2">
+                  {sinComprob.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
+                </div>
+              </>
+            )}
+            {pendientes.length > 0 && (
+              <>
+                <SeccionHeader color="#D97706" emoji="📄" titulo="Por generar recibo" count={pendientes.length} />
+                <div className="space-y-2 mb-2">
+                  {pendientes.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
+                </div>
+              </>
+            )}
+            {pendientes.length === 0 && sinComprob.length === 0 && (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-3"
+                style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
+                <CheckCircle size={15} style={{ color: '#16A34A' }} />
+                <span className="text-[12px] font-bold text-green-800">Al día — sin recibos pendientes</span>
+              </div>
+            )}
+            {resto.length > 0 && (
+              <>
+                <SeccionHeader color="#16A34A" emoji="✅" titulo="Recientes" count={resto.length} />
+                <div className="space-y-2">
+                  {resto.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
     )
   }
 
   return (
-    <ReciboForm
-      svcData={svcData}
-      servicioSel={servicioSel}
-      tecnico={tecnico}
-      onVolver={() => {
-        try { localStorage.removeItem('tecnico_recibo_sel') } catch (_) {}
-        setServicioSel(null); setSvcData(null)
-      }}
-      onGuardado={() => {}}
-    />
+    <ReciboErrorBoundary>
+      <ReciboForm
+        svcData={svcData}
+        servicioSel={servicioSel}
+        tecnico={tecnico}
+        reciboExistente={reciboExistente}
+        onVolver={volver}
+        onGuardado={() => {}}
+      />
+    </ReciboErrorBoundary>
   )
 }
 
 // ─── MEDIOS DE PAGO DISPONIBLES ────────────────────────────────────────────
 const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
+// Métodos que requieren comprobante/referencia
+const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
 
 // ─── RECIBO FORM ────────────────────────────────────────────────────────────
-function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolver, onGuardado }) {
+function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onVolver, onGuardado }) {
   const mascota = svcData.mascotas
   const cliente = mascota?.clientes
   const plan    = svcData.planes
@@ -2577,37 +2667,49 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
   // ── Estado: declarados ANTES de useEffects para evitar TDZ en sus dependency arrays ──
   const montoClienteDefault = comisionFueDescontada ? precioOriginal : saldoPendiente
-  const [tipoRecibo, setTipoRecibo]   = useState('CLIENTE')
-  const [form, setForm] = useState({
-    fecha:              fechaHoy,
-    hora:               horaActual,
-    numero_recibo:      numeroRecibo,
-    mascota_nombre:     mascota?.nombre || '',
-    peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
-    especie:            mascota?.especies?.nombre || '',
-    veterinaria:        aliado?.nombre || '',
-    propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
-    email:              cliente?.email || '',
-    telefono:           cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
-    casa:               servicioSel.direccion_recogida || '',
-    servicio:           plan?.nombre || '',
-    valor_servicio:     precioOriginal,
-    total_recibido:     saldoPendiente,
-    toma_huella:        false,
-    toma_mechon:        false,
-    entrega_rec_basicos: false,
-    nombre_recibe:      '',
-    confirmacion_foto:  false,
-    observaciones:      '',
+  const [tipoRecibo, setTipoRecibo]   = useState(reciboExistente?.tipo || 'CLIENTE')
+  const [form, setForm] = useState(() => {
+    const base = {
+      fecha:              fechaHoy,
+      hora:               horaActual,
+      numero_recibo:      numeroRecibo,
+      mascota_nombre:     mascota?.nombre || '',
+      peso:               svcData.peso_confirmado || mascota?.peso_kg || '',
+      especie:            mascota?.especies?.nombre || '',
+      veterinaria:        aliado?.nombre || '',
+      propietario:        `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim(),
+      email:              cliente?.email || '',
+      telefono:           cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
+      casa:               servicioSel.direccion_recogida || '',
+      servicio:           plan?.nombre || '',
+      valor_servicio:     precioOriginal,
+      total_recibido:     saldoPendiente,
+      toma_huella:        false,
+      toma_mechon:        false,
+      entrega_rec_basicos: false,
+      nombre_recibe:      '',
+      confirmacion_foto:  false,
+      observaciones:      '',
+    }
+    // Recibo ya guardado en DB (reabierto desde Recibos): restaurar sus datos
+    if (reciboExistente?.datos_form) {
+      const { pago_pendiente: _pp, ...datos } = reciboExistente.datos_form
+      return { ...base, ...datos }
+    }
+    return base
   })
-  const [mediosPago, setMediosPago] = useState([{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
-  const [guardado, setGuardado]         = useState(yaGuardado)
-  const [pagoPendiente, setPagoPendiente] = useState(false)
+  const [mediosPago, setMediosPago] = useState(() =>
+    Array.isArray(reciboExistente?.medios_pago) && reciboExistente.medios_pago.length > 0
+      ? reciboExistente.medios_pago.map(m => ({ referencia: '', comprobanteUrl: '', ...m, subiendoComprobante: false }))
+      : [{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }]
+  )
+  const [guardado, setGuardado]         = useState(!!reciboExistente)
+  const [pagoPendiente, setPagoPendiente] = useState(reciboExistente?.datos_form?.pago_pendiente || false)
 
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
   const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
   useEffect(() => {
-    if (yaGuardado) return
+    if (reciboExistente) return
     try {
       const raw = localStorage.getItem(DRAFT_KEY)
       if (!raw) return
@@ -2627,10 +2729,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
   }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente])
 
   // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
-  // El archivo quedó en IndexedDB (stashPut antes de comprimir); aquí se
-  // retoma la subida sin que el técnico tenga que volver a buscarlo.
+  // El archivo quedó en IndexedDB (stashPut antes de subir); aquí se retoma
+  // la subida sin que el técnico tenga que volver a buscarlo. Aplica también
+  // a recibos ya guardados: el comprobante pendiente se completa sobre la fila.
   useEffect(() => {
-    if (yaGuardado) return
     ;(async () => {
       const pendientes = await stashGetByPrefix(`recibo_${servicioSel.id}_`)
       for (const p of pendientes) {
@@ -2695,15 +2797,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     ? Math.max(0, precioOriginal - comisionMonto)
     : precioOriginal
 
-  const [tipoFijado, setTipoFijado]   = useState(false)
+  const [tipoFijado, setTipoFijado]   = useState(!!reciboExistente)
 
   const totalMedios = mediosPago.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0)
 
   const [firma, setFirma]           = useState(null)
   const [generando, setGenerando]   = useState(false)
   const [guardando, setGuardando]   = useState(false)
-  const [pagoRegistrado,  setPagoRegistrado]  = useState(false)
-  const [reciboId,        setReciboId]        = useState(null)
+  // Con recibo existente, el pago ya quedó registrado al guardarlo la primera vez
+  const [pagoRegistrado,  setPagoRegistrado]  = useState(!!reciboExistente)
+  const [reciboId,        setReciboId]        = useState(reciboExistente?.id || null)
   const [err, setErr]               = useState('')
 
   const uploadRefs = useRef({})
@@ -2755,9 +2858,23 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       updateMedio(idx, 'comprobanteUrl', publicUrl)
+      // Persistir la URL en la fila del recibo DE INMEDIATO: si la PWA muere
+      // después de subir, el comprobante ya quedó en DB (no solo en useState).
+      // Read-modify-write para no pisar otros medios de la fila.
+      if (reciboId) {
+        const { data: row, error: rowErr } = await db.from('recibos_tecnico')
+          .select('medios_pago').eq('id', reciboId).single()
+        if (rowErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + rowErr.message)
+        const arr = Array.isArray(row?.medios_pago) ? [...row.medios_pago] : []
+        while (arr.length <= idx) arr.push({ metodo: 'TRANSFERENCIA', monto: '', referencia: '', comprobanteUrl: '' })
+        arr[idx] = { ...arr[idx], comprobanteUrl: publicUrl }
+        const { error: updErr } = await db.from('recibos_tecnico')
+          .update({ medios_pago: arr }).eq('id', reciboId)
+        if (updErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + updErr.message)
+      }
       await stashDelete(stashKey)
     } catch (e) {
-      setErr('Error al subir comprobante: ' + (e.message || e) + '. El archivo quedó guardado en el teléfono — reintenta desde "Subir comprobante".')
+      setErr('Comprobante pendiente. Puedes reintentarlo. (' + (e.message || e) + ' — el archivo quedó guardado en el teléfono)')
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
       // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
@@ -2766,10 +2883,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     }
   }
 
-  // Métodos que requieren comprobante/referencia
-  const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
-
   const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
+
+  // Medios digitales con cobro pero sin comprobante adjunto todavía
+  const comprobantesPendientes = mediosPago.filter(m =>
+    METODOS_CON_COMPROBANTE.includes(m.metodo) &&
+    parseFloat(m.monto) > 0 &&
+    !m.comprobanteUrl
+  )
 
   async function guardarRecibo() {
     // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
@@ -2777,16 +2898,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       setErr('Registra al menos un medio de pago con monto.')
       return
     }
-    // Comprobante obligatorio para métodos digitales (solo si hay cobro)
-    const sinComprobante = mediosPago.filter(m =>
-      METODOS_CON_COMPROBANTE.includes(m.metodo) &&
-      parseFloat(m.monto) > 0 &&
-      !m.comprobanteUrl
-    )
-    if (!esFacturacionMensual && !pagoPendiente && sinComprobante.length > 0) {
-      setErr(`Falta adjuntar el comprobante de pago para: ${sinComprobante.map(m => m.metodo).join(', ')}.`)
-      return
-    }
+    // El comprobante NO bloquea la creación del recibo: si falta, el recibo
+    // se guarda igual y queda como "comprobante pendiente" para reintentar
+    const sinComprobante = comprobantesPendientes
     setGuardando(true); setErr('')
     try {
       const valorCobrado  = pagoPendiente ? 0 : (tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios)
@@ -2853,6 +2967,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           registrado_por: tecnico?.id || null,
         })
         setPagoRegistrado(true)
+      }
+
+      // Dejar rastro visible para el coordinador si quedó comprobante pendiente
+      if (!esFacturacionMensual && !pagoPendiente && sinComprobante.length > 0) {
+        await db.from('novedades_servicio').insert({
+          servicio_id:    servicioSel.id,
+          tipo_novedad:   'NOTA',
+          descripcion:    `Recibo ${form.numero_recibo} guardado con comprobante PENDIENTE (${sinComprobante.map(m => m.metodo).join(', ')}). El técnico puede reintentarlo desde el módulo Recibos.`,
+          registrado_por: tecnico?.id || null,
+        })
       }
 
       setGuardado(true)
@@ -3540,7 +3664,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
                     {/* Upload comprobante */}
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                      Comprobante de pago {!tieneComprobante && <span className="text-red-600 font-bold">(requerido ✱)</span>}
+                      Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#D97706' }}>(pendiente ⏳)</span>}
                     </div>
                     <input type="file" accept="image/*,application/pdf"
                       ref={el => uploadRefs.current[idx] = el}
@@ -3666,6 +3790,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
           </div>
         )}
 
+        {/* El recibo existe en DB aunque falte el comprobante — se puede reintentar */}
+        {guardado && !esFacturacionMensual && !pagoPendiente && comprobantesPendientes.length > 0 && (
+          <div className="flex items-start gap-2 px-4 py-3 rounded-2xl"
+            style={{ background: '#FFEDD5', border: '1.5px solid #FED7AA' }}>
+            <span className="text-base flex-shrink-0">⏳</span>
+            <div>
+              <p className="text-[12px] font-bold" style={{ color: '#9A3412' }}>Comprobante pendiente. Puedes reintentarlo.</p>
+              <p className="text-[11px] mt-0.5" style={{ color: '#C2410C' }}>
+                El recibo ya quedó guardado. Sube el comprobante de {comprobantesPendientes.map(m => m.metodo).join(', ')} arriba, ahora o más tarde desde el módulo Recibos.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Descargar PDF — solo el del tipo actual */}
         <button onClick={async () => { await descargarPDF(tipoRecibo) }} disabled={generando || !guardado}
           className="w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
@@ -3701,7 +3839,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
         {/* Volver sin cerrar — para cuando solo quieran guardar y volver después */}
         <button onClick={cerrar}
           className="w-full py-3 rounded-2xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors">
-          ← Volver a la recogida
+          ← Volver a la lista de recibos
         </button>
       </div>
     </div>
