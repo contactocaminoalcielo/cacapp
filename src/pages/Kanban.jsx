@@ -15,9 +15,15 @@ import {
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
+  Copy, Check,
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
+
+// ── Enlace público del formulario de solicitud ────────────────────────────────
+const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
+const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
 
 // ── Columnas por tablero ──────────────────────────────────────────────────────
 const COLS_COORDINACION = ['SOLICITUDES', 'INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
@@ -112,6 +118,63 @@ export default function Kanban() {
   // ── Estado botones Contactar / Notificar técnico ──
   const [contactarLoadingId,  setContactarLoadingId]  = useState(null)
   const [notifTecLoadingId,   setNotifTecLoadingId]   = useState(null)
+
+  // ── Enviar enlace de solicitud al cliente ─────────────────────────────────
+  const [modalEnlace,     setModalEnlace]     = useState(false)
+  const [enlaceNombre,    setEnlaceNombre]    = useState('')
+  const [enlaceTelefono,  setEnlaceTelefono]  = useState('')
+  const [enlaceLinea,     setEnlaceLinea]     = useState(LINEAS_WHATSAPP[0].numero)
+  const [enviandoEnlace,  setEnviandoEnlace]  = useState(false)
+  const [enlaceCopiado,   setEnlaceCopiado]   = useState(false)
+
+  function mensajeEnlaceSolicitud(nombre) {
+    const saludo = nombre.trim() ? `Hola ${nombre.trim()} 🌿` : 'Hola 🌿'
+    return `${saludo} Somos *Camino al Cielo*, servicios funerarios para mascotas.\n\n` +
+      `Para solicitar nuestro servicio, completa este formulario con los datos de tu mascota ` +
+      `y un miembro de nuestro equipo te contactará para coordinar todos los detalles:\n\n` +
+      `${LINK_SOLICITUD}\n\nQuedamos atentos a cualquier inquietud 💚`
+  }
+
+  function validarTelefonoEnlace(v) {
+    const val = (v || '').trim()
+    if (val.startsWith('+') || val.startsWith('00')) {
+      const digits = (val.startsWith('+') ? val.slice(1) : val.slice(2)).replace(/\D/g, '')
+      return digits.length >= 7 && digits.length <= 15
+    }
+    const digits = val.replace(/\D/g, '')
+    return digits.length === 10 && digits.startsWith('3')
+  }
+
+  async function enviarEnlaceSolicitud() {
+    if (!validarTelefonoEnlace(enlaceTelefono)) {
+      await showAlert('Ingresa un celular colombiano de 10 dígitos (3XX...) o internacional con +.', { title: 'Número inválido' })
+      return
+    }
+    setEnviandoEnlace(true)
+    try {
+      await enviarWhatsApp({
+        telefono:   enlaceTelefono,
+        nombre:     enlaceNombre.trim(),
+        mensaje:    mensajeEnlaceSolicitud(enlaceNombre),
+        fromNumber: enlaceLinea,
+      })
+      setModalEnlace(false)
+      setEnlaceNombre(''); setEnlaceTelefono('')
+      await showAlert('El cliente recibió el enlace del formulario de solicitud por WhatsApp.', { title: 'Enlace enviado ✅' })
+    } catch (e) {
+      await showAlert(`No se pudo enviar el WhatsApp: ${e.message || e}`, { title: 'Error al enviar' })
+    } finally {
+      setEnviandoEnlace(false)
+    }
+  }
+
+  async function copiarEnlaceSolicitud() {
+    try {
+      await navigator.clipboard.writeText(LINK_SOLICITUD)
+      setEnlaceCopiado(true)
+      setTimeout(() => setEnlaceCopiado(false), 2000)
+    } catch {}
+  }
 
   // ── Solicitudes de clientes ───────────────────────────────────────────────
   const [solicitudes,    setSolicitudes]    = useState([])
@@ -1322,6 +1385,12 @@ export default function Kanban() {
                       {/* ── Columna SOLICITUDES ── */}
                       {esSolicitudes && (
                         <div className="space-y-2">
+                          <button
+                            onClick={() => setModalEnlace(true)}
+                            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border-2 border-dashed transition-all hover:opacity-80"
+                            style={{ borderColor: '#C4A87A', color: '#9A7B4F', background: '#FFFDF7' }}>
+                            <Send size={12} /> Enviar enlace a cliente
+                          </button>
                           {solicitudes.length === 0 ? (
                             <div className="text-center py-8 text-[12px] text-gray-400">Sin solicitudes pendientes</div>
                           ) : solicitudes.map(s => {
@@ -2381,6 +2450,80 @@ export default function Kanban() {
         </Modal>
         )
       })()}
+
+      {/* ── Modal: enviar enlace de solicitud al cliente ──────────────────── */}
+      <Modal open={modalEnlace} onClose={() => !enviandoEnlace && setModalEnlace(false)}
+        title="Enviar enlace de solicitud al cliente"
+        maxWidth="max-w-md"
+        footer={
+          <div className="flex items-center justify-end w-full gap-2">
+            <button onClick={() => setModalEnlace(false)} disabled={enviandoEnlace}
+              className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all disabled:opacity-50">
+              Cancelar
+            </button>
+            <button onClick={enviarEnlaceSolicitud} disabled={enviandoEnlace}
+              className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg,#3D5A27,#263218)' }}>
+              {enviandoEnlace
+                ? <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Enviando...</>
+                : <><Send size={13} /> Enviar por WhatsApp</>}
+            </button>
+          </div>
+        }>
+        <div className="space-y-4">
+          <p className="text-[12px] text-gray-500 leading-relaxed">
+            El cliente recibirá un WhatsApp con el enlace al formulario público para
+            solicitar el servicio. Cuando lo complete, la solicitud aparecerá automáticamente
+            en esta columna.
+          </p>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-600 mb-1">Nombre del cliente <span className="font-normal text-gray-400">(opcional)</span></label>
+            <Input placeholder="María" value={enlaceNombre}
+              onChange={e => setEnlaceNombre(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-600 mb-1">WhatsApp del cliente *</label>
+            <Input placeholder="3001234567" inputMode="tel" maxLength={25} value={enlaceTelefono}
+              onChange={e => setEnlaceTelefono(e.target.value)} />
+            <p className="text-[11px] text-gray-400 mt-1">Colombia: 3XX XXX XXXX · Internacional: +1 555 1234</p>
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-600 mb-1.5">Enviar desde la línea</label>
+            <div className="flex gap-2">
+              {LINEAS_WHATSAPP.map(l => (
+                <button key={l.numero} type="button"
+                  onClick={() => setEnlaceLinea(l.numero)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-semibold border transition-all"
+                  style={{
+                    background:  enlaceLinea === l.numero ? '#16A34A' : 'white',
+                    color:       enlaceLinea === l.numero ? 'white'   : '#374151',
+                    borderColor: enlaceLinea === l.numero ? '#16A34A' : '#D1D5DB',
+                  }}>
+                  {enlaceLinea === l.numero && <Check size={12} />}
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Vista previa del mensaje */}
+          <div className="rounded-xl p-3.5" style={{ background: '#F0F7EB', border: '1px solid #D9E8CC' }}>
+            <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#3D5A27' }}>Vista previa del mensaje</p>
+            <p className="text-[12px] text-gray-700 whitespace-pre-line leading-relaxed">
+              {mensajeEnlaceSolicitud(enlaceNombre)}
+            </p>
+          </div>
+
+          {/* Copiar enlace manual */}
+          <button type="button" onClick={copiarEnlaceSolicitud}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
+            {enlaceCopiado ? <><Check size={12} className="text-green-600" /> Enlace copiado</> : <><Copy size={12} /> Copiar solo el enlace</>}
+          </button>
+        </div>
+      </Modal>
     </div>
     </>
   )
