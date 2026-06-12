@@ -5,7 +5,15 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 
+// Fecha/hora del build (Bogotá) — visible en el header de TecnicoApp para
+// verificar qué versión corre realmente un teléfono en campo
+const buildFecha = new Date().toLocaleString('es-CO', {
+  timeZone: 'America/Bogota', day: '2-digit', month: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+})
+
 export default defineConfig({
+  define: { __ORBIT_BUILD__: JSON.stringify(buildFecha) },
   plugins: [
     react(),
     tailwindcss(),

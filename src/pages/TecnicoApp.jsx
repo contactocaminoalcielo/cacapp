@@ -240,6 +240,14 @@ function conTimeout(promise, msg) {
   ])
 }
 
+// Detector de reinicio por galería: Android puede matar la PWA mientras el
+// picker está abierto (falta de RAM del teléfono — ningún código JS lo evita).
+// Se marca antes de abrir el picker y se limpia cuando el archivo llega; si al
+// montar la app la marca sigue ahí y es reciente, la app se reinició en medio.
+const PICKER_FLAG = 'orbit_picker_abierto'
+function marcarPickerAbierto()  { try { localStorage.setItem(PICKER_FLAG, String(Date.now())) } catch (_) {} }
+function limpiarPickerAbierto() { try { localStorage.removeItem(PICKER_FLAG) } catch (_) {} }
+
 // Validación de archivos a subir SIN decodificar la imagen (cero riesgo de RAM).
 // HEIC/HEIF se rechaza con mensaje claro: Chrome Android no lo decodifica y
 // el fallo sería silencioso.
@@ -323,6 +331,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
   }
 
   async function handleFile(e) {
+    limpiarPickerAbierto()
     const file = e.target.files?.[0]
     if (!file) return
     await subirFoto(file)
@@ -349,12 +358,12 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
                 <CheckCircle size={12} /> Foto guardada
               </span>
               <div className="flex gap-2">
-                <button onClick={() => cameraRef.current?.click()}
+                <button onClick={() => { marcarPickerAbierto(); cameraRef.current?.click() }}
                   className="text-white text-xs font-medium px-2 py-1 rounded-full"
                   style={{ background: 'rgba(255,255,255,0.25)' }}>
                   📷 Cámara
                 </button>
-                <button onClick={() => galeriaRef.current?.click()}
+                <button onClick={() => { marcarPickerAbierto(); galeriaRef.current?.click() }}
                   className="text-white text-xs font-medium px-2 py-1 rounded-full"
                   style={{ background: 'rgba(255,255,255,0.25)' }}>
                   🖼 Galería
@@ -373,13 +382,13 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
         <div>
           <p className="text-xs text-gray-500 mb-2 text-center">{label} · <span className="text-gray-400">{sublabel}</span></p>
           <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => cameraRef.current?.click()}
+            <button onClick={() => { marcarPickerAbierto(); cameraRef.current?.click() }}
               className="py-5 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 transition-all active:scale-95"
               style={{ borderColor: '#D1D5DB', background: '#FAFAFA' }}>
               <Camera size={28} className="text-gray-400" />
               <span className="text-sm font-semibold text-gray-600">Cámara</span>
             </button>
-            <button onClick={() => galeriaRef.current?.click()}
+            <button onClick={() => { marcarPickerAbierto(); galeriaRef.current?.click() }}
               className="py-5 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 transition-all active:scale-95"
               style={{ borderColor: '#D1D5DB', background: '#FAFAFA' }}>
               <span className="text-2xl">🖼</span>
@@ -1492,6 +1501,16 @@ export default function TecnicoApp() {
   const [queryErr, setQueryErr]   = useState('')
   const [notif, setNotif]         = useState(null)
   const prevCountRef               = useRef(null)
+  // Si la app se reinició con el picker de galería/cámara abierto (Android
+  // mata la PWA por RAM), avisar al técnico: la imagen NO llegó
+  const [avisoGaleria, setAvisoGaleria] = useState(false)
+  useEffect(() => {
+    try {
+      const ts = parseInt(localStorage.getItem(PICKER_FLAG) || '0', 10)
+      if (ts && Date.now() - ts < 3 * 60 * 1000) setAvisoGaleria(true)
+      localStorage.removeItem(PICKER_FLAG)
+    } catch (_) {}
+  }, [])
   const [reporteHoy,     setReporteHoy]     = useState(null)
   const [neverasActivas, setNeverasActivas] = useState([])
   const [misCF,          setMisCF]          = useState([])
@@ -1866,6 +1885,7 @@ export default function TecnicoApp() {
               <div className="text-white font-bold text-[15px] leading-tight">{tecnico.nombre} {tecnico.apellido}</div>
               <div className="text-[11px]" style={{ color: '#C4A87A' }}>
                 Técnico · Camino al Cielo{tecnico.tipo_vehiculo ? ` · ${tecnico.tipo_vehiculo}` : ''}
+                <span style={{ opacity: 0.55 }}> · v{typeof __ORBIT_BUILD__ !== 'undefined' ? __ORBIT_BUILD__ : 'dev'}</span>
               </div>
             </div>
           </div>
@@ -1888,6 +1908,23 @@ export default function TecnicoApp() {
             <p className="text-sm font-semibold" style={{ color: '#991B1B' }}>Error al cargar</p>
             <p className="text-xs mt-0.5" style={{ color: '#B91C1C' }}>{queryErr}</p>
           </div>
+        </div>
+      )}
+
+      {avisoGaleria && (
+        <div className="mx-4 mt-3 flex items-start gap-2.5 px-4 py-3 rounded-xl"
+          style={{ background: '#FEE2E2', border: '1px solid #FECACA' }}>
+          <AlertCircle size={15} className="flex-shrink-0 mt-0.5" style={{ color: '#DC2626' }} />
+          <div className="flex-1">
+            <p className="text-sm font-semibold" style={{ color: '#991B1B' }}>El teléfono reinició Orbit al abrir la galería</p>
+            <p className="text-xs mt-0.5" style={{ color: '#B91C1C' }}>
+              La imagen no alcanzó a llegar — vuelve a seleccionarla. Si pasa seguido:
+              cierra las demás apps abiertas y reintenta, o usa el botón <b>Cámara</b>.
+            </p>
+          </div>
+          <button onClick={() => setAvisoGaleria(false)} className="p-1" style={{ color: '#DC2626' }}>
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -3459,7 +3496,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                     <input type="file" accept="image/*,application/pdf"
                       ref={el => uploadRefs.current[idx] = el}
                       className="hidden"
-                      onChange={e => subirComprobante(idx, e.target.files?.[0])} />
+                      onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
 
                     {tieneComprobante ? (
                       /* Preview del comprobante (imagen o PDF) */
@@ -3482,7 +3519,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                             <Check size={12} /> Comprobante guardado
                           </span>
                           <button
-                            onClick={e => { e.stopPropagation(); e.preventDefault(); uploadRefs.current[idx]?.click() }}
+                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
                             className="text-white text-[10px] font-semibold px-2 py-1 rounded-full pointer-events-auto"
                             style={{ background: 'rgba(255,255,255,0.25)' }}>
                             Cambiar
@@ -3497,7 +3534,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                       </div>
                     ) : (
                       <button
-                        onClick={e => { e.stopPropagation(); e.preventDefault(); uploadRefs.current[idx]?.click() }}
+                        onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
                         className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
                         style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
                         <UploadIcon size={20} style={{ color: '#D97706' }} />
