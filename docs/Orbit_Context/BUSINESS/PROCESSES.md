@@ -116,3 +116,26 @@ Estados sugeridos:
 5. Clasificación VIP si supera umbral de política activa.
 6. Entrega de beneficios o materiales (registro pendiente en DB).
 7. Reporte de resultados.
+
+## 9. Cancelación de servicios (implementado 2026-06-12)
+Entrada: servicio en cualquier estado activo (no ENTREGADO ni CANCELADO).
+Responsables: solo COORDINADOR o ADMIN, desde el modal de detalle del Kanban.
+Salida: servicio en estado `CANCELADO` con trazabilidad completa, datos intactos.
+
+Flujo:
+1. Botón "Cancelar servicio" → modal con motivo obligatorio (Cliente canceló /
+   Servicio duplicado / Error en datos / No se pudo contactar / Cambio de decisión / Otro)
+   y observación opcional. Advertencia ámbar si el proceso ya inició (etapa > EN_RECOGIDA).
+2. Al confirmar: `servicios.estado='CANCELADO'` + `cancelado_en/por`, `motivo_cancelacion`,
+   `observacion_cancelacion`, `etapa_cancelacion` + novedad NOTA en historial +
+   notificación al técnico asignado si lo hay.
+3. Nada se borra: evidencias, recibos, novedades y datos quedan para auditoría.
+
+Reglas:
+- Cancelado sale solo de todas las listas operativas (técnicos, recibos, rutas,
+  Calendario, Finanzas, Reportes ya excluían CANCELADO).
+- TecnicoApp verifica contra DB antes de iniciar/completar recogida y antes de
+  guardar recibo (la UI del técnico puede estar desactualizada).
+- Reactivar un cancelado: solo ADMIN, vía "Reactivar a…" en el detalle.
+- Auditoría: Gestion (badge Cancelado), Presequiales (tab Cancelados), banner rojo
+  con motivo/fecha/usuario/etapa en el detalle del Kanban.

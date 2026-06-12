@@ -24,6 +24,16 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
 const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
 
+// ── Motivos de cancelación de servicio ───────────────────────────────────────
+const MOTIVOS_CANCELACION = [
+  'Cliente canceló',
+  'Servicio duplicado',
+  'Error en datos',
+  'No se pudo contactar',
+  'Cambio de decisión',
+  'Otro',
+]
+
 // ── Columnas por tablero ──────────────────────────────────────────────────────
 const COLS_COORDINACION = ['SOLICITUDES', 'INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
 const COLS_PRODUCCION   = ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION', 'LISTO', 'EN_ENTREGA', 'ENTREGADO']
@@ -213,6 +223,13 @@ export default function Kanban() {
   const [tecnicos, setTecnicos]           = useState([])
   const [mensajeroId, setMensajeroId]     = useState('')
   const [modalEntrega, setModalEntrega]   = useState(null) // servicioId para modal entrega
+
+  // ── Cancelación formal de servicio ──
+  const [modalCancelar,  setModalCancelar]  = useState(false)
+  const [motivoCancelar, setMotivoCancelar] = useState('')
+  const [obsCancelar,    setObsCancelar]    = useState('')
+  const [cancelando,     setCancelando]     = useState(false)
+  const [cancelInfo,     setCancelInfo]     = useState(null) // motivo/fecha/usuario de un servicio ya cancelado
   const [editTecnicoId, setEditTecnicoId] = useState('')
   const [editEstadoPago, setEditEstadoPago] = useState('')
   const [editNotas, setEditNotas]         = useState('')
@@ -679,6 +696,17 @@ export default function Kanban() {
     setEditNotas(s.notas || ''); setEditComisionAliado('')
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
     setAddRecId(''); setAddRecQty(1)
+    setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
+
+    // Si está cancelado, traer la trazabilidad en query aparte (defensivo: si
+    // las columnas de cancelación aún no existen en DB, el detalle normal no se rompe)
+    if (s.estado === 'CANCELADO') {
+      db.from('servicios')
+        .select('cancelado_en, motivo_cancelacion, observacion_cancelacion, etapa_cancelacion, cancelado_por_p:personal!cancelado_por(nombre, apellido)')
+        .eq('id', s.servicio_id).maybeSingle()
+        .then(({ data }) => { if (data) setCancelInfo(data) })
+        .catch(() => {})
+    }
 
     const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }] = await Promise.all([
       db.from('servicios')
@@ -912,6 +940,71 @@ export default function Kanban() {
     if (selected?.servicio_id === servicioId) setSelected(prev => ({ ...prev, estado: nuevoEstado }))
     const { error: err } = await db.from('servicios').update({ estado: nuevoEstado }).eq('id', servicioId)
     if (err) { await showAlert(parsearErrorDB(err), { title: 'Error' }); cargar() }
+  }
+
+  // Cancelación formal: transición de estado trazable — nunca borra datos,
+  // evidencias, recibos ni historial del servicio
+  async function cancelarServicio() {
+    if (!selected || cancelando) return
+    if (!motivoCancelar) {
+      await showAlert('Selecciona el motivo de la cancelación.', { title: 'Motivo requerido' })
+      return
+    }
+    setCancelando(true)
+    try {
+      const etapa  = selected.estado
+      const ahora  = new Date().toISOString()
+      const { error: err } = await db.from('servicios').update({
+        estado:                  'CANCELADO',
+        cancelado_en:            ahora,
+        cancelado_por:           personalData?.id || null,
+        motivo_cancelacion:      motivoCancelar,
+        observacion_cancelacion: obsCancelar.trim() || null,
+        etapa_cancelacion:       etapa,
+      }).eq('id', selected.servicio_id)
+      if (err) throw err
+
+      // Trazabilidad también en el historial de novedades (visible en este modal)
+      await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `🚫 SERVICIO CANCELADO — Motivo: ${motivoCancelar}.` +
+          (obsCancelar.trim() ? ` Observación: ${obsCancelar.trim()}.` : '') +
+          ` Etapa al cancelar: ${ESTADO_LABEL[etapa] || etapa}.`,
+        registrado_por: personalData?.id || null,
+      })
+
+      // Avisar al técnico asignado para que no salga a ruta
+      if (selected.tecnico_id) {
+        try {
+          await crearNotificacion({
+            para_personal_id: selected.tecnico_id,
+            de_personal_id:   personalData?.id,
+            tipo:             'SERVICIO_CANCELADO',
+            titulo:           `Servicio cancelado — ${selected.mascota}`,
+            mensaje:          `El servicio de ${selected.mascota} fue cancelado. Motivo: ${motivoCancelar}. No realices la recogida.`,
+            servicio_id:      selected.servicio_id,
+            datos:            { motivo: motivoCancelar },
+          })
+        } catch (_) { /* la notificación no debe bloquear la cancelación */ }
+      }
+
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, estado: 'CANCELADO' } : s))
+      setSelected(prev => ({ ...prev, estado: 'CANCELADO' }))
+      setCancelInfo({
+        cancelado_en:            ahora,
+        motivo_cancelacion:      motivoCancelar,
+        observacion_cancelacion: obsCancelar.trim() || null,
+        etapa_cancelacion:       etapa,
+        cancelado_por_p:         { nombre: personalData?.nombre || '', apellido: personalData?.apellido || '' },
+      })
+      setModalCancelar(false)
+      await showAlert('Servicio cancelado correctamente.', { title: 'Servicio cancelado' })
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al cancelar', variant: 'danger' })
+    } finally {
+      setCancelando(false)
+    }
   }
 
   async function confirmarEntrega() {
@@ -1683,6 +1776,30 @@ export default function Kanban() {
               )}
             </div>
 
+            {/* ── Banner servicio cancelado: trazabilidad completa ── */}
+            {selected.estado === 'CANCELADO' && (
+              <div className="rounded-xl px-4 py-3 space-y-1"
+                style={{ background: '#FEE2E2', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-[13px] font-bold" style={{ color: '#991B1B' }}>🚫 Este servicio fue cancelado</p>
+                {cancelInfo ? (
+                  <div className="text-[12px] space-y-0.5" style={{ color: '#B91C1C' }}>
+                    {cancelInfo.motivo_cancelacion && <p><strong>Motivo:</strong> {cancelInfo.motivo_cancelacion}</p>}
+                    {cancelInfo.observacion_cancelacion && <p><strong>Observación:</strong> {cancelInfo.observacion_cancelacion}</p>}
+                    <p>
+                      {cancelInfo.cancelado_por_p && <><strong>Por:</strong> {cancelInfo.cancelado_por_p.nombre} {cancelInfo.cancelado_por_p.apellido} · </>}
+                      {cancelInfo.cancelado_en && <><strong>Fecha:</strong> {new Date(cancelInfo.cancelado_en).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}</>}
+                    </p>
+                    {cancelInfo.etapa_cancelacion && (
+                      <p><strong>Etapa al cancelar:</strong> {ESTADO_LABEL[cancelInfo.etapa_cancelacion] || cancelInfo.etapa_cancelacion}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[12px]" style={{ color: '#B91C1C' }}>El detalle de la cancelación está en el historial de comentarios.</p>
+                )}
+                <p className="text-[11px]" style={{ color: '#DC2626' }}>Los datos, evidencias y recibos del servicio se conservan para auditoría.</p>
+              </div>
+            )}
+
             {/* ── Alerta horario veterinaria ── */}
             {aliadoHorario && (() => {
               const est = calcularEstadoVet(aliadoHorario.horario)
@@ -1972,9 +2089,12 @@ export default function Kanban() {
               </button>
             )}
 
-            {/* Mover estado */}
+            {/* Mover estado — un CANCELADO solo lo puede reactivar un ADMIN */}
+            {(selected.estado !== 'CANCELADO' || esAdmin) && (
             <div>
-              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Mover a…</div>
+              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">
+                {selected.estado === 'CANCELADO' ? 'Reactivar a… (solo admin)' : 'Mover a…'}
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {TODAS_COLS.filter(c => c !== selected.estado && !(selected.estado === 'LISTO' && c === 'EN_ENTREGA')).map(col => (
                   <button key={col} disabled={saving} onClick={() => cambiarEstado(selected.servicio_id, col)}
@@ -1985,6 +2105,7 @@ export default function Kanban() {
                 ))}
               </div>
             </div>
+            )}
 
             {/* ── Opción anticipados compostaje ── */}
             {selected.tipo_proceso?.startsWith('COMPOSTAJE') && selected.recordatorios_anticipados !== null && selected.recordatorios_anticipados !== undefined && (
@@ -2131,6 +2252,82 @@ export default function Kanban() {
                 <MessageCircle size={14} /> Escribir por WhatsApp
               </a>
             )}
+
+            {/* ── Cancelar servicio (solo COORDINADOR / ADMIN, nunca entregados) ── */}
+            {(esAdmin || esCoord) && !['CANCELADO', 'ENTREGADO'].includes(selected.estado) && (
+              <div className="pt-2 border-t" style={{ borderColor: '#F3F4F6' }}>
+                <button onClick={() => { setMotivoCancelar(''); setObsCancelar(''); setModalCancelar(true) }}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-bold transition-all hover:bg-red-50"
+                  style={{ color: '#DC2626', border: '1.5px solid #FECACA' }}>
+                  <X size={13} /> Cancelar servicio
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal confirmación de cancelación ─────────────────────────────── */}
+      {modalCancelar && selected && (
+        <Modal open={modalCancelar} onClose={() => { if (!cancelando) setModalCancelar(false) }}
+          title="Cancelar servicio"
+          maxWidth="max-w-md"
+          footer={
+            <div className="flex gap-2 justify-end w-full">
+              <button onClick={() => setModalCancelar(false)} disabled={cancelando}
+                className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all disabled:opacity-50">
+                Cancelar
+              </button>
+              <button onClick={cancelarServicio} disabled={cancelando || !motivoCancelar}
+                className="px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+                style={{ background: '#DC2626' }}>
+                {cancelando ? 'Cancelando…' : 'Confirmar cancelación'}
+              </button>
+            </div>
+          }>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-xl px-4 py-3"
+              style={{ background: '#FEF2F2', border: '1.5px solid #FECACA' }}>
+              <AlertTriangle size={18} style={{ color: '#DC2626', flexShrink: 0, marginTop: 2 }} />
+              <p className="text-[12px] leading-relaxed" style={{ color: '#991B1B' }}>
+                Esta acción marcará el servicio de <strong>{selected.mascota}</strong> como cancelado.
+                No se eliminará, pero dejará de aparecer como servicio activo.
+                Las evidencias, recibos e historial se conservan.
+              </p>
+            </div>
+
+            {/* Advertencia si el proceso ya inició (mascota ya recogida) */}
+            {!['INGRESADO', 'EN_RECOGIDA'].includes(selected.estado) && (
+              <div className="flex items-start gap-2 rounded-xl px-3 py-2.5"
+                style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A' }}>
+                <span className="text-base flex-shrink-0">⚠️</span>
+                <p className="text-[12px]" style={{ color: '#92400E' }}>
+                  Este servicio ya tiene <strong>proceso iniciado</strong> (etapa actual:{' '}
+                  <strong>{ESTADO_LABEL[selected.estado] || selected.estado}</strong>).
+                  La cancelación quedará registrada con esta etapa para trazabilidad.
+                </p>
+              </div>
+            )}
+
+            <div>
+              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide block mb-1.5">
+                Motivo de cancelación <span className="text-red-500">*</span>
+              </label>
+              <Select value={motivoCancelar} onChange={e => setMotivoCancelar(e.target.value)} className="w-full text-[13px]">
+                <option value="">Seleccionar motivo…</option>
+                {MOTIVOS_CANCELACION.map(m => <option key={m} value={m}>{m}</option>)}
+              </Select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide block mb-1.5">
+                Observación (opcional)
+              </label>
+              <textarea value={obsCancelar} onChange={e => setObsCancelar(e.target.value)}
+                rows={3} placeholder="Detalle adicional de la cancelación…"
+                className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none resize-none"
+                style={{ borderColor: '#E5E7EB' }} />
+            </div>
           </div>
         </Modal>
       )}

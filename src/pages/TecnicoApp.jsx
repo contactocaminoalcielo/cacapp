@@ -1556,7 +1556,8 @@ export default function TecnicoApp() {
       const nuevasR = serviciosConCF.filter(s =>
         ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
       )
-      const nuevasE = entData || []
+      // Entregas de servicios cancelados no son tareas activas
+      const nuevasE = (entData || []).filter(e => e.servicios?.estado !== 'CANCELADO')
 
       const total = nuevasR.length
       if (silent && prevCountRef.current !== null && total > prevCountRef.current) {
@@ -1634,7 +1635,19 @@ export default function TecnicoApp() {
     return data || []
   }
 
+  // La UI del técnico puede estar desactualizada cuando coordinación cancela:
+  // verificar contra DB antes de cualquier acción operativa sobre el servicio
+  async function estaCancelado(svcId) {
+    const { data } = await db.from('servicios').select('estado').eq('id', svcId).maybeSingle()
+    return data?.estado === 'CANCELADO'
+  }
+
   async function iniciarRecogida(svc, hora) {
+    if (await estaCancelado(svc.id)) {
+      alert('⚠️ Este servicio fue cancelado por coordinación. No realices la recogida.')
+      await cargar()
+      return
+    }
     const { error } = await db.from('servicios').update({ estado: 'EN_RECOGIDA' }).eq('id', svc.id)
     if (error) throw new Error(error.message)
     const recogidaId = svc.recogidas?.[0]?.id
@@ -1718,6 +1731,10 @@ export default function TecnicoApp() {
   }
 
   async function completarRecogida(svc, recogidaId, valorCobrado = 0) {
+    if (await estaCancelado(svc.id)) {
+      await cargar()
+      throw new Error('Este servicio fue cancelado por coordinación. No completes la recogida — comunícate con el coordinador.')
+    }
     const { error } = await db.from('servicios').update({ estado: 'EN_CUARTO_FRIO' }).eq('id', svc.id)
     if (error) throw new Error(error.message)
 
@@ -2961,6 +2978,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     const sinComprobante = comprobantesPendientes
     setGuardando(true); setErr('')
     try {
+      // Un servicio cancelado no puede generar recibos nuevos
+      const { data: svcActual } = await db.from('servicios')
+        .select('estado').eq('id', servicioSel.id).maybeSingle()
+      if (svcActual?.estado === 'CANCELADO') {
+        setErr('Este servicio fue cancelado. No se puede generar un recibo nuevo — comunícate con el coordinador.')
+        return
+      }
       const valorCobrado  = pagoPendiente ? 0 : (tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios)
       const { data, error } = await db.from('recibos_tecnico').insert({
         servicio_id:     servicioSel.id,

@@ -44,6 +44,12 @@
 - `responsable_id` (UUID FK → `personal.id`)
 - `fecha_creacion`, `fecha_confirmacion`, `fecha_cierre`
 - `observaciones`
+- **Cancelación** (agregadas 2026-06-12, migración `2026-06-12_cancelacion_servicios.sql`, todas nullable):
+  - `cancelado_en` (timestamptz)
+  - `cancelado_por` (UUID FK → `personal.id`)
+  - `motivo_cancelacion` (text) — valores de `MOTIVOS_CANCELACION` en Kanban.jsx
+  - `observacion_cancelacion` (text)
+  - `etapa_cancelacion` (text) — estado del servicio al momento de cancelar
 
 ### Plan — tabla `planes`
 - `id` (UUID) — PK
