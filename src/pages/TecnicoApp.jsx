@@ -2440,12 +2440,59 @@ function CardServicioRecibo({ item, onSeleccionar, disabled }) {
   )
 }
 
+// Búsqueda sin tildes ni mayúsculas (ej: "muñeca" encuentra "MUNECA" y viceversa)
+const normalizar = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+function coincideRecibo(item, q) {
+  if (!q) return true
+  const m = item.svc.mascotas
+  const campos = [
+    m?.nombre,
+    `${m?.clientes?.nombre || ''} ${m?.clientes?.apellido || ''}`,
+    item.svc.planes?.nombre,
+    ...item.recibos.map(r => r.numero_recibo),
+  ]
+  return campos.some(c => normalizar(c).includes(q))
+}
+
+// Sección colapsable por estado de recibo: header con contador + flechita
+function SeccionRecibos({ color, emoji, titulo, lista, abierta, onToggle, onSeleccionar, disabled }) {
+  if (lista.length === 0) return null
+  return (
+    <div className="mb-2">
+      <button onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-3 rounded-2xl bg-white border shadow-sm transition-all active:scale-98"
+        style={{ borderColor: abierta ? color : '#F0F0F0', borderWidth: abierta ? 1.5 : 1 }}>
+        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+        <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color }}>
+          {emoji} {titulo}
+        </span>
+        <span className="text-[10px] font-bold min-w-[18px] h-[18px] rounded-full inline-flex items-center justify-center px-1"
+          style={{ background: color, color: '#fff' }}>
+          {lista.length}
+        </span>
+        <ChevronDown size={16} className="ml-auto flex-shrink-0 transition-transform"
+          style={{ color: '#9CA3AF', transform: abierta ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+      </button>
+      {abierta && (
+        <div className="space-y-2 mt-2">
+          {lista.map(i => (
+            <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={onSeleccionar} disabled={disabled} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReciboTab({ tecnico }) {
   // El módulo Recibos es independiente del flujo de recogida: consulta la DB
   // directamente (servicios ya recogidos del técnico + sus recibos guardados)
   const [items, setItems]             = useState([])
   const [cargando, setCargando]       = useState(true)
   const [listErr, setListErr]         = useState('')
+  const [busqueda, setBusqueda]       = useState('')
+  const [abiertas, setAbiertas]       = useState({}) // secciones desplegadas, por estado
   const [servicioSel, setServicioSel] = useState(null)
   const [svcData,     setSvcData]     = useState(null)
   const [reciboExistente, setReciboExistente] = useState(null)
@@ -2549,9 +2596,16 @@ function ReciboTab({ tecnico }) {
   }, [items, cargando])
 
   if (!servicioSel || !svcData) {
-    const pendientes  = items.filter(i => i.estadoRecibo === 'PENDIENTE_RECIBO')
-    const sinComprob  = items.filter(i => i.estadoRecibo === 'PENDIENTE_COMPROBANTE')
-    const resto       = items.filter(i => ['PAGO_PENDIENTE', 'COMPLETO'].includes(i.estadoRecibo)).slice(0, 10)
+    const q         = normalizar(busqueda.trim())
+    const filtrados = items.filter(i => coincideRecibo(i, q))
+    const GRUPOS = [
+      { key: 'PENDIENTE_COMPROBANTE', color: '#EA580C', emoji: '⏳', titulo: 'Comprobante pendiente' },
+      { key: 'PENDIENTE_RECIBO',      color: '#D97706', emoji: '📄', titulo: 'Por generar recibo' },
+      { key: 'PAGO_PENDIENTE',        color: '#854D0E', emoji: '💤', titulo: 'Pago pendiente' },
+      { key: 'COMPLETO',              color: '#16A34A', emoji: '✅', titulo: 'Recibo completo' },
+    ]
+    const hayPendientes = items.some(i =>
+      ['PENDIENTE_RECIBO', 'PENDIENTE_COMPROBANTE'].includes(i.estadoRecibo))
     return (
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -2563,6 +2617,21 @@ function ReciboTab({ tecnico }) {
             style={{ background: '#F3E8FF', color: '#7C3AED' }}>
             {cargando ? 'Cargando…' : '↻ Actualizar'}
           </button>
+        </div>
+
+        {/* Buscador inteligente: mascota, cliente, plan o No. de recibo (sin tildes) */}
+        <div className="relative mb-3">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none text-[13px]">🔍</span>
+          <input
+            type="text" value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Mascota, cliente, plan o No. de recibo…"
+            className="w-full pl-8 pr-8 py-2 rounded-xl border text-[12px] outline-none"
+            style={{ borderColor: busqueda ? '#7C3AED' : '#E5E7EB', background: '#fff' }}
+          />
+          {busqueda && (
+            <button onClick={() => setBusqueda('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 text-gray-400 hover:text-gray-600 text-[13px]">✕</button>
+          )}
         </div>
 
         {listErr && (
@@ -2579,37 +2648,26 @@ function ReciboTab({ tecnico }) {
             sub="Cuando completes una recogida, el servicio aparecerá aquí para generar su recibo." />
         ) : (
           <>
-            {sinComprob.length > 0 && (
-              <>
-                <SeccionHeader color="#EA580C" emoji="⏳" titulo="Comprobante pendiente" count={sinComprob.length} />
-                <div className="space-y-2 mb-2">
-                  {sinComprob.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
-                </div>
-              </>
-            )}
-            {pendientes.length > 0 && (
-              <>
-                <SeccionHeader color="#D97706" emoji="📄" titulo="Por generar recibo" count={pendientes.length} />
-                <div className="space-y-2 mb-2">
-                  {pendientes.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
-                </div>
-              </>
-            )}
-            {pendientes.length === 0 && sinComprob.length === 0 && (
+            {!hayPendientes && !q && (
               <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-3"
                 style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
                 <CheckCircle size={15} style={{ color: '#16A34A' }} />
                 <span className="text-[12px] font-bold text-green-800">Al día — sin recibos pendientes</span>
               </div>
             )}
-            {resto.length > 0 && (
-              <>
-                <SeccionHeader color="#16A34A" emoji="✅" titulo="Recientes" count={resto.length} />
-                <div className="space-y-2">
-                  {resto.map(i => <CardServicioRecibo key={i.svc.id} item={i} onSeleccionar={seleccionar} disabled={loading} />)}
-                </div>
-              </>
+            {q && filtrados.length === 0 && (
+              <div className="text-center py-8 text-gray-400 text-sm">Sin resultados para "{busqueda.trim()}"</div>
             )}
+            {/* Secciones colapsables por estado; con búsqueda activa se despliegan solas */}
+            {GRUPOS.map(g => (
+              <SeccionRecibos key={g.key} color={g.color} emoji={g.emoji} titulo={g.titulo}
+                lista={filtrados.filter(i => i.estadoRecibo === g.key)}
+                abierta={q ? true : !!abiertas[g.key]}
+                onToggle={() => setAbiertas(prev => ({ ...prev, [g.key]: !prev[g.key] }))}
+                onSeleccionar={seleccionar}
+                disabled={loading}
+              />
+            ))}
           </>
         )}
       </div>
