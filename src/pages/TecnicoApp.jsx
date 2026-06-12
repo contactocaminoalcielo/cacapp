@@ -239,8 +239,9 @@ async function compressImage(file, maxW = 1200, quality = 0.82) {
     try {
       bitmap = await createImageBitmap(file, { resizeWidth: maxW, resizeQuality: 'medium' })
     } catch (_) {
-      // Safari viejo u opciones no soportadas: decodificar y escalar al dibujar
-      bitmap = await createImageBitmap(file)
+      // resizeWidth no soportado en este browser/device: subir el JPEG original
+      // (ya comprimido por la cámara). Nunca decodificar a full-res — OOM seguro.
+      return file
     }
     const scale  = Math.min(1, maxW / bitmap.width)
     const canvas = document.createElement('canvas')
@@ -251,27 +252,7 @@ async function compressImage(file, maxW = 1200, quality = 0.82) {
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality))
     return blob || file
   } catch (_) {
-    // Último recurso (createImageBitmap no disponible): método clásico
-    return new Promise(resolve => {
-      const img = new Image()
-      const url = URL.createObjectURL(file)
-      img.onload = () => {
-        try {
-          const scale = Math.min(1, maxW / img.width)
-          const canvas = document.createElement('canvas')
-          canvas.width  = Math.round(img.width  * scale)
-          canvas.height = Math.round(img.height * scale)
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
-          URL.revokeObjectURL(url)
-          canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', quality)
-        } catch (_) {
-          URL.revokeObjectURL(url)
-          resolve(file) // jamás bloquear la subida por fallo de compresión
-        }
-      }
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
-      img.src = url
-    })
+    return file // jamás bloquear la subida por fallo de compresión
   }
 }
 
@@ -280,10 +261,22 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
   const [err, setErr]             = useState('')
   const cameraRef                 = useRef()
   const galeriaRef                = useRef()
+  const stashKey                  = `foto_${storagePath}`
 
-  async function handleFile(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
+  // Recovery: si Chrome mató el renderer durante la subida, reanudar al montar
+  useEffect(() => {
+    if (fotoUrl) return
+    ;(async () => {
+      const pendientes = await stashGetByPrefix(stashKey)
+      if (pendientes.length > 0 && pendientes[0].blob) {
+        subirFoto(pendientes[0].blob, { recuperado: true })
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function subirFoto(file, { recuperado = false } = {}) {
+    if (!recuperado) await stashPut(stashKey, file)
     setUploading(true); setErr('')
     try {
       const compressed = await compressImage(file)
@@ -298,6 +291,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
         if (dbErr) throw dbErr
       }
       onFotoUploaded(publicUrl)
+      await stashDelete(stashKey)
     } catch (e) {
       setErr(e.message || 'Error al subir foto')
     } finally {
@@ -305,6 +299,12 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
       if (cameraRef.current)  cameraRef.current.value  = ''
       if (galeriaRef.current) galeriaRef.current.value = ''
     }
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await subirFoto(file)
   }
 
   return (
