@@ -2687,13 +2687,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       } else if (esFacturacionMensual) {
         // No se registra cobro ahora — dejar estado_pago como PENDIENTE
         // Si comision_aliado=0 en DB (servicio registrado antes del fix VIP) — corregirlo ahora
-        if (comisionGuardada <= 0 && comisionManual > 0) {
+        if (!comisionFueDescontada && comisionGuardada <= 0 && comisionManual > 0) {
           await db.from('servicios').update({ comision_aliado: comisionManual }).eq('id', servicioSel.id)
         }
+        // Con descuento aplicado (regla Animal City): el total a facturar ya es neto
+        const descNovedad = comisionFueDescontada
+          ? `Recibo VET generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+          : `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
-          descripcion:    `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`,
+          descripcion:    descNovedad,
           registrado_por: tecnico?.id || null,
         })
       } else if (!pagoRegistrado && totalMedios > 0) {

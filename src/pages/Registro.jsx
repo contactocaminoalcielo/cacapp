@@ -334,12 +334,13 @@ export default function Registro() {
     ? (vehiculoTipo === 'MOTO' ? (ciudadInfo.tarifa_moto || 0) : (ciudadInfo.tarifa_camioneta || 0))
     : 0
   const modalidadComision  = aliadoSeleccionado?.modalidad_comision
-  // La comisión siempre reduce el valor del servicio cuando hay aliado en clínica
-  // La modalidad solo afecta CÓMO se registra/cobra la comisión después
+  // La comisión siempre reduce el valor del servicio cuando hay aliado en clínica.
+  // La modalidad solo afecta CUÁNDO se paga: DESCUENTO_INMEDIATO cobra ya;
+  // FACTURACION_MENSUAL descuenta igual pero queda PENDIENTE (factura a fin de mes).
   const comisionCalculada  = comisionPorcentaje > 0
     ? Math.round(valorBase * comisionPorcentaje / 100) : 0
   const aplicaDescuento    = !!aliadoSeleccionado &&
-    aliadoSeleccionado?.modalidad_comision === 'DESCUENTO_INMEDIATO' &&
+    ['DESCUENTO_INMEDIATO', 'FACTURACION_MENSUAL'].includes(aliadoSeleccionado?.modalidad_comision) &&
     formRecogida.tipo_lugar === 'CLINICA_ALIADA' && comisionCalculada > 0
   const comisionMonto      = aplicaDescuento ? comisionCalculada : 0
   const recargoPrioridad  = planSeleccionado?.codigo === 'DESAMPARADO' && desamparadoPrioridad ? 16000 : 0
