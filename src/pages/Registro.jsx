@@ -478,9 +478,9 @@ export default function Registro() {
       if (angelP && map[angelP.id] === undefined) {
         if (pesoG < 1000)        map[angelP.id] = 69000
         else if (usaFelino)      map[angelP.id] = 79000  // Gato o Conejo
-        else if (pesoG <= 10000) map[angelP.id] = 89000
-        else if (pesoG <= 20000) map[angelP.id] = 119000
-        else if (pesoG <= 35000) map[angelP.id] = 139000
+        else if (pesoG < 11000)  map[angelP.id] = 89000   // decimales: 10.4 sigue en 1-10
+        else if (pesoG < 21000)  map[angelP.id] = 119000
+        else if (pesoG < 36000)  map[angelP.id] = 139000
         else                     map[angelP.id] = 189000
       }
 
@@ -491,12 +491,19 @@ export default function Registro() {
         map[basicoSinRecP.id] = Math.round(map[basicoP.id] * 0.8)
       }
 
-      // Compets sin recordatorios = Compets Evidencia × 80 %
-      const competsSinRecP = planByCode['COMPETS_SIN_REC']
-      const competsEvidP   = planByCode['COMPETS_EVIDENCIA']
-      if (competsSinRecP && map[competsSinRecP.id] === undefined && competsEvidP && map[competsEvidP.id] !== undefined) {
-        map[competsSinRecP.id] = Math.round(map[competsEvidP.id] * 0.8)
-      }
+      // Compets sin recordatorios: precios en planes_precios (sin fallback —
+      // si falta el rango, la tarjeta muestra "Sin precio configurado")
+
+      // Exclusivo sin recordatorios = plan base × 80 % (regla aritmética válida,
+      // confirmada por David 2026-06-12 — sigue automáticamente al precio base)
+      ;[['EXCLUSIVO_PRESENCIAL_SIN_REC', 'EXCLUSIVO_PRESENCIAL'],
+        ['EXCLUSIVO_VIDEOLLAMADA_SIN_REC', 'EXCLUSIVO_VIDEOLLAMADA']].forEach(([sinRec, baseCod]) => {
+        const sinRecP = planByCode[sinRec]
+        const baseP   = planByCode[baseCod]
+        if (sinRecP && baseP && map[sinRecP.id] === undefined && map[baseP.id] !== undefined) {
+          map[sinRecP.id] = Math.round(map[baseP.id] * 0.8)
+        }
+      })
 
       // Desamparado: ≤10 kg → $46 000 fijo, >10 kg → $44 000 + $4 000/kg extra
       const desamparadoP = planByCode['DESAMPARADO']

@@ -1956,6 +1956,19 @@ function TabCatalogos() {
 
 // ─── PRECIOS POR PESO ─────────────────────────────────────────────────────────
 const RANGOS = ['PETIT','FELINO','1-10KG','11-20KG','21-35KG','36-60KG']
+// Límites en gramos por rango — deben coincidir con la búsqueda por peso de
+// Registro/Kanban (.lte peso_min_gr / .gte peso_max_gr). FELINO se busca por
+// nombre, no por peso (peso_max_gr null).
+// Regla de decimales (David 2026-06-12): el peso pertenece a su rango hasta
+// ALCANZAR el mínimo del siguiente — 10.4 kg es 1-10KG, no 11-20KG.
+const RANGO_GRAMOS = {
+  'PETIT':   { peso_min_gr: 0,     peso_max_gr: 999 },
+  'FELINO':  { peso_min_gr: 1000,  peso_max_gr: null },
+  '1-10KG':  { peso_min_gr: 1000,  peso_max_gr: 10999 },
+  '11-20KG': { peso_min_gr: 11000, peso_max_gr: 20999 },
+  '21-35KG': { peso_min_gr: 21000, peso_max_gr: 35999 },
+  '36-60KG': { peso_min_gr: 36000, peso_max_gr: 60999 },
+}
 const LABEL_CF = 'text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
 
 function TabPreciosPlanes() {
@@ -2004,8 +2017,7 @@ function TabPreciosPlanes() {
             plan_id:    planSel.id,
             rango_nombre: rango,
             precio,
-            peso_min_gr: 0,
-            peso_max_gr: 999999,
+            ...RANGO_GRAMOS[rango],
           })
         }
       }

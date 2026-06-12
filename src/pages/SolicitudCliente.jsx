@@ -64,9 +64,11 @@ function getRango(pesoKg, especieId) {
   if (!pesoKg || pesoKg <= 0) return null
   if (pesoKg < 1) return 'PETIT'
   if (especieId === 2 || especieId === 3) return 'FELINO'  // Gato (2) o Conejo (3)
-  if (pesoKg <= 10) return '1-10KG'
-  if (pesoKg <= 20) return '11-20KG'
-  if (pesoKg <= 35) return '21-35KG'
+  // Regla de decimales (David 2026-06-12): el peso pertenece a su rango hasta
+  // ALCANZAR el mínimo del siguiente — 10.4 kg es 1-10KG, solo desde 11.0 es 11-20KG
+  if (pesoKg < 11) return '1-10KG'
+  if (pesoKg < 21) return '11-20KG'
+  if (pesoKg < 36) return '21-35KG'
   return '36-60KG'
 }
 
@@ -232,7 +234,19 @@ export default function SolicitudCliente() {
     if (!pid || !mascota.peso_kg) return null
     const rango = getRango(parseFloat(mascota.peso_kg), parseInt(mascota.especie_id))
     if (!rango) return null
-    return precios.find(p => p.plan_id === pid && p.rango_nombre === rango)?.precio ?? null
+    const directo = precios.find(p => p.plan_id === pid && p.rango_nombre === rango)?.precio
+    if (directo != null) return directo
+    // Exclusivo sin recordatorios = plan base × 80 % (misma regla que Registro/Kanban)
+    const baseCod = {
+      EXCLUSIVO_PRESENCIAL_SIN_REC:   'EXCLUSIVO_PRESENCIAL',
+      EXCLUSIVO_VIDEOLLAMADA_SIN_REC: 'EXCLUSIVO_VIDEOLLAMADA',
+    }[planes.find(p => p.id === pid)?.codigo]
+    if (baseCod) {
+      const basePlan   = planes.find(p => p.codigo === baseCod)
+      const basePrecio = precios.find(p => p.plan_id === basePlan?.id && p.rango_nombre === rango)?.precio
+      if (basePrecio != null) return Math.round(basePrecio * 0.8)
+    }
+    return null
   }
 
   // ── Avanzar con validación ────────────────────────────────────────────────

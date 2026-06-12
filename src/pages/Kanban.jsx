@@ -283,12 +283,12 @@ export default function Kanban() {
 
     const pesoG = Math.round(pesoKg * 1000)
     const especieId = parseInt(especieIdRaw) || 0
-    const esGato = especieId === 2
+    const usaFelino = especieId === 2 || especieId === 3  // Gato o Conejo → rango FELINO
 
     let q = db.from('planes_precios').select('precio').eq('plan_id', planId)
     if (pesoG < 1000) {
       q = q.eq('rango_nombre', 'PETIT')
-    } else if (esGato) {
+    } else if (usaFelino) {
       q = q.eq('rango_nombre', 'FELINO')
     } else {
       q = q.lte('peso_min_gr', pesoG).gte('peso_max_gr', pesoG).neq('rango_nombre', 'FELINO')
@@ -303,10 +303,10 @@ export default function Kanban() {
 
     if (planActual?.codigo === 'ANGEL') {
       if (pesoG < 1000) return 69000
-      if (esGato) return 79000
-      if (pesoG <= 10000) return 89000
-      if (pesoG <= 20000) return 119000
-      if (pesoG <= 35000) return 139000
+      if (usaFelino) return 79000
+      if (pesoG < 11000) return 89000   // decimales: 10.4 sigue en 1-10
+      if (pesoG < 21000) return 119000
+      if (pesoG < 36000) return 139000
       return 189000
     }
 
@@ -315,8 +315,16 @@ export default function Kanban() {
       return base ? Math.round(base * 0.8) : null
     }
 
-    if (planActual?.codigo === 'COMPETS_SIN_REC' && planByCode.COMPETS_EVIDENCIA) {
-      const base = await calcularPrecioPara(planByCode.COMPETS_EVIDENCIA.id, pesoKg, especieId)
+    // COMPETS_SIN_REC: precios propios en planes_precios, sin fallback —
+    // si falta el rango configurado se devuelve null (no inventar tarifa)
+
+    // Exclusivo sin recordatorios = plan base × 80 %
+    const baseSinRec = {
+      EXCLUSIVO_PRESENCIAL_SIN_REC:   'EXCLUSIVO_PRESENCIAL',
+      EXCLUSIVO_VIDEOLLAMADA_SIN_REC: 'EXCLUSIVO_VIDEOLLAMADA',
+    }[planActual?.codigo]
+    if (baseSinRec && planByCode[baseSinRec]) {
+      const base = await calcularPrecioPara(planByCode[baseSinRec].id, pesoKg, especieId)
       return base ? Math.round(base * 0.8) : null
     }
 
