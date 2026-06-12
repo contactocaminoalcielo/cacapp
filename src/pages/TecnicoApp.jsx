@@ -2414,7 +2414,10 @@ function ReciboTab({ recogidas, tecnico }) {
       svcData={svcData}
       servicioSel={servicioSel}
       tecnico={tecnico}
-      onVolver={() => { setServicioSel(null); setSvcData(null) }}
+      onVolver={() => {
+        try { localStorage.removeItem('tecnico_recibo_sel') } catch (_) {}
+        setServicioSel(null); setSvcData(null)
+      }}
       onGuardado={() => {}}
     />
   )
