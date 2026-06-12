@@ -11,6 +11,7 @@ import {
   Plus, Trash2, Upload as UploadIcon, Receipt,
 } from 'lucide-react'
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
+import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 
 const POLL = 30_000
 
@@ -224,23 +225,66 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 
 // ─── FOTO EVIDENCIA (reutilizable) ─────────────────────────────────────
 // Comprime una imagen antes de subirla (máx 1200px, calidad 0.82)
-async function compressImage(file, maxW = 1200, quality = 0.82) {
-  if (!file.type.startsWith('image/')) return file
-  return new Promise(resolve => {
-    const img = new Image()
+// Lee ancho/alto sin decodificar la imagen completa (solo parsea cabeceras)
+function leerDimensiones(file) {
+  return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      const scale = Math.min(1, maxW / img.width)
-      const canvas = document.createElement('canvas')
-      canvas.width  = Math.round(img.width  * scale)
-      canvas.height = Math.round(img.height * scale)
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
-      canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', quality)
-    }
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    const img = new Image()
+    img.onload  = () => { const d = { w: img.naturalWidth, h: img.naturalHeight }; URL.revokeObjectURL(url); resolve(d) }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagen ilegible')) }
     img.src = url
   })
+}
+
+// ⚠️ CRÍTICO PARA ANDROID: nunca decodificar la foto a resolución completa.
+// Las cámaras modernas producen 50–108 MP; el drawImage clásico necesita
+// ~200–400 MB de RAM para muestrear, Chrome Android mata el renderer y la
+// PWA "se reinicia" en plena calle. createImageBitmap con resizeWidth
+// decodifica YA reducida (downscale nativo del decodificador, poca memoria).
+// Cadena de fallbacks: bitmap-redimensionado → bitmap → Image clásico → original.
+async function compressImage(file, maxW = 1200, quality = 0.82) {
+  if (!file.type.startsWith('image/')) return file
+  try {
+    let bitmap = null
+    try {
+      const { w } = await leerDimensiones(file)
+      const destW = Math.min(maxW, w || maxW)
+      bitmap = await createImageBitmap(file, { resizeWidth: destW, resizeQuality: 'medium' })
+    } catch (_) {
+      // Safari viejo u opciones no soportadas: decodificar y escalar al dibujar
+      bitmap = await createImageBitmap(file)
+    }
+    const scale  = Math.min(1, maxW / bitmap.width)
+    const canvas = document.createElement('canvas')
+    canvas.width  = Math.max(1, Math.round(bitmap.width  * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close?.()
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality))
+    return blob || file
+  } catch (_) {
+    // Último recurso (createImageBitmap no disponible): método clásico
+    return new Promise(resolve => {
+      const img = new Image()
+      const url = URL.createObjectURL(file)
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxW / img.width)
+          const canvas = document.createElement('canvas')
+          canvas.width  = Math.round(img.width  * scale)
+          canvas.height = Math.round(img.height * scale)
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+          URL.revokeObjectURL(url)
+          canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', quality)
+        } catch (_) {
+          URL.revokeObjectURL(url)
+          resolve(file) // jamás bloquear la subida por fallo de compresión
+        }
+      }
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+      img.src = url
+    })
+  }
 }
 
 function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
@@ -2426,6 +2470,26 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     } catch (_) {}
   }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente])
 
+  // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
+  // El archivo quedó en IndexedDB (stashPut antes de comprimir); aquí se
+  // retoma la subida sin que el técnico tenga que volver a buscarlo.
+  useEffect(() => {
+    if (yaGuardado) return
+    ;(async () => {
+      const pendientes = await stashGetByPrefix(`recibo_${servicioSel.id}_`)
+      for (const p of pendientes) {
+        const idx = parseInt(p.key.split('_').pop(), 10)
+        if (Number.isNaN(idx) || !p.blob) { stashDelete(p.key); continue }
+        // Garantizar que el medio exista en la lista restaurada del draft
+        setMediosPago(prev => prev.length > idx ? prev
+          : [...prev, ...Array.from({ length: idx + 1 - prev.length },
+              () => ({ metodo: 'TRANSFERENCIA', monto: '', referencia: '', comprobanteUrl: '', subiendoComprobante: false }))])
+        subirComprobante(idx, p.blob, { recuperado: true })
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Porcentaje real: se consulta de config_comisiones para evitar distorsión por recargos
   const [comisionPct, setComisionPct] = useState(
     comisionFueDescontada && precioOriginal > 0
@@ -2492,19 +2556,29 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
     setMediosPago(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m))
   }
 
-  async function subirComprobante(idx, file) {
+  async function subirComprobante(idx, file, { recuperado = false } = {}) {
     if (!file) return
+    const stashKey = `recibo_${servicioSel.id}_${idx}`
+    // Guardar el archivo en IndexedDB ANTES de comprimir: si Android mata la
+    // pestaña a mitad de camino, al volver se reanuda la subida automáticamente.
+    if (!recuperado) await stashPut(stashKey, file)
     updateMedio(idx, 'subiendoComprobante', true)
     try {
-      const compressed = await compressImage(file)
-      const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.jpg`
+      const esPdf = file.type === 'application/pdf'
+      const body  = esPdf ? file : await compressImage(file)
+      const ext   = esPdf ? 'pdf' : 'jpg'
+      const path  = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
       const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' })
+        .from('evidencias').upload(path, body, {
+          upsert: false,
+          contentType: esPdf ? 'application/pdf' : 'image/jpeg',
+        })
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       updateMedio(idx, 'comprobanteUrl', publicUrl)
+      await stashDelete(stashKey)
     } catch (e) {
-      setErr('Error al subir comprobante: ' + (e.message || e))
+      setErr('Error al subir comprobante: ' + (e.message || e) + '. El archivo quedó guardado en el teléfono — reintenta desde "Subir comprobante".')
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
     }
@@ -3286,19 +3360,28 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
                       onChange={e => subirComprobante(idx, e.target.files?.[0])} />
 
                     {tieneComprobante ? (
-                      /* Preview del comprobante */
+                      /* Preview del comprobante (imagen o PDF) */
                       <div className="relative rounded-xl overflow-hidden border border-green-200">
-                        <img src={m.comprobanteUrl} alt="Comprobante"
-                          className="w-full object-cover"
-                          style={{ maxHeight: 160 }} />
-                        <div className="absolute inset-0 flex items-end justify-between p-2"
+                        {m.comprobanteUrl.toLowerCase().includes('.pdf') ? (
+                          <a href={m.comprobanteUrl} target="_blank" rel="noreferrer"
+                            className="flex items-center gap-2 px-3 py-5 bg-gray-50">
+                            <FileText size={22} style={{ color: '#DC2626' }} />
+                            <span className="text-[12px] font-semibold text-gray-700">Comprobante PDF — toca para ver</span>
+                          </a>
+                        ) : (
+                          <img src={m.comprobanteUrl} alt="Comprobante"
+                            className="w-full object-cover"
+                            style={{ maxHeight: 160 }} />
+                        )}
+                        {/* pointer-events-none: el overlay no debe bloquear el enlace del PDF */}
+                        <div className="absolute inset-0 flex items-end justify-between p-2 pointer-events-none"
                           style={{ background: 'linear-gradient(transparent 60%, rgba(0,0,0,0.5))' }}>
                           <span className="text-white text-[11px] font-bold flex items-center gap-1">
                             <Check size={12} /> Comprobante guardado
                           </span>
                           <button
                             onClick={e => { e.stopPropagation(); e.preventDefault(); uploadRefs.current[idx]?.click() }}
-                            className="text-white text-[10px] font-semibold px-2 py-1 rounded-full"
+                            className="text-white text-[10px] font-semibold px-2 py-1 rounded-full pointer-events-auto"
                             style={{ background: 'rgba(255,255,255,0.25)' }}>
                             Cambiar
                           </button>
