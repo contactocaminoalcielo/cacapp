@@ -229,6 +229,17 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 // Lee ancho/alto sin decodificar la imagen completa (solo parsea cabeceras)
 
 
+// En red móvil un fetch puede colgarse sin error: sin timeout el spinner
+// "Subiendo…" queda infinito y el técnico no sabe si guardó. Al vencerse,
+// se muestra error y el archivo sigue en el stash para reintentar.
+const SUBIDA_TIMEOUT_MS = 60000
+function conTimeout(promise, msg) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), SUBIDA_TIMEOUT_MS)),
+  ])
+}
+
 function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
@@ -254,8 +265,10 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
     try {
       const compressed = await compressImage(file)
       const path = `${storagePath}/${Date.now()}.jpg`
-      const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' })
+      const { data, error: upErr } = await conTimeout(
+        db.storage.from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' }),
+        'La subida tardó demasiado — revisa la señal y reintenta'
+      )
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       if (dbSave) {
@@ -473,18 +486,34 @@ const NEVERAS_DEFAULT = ['N1','N2','N3','N4','N5','N6']
 
 function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT }) {
   const cf = svc.cuarto_frio_data || null
+  // La foto ya subida debe sobrevivir reinicios de la PWA (Android mata el
+  // renderer al abrir la galería) y cambios de tab: se resiembra desde la DB
+  // (cuarto_frio.foto_pesaje_url, vía dbSave) o desde localStorage si aún no
+  // existe la fila de cuarto_frio.
+  const FOTO_LS_KEY = `cf_foto_${svc.id}`
   const [peso, setPeso]               = useState(String(svc.mascotas?.peso_kg || ''))
   const [nevera, setNevera]           = useState('')
   const [neveraCustom, setNeveraCustom] = useState(false)
-  const [fotoUrl, setFotoUrl]         = useState(null)
+  const [fotoUrl, setFotoUrl]         = useState(() => {
+    if (cf?.foto_pesaje_url) return cf.foto_pesaje_url
+    try { return localStorage.getItem(FOTO_LS_KEY) || null } catch (_) { return null }
+  })
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState('')
 
   const canConfirm = !!fotoUrl && !!nevera.trim() && !!peso
 
+  function fotoSubida(url) {
+    setFotoUrl(url)
+    try { localStorage.setItem(FOTO_LS_KEY, url) } catch (_) {}
+  }
+
   async function confirmar() {
     setSaving(true); setErr('')
-    try { await onCompletar(svc, { cfId: cf?.id, peso, nevera: nevera.trim(), fotoUrl }) }
+    try {
+      await onCompletar(svc, { cfId: cf?.id, peso, nevera: nevera.trim(), fotoUrl })
+      try { localStorage.removeItem(FOTO_LS_KEY) } catch (_) {}
+    }
     catch (e) { setErr(e.message || 'Error al guardar') }
     finally { setSaving(false) }
   }
@@ -500,8 +529,9 @@ function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT })
       {/* Foto pesaje */}
       <FotoEvidencia
         storagePath={cf?.id ? `cuarto_frio/${cf.id}` : `cuarto_frio/temp_${svc.id}`}
+        dbSave={cf?.id ? { table: 'cuarto_frio', column: 'foto_pesaje_url', id: cf.id } : null}
         fotoUrl={fotoUrl}
-        onFotoUploaded={setFotoUrl}
+        onFotoUploaded={fotoSubida}
         label="Foto de la báscula / pesaje"
         sublabel="Toma una foto del peso en báscula"
       />
@@ -1695,13 +1725,19 @@ export default function TecnicoApp() {
 
   async function confirmarCuartoFrio(svc, { cfId, peso, nevera, fotoUrl }) {
     const pesoNum = parseFloat(peso) || null
+    const datosCF = {
+      nevera_codigo:   nevera,
+      peso_kg:         pesoNum,
+      estado:          'REFRIGERADO',
+      foto_pesaje_url: fotoUrl || null,
+    }
     if (cfId) {
-      const { error } = await db.from('cuarto_frio').update({
-        nevera_codigo:   nevera,
-        peso_kg:         pesoNum,
-        estado:          'REFRIGERADO',
-        foto_pesaje_url: fotoUrl || null,
-      }).eq('id', cfId)
+      const { error } = await db.from('cuarto_frio').update(datosCF).eq('id', cfId)
+      if (error) throw new Error(error.message)
+    } else {
+      // El trigger de DB debió crear la fila al crear el servicio; si no existe
+      // (servicio antiguo), crearla aquí — antes nevera/peso/foto se perdían en silencio
+      const { error } = await db.from('cuarto_frio').insert({ servicio_id: svc.id, ...datosCF })
       if (error) throw new Error(error.message)
     }
     // El peso de báscula pasa a ser el oficial para la mascota
@@ -2581,11 +2617,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       const body  = esPdf ? file : await compressImage(file)
       const ext   = esPdf ? 'pdf' : 'jpg'
       const path  = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
-      const { data, error: upErr } = await db.storage
-        .from('evidencias').upload(path, body, {
+      const { data, error: upErr } = await conTimeout(
+        db.storage.from('evidencias').upload(path, body, {
           upsert: false,
           contentType: esPdf ? 'application/pdf' : 'image/jpeg',
-        })
+        }),
+        'La subida tardó demasiado — revisa la señal'
+      )
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       updateMedio(idx, 'comprobanteUrl', publicUrl)
@@ -2594,6 +2632,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
       setErr('Error al subir comprobante: ' + (e.message || e) + '. El archivo quedó guardado en el teléfono — reintenta desde "Subir comprobante".')
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
+      // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
+      // onChange (el input conserva su value) y el comprobante "no carga"
+      if (uploadRefs.current[idx]) uploadRefs.current[idx].value = ''
     }
   }
 
