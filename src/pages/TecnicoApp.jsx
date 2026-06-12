@@ -226,30 +226,18 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 // ─── FOTO EVIDENCIA (reutilizable) ─────────────────────────────────────
 // Comprime una imagen antes de subirla (máx 1200px, calidad 0.82)
 // Lee ancho/alto sin decodificar la imagen completa (solo parsea cabeceras)
-function leerDimensiones(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload  = () => { const d = { w: img.naturalWidth, h: img.naturalHeight }; URL.revokeObjectURL(url); resolve(d) }
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagen ilegible')) }
-    img.src = url
-  })
-}
-
 // ⚠️ CRÍTICO PARA ANDROID: nunca decodificar la foto a resolución completa.
 // Las cámaras modernas producen 50–108 MP; el drawImage clásico necesita
 // ~200–400 MB de RAM para muestrear, Chrome Android mata el renderer y la
 // PWA "se reinicia" en plena calle. createImageBitmap con resizeWidth
 // decodifica YA reducida (downscale nativo del decodificador, poca memoria).
-// Cadena de fallbacks: bitmap-redimensionado → bitmap → Image clásico → original.
+// leerDimensiones (new Image) fue eliminado: decodificaba a full-res causando el OOM real.
 async function compressImage(file, maxW = 1200, quality = 0.82) {
   if (!file.type.startsWith('image/')) return file
   try {
     let bitmap = null
     try {
-      const { w } = await leerDimensiones(file)
-      const destW = Math.min(maxW, w || maxW)
-      bitmap = await createImageBitmap(file, { resizeWidth: destW, resizeQuality: 'medium' })
+      bitmap = await createImageBitmap(file, { resizeWidth: maxW, resizeQuality: 'medium' })
     } catch (_) {
       // Safari viejo u opciones no soportadas: decodificar y escalar al dibujar
       bitmap = await createImageBitmap(file)

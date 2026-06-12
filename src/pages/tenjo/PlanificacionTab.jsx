@@ -280,7 +280,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
         <div className="flex items-start gap-3">
           <Sparkles size={18} style={{ color: '#C4A87A' }} className="mt-0.5 flex-shrink-0" />
           <div className="flex-1">
-            <div className="font-serif text-lg text-ink">
+            <div className="font-semibold text-[15px] text-ink">
               {fechaJornada
                 ? <>Próxima jornada: <strong>{fmtFechaLarga(fechaJornada)}</strong></>
                 : 'Sin días de operación configurados'}
@@ -325,7 +325,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
         <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <CalendarCheck size={16} className="text-ink3" />
-            <div className="font-serif text-lg text-ink flex-1">Lote {lote.numero_lote}</div>
+            <div className="font-semibold text-[15px] text-ink flex-1">Lote {lote.numero_lote}</div>
             {canPlan && editable && agregables.length > 0 && (
               <Button size="sm" variant="secondary" onClick={() => setModalAgregar(true)}>
                 <Plus size={12} /> Agregar mascota

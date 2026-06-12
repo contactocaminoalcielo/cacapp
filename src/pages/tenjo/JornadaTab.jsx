@@ -240,7 +240,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
         return (
           <div key={lote.id} className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-              <div className="font-serif text-lg text-ink flex-1">
+              <div className="font-semibold text-[15px] text-ink flex-1">
                 Lote {lote.numero_lote} — {fmtFechaLarga(lote.fecha_jornada)}
               </div>
               <Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} />

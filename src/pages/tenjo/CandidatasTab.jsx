@@ -52,7 +52,7 @@ export default function CandidatasTab({ candidatas, config }) {
       <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
         <div className="px-5 py-4 border-b flex items-center gap-3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <Snowflake size={15} className="text-blue-500" />
-          <div className="font-serif text-lg text-ink flex-1">Candidatas Tenjo</div>
+          <div className="font-semibold text-[15px] text-ink flex-1">Candidatas Tenjo</div>
           {jornada && (
             <span className="text-[11px] text-ink3">
               Próxima jornada: <strong className="text-ink">{nombreDia(jornada)} {fmtFecha(jornada + 'T12:00:00')}</strong>

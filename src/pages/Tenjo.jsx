@@ -510,7 +510,7 @@ export default function Tenjo() {
         <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <div className="px-5 py-4 border-b flex items-center" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <Truck size={16} className="text-ink3 mr-2" />
-            <div className="font-serif text-lg text-ink">Traslados activos</div>
+            <div className="font-semibold text-[15px] text-ink">Traslados activos</div>
           </div>
           {traslados.length === 0 ? (
             <div className="py-12 text-center text-ink3 text-sm">Sin traslados activos</div>
@@ -560,7 +560,7 @@ export default function Tenjo() {
           <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#93C5FD' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(147,197,253,0.4)' }}>
               <Clock size={15} style={{ color: '#2563EB' }} />
-              <div className="font-serif text-lg text-ink flex-1">Cremación completada — esperando 5 días</div>
+              <div className="font-semibold text-[15px] text-ink flex-1">Cremación completada — esperando 5 días</div>
               <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#DBEAFE', color: '#1D4ED8' }}>
                 {cenizasEspera.length} en espera
               </span>
@@ -604,7 +604,7 @@ export default function Tenjo() {
           <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C03030' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(192,48,48,0.2)' }}>
               <Flame size={16} className="text-danger" />
-              <div className="font-serif text-lg text-ink flex-1">Cenizas listas — solicitar traslado de regreso</div>
+              <div className="font-semibold text-[15px] text-ink flex-1">Cenizas listas — solicitar traslado de regreso</div>
               <span className="text-[11px] font-bold text-danger bg-danger-light px-2 py-0.5 rounded-full">
                 {cenizasListas.length} lista{cenizasListas.length !== 1 ? 's' : ''}
               </span>
@@ -639,7 +639,7 @@ export default function Tenjo() {
         {/* Aptos para traslado */}
         <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <div className="px-5 py-4 border-b flex items-center" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-            <div className="font-serif text-lg text-ink flex-1">Mascotas listas para traslado individual</div>
+            <div className="font-semibold text-[15px] text-ink flex-1">Mascotas listas para traslado individual</div>
           </div>
           {aptosTraslado.length === 0 ? (
             <div className="py-8 text-center text-ink3 text-sm">Sin mascotas listas para traslado</div>
@@ -693,7 +693,7 @@ export default function Tenjo() {
           <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#F59E0B' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(245,158,11,0.3)' }}>
               <AlertTriangle size={15} className="text-amber-500" />
-              <div className="font-serif text-lg text-ink flex-1">Compostajes próximos a finalizar</div>
+              <div className="font-semibold text-[15px] text-ink flex-1">Compostajes próximos a finalizar</div>
               <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>
                 {compostajesAlerta.length} en alerta
               </span>
@@ -725,7 +725,7 @@ export default function Tenjo() {
           <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#059669' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(5,150,105,0.2)' }}>
               <Leaf size={15} className="text-green-600" />
-              <div className="font-serif text-lg text-ink flex-1">Compostajes listos — solicitar traslado de planta</div>
+              <div className="font-semibold text-[15px] text-ink flex-1">Compostajes listos — solicitar traslado de planta</div>
               <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#D1FAE5', color: '#065F46' }}>
                 {compostajesListos.length} listo{compostajesListos.length !== 1 ? 's' : ''}
               </span>
@@ -756,7 +756,7 @@ export default function Tenjo() {
         {compostajes.length > 0 && (
           <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-              <div className="font-serif text-lg text-ink">Compostajes activos</div>
+              <div className="font-semibold text-[15px] text-ink">Compostajes activos</div>
             </div>
             <TableWrap>
               <Table>
@@ -805,7 +805,7 @@ export default function Tenjo() {
           <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
             <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
               <FileText size={15} className="text-ink3" />
-              <div className="font-serif text-lg text-ink flex-1">Individuales procesados — Certificados</div>
+              <div className="font-semibold text-[15px] text-ink flex-1">Individuales procesados — Certificados</div>
               <span className="text-[11px] text-ink3 bg-surface2 px-2 py-0.5 rounded-full">{procesados.length}</span>
             </div>
             <div className="p-5 space-y-3">
