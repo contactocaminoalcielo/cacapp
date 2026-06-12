@@ -240,7 +240,33 @@ function conTimeout(promise, msg) {
   ])
 }
 
-function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
+// Validación de archivos a subir SIN decodificar la imagen (cero riesgo de RAM).
+// HEIC/HEIF se rechaza con mensaje claro: Chrome Android no lo decodifica y
+// el fallo sería silencioso.
+const MAX_SUBIDA_MB = 25
+const MIME_POR_EXT  = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf' }
+const EXT_POR_MIME  = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' }
+
+function validarArchivo(file, { permitirPdf = false } = {}) {
+  const nombre    = (file.name || '').toLowerCase()
+  const extNombre = nombre.includes('.') ? nombre.split('.').pop() : ''
+  const mime      = file.type || MIME_POR_EXT[extNombre] || ''
+  if (/hei[cf]/.test(mime) || ['heic', 'heif'].includes(extNombre)) {
+    return { error: 'Formato HEIC no soportado. Configura la cámara en modo "Más compatible" (JPG) o reenvía la foto por WhatsApp y sube esa copia.' }
+  }
+  const esPdf = mime === 'application/pdf'
+  if (esPdf && !permitirPdf) return { error: 'Aquí solo se permiten imágenes (JPG, PNG o WEBP).' }
+  if (!esPdf && !mime.startsWith('image/')) {
+    return { error: `Formato no permitido. Usa JPG, PNG, WEBP${permitirPdf ? ' o PDF' : ''}.` }
+  }
+  if (file.size > MAX_SUBIDA_MB * 1024 * 1024) {
+    return { error: `El archivo supera los ${MAX_SUBIDA_MB} MB permitidos.` }
+  }
+  const ext = EXT_POR_MIME[mime] || extNombre || mime.split('/')[1] || 'bin'
+  return { mime, ext, esPdf }
+}
+
+function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir = true, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
   const cameraRef                 = useRef()
@@ -260,13 +286,22 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, label = '
   }, [])
 
   async function subirFoto(file, { recuperado = false } = {}) {
+    const val = validarArchivo(file)
+    if (val.error) {
+      setErr(val.error)
+      if (cameraRef.current)  cameraRef.current.value  = ''
+      if (galeriaRef.current) galeriaRef.current.value = ''
+      return
+    }
     if (!recuperado) await stashPut(stashKey, file)
     setUploading(true); setErr('')
     try {
-      const compressed = await compressImage(file)
-      const path = `${storagePath}/${Date.now()}.jpg`
+      // comprimir=false (cuarto frío): subir el original sin decodificar —
+      // la rama createImageBitmap/canvas es la que falla desde galería Android
+      const body = comprimir ? await compressImage(file) : file
+      const path = `${storagePath}/${Date.now()}.${comprimir ? 'jpg' : val.ext}`
       const { data, error: upErr } = await conTimeout(
-        db.storage.from('evidencias').upload(path, compressed, { upsert: false, contentType: 'image/jpeg' }),
+        db.storage.from('evidencias').upload(path, body, { upsert: false, contentType: comprimir ? 'image/jpeg' : val.mime }),
         'La subida tardó demasiado — revisa la señal y reintenta'
       )
       if (upErr) throw upErr
@@ -530,6 +565,7 @@ function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT })
       <FotoEvidencia
         storagePath={cf?.id ? `cuarto_frio/${cf.id}` : `cuarto_frio/temp_${svc.id}`}
         dbSave={cf?.id ? { table: 'cuarto_frio', column: 'foto_pesaje_url', id: cf.id } : null}
+        comprimir={false}
         fotoUrl={fotoUrl}
         onFotoUploaded={fotoSubida}
         label="Foto de la báscula / pesaje"
@@ -2607,20 +2643,26 @@ function ReciboForm({ svcData, servicioSel, tecnico, yaGuardado = false, onVolve
 
   async function subirComprobante(idx, file, { recuperado = false } = {}) {
     if (!file) return
+    const val = validarArchivo(file, { permitirPdf: true })
+    if (val.error) {
+      setErr(val.error)
+      if (uploadRefs.current[idx]) uploadRefs.current[idx].value = ''
+      return
+    }
     const stashKey = `recibo_${servicioSel.id}_${idx}`
-    // Guardar el archivo en IndexedDB ANTES de comprimir: si Android mata la
+    // Guardar el archivo en IndexedDB ANTES de subir: si Android mata la
     // pestaña a mitad de camino, al volver se reanuda la subida automáticamente.
     if (!recuperado) await stashPut(stashKey, file)
     updateMedio(idx, 'subiendoComprobante', true)
     try {
-      const esPdf = file.type === 'application/pdf'
-      const body  = esPdf ? file : await compressImage(file)
-      const ext   = esPdf ? 'pdf' : 'jpg'
-      const path  = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${ext}`
+      // Subir el archivo ORIGINAL sin comprimir ni convertir a JPG: el PDF
+      // (que nunca pasó por compresión) siempre funcionó; la rama de imagen
+      // con createImageBitmap/canvas era la que fallaba desde galería Android
+      const path = `comprobantes/${servicioSel.id}/${Date.now()}_${idx}.${val.ext}`
       const { data, error: upErr } = await conTimeout(
-        db.storage.from('evidencias').upload(path, body, {
+        db.storage.from('evidencias').upload(path, file, {
           upsert: false,
-          contentType: esPdf ? 'application/pdf' : 'image/jpeg',
+          contentType: val.mime,
         }),
         'La subida tardó demasiado — revisa la señal'
       )
