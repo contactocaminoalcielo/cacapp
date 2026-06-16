@@ -3615,14 +3615,24 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // selector, así la pantalla pesada ya está desmontada cuando se abre.
   if (comproOverlay !== null) {
     const m = mediosPago[comproOverlay] || {}
-    // Al elegir el archivo: cerramos esta pantalla y volvemos al recibo de
-    // inmediato. La subida sigue en SEGUNDO PLANO; el estado se ve en un chip
-    // dentro del medio de pago. Así el técnico no queda atrapado en un spinner.
-    const alElegir = e => {
+    // Al elegir el archivo: PRIMERO lo respaldamos en IndexedDB (todavía en esta
+    // pantalla liviana), y SOLO DESPUÉS volvemos al recibo y subimos en segundo
+    // plano. Clave anti-reinicio: en celulares con poca RAM, Android mata la PWA
+    // justo al volver del selector (pasa igual con foto o PDF). Si el archivo ya
+    // quedó en el stash ANTES del render pesado, al reabrir el recibo la subida
+    // se reanuda sola con ese archivo — el técnico NO tiene que elegirlo de nuevo.
+    const alElegir = async e => {
       const file = e.target.files?.[0]
       limpiarPickerAbierto()
+      if (!file) { setComproOverlay(null); return }
+      // Validación liviana (no decodifica la imagen): rechaza HEIC/tamaño antes de respaldar
+      const val = validarArchivo(file, { permitirPdf: true })
+      if (val.error) { setErr(val.error); setComproOverlay(null); return }
+      const idx = comproOverlay
+      await stashPut(`recibo_${servicioSel.id}_${idx}`, file)
       setComproOverlay(null)
-      subirComprobante(comproOverlay, file)
+      // recuperado:true → subirComprobante no vuelve a guardar en el stash (ya está)
+      subirComprobante(idx, file, { recuperado: true })
     }
     return (
       <div ref={topRef} className="min-h-[55vh] flex flex-col">
