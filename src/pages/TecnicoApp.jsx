@@ -3754,32 +3754,33 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                       onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
 
                     {tieneComprobante ? (
-                      /* Preview del comprobante (imagen o PDF) */
-                      <div className="relative rounded-xl overflow-hidden border border-green-200">
-                        {m.comprobanteUrl.toLowerCase().includes('.pdf') ? (
-                          <a href={m.comprobanteUrl} target="_blank" rel="noreferrer"
-                            className="flex items-center gap-2 px-3 py-5 bg-gray-50">
-                            <FileText size={22} style={{ color: '#DC2626' }} />
-                            <span className="text-[12px] font-semibold text-gray-700">Comprobante PDF — toca para ver</span>
-                          </a>
-                        ) : (
-                          <img src={m.comprobanteUrl} alt="Comprobante"
-                            className="w-full object-cover"
-                            style={{ maxHeight: 160 }} />
-                        )}
-                        {/* pointer-events-none: el overlay no debe bloquear el enlace del PDF */}
-                        <div className="absolute inset-0 flex items-end justify-between p-2 pointer-events-none"
-                          style={{ background: 'linear-gradient(transparent 60%, rgba(0,0,0,0.5))' }}>
-                          <span className="text-white text-[11px] font-bold flex items-center gap-1">
-                            <Check size={12} /> Comprobante guardado
-                          </span>
-                          <button
-                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
-                            className="text-white text-[10px] font-semibold px-2 py-1 rounded-full pointer-events-auto"
-                            style={{ background: 'rgba(255,255,255,0.25)' }}>
-                            Cambiar
-                          </button>
-                        </div>
+                      /* Confirmación del comprobante como ENLACE (toca para ver), igual
+                         que el PDF. NO se renderiza <img src={url}> con la imagen completa:
+                         decodificar una captura/foto de varios MP a resolución completa
+                         dispara OOM en Android y reinicia la PWA (ver feedback_mobile_image_oom).
+                         El archivo se abre en pestaña nueva, donde el visor del navegador
+                         decodifica fuera del contexto de la app. */
+                      <div className="rounded-xl border border-green-200 flex items-center gap-2 px-3 py-4 bg-green-50">
+                        <a href={m.comprobanteUrl} target="_blank" rel="noreferrer"
+                          className="flex items-center gap-2 min-w-0 flex-1">
+                          {m.comprobanteUrl.toLowerCase().includes('.pdf')
+                            ? <FileText size={22} style={{ color: '#DC2626' }} className="flex-shrink-0" />
+                            : <Receipt size={22} style={{ color: '#059669' }} className="flex-shrink-0" />}
+                          <div className="min-w-0">
+                            <span className="text-[12px] font-bold text-green-700 flex items-center gap-1">
+                              <Check size={12} /> Comprobante guardado
+                            </span>
+                            <span className="text-[11px] text-gray-500">
+                              Toca para ver{m.comprobanteUrl.toLowerCase().includes('.pdf') ? ' (PDF)' : ''}
+                            </span>
+                          </div>
+                        </a>
+                        <button
+                          onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
+                          className="ml-auto text-[10px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
+                          style={{ background: '#D1FAE5', color: '#065F46' }}>
+                          Cambiar
+                        </button>
                       </div>
                     ) : m.subiendoComprobante ? (
                       <div className="w-full py-5 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5"
