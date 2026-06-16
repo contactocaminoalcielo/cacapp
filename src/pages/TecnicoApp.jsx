@@ -2887,6 +2887,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const uploadRefs    = useRef({})   // input galería / archivo (incluye PDF)
   const comproCamRefs = useRef({})   // input cámara directa
   const topRef        = useRef(null)
+  // idx del medio cuyo comprobante se está subiendo: mientras no sea null se
+  // muestra SOLO la pantalla liviana de carga (ver early-return más abajo).
+  const [comproOverlay, setComproOverlay] = useState(null)
 
   // Limpia el value de ambos inputs del medio idx para permitir reseleccionar
   // el MISMO archivo tras un intento (si no, onChange no vuelve a dispararse).
@@ -3418,6 +3421,77 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     }
   }
 
+  // ── Pantalla LIVIANA de carga de comprobante ──────────────────────────────
+  // Mientras se sube, desmontamos el preview/firma/datos del recibo (pantalla
+  // pesada). En celulares con poca RAM, abrir el selector de fotos desde la
+  // pantalla pesada hacía que Android matara la PWA al cerrarse el selector
+  // (OOM) y la imagen se perdía antes de llegar al código. Liviana = sobrevive,
+  // igual que la pantalla de recogida. El técnico entra aquí ANTES de abrir el
+  // selector, así la pantalla pesada ya está desmontada cuando se abre.
+  if (comproOverlay !== null) {
+    const m = mediosPago[comproOverlay] || {}
+    return (
+      <div ref={topRef} className="min-h-[55vh] flex flex-col">
+        <input type="file" accept="image/*,application/pdf"
+          ref={el => uploadRefs.current[comproOverlay] = el}
+          className="hidden"
+          onChange={e => { limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+        <input type="file" accept="image/*" capture="environment"
+          ref={el => comproCamRefs.current[comproOverlay] = el}
+          className="hidden"
+          onChange={e => { limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+
+        <button onClick={() => setComproOverlay(null)}
+          className="text-[12px] font-semibold text-gray-500 mb-4 self-start">
+          ← Volver al recibo
+        </button>
+        <div className="text-[13px] font-bold text-gray-800 mb-1">Subir comprobante de pago</div>
+        <div className="text-[11px] text-gray-400 mb-5">{m.metodo} · {fmt(parseFloat(m.monto) || 0)}</div>
+
+        {m.subiendoComprobante ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+            <div className="spinner" style={{ width: 28, height: 28 }} />
+            <span className="text-[12px] text-gray-500">Subiendo comprobante…</span>
+          </div>
+        ) : m.comprobanteUrl ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+            <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+              <Check size={28} style={{ color: '#16A34A' }} />
+            </div>
+            <span className="text-[13px] font-bold text-green-700">¡Comprobante guardado!</span>
+            <button onClick={() => setComproOverlay(null)}
+              className="mt-2 px-5 py-2.5 rounded-xl text-[13px] font-bold text-white"
+              style={{ background: '#0B1D4F' }}>
+              Volver al recibo
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => { marcarPickerAbierto(); uploadRefs.current[comproOverlay]?.click() }}
+                className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
+                style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+                <span className="text-3xl">🖼</span>
+                <span className="text-[13px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
+                <span className="text-[10px] font-bold text-green-700">Recomendado</span>
+              </button>
+              <button onClick={() => { marcarPickerAbierto(); comproCamRefs.current[comproOverlay]?.click() }}
+                className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
+                style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
+                <Camera size={28} className="text-gray-400" />
+                <span className="text-[13px] font-semibold text-gray-600">Cámara</span>
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-3 leading-snug">
+              💡 Para que la app no se reinicie: toma la foto con la cámara de tu teléfono y súbela desde <strong>Galería</strong>.
+            </p>
+            {err && <p className="text-[12px] text-red-500 mt-3 flex items-start gap-1"><AlertCircle size={12} className="mt-0.5 flex-shrink-0" /> {err}</p>}
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div ref={topRef}>
       <div className="flex items-center gap-2 mb-4">
@@ -3756,18 +3830,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
                       Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#D97706' }}>(pendiente ⏳)</span>}
                     </div>
-                    {/* Galería / archivo (incluye PDF) — ruta recomendada: la foto
-                        ya existe en el teléfono, el picker es liviano y NO mata la PWA */}
-                    <input type="file" accept="image/*,application/pdf"
-                      ref={el => uploadRefs.current[idx] = el}
-                      className="hidden"
-                      onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
-                    {/* Cámara directa — puede reiniciar la app en teléfonos con poca RAM */}
-                    <input type="file" accept="image/*" capture="environment"
-                      ref={el => comproCamRefs.current[idx] = el}
-                      className="hidden"
-                      onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
-
+                    {/* Los inputs de archivo NO viven aquí: la subida se hace desde
+                        una pantalla liviana (setComproOverlay) para no morir por RAM. */}
                     {tieneComprobante ? (
                       /* Confirmación del comprobante como ENLACE (toca para ver), igual
                          que el PDF. NO se renderiza <img src={url}> con la imagen completa:
@@ -3791,7 +3855,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                           </div>
                         </a>
                         <button
-                          onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
+                          onClick={e => { e.stopPropagation(); e.preventDefault(); setComproOverlay(idx) }}
                           className="ml-auto text-[10px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
                           style={{ background: '#D1FAE5', color: '#065F46' }}>
                           Cambiar
@@ -3804,29 +3868,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         <span className="text-[11px] text-gray-500">Subiendo comprobante…</span>
                       </div>
                     ) : (
-                      <div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
-                            className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 transition-all active:scale-98"
-                            style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
-                            <span className="text-xl">🖼</span>
-                            <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
-                            <span className="text-[9px] font-bold text-green-700">Recomendado</span>
-                          </button>
-                          <button
-                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); comproCamRefs.current[idx]?.click() }}
-                            className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 transition-all active:scale-98"
-                            style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
-                            <Camera size={20} className="text-gray-400" />
-                            <span className="text-[12px] font-semibold text-gray-600">Cámara</span>
-                            <span className="text-[9px] text-gray-400">en el momento</span>
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-gray-400 mt-1.5 leading-tight">
-                          💡 Si la cámara reinicia la app, toma la foto con tu teléfono y súbela desde <strong>Galería</strong>.
-                        </p>
-                      </div>
+                      <button
+                        onClick={e => { e.stopPropagation(); e.preventDefault(); setComproOverlay(idx) }}
+                        className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
+                        style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+                        <UploadIcon size={20} style={{ color: '#D97706' }} />
+                        <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>
+                          Subir comprobante
+                        </span>
+                        <span className="text-[10px] text-gray-400">
+                          Galería, PDF o cámara — pantalla simple
+                        </span>
+                      </button>
                     )}
                   </div>
                 )}
