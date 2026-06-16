@@ -1425,7 +1425,7 @@ export default function TecnicoApp() {
   const { personalData: tecnico, logout } = useAuth()
   // La pestaña activa sobrevive reinicios de la PWA (Android mata la pestaña
   // al abrir cámara/galería): el técnico vuelve exactamente donde estaba.
-  const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo']
+  const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo', 'comprobantes']
   const [tab, setTab] = useState(() => {
     try {
       const t = localStorage.getItem('tecnico_ui_tab')
@@ -1437,6 +1437,7 @@ export default function TecnicoApp() {
   }, [tab])
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
+  const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
   const [loading, setLoading]     = useState(false)
   const [queryErr, setQueryErr]   = useState('')
   const [notif, setNotif]         = useState(null)
@@ -1602,6 +1603,17 @@ export default function TecnicoApp() {
 
       setRecogidas(nuevasR)
       setEntregas(nuevasE)
+
+      // ── 6. Badge de comprobantes pendientes (recibos con pago digital sin comprobante) ──
+      try {
+        const { data: recs } = await db.from('recibos_tecnico')
+          .select('medios_pago').eq('tecnico_id', tecnico.id).limit(300)
+        const n = (recs || []).filter(r =>
+          Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
+            METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
+        ).length
+        setCompPend(n)
+      } catch (_) { /* badge best-effort */ }
     } finally {
       if (!silent) setLoading(false)
     }
@@ -1860,6 +1872,7 @@ export default function TecnicoApp() {
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: 0,                    color: '#7C3AED' },
+    { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
   ]
 
   return (
@@ -2024,6 +2037,8 @@ export default function TecnicoApp() {
           </div>
         ) : tab === 'recibo' ? (
           <ReciboTab tecnico={tecnico} />
+        ) : tab === 'comprobantes' ? (
+          <ComprobanteTab tecnico={tecnico} onCount={setCompPend} />
         ) : null}
       </div>
 
@@ -2709,6 +2724,310 @@ function ReciboTab({ tecnico }) {
 const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
 // Métodos que requieren comprobante/referencia
 const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
+
+// ─── COMPROBANTES (pestaña independiente) ───────────────────────────────────
+// Por qué existe separado del recibo: en celulares con poca RAM, abrir el
+// selector de archivos desde la pantalla PESADA del recibo (preview + firma +
+// datos) hacía que Android matara la PWA al volver del selector. La foto de
+// evidencia de la mascota NUNCA falla porque es un cargador simple en pantalla
+// liviana que NO cambia de pantalla al elegir el archivo. Acá replicamos ESE
+// patrón: lista liviana + cargador inline (sin desmontar/montar pantallas
+// pesadas, sin <img> de la imagen completa). El ReciboForm pesado ni se monta.
+
+// Cargador inline de un comprobante — copia las mecánicas probadas de FotoEvidencia
+// (stash antes de subir, original sin comprimir, sin decodificar, reset de inputs).
+function ComprobanteUploader({ servicioId, onSubido }) {
+  const [uploading, setUploading] = useState(false)
+  const [err, setErr]             = useState('')
+  const [okUrl, setOkUrl]         = useState('')
+  const galeriaRef                = useRef()
+  const cameraRef                 = useRef()
+  const stashKey                  = `comprobante_${servicioId}`
+
+  // Recovery: si la app se reinició a mitad de subida, reanudar al montar
+  useEffect(() => {
+    ;(async () => {
+      const p = await stashGetByPrefix(stashKey)
+      if (p.length > 0 && p[0].blob) subir(p[0].blob, { recuperado: true })
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function limpiar() {
+    if (galeriaRef.current) galeriaRef.current.value = ''
+    if (cameraRef.current)  cameraRef.current.value  = ''
+  }
+
+  async function subir(file, { recuperado = false } = {}) {
+    const val = validarArchivo(file, { permitirPdf: true })
+    if (val.error) { setErr(val.error); limpiar(); return }
+    // Respaldar ANTES de subir (sobrevive a un reinicio del teléfono)
+    if (!recuperado) await stashPut(stashKey, file)
+    setUploading(true); setErr('')
+    try {
+      // Original sin comprimir ni decodificar (igual que el comprobante de hoy)
+      const path = `comprobantes/${servicioId}/${Date.now()}.${val.ext}`
+      const { data, error: upErr } = await conTimeout(
+        db.storage.from('evidencias').upload(path, file, { upsert: false, contentType: val.mime }),
+        'La subida tardó demasiado — revisa la señal'
+      )
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
+      await onSubido(publicUrl, data.path, val)   // persistencia (recibo_comprobantes + jsonb)
+      await stashDelete(stashKey)
+      setOkUrl(publicUrl)
+    } catch (e) {
+      setErr(String(e.message || e).slice(0, 120))
+    } finally {
+      setUploading(false)
+      limpiar()
+    }
+  }
+
+  function handleFile(e) {
+    limpiarPickerAbierto()
+    const f = e.target.files?.[0]
+    if (f) subir(f)
+  }
+
+  // Inputs file SIEMPRE montados (livianos). No se renderiza <img> del comprobante.
+  return (
+    <div className="mt-2">
+      <input type="file" accept="image/*,application/pdf" ref={galeriaRef} onChange={handleFile} className="hidden" />
+      <input type="file" accept="image/*" capture="environment" ref={cameraRef} onChange={handleFile} className="hidden" />
+
+      {okUrl ? (
+        <a href={okUrl} target="_blank" rel="noreferrer"
+          className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-3 py-3">
+          <Check size={16} style={{ color: '#059669' }} className="flex-shrink-0" />
+          <span className="text-[12px] font-bold text-green-700">Comprobante subido · toca para ver</span>
+        </a>
+      ) : uploading ? (
+        <div className="flex items-center gap-3 rounded-xl px-3 py-3" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+          <div className="spinner flex-shrink-0" style={{ width: 18, height: 18 }} />
+          <span className="text-[12px] font-bold text-blue-800">Subiendo comprobante…</span>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => { marcarPickerAbierto(); galeriaRef.current?.click() }}
+              className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 active:scale-98"
+              style={{ borderColor: '#FDBA74', background: '#FFF7ED' }}>
+              <UploadIcon size={18} style={{ color: '#EA580C' }} />
+              <span className="text-[12px] font-semibold" style={{ color: '#9A3412' }}>Galería / PDF</span>
+            </button>
+            <button onClick={() => { marcarPickerAbierto(); cameraRef.current?.click() }}
+              className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 active:scale-98"
+              style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
+              <Camera size={18} className="text-gray-400" />
+              <span className="text-[12px] font-semibold text-gray-600">Cámara</span>
+            </button>
+          </div>
+          {err && (
+            <div className="flex items-center gap-2 mt-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
+              <AlertCircle size={12} /> {err}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ComprobanteTab({ tecnico, onCount }) {
+  const [items, setItems]       = useState([])
+  const [cargando, setCargando] = useState(true)
+  const [listErr, setListErr]   = useState('')
+
+  const cargar = useCallback(async () => {
+    if (!tecnico?.id) return
+    setCargando(true); setListErr('')
+    try {
+      const { data: svcs, error } = await db.from('servicios')
+        .select(`
+          id, estado,
+          mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
+          planes:plan_id ( nombre )
+        `)
+        .eq('tecnico_id', tecnico.id)
+        .in('estado', ESTADOS_RECOGIDO)
+        .limit(80)
+      if (error) throw error
+      const ids = (svcs || []).map(s => s.id)
+      const svcById = Object.fromEntries((svcs || []).map(s => [s.id, s]))
+      let recibos = []
+      if (ids.length) {
+        const { data: recs } = await db.from('recibos_tecnico')
+          .select('id, servicio_id, numero_recibo, medios_pago, created_at')
+          .in('servicio_id', ids)
+          .order('created_at', { ascending: true })
+        recibos = recs || []
+      }
+      // Un item por recibo que tenga al menos un medio DIGITAL con monto > 0
+      const lista = []
+      for (const r of recibos) {
+        const medios  = Array.isArray(r.medios_pago) ? r.medios_pago : []
+        const digital = medios.filter(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
+        if (digital.length === 0) continue
+        const pendientes = digital.filter(m => !m.comprobanteUrl)
+        const yaUrl      = digital.find(m => m.comprobanteUrl)?.comprobanteUrl || ''
+        const svc        = svcById[r.servicio_id]
+        lista.push({
+          reciboId: r.id,
+          svcId:    r.servicio_id,
+          numero:   r.numero_recibo,
+          mascota:  svc?.mascotas,
+          plan:     svc?.planes?.nombre || '',
+          metodos:  pendientes.map(m => m.metodo),
+          monto:    digital.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
+          estado:   pendientes.length > 0 ? 'PENDIENTE' : 'SUBIDO',
+          yaUrl,
+        })
+      }
+      setItems(lista)
+      if (onCount) onCount(lista.filter(i => i.estado === 'PENDIENTE').length)
+    } catch (e) {
+      setListErr(e.message || 'Error al cargar comprobantes')
+    } finally { setCargando(false) }
+  }, [tecnico?.id, onCount])
+
+  useEffect(() => { cargar() }, [cargar])
+
+  // Persistencia tras subir: jsonb (compat) + tabla formal recibo_comprobantes + novedad
+  async function persistir(item, publicUrl, storagePath, val) {
+    // 1. Compat: marcar el primer medio digital sin comprobante en el jsonb
+    let idx = -1
+    try {
+      const { data: row } = await db.from('recibos_tecnico').select('medios_pago').eq('id', item.reciboId).single()
+      const arr = Array.isArray(row?.medios_pago) ? [...row.medios_pago] : []
+      idx = arr.findIndex(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
+      if (idx >= 0) {
+        arr[idx] = { ...arr[idx], comprobanteUrl: publicUrl }
+        await db.from('recibos_tecnico').update({ medios_pago: arr }).eq('id', item.reciboId)
+      }
+    } catch (_) {}
+    // 2. Fuente formal (asociación por medio_pago_id; best-effort si la tabla existe)
+    try {
+      let medioPagoId = null
+      const { data: rows } = await db.from('recibo_medios_pago')
+        .select('id, metodo, created_at').eq('recibo_id', item.reciboId)
+        .order('created_at', { ascending: true })
+      if (rows?.length) {
+        medioPagoId = (idx >= 0 && rows[idx]?.id) ||
+          rows.find(r => METODOS_CON_COMPROBANTE.includes(r.metodo))?.id || null
+      }
+      await db.from('recibo_comprobantes').insert({
+        recibo_id:     item.reciboId,
+        medio_pago_id: medioPagoId,
+        servicio_id:   item.svcId,
+        bucket:        'evidencias',
+        storage_path:  storagePath,
+        mime_type:     val.mime,
+        estado:        'PENDIENTE_REVISION',
+        uploaded_by:   tecnico?.id || null,
+      })
+    } catch (_) {}
+    // 3. Rastro para el coordinador
+    try {
+      await db.from('novedades_servicio').insert({
+        servicio_id:    item.svcId,
+        tipo_novedad:   'NOTA',
+        descripcion:    `Comprobante de pago subido (recibo ${item.numero}). Pendiente de revisión.`,
+        registrado_por: tecnico?.id || null,
+      })
+    } catch (_) {}
+    await cargar()
+  }
+
+  const pendientes = items.filter(i => i.estado === 'PENDIENTE')
+  const subidos    = items.filter(i => i.estado === 'SUBIDO')
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+          🧾 Comprobantes de pago
+        </div>
+        <button onClick={cargar} disabled={cargando}
+          className="text-[11px] font-bold px-2.5 py-1 rounded-lg disabled:opacity-50"
+          style={{ background: '#FFEDD5', color: '#EA580C' }}>
+          {cargando ? 'Cargando…' : '↻ Actualizar'}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[11px]"
+        style={{ background: '#FFF7ED', color: '#9A3412' }}>
+        <span className="text-base">💡</span>
+        <span>Subí acá el comprobante de cada pago digital. Es una pantalla simple — no se reinicia como el recibo.</span>
+      </div>
+
+      {listErr && (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3" style={{ background: '#FEE2E2', color: '#991B1B' }}>
+          <AlertCircle size={13} /> {listErr}
+        </div>
+      )}
+
+      {cargando && items.length === 0 ? (
+        <div className="flex justify-center py-10"><div className="spinner" /></div>
+      ) : items.length === 0 ? (
+        <EmptyState icon="🧾" texto="Sin comprobantes por subir"
+          sub="Cuando registres un pago por transferencia, Nequi, Daviplata o tarjeta, aparecerá aquí para subir el comprobante." />
+      ) : (
+        <>
+          {pendientes.length === 0 && (
+            <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-3" style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
+              <CheckCircle size={15} style={{ color: '#16A34A' }} />
+              <span className="text-[12px] font-bold text-green-800">Al día — todos los comprobantes subidos</span>
+            </div>
+          )}
+
+          {pendientes.map(item => (
+            <div key={item.reciboId} className="bg-white rounded-2xl p-4 border mb-2 shadow-sm" style={{ borderColor: '#FED7AA' }}>
+              <div className="flex items-center gap-3">
+                <span style={{ fontSize: 26 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-gray-900 leading-tight">{item.mascota?.nombre || '—'}</div>
+                  <div className="text-[11px] text-gray-500 truncate">
+                    {item.plan ? `${item.plan} · ` : ''}{item.mascota?.clientes?.nombre} {item.mascota?.clientes?.apellido}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FFEDD5', color: '#9A3412' }}>
+                      {item.metodos.join(', ')} · {fmt(item.monto)}
+                    </span>
+                    <span className="text-[10px] text-gray-400">No. {item.numero}</span>
+                  </div>
+                </div>
+              </div>
+              <ComprobanteUploader
+                servicioId={item.svcId}
+                onSubido={(url, path, val) => persistir(item, url, path, val)}
+              />
+            </div>
+          ))}
+
+          {subidos.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
+              {subidos.map(item => (
+                <a key={item.reciboId} href={item.yaUrl || undefined} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-3 bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
+                  <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '—'}</div>
+                    <div className="text-[10px] text-gray-400">No. {item.numero}</div>
+                  </div>
+                  <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
+                    <Check size={12} /> Subido
+                  </span>
+                </a>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 // ─── RECIBO FORM ────────────────────────────────────────────────────────────
 function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onVolver, onGuardado }) {
@@ -4096,18 +4415,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         </button>
                       </div>
                     ) : (
-                      <button
-                        onClick={e => { e.stopPropagation(); e.preventDefault(); setComproOverlay(idx) }}
-                        className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
-                        style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
-                        <UploadIcon size={20} style={{ color: '#D97706' }} />
-                        <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>
-                          Subir comprobante
-                        </span>
-                        <span className="text-[10px] text-gray-400">
-                          Galería, PDF o cámara — pantalla simple
-                        </span>
-                      </button>
+                      <div className="w-full px-3 py-3 rounded-xl flex items-center gap-2"
+                        style={{ background: '#FFF7ED', border: '1px solid #FED7AA' }}>
+                        <Receipt size={16} style={{ color: '#EA580C' }} className="flex-shrink-0" />
+                        <p className="text-[11px] font-semibold leading-snug" style={{ color: '#9A3412' }}>
+                          El comprobante ahora se sube en la pestaña <b>🧾 Comprob.</b> (abajo).
+                          Guardá el recibo y subilo desde ahí — esa pantalla no se reinicia.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
