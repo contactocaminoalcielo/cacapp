@@ -2856,6 +2856,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   useEffect(() => {
     ;(async () => {
       const pendientes = await stashGetByPrefix(`recibo_${servicioSel.id}_`)
+      if (pendientes.some(p => p.blob)) setReanudando(true)
       for (const p of pendientes) {
         const idx = parseInt(p.key.split('_').pop(), 10)
         if (Number.isNaN(idx) || !p.blob) { stashDelete(p.key); continue }
@@ -2929,12 +2930,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [pagoRegistrado,  setPagoRegistrado]  = useState(!!reciboExistente)
   const [reciboId,        setReciboId]        = useState(reciboExistente?.id || null)
   const [err, setErr]               = useState('')
+  // Si la subida se reanuda sola tras un reinicio del teléfono, mostramos aviso
+  const [reanudando, setReanudando] = useState(false)
 
   const uploadRefs    = useRef({})   // input galería / archivo (incluye PDF)
   const comproCamRefs = useRef({})   // input cámara directa
   const topRef        = useRef(null)
-  // idx del medio cuyo comprobante se está subiendo: mientras no sea null se
-  // muestra SOLO la pantalla liviana de carga (ver early-return más abajo).
+  // reciboId puede cambiar (al guardar) MIENTRAS un comprobante sube en segundo
+  // plano; usamos un ref para anclar a la fila correcta aunque el closure sea viejo.
+  const reciboIdRef = useRef(reciboId)
+  useEffect(() => { reciboIdRef.current = reciboId }, [reciboId])
+  // idx del medio que está abriendo el selector: mientras no sea null se muestra
+  // SOLO la pantalla liviana (early-return) para que el selector no mate la PWA.
   const [comproOverlay, setComproOverlay] = useState(null)
 
   // Limpia el value de ambos inputs del medio idx para permitir reseleccionar
@@ -2977,6 +2984,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     if (!recuperado) await stashPut(stashKey, file)
     logEvent('compro:stash:ok')
     updateMedio(idx, 'subiendoComprobante', true)
+    updateMedio(idx, 'comproError', '')   // limpiar error previo al reintentar
     try {
       // Subir el archivo ORIGINAL sin comprimir ni convertir a JPG: el PDF
       // (que nunca pasó por compresión) siempre funcionó; la rama de imagen
@@ -2994,29 +3002,41 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       updateMedio(idx, 'comprobanteUrl', publicUrl)
       // Persistir la URL en la fila del recibo DE INMEDIATO: si la PWA muere
       // después de subir, el comprobante ya quedó en DB (no solo en useState).
-      // Read-modify-write para no pisar otros medios de la fila.
-      if (reciboId) {
+      // Usamos el REF (no el closure): si el recibo se guardó mientras la subida
+      // corría en segundo plano, reciboIdRef ya tiene el id y se ancla igual.
+      const rid = reciboIdRef.current
+      if (rid) {
         const { data: row, error: rowErr } = await db.from('recibos_tecnico')
-          .select('medios_pago').eq('id', reciboId).single()
+          .select('medios_pago').eq('id', rid).single()
         if (rowErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + rowErr.message)
         const arr = Array.isArray(row?.medios_pago) ? [...row.medios_pago] : []
         while (arr.length <= idx) arr.push({ metodo: 'TRANSFERENCIA', monto: '', referencia: '', comprobanteUrl: '' })
         arr[idx] = { ...arr[idx], comprobanteUrl: publicUrl }
         const { error: updErr } = await db.from('recibos_tecnico')
-          .update({ medios_pago: arr }).eq('id', reciboId)
+          .update({ medios_pago: arr }).eq('id', rid)
         if (updErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + updErr.message)
       }
       await stashDelete(stashKey)
       logEvent('compro:subir:ok')
     } catch (e) {
       logEvent('compro:subir:err', { m: String(e.message || e).slice(0, 60) })
-      setErr('Comprobante pendiente. Puedes reintentarlo. (' + (e.message || e) + ' — el archivo quedó guardado en el teléfono)')
+      updateMedio(idx, 'comproError', String(e.message || e).slice(0, 90))
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
+      setReanudando(false)
       // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
       // onChange (el input conserva su value) y el comprobante "no carga"
       limpiarInputsComprobante(idx)
     }
+  }
+
+  // Reintentar la subida usando el archivo ya guardado en el teléfono (stash),
+  // sin volver a abrir el selector (evita el riesgo de reinicio del selector).
+  async function reintentarComprobante(idx) {
+    const pendientes = await stashGetByPrefix(`recibo_${servicioSel.id}_${idx}`)
+    const blob = pendientes.find(p => p.key === `recibo_${servicioSel.id}_${idx}`)?.blob
+    if (blob) subirComprobante(idx, blob, { recuperado: true })
+    else setComproOverlay(idx)   // ya no está el archivo: volver a elegirlo
   }
 
   const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
@@ -3056,7 +3076,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         hora_emision:    horaActual,
         valor_total:     form.valor_servicio,
         valor_cobrado:   valorCobrado,
-        medios_pago:     pagoPendiente ? [] : mediosPago,
+        medios_pago:     pagoPendiente ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
         datos_form:      { ...form, pago_pendiente: pagoPendiente },
         estado:          'GUARDADO',
       }).select('id').single()
@@ -3480,72 +3500,51 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // selector, así la pantalla pesada ya está desmontada cuando se abre.
   if (comproOverlay !== null) {
     const m = mediosPago[comproOverlay] || {}
+    // Al elegir el archivo: cerramos esta pantalla y volvemos al recibo de
+    // inmediato. La subida sigue en SEGUNDO PLANO; el estado se ve en un chip
+    // dentro del medio de pago. Así el técnico no queda atrapado en un spinner.
+    const alElegir = e => {
+      const file = e.target.files?.[0]
+      logEvent('compro:onchange', { got: !!file })
+      limpiarPickerAbierto()
+      setComproOverlay(null)
+      subirComprobante(comproOverlay, file)
+    }
     return (
       <div ref={topRef} className="min-h-[55vh] flex flex-col">
         <input type="file" accept="image/*,application/pdf"
           ref={el => uploadRefs.current[comproOverlay] = el}
-          className="hidden"
-          onChange={e => { logEvent('compro:onchange', { src: 'galeria', got: !!e.target.files?.[0] }); limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+          className="hidden" onChange={alElegir} />
         <input type="file" accept="image/*" capture="environment"
           ref={el => comproCamRefs.current[comproOverlay] = el}
-          className="hidden"
-          onChange={e => { logEvent('compro:onchange', { src: 'camara', got: !!e.target.files?.[0] }); limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+          className="hidden" onChange={alElegir} />
 
         <button onClick={() => setComproOverlay(null)}
           className="text-[12px] font-semibold text-gray-500 mb-4 self-start">
           ← Volver al recibo
         </button>
-        <div className="text-[13px] font-bold text-gray-800 mb-1">Subir comprobante de pago</div>
-        <div className="text-[11px] text-gray-400 mb-5">{m.metodo} · {fmt(parseFloat(m.monto) || 0)}</div>
+        <div className="text-[14px] font-bold text-gray-800 mb-1">Subir comprobante de pago</div>
+        <div className="text-[11px] text-gray-400 mb-6">{m.metodo} · {fmt(parseFloat(m.monto) || 0)}</div>
 
-        {m.subiendoComprobante ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3">
-            <div className="spinner" style={{ width: 28, height: 28 }} />
-            <span className="text-[12px] text-gray-500">Subiendo comprobante…</span>
-          </div>
-        ) : m.comprobanteUrl ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
-            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-              <Check size={34} style={{ color: '#16A34A' }} />
-            </div>
-            <span className="text-[15px] font-extrabold text-green-700">¡Comprobante guardado!</span>
-            <span className="text-[12px] text-gray-500 -mt-1">
-              La imagen ya quedó subida. No tienes que volver a cargarla; se guarda junto con el recibo.
-            </span>
-            <a href={m.comprobanteUrl} target="_blank" rel="noreferrer"
-              className="mt-1 px-4 py-2 rounded-xl text-[12px] font-bold border"
-              style={{ borderColor: '#86EFAC', color: '#065F46', background: '#F0FDF4' }}>
-              👁 Ver comprobante
-            </a>
-            <button onClick={() => setComproOverlay(null)}
-              className="mt-1 px-5 py-2.5 rounded-xl text-[13px] font-bold text-white"
-              style={{ background: '#0B1D4F' }}>
-              Volver al recibo
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => { logEvent('compro:click', { src: 'galeria' }); marcarPickerAbierto(); uploadRefs.current[comproOverlay]?.click() }}
-                className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
-                style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
-                <span className="text-3xl">🖼</span>
-                <span className="text-[13px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
-                <span className="text-[10px] font-bold text-green-700">Recomendado</span>
-              </button>
-              <button onClick={() => { logEvent('compro:click', { src: 'camara' }); marcarPickerAbierto(); comproCamRefs.current[comproOverlay]?.click() }}
-                className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
-                style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
-                <Camera size={28} className="text-gray-400" />
-                <span className="text-[13px] font-semibold text-gray-600">Cámara</span>
-              </button>
-            </div>
-            <p className="text-[11px] text-gray-400 mt-3 leading-snug">
-              💡 Para que la app no se reinicie: toma la foto con la cámara de tu teléfono y súbela desde <strong>Galería</strong>.
-            </p>
-            {err && <p className="text-[12px] text-red-500 mt-3 flex items-start gap-1"><AlertCircle size={12} className="mt-0.5 flex-shrink-0" /> {err}</p>}
-          </>
-        )}
+        <div className="grid grid-cols-2 gap-3">
+          <button onClick={() => { logEvent('compro:click', { src: 'galeria' }); marcarPickerAbierto(); uploadRefs.current[comproOverlay]?.click() }}
+            className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
+            style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+            <span className="text-3xl">🖼</span>
+            <span className="text-[13px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
+            <span className="text-[10px] font-bold text-green-700">Recomendado</span>
+          </button>
+          <button onClick={() => { logEvent('compro:click', { src: 'camara' }); marcarPickerAbierto(); comproCamRefs.current[comproOverlay]?.click() }}
+            className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
+            style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
+            <Camera size={28} className="text-gray-400" />
+            <span className="text-[13px] font-semibold text-gray-600">Cámara</span>
+          </button>
+        </div>
+        <p className="text-[11px] text-gray-500 mt-4 leading-snug">
+          Elige la foto o el PDF y <strong>vuelves al recibo</strong>: el comprobante se sube solo.
+          Si tienes poca señal puede tardar unos segundos; no necesitas esperar aquí.
+        </p>
       </div>
     )
   }
@@ -3920,10 +3919,32 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         </button>
                       </div>
                     ) : m.subiendoComprobante ? (
-                      <div className="w-full py-5 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5"
-                        style={{ borderColor: '#D1D5DB' }}>
-                        <div className="spinner" style={{ width: 22, height: 22 }} />
-                        <span className="text-[11px] text-gray-500">Subiendo comprobante…</span>
+                      <div className="w-full px-3 py-3 rounded-xl flex items-center gap-3"
+                        style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+                        <div className="spinner flex-shrink-0" style={{ width: 20, height: 20 }} />
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-bold text-blue-800">
+                            {reanudando ? 'Reanudando la subida…' : 'Subiendo comprobante…'}
+                          </p>
+                          <p className="text-[11px] text-blue-600">
+                            Puedes seguir con el recibo — se guarda solo cuando termine.
+                          </p>
+                        </div>
+                      </div>
+                    ) : m.comproError ? (
+                      <div className="w-full px-3 py-3 rounded-xl flex items-center gap-3"
+                        style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                        <AlertCircle size={18} style={{ color: '#DC2626' }} className="flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-bold text-red-700">No se pudo subir</p>
+                          <p className="text-[10px] text-red-500 truncate">{m.comproError}</p>
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); e.preventDefault(); reintentarComprobante(idx) }}
+                          className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-white flex-shrink-0"
+                          style={{ background: '#DC2626' }}>
+                          Reintentar
+                        </button>
                       </div>
                     ) : (
                       <button
