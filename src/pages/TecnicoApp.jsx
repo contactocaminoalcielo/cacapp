@@ -3504,13 +3504,21 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             <span className="text-[12px] text-gray-500">Subiendo comprobante…</span>
           </div>
         ) : m.comprobanteUrl ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3">
-            <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-              <Check size={28} style={{ color: '#16A34A' }} />
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+              <Check size={34} style={{ color: '#16A34A' }} />
             </div>
-            <span className="text-[13px] font-bold text-green-700">¡Comprobante guardado!</span>
+            <span className="text-[15px] font-extrabold text-green-700">¡Comprobante guardado!</span>
+            <span className="text-[12px] text-gray-500 -mt-1">
+              La imagen ya quedó subida. No tienes que volver a cargarla; se guarda junto con el recibo.
+            </span>
+            <a href={m.comprobanteUrl} target="_blank" rel="noreferrer"
+              className="mt-1 px-4 py-2 rounded-xl text-[12px] font-bold border"
+              style={{ borderColor: '#86EFAC', color: '#065F46', background: '#F0FDF4' }}>
+              👁 Ver comprobante
+            </a>
             <button onClick={() => setComproOverlay(null)}
-              className="mt-2 px-5 py-2.5 rounded-xl text-[13px] font-bold text-white"
+              className="mt-1 px-5 py-2.5 rounded-xl text-[13px] font-bold text-white"
               style={{ background: '#0B1D4F' }}>
               Volver al recibo
             </button>
