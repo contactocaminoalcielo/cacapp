@@ -13,6 +13,7 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
+import { logEvent, getLog, clearLog } from '@/lib/lifelog'
 
 const POLL = 30_000
 
@@ -272,6 +273,49 @@ function validarArchivo(file, { permitirPdf = false } = {}) {
   }
   const ext = EXT_POR_MIME[mime] || extNombre || mime.split('/')[1] || 'bin'
   return { mime, ext, esPdf }
+}
+
+// ─── PANEL DE DIAGNÓSTICO (temporal) — muestra el lifelog en pantalla ─────────
+function DiagnosticoLifelog() {
+  const [abierto, setAbierto] = useState(false)
+  const [, force]            = useState(0)
+  const eventos = getLog()
+  const fmtT = ts => {
+    const d = new Date(ts)
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
+  }
+  const texto = eventos.map(e =>
+    `${fmtT(e.t)} ${e.name}${e.extra ? ' ' + JSON.stringify(e.extra) : ''}`).join('\n')
+  return (
+    <div className="mx-4 mt-3">
+      <button onClick={() => setAbierto(a => !a)}
+        className="text-[11px] font-bold px-2.5 py-1 rounded-lg"
+        style={{ background: '#EEF2FF', color: '#4338CA' }}>
+        🐞 Diagnóstico {abierto ? '▲' : `▼ (${eventos.length})`}
+      </button>
+      {abierto && (
+        <div className="mt-2 rounded-xl border p-2" style={{ borderColor: '#C7D2FE', background: '#F8FAFF' }}>
+          <div className="flex gap-2 mb-2">
+            <button onClick={() => { navigator.clipboard?.writeText(texto); }}
+              className="text-[10px] font-bold px-2 py-1 rounded-lg" style={{ background: '#4338CA', color: '#fff' }}>
+              Copiar
+            </button>
+            <button onClick={() => { clearLog(); force(n => n + 1); }}
+              className="text-[10px] font-bold px-2 py-1 rounded-lg" style={{ background: '#E5E7EB', color: '#374151' }}>
+              Limpiar
+            </button>
+            <button onClick={() => force(n => n + 1)}
+              className="text-[10px] font-bold px-2 py-1 rounded-lg" style={{ background: '#E5E7EB', color: '#374151' }}>
+              ↻
+            </button>
+          </div>
+          <div className="font-mono text-[9px] leading-tight max-h-48 overflow-auto whitespace-pre-wrap" style={{ color: '#1E293B' }}>
+            {eventos.length === 0 ? 'Sin eventos aún.' : texto}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir = true, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
@@ -1935,6 +1979,8 @@ export default function TecnicoApp() {
         </div>
       )}
 
+      <DiagnosticoLifelog />
+
       {notif && (
         <div className="mx-4 mt-3 flex items-center gap-2.5 px-4 py-3 rounded-xl"
           style={{ background: '#FEF3C7', border: '1px solid #FDE68A' }}>
@@ -2924,10 +2970,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       limpiarInputsComprobante(idx)
       return
     }
+    logEvent('compro:subir:start', { mb: Math.round((file.size || 0) / 1048576 * 10) / 10, mime: val.mime })
     const stashKey = `recibo_${servicioSel.id}_${idx}`
     // Guardar el archivo en IndexedDB ANTES de subir: si Android mata la
     // pestaña a mitad de camino, al volver se reanuda la subida automáticamente.
     if (!recuperado) await stashPut(stashKey, file)
+    logEvent('compro:stash:ok')
     updateMedio(idx, 'subiendoComprobante', true)
     try {
       // Subir el archivo ORIGINAL sin comprimir ni convertir a JPG: el PDF
@@ -2959,7 +3007,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         if (updErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + updErr.message)
       }
       await stashDelete(stashKey)
+      logEvent('compro:subir:ok')
     } catch (e) {
+      logEvent('compro:subir:err', { m: String(e.message || e).slice(0, 60) })
       setErr('Comprobante pendiente. Puedes reintentarlo. (' + (e.message || e) + ' — el archivo quedó guardado en el teléfono)')
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
@@ -3435,11 +3485,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         <input type="file" accept="image/*,application/pdf"
           ref={el => uploadRefs.current[comproOverlay] = el}
           className="hidden"
-          onChange={e => { limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+          onChange={e => { logEvent('compro:onchange', { src: 'galeria', got: !!e.target.files?.[0] }); limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
         <input type="file" accept="image/*" capture="environment"
           ref={el => comproCamRefs.current[comproOverlay] = el}
           className="hidden"
-          onChange={e => { limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
+          onChange={e => { logEvent('compro:onchange', { src: 'camara', got: !!e.target.files?.[0] }); limpiarPickerAbierto(); subirComprobante(comproOverlay, e.target.files?.[0]) }} />
 
         <button onClick={() => setComproOverlay(null)}
           className="text-[12px] font-semibold text-gray-500 mb-4 self-start">
@@ -3468,14 +3518,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => { marcarPickerAbierto(); uploadRefs.current[comproOverlay]?.click() }}
+              <button onClick={() => { logEvent('compro:click', { src: 'galeria' }); marcarPickerAbierto(); uploadRefs.current[comproOverlay]?.click() }}
                 className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
                 style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
                 <span className="text-3xl">🖼</span>
                 <span className="text-[13px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
                 <span className="text-[10px] font-bold text-green-700">Recomendado</span>
               </button>
-              <button onClick={() => { marcarPickerAbierto(); comproCamRefs.current[comproOverlay]?.click() }}
+              <button onClick={() => { logEvent('compro:click', { src: 'camara' }); marcarPickerAbierto(); comproCamRefs.current[comproOverlay]?.click() }}
                 className="py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2 active:scale-98"
                 style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
                 <Camera size={28} className="text-gray-400" />

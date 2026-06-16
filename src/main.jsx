@@ -2,10 +2,15 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
+import { initLifelog, logEvent } from './lib/lifelog'
+
+// Diagnóstico de reinicios en el celular (temporal) — debe ir lo antes posible
+initLifelog()
 
 // Cuando el SW detecta un nuevo build, recarga la página automáticamente
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    logEvent('SW:controllerchange')
     window.location.reload()
   })
 }
