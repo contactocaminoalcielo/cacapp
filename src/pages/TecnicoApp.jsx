@@ -2932,6 +2932,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [err, setErr]               = useState('')
   // Si la subida se reanuda sola tras un reinicio del teléfono, mostramos aviso
   const [reanudando, setReanudando] = useState(false)
+  // Aviso flotante FIJO arriba (visible sin importar el scroll) del estado del
+  // comprobante: { tipo: 'subiendo' | 'ok' | 'err', msg }
+  const [comproFlash, setComproFlash] = useState(null)
 
   const uploadRefs    = useRef({})   // input galería / archivo (incluye PDF)
   const comproCamRefs = useRef({})   // input cámara directa
@@ -2985,6 +2988,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     logEvent('compro:stash:ok')
     updateMedio(idx, 'subiendoComprobante', true)
     updateMedio(idx, 'comproError', '')   // limpiar error previo al reintentar
+    setComproFlash({ tipo: 'subiendo', msg: 'Subiendo comprobante…' })
     try {
       // Subir el archivo ORIGINAL sin comprimir ni convertir a JPG: el PDF
       // (que nunca pasó por compresión) siempre funcionó; la rama de imagen
@@ -3018,9 +3022,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }
       await stashDelete(stashKey)
       logEvent('compro:subir:ok')
+      setComproFlash({ tipo: 'ok', msg: '✅ Comprobante subido correctamente' })
+      setTimeout(() => setComproFlash(f => (f?.tipo === 'ok' ? null : f)), 5000)
     } catch (e) {
       logEvent('compro:subir:err', { m: String(e.message || e).slice(0, 60) })
       updateMedio(idx, 'comproError', String(e.message || e).slice(0, 90))
+      setComproFlash({ tipo: 'err', msg: 'No se pudo subir el comprobante. Toca Reintentar.' })
     } finally {
       updateMedio(idx, 'subiendoComprobante', false)
       setReanudando(false)
@@ -3551,6 +3558,31 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   return (
     <div ref={topRef}>
+      {/* Aviso FIJO del estado del comprobante — visible sin importar el scroll */}
+      {comproFlash && (
+        <div className="fixed left-1/2 -translate-x-1/2 top-3 z-50 w-[92%] max-w-md px-4 py-3 rounded-2xl shadow-lg flex items-center gap-3"
+          style={{
+            background: comproFlash.tipo === 'ok' ? '#DCFCE7' : comproFlash.tipo === 'err' ? '#FEE2E2' : '#DBEAFE',
+            border: `1.5px solid ${comproFlash.tipo === 'ok' ? '#86EFAC' : comproFlash.tipo === 'err' ? '#FECACA' : '#BFDBFE'}`,
+          }}>
+          {comproFlash.tipo === 'subiendo'
+            ? <div className="spinner flex-shrink-0" style={{ width: 20, height: 20 }} />
+            : comproFlash.tipo === 'ok'
+              ? <Check size={20} style={{ color: '#16A34A' }} className="flex-shrink-0" />
+              : <AlertCircle size={20} style={{ color: '#DC2626' }} className="flex-shrink-0" />}
+          <span className="text-[13px] font-bold flex-1"
+            style={{ color: comproFlash.tipo === 'ok' ? '#166534' : comproFlash.tipo === 'err' ? '#991B1B' : '#1E40AF' }}>
+            {comproFlash.msg}
+          </span>
+          {comproFlash.tipo !== 'subiendo' && (
+            <button onClick={() => setComproFlash(null)} className="p-0.5 flex-shrink-0"
+              style={{ color: comproFlash.tipo === 'ok' ? '#166534' : '#991B1B' }}>
+              <X size={16} />
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 mb-4">
         <span className="text-[13px] font-bold text-gray-800">
           📄 Recibo — {form.mascota_nombre}
