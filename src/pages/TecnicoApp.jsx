@@ -2884,8 +2884,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [reciboId,        setReciboId]        = useState(reciboExistente?.id || null)
   const [err, setErr]               = useState('')
 
-  const uploadRefs = useRef({})
-  const topRef     = useRef(null)
+  const uploadRefs    = useRef({})   // input galería / archivo (incluye PDF)
+  const comproCamRefs = useRef({})   // input cámara directa
+  const topRef        = useRef(null)
+
+  // Limpia el value de ambos inputs del medio idx para permitir reseleccionar
+  // el MISMO archivo tras un intento (si no, onChange no vuelve a dispararse).
+  const limpiarInputsComprobante = idx => {
+    if (uploadRefs.current[idx])    uploadRefs.current[idx].value    = ''
+    if (comproCamRefs.current[idx]) comproCamRefs.current[idx].value = ''
+  }
 
   useEffect(() => {
     topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -2910,7 +2918,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     const val = validarArchivo(file, { permitirPdf: true })
     if (val.error) {
       setErr(val.error)
-      if (uploadRefs.current[idx]) uploadRefs.current[idx].value = ''
+      limpiarInputsComprobante(idx)
       return
     }
     const stashKey = `recibo_${servicioSel.id}_${idx}`
@@ -2954,7 +2962,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       updateMedio(idx, 'subiendoComprobante', false)
       // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
       // onChange (el input conserva su value) y el comprobante "no carga"
-      if (uploadRefs.current[idx]) uploadRefs.current[idx].value = ''
+      limpiarInputsComprobante(idx)
     }
   }
 
@@ -3748,8 +3756,15 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
                       Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#D97706' }}>(pendiente ⏳)</span>}
                     </div>
+                    {/* Galería / archivo (incluye PDF) — ruta recomendada: la foto
+                        ya existe en el teléfono, el picker es liviano y NO mata la PWA */}
                     <input type="file" accept="image/*,application/pdf"
                       ref={el => uploadRefs.current[idx] = el}
+                      className="hidden"
+                      onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
+                    {/* Cámara directa — puede reiniciar la app en teléfonos con poca RAM */}
+                    <input type="file" accept="image/*" capture="environment"
+                      ref={el => comproCamRefs.current[idx] = el}
                       className="hidden"
                       onChange={e => { limpiarPickerAbierto(); subirComprobante(idx, e.target.files?.[0]) }} />
 
@@ -3789,18 +3804,29 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         <span className="text-[11px] text-gray-500">Subiendo comprobante…</span>
                       </div>
                     ) : (
-                      <button
-                        onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
-                        className="w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1.5 transition-all active:scale-98"
-                        style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
-                        <UploadIcon size={20} style={{ color: '#D97706' }} />
-                        <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>
-                          Subir captura / foto del comprobante
-                        </span>
-                        <span className="text-[10px] text-gray-400">
-                          Foto de pantalla, recibo físico o comprobante digital
-                        </span>
-                      </button>
+                      <div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); uploadRefs.current[idx]?.click() }}
+                            className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 transition-all active:scale-98"
+                            style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+                            <span className="text-xl">🖼</span>
+                            <span className="text-[12px] font-semibold" style={{ color: '#92400E' }}>Galería / PDF</span>
+                            <span className="text-[9px] font-bold text-green-700">Recomendado</span>
+                          </button>
+                          <button
+                            onClick={e => { e.stopPropagation(); e.preventDefault(); marcarPickerAbierto(); comproCamRefs.current[idx]?.click() }}
+                            className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 transition-all active:scale-98"
+                            style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
+                            <Camera size={20} className="text-gray-400" />
+                            <span className="text-[12px] font-semibold text-gray-600">Cámara</span>
+                            <span className="text-[9px] text-gray-400">en el momento</span>
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-1.5 leading-tight">
+                          💡 Si la cámara reinicia la app, toma la foto con tu teléfono y súbela desde <strong>Galería</strong>.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
