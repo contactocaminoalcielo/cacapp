@@ -2876,6 +2876,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1))
       : 0
   )
+  // BASE de la comisión = VALOR DEL PLAN (no el total). El coordinador guarda
+  // comision_aliado = valor_plan × %; el total puede incluir transporte,
+  // adicionales y recargos que NO son comisionables. Como el servicio no guarda
+  // el valor del plan por separado, lo reconstruimos: valor_plan = comision /(%/100).
+  // Init = precioOriginal: con el % diluido inicial (comision/precioOriginal) da
+  // exactamente comision_aliado hasta que carga el % real de config y lo corrige.
+  const [valorPlanBase, setValorPlanBase] = useState(precioOriginal)
   // Estados para FACTURACION_MENSUAL — permiten corregir monto/% cuando comision_aliado=0 en DB
   const [comisionManual,    setComisionManual]    = useState(comisionGuardada)
   const [comisionManualPct, setComisionManualPct] = useState(
@@ -2898,7 +2905,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             const diffR   = Math.abs(base * parseFloat(r.porcentaje)   / 100 - comisionGuardada)
             return diffR < diffAcc ? r : acc
           })
-          setComisionPct(parseFloat(best.porcentaje))
+          const pct = parseFloat(best.porcentaje)
+          setComisionPct(pct)
+          // Reconstruir el valor del plan (base comisionable) desde la comisión guardada
+          if (pct > 0) setValorPlanBase(Math.round(comisionGuardada * 100 / pct))
         })
     } else if (aliado?.vip) {
       // FACTURACION_MENSUAL + VIP: tasas fijas por tipo de proceso (igual que Registro.jsx)
@@ -2913,7 +2923,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }
     }
   }, [])
-  const comisionMonto = comisionFueDescontada ? Math.round(precioOriginal * comisionPct / 100) : 0
+  // Comisión SOLO sobre el valor del plan, no sobre el total (transporte/adicionales/recargos)
+  const comisionMonto = comisionFueDescontada ? Math.round(valorPlanBase * comisionPct / 100) : 0
   // Solo se deduce en recibo cuando la comisión fue aplicada inmediatamente
   const valorVet = comisionFueDescontada
     ? Math.max(0, precioOriginal - comisionMonto)
@@ -3279,7 +3290,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
 
           pdf.setFont('helvetica', 'normal'); pdf.setTextColor(180, 50, 0)
-          t(`Comisión aliado (${comisionPct}%):`, M + 3, y + lineH * 2)
+          t(`Comisión aliado (${comisionPct}% del plan ${fmt(valorPlanBase)}):`, M + 3, y + lineH * 2)
           pdf.setFont('helvetica', 'bold')
           t(`– ${fmt(comisionMonto)}`, W - M - 3, y + lineH * 2, { align: 'right' })
 
@@ -3635,7 +3646,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                   <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
                 </div>
                 <div className="flex items-center justify-between text-[12px] mb-1">
-                  <span className="text-amber-700">Comisión aliado</span>
+                  <span className="text-amber-700">Comisión aliado <span className="text-amber-500">(sobre plan {fmt(valorPlanBase)})</span></span>
                   <div className="flex items-center gap-1.5">
                     <span className="text-red-600 font-bold">– {fmt(comisionMonto)}</span>
                     <div className="flex items-center gap-1 ml-2">
@@ -3722,7 +3733,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             {comisionFueDescontada ? (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
-                  <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}%)</span>
+                  <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}% del plan {fmt(valorPlanBase)})</span>
                   <span style={{ fontSize: '13px', fontWeight: '700', color: '#DC2626' }}>– {fmt(comisionMonto)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
