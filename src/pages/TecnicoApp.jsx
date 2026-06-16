@@ -2937,6 +2937,29 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setMediosPago(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m))
   }
 
+  // Clave de idempotencia estable por borrador: sobrevive a reinicios
+  // (localStorage) y a doble-click (mismo valor) → la RPC no duplica el recibo
+  // ni vuelve a sumar el pago. Se limpia al volver / cuando el recibo queda OK.
+  const idemKeyRef = useRef(null)
+  function getIdemKey() {
+    if (idemKeyRef.current) return idemKeyRef.current
+    const k = `recibo_idem_${servicioSel.id}`
+    let v = null
+    try { v = localStorage.getItem(k) } catch (_) {}
+    if (!v) {
+      v = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`
+      try { localStorage.setItem(k, v) } catch (_) {}
+    }
+    idemKeyRef.current = v
+    return v
+  }
+  function limpiarIdemKey() {
+    idemKeyRef.current = null
+    try { localStorage.removeItem(`recibo_idem_${servicioSel.id}`) } catch (_) {}
+  }
+
   async function subirComprobante(idx, file, { recuperado = false } = {}) {
     if (!file) return
     const val = validarArchivo(file, { permitirPdf: true })
@@ -2965,6 +2988,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         'La subida tardó demasiado — revisa la señal'
       )
       if (upErr) throw upErr
+      // TODO Fase 3/7 (privacidad del bucket): el comprobante NO debería servirse
+      // con publicUrl. `recibo_comprobantes.storage_path` ya guarda la ruta cruda
+      // (no la URL pública). Plan: marcar el bucket `evidencias` como privado y que
+      // admin/coordinador abran el comprobante con `createSignedUrl(storage_path)`.
+      // Se mantiene publicUrl en el jsonb por compatibilidad con los visores actuales.
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
       updateMedio(idx, 'comprobanteUrl', publicUrl)
       // Persistir la URL en la fila del recibo DE INMEDIATO: si la PWA muere
@@ -2982,6 +3010,34 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         const { error: updErr } = await db.from('recibos_tecnico')
           .update({ medios_pago: arr }).eq('id', rid)
         if (updErr) throw new Error('Comprobante subido pero no se pudo anclar al recibo: ' + updErr.message)
+
+        // Fuente formal: registrar el comprobante en recibo_comprobantes por
+        // medio_pago_id (no por índice visual). Estrictamente ADITIVO y
+        // tragado: si la tabla nueva aún no existe (despliegue gradual) o
+        // falla, el flujo de arriba ya dejó el comprobante en DB (jsonb).
+        // Guardamos storage_path (no publicUrl) para poder migrar a URL firmada.
+        try {
+          let medioPagoId = mediosPago[idx]?.medioPagoId || null
+          if (!medioPagoId) {
+            // El recibo pudo guardarse por la RPC (hay filas formales): mapear
+            // idx → medio por orden de creación (mismo orden del array de medios).
+            const { data: rows } = await db.from('recibo_medios_pago')
+              .select('id').eq('recibo_id', rid)
+              .order('created_at', { ascending: true })
+            medioPagoId = rows?.[idx]?.id || null
+          }
+          await db.from('recibo_comprobantes').insert({
+            recibo_id:     rid,
+            medio_pago_id: medioPagoId,
+            servicio_id:   servicioSel.id,
+            bucket:        'evidencias',
+            storage_path:  data.path,
+            mime_type:     val.mime,
+            size_bytes:    file.size || null,
+            estado:        'PENDIENTE_REVISION',
+            uploaded_by:   tecnico?.id || null,
+          })
+        } catch (_) { /* tabla nueva opcional — no romper el flujo */ }
       }
       await stashDelete(stashKey)
       setComproFlash({ tipo: 'ok', msg: '✅ Comprobante subido correctamente' })
@@ -3016,6 +3072,31 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     !m.comprobanteUrl
   )
 
+  // Arma el texto de las novedades con el formato del front (fmt, etc.) para
+  // que la RPC los inserte. Centralizado para reusarlo en RPC y respaldo legacy.
+  function construirNovedades(sinComprobante) {
+    const detallePagos = mediosPago.map(m => {
+      let txt = `${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
+      if (m.referencia) txt += ` (Ref: ${m.referencia})`
+      if (m.comprobanteUrl) txt += ` ✅comprobante`
+      return txt
+    }).join(' | ')
+    const novedadPago = (!pagoPendiente && !esFacturacionMensual && totalMedios > 0)
+      ? `Técnico recibió ${fmt(totalMedios)} — ${detallePagos}`
+      : null
+    let novedadNota = null
+    if (pagoPendiente) {
+      novedadNota = `Recibo generado con pago pendiente — ${fmt(svcData.valor_total || 0)}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`
+    } else if (esFacturacionMensual) {
+      novedadNota = comisionFueDescontada
+        ? `Recibo VET generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+        : `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
+    } else if (sinComprobante.length > 0) {
+      novedadNota = `Recibo ${form.numero_recibo} guardado con comprobante PENDIENTE (${sinComprobante.map(m => m.metodo).join(', ')}). El técnico puede reintentarlo desde el módulo Recibos.`
+    }
+    return { novedadPago, novedadNota }
+  }
+
   async function guardarRecibo() {
     // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
     if (!esFacturacionMensual && !pagoPendiente && totalMedios <= 0 && saldoPendiente > 0) {
@@ -3027,15 +3108,85 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     const sinComprobante = comprobantesPendientes
     setGuardando(true); setErr('')
     try {
-      // Un servicio cancelado no puede generar recibos nuevos
-      const { data: svcActual } = await db.from('servicios')
-        .select('estado').eq('id', servicioSel.id).maybeSingle()
-      if (svcActual?.estado === 'CANCELADO') {
-        setErr('Este servicio fue cancelado. No se puede generar un recibo nuevo — comunícate con el coordinador.')
-        return
+      const { novedadPago, novedadNota } = construirNovedades(sinComprobante)
+      const medios = pagoPendiente
+        ? []
+        : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl }))
+      // Corrección de comisión solo si el servicio quedó con comision_aliado=0 (previo al fix VIP)
+      const comisionParaGuardar = (esFacturacionMensual && !comisionFueDescontada && comisionGuardada <= 0 && comisionManual > 0)
+        ? comisionManual : null
+
+      // ── Camino transaccional e idempotente (RPC) ──────────────────────────
+      const { data: rpcData, error: rpcErr } = await db.rpc('guardar_recibo_tecnico', {
+        p_servicio_id:            servicioSel.id,
+        p_idempotency_key:        getIdemKey(),
+        p_tipo:                   tipoRecibo,
+        p_numero_recibo:          form.numero_recibo,
+        p_fecha_emision:          now.toISOString().split('T')[0],
+        p_hora_emision:           horaActual,
+        p_valor_total:            form.valor_servicio,
+        p_medios:                 medios,
+        p_datos_form:             { ...form, pago_pendiente: pagoPendiente },
+        p_pago_pendiente:         pagoPendiente,
+        p_es_facturacion_mensual: esFacturacionMensual,
+        p_actor_id:               tecnico?.id || null,
+        p_actor_rol:              tecnico?.rol || 'TECNICO',
+        p_comision_aliado:        comisionParaGuardar,
+        p_novedad_pago:           novedadPago,
+        p_novedad_nota:           novedadNota,
+      })
+
+      if (rpcErr) {
+        const msg = String(rpcErr.message || '')
+        // La función aún no está desplegada (despliegue gradual) → respaldo legacy
+        if (rpcErr.code === 'PGRST202' || /could not find the function|does not exist|schema cache/i.test(msg)) {
+          await guardarReciboLegacy(sinComprobante)
+          return
+        }
+        // Errores de validación de la RPC → mensaje claro, sin reintentar
+        if (/SERVICIO_CANCELADO/.test(msg)) { setErr('Este servicio fue cancelado. No se puede generar un recibo nuevo — comunícate con el coordinador.'); return }
+        if (/SOBREPAGO/.test(msg))          { setErr('El total cobrado supera el valor del recibo. Revisa los montos.'); return }
+        if (/NO_AUTORIZADO/.test(msg))      { setErr('No estás asignado a la recogida de este servicio. Avísale al coordinador.'); return }
+        if (/MONTO_NEGATIVO/.test(msg))     { setErr('Los montos de pago no pueden ser negativos.'); return }
+        throw rpcErr
       }
-      const valorCobrado  = pagoPendiente ? 0 : (tipoRecibo === 'CLIENTE' ? form.total_recibido : totalMedios)
-      const { data, error } = await db.from('recibos_tecnico').insert({
+
+      const res = rpcData || {}
+      setReciboId(res.recibo_id)
+      reciboIdRef.current = res.recibo_id
+      // Anclar medio_pago_id a cada medio: asocia comprobantes sin depender del índice
+      if (Array.isArray(res.medios) && res.medios.length) {
+        setMediosPago(prev => prev.map((m, i) => {
+          const match = res.medios.find(x => x.idx === i)
+          return match ? { ...m, medioPagoId: match.id } : m
+        }))
+      }
+      if (res.pago_registrado) setPagoRegistrado(true)
+      setGuardado(true)
+      setTipoFijado(true)
+      limpiarIdemKey()
+      if (onGuardado) onGuardado(res.recibo_id)
+    } catch (e) {
+      setErr('Error al guardar: ' + (e.message || e))
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  // ── Respaldo legacy (sin transacción) — solo si la RPC no está desplegada ──
+  // Conserva el comportamiento previo para no romper el flujo durante el
+  // despliegue. NO maneja setGuardando (lo hace guardarRecibo).
+  async function guardarReciboLegacy(sinComprobante) {
+    // Un servicio cancelado no puede generar recibos nuevos
+    const { data: svcActual } = await db.from('servicios')
+      .select('estado').eq('id', servicioSel.id).maybeSingle()
+    if (svcActual?.estado === 'CANCELADO') {
+      setErr('Este servicio fue cancelado. No se puede generar un recibo nuevo — comunícate con el coordinador.')
+      return
+    }
+    // Fix #4: valor_cobrado = suma real de medios (no el saldo asumido), igual que la RPC
+    const valorCobrado  = pagoPendiente ? 0 : totalMedios
+    const { data, error } = await db.from('recibos_tecnico').insert({
         servicio_id:     servicioSel.id,
         tecnico_id:      tecnico?.id || null,
         numero_recibo:   form.numero_recibo,
@@ -3110,14 +3261,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         })
       }
 
-      setGuardado(true)
-      setTipoFijado(true)
-      if (onGuardado) onGuardado(data.id)
-    } catch (e) {
-      setErr('Error al guardar: ' + (e.message || e))
-    } finally {
-      setGuardando(false)
-    }
+    setGuardado(true)
+    setTipoFijado(true)
+    limpiarIdemKey()
+    if (onGuardado) onGuardado(data.id)
   }
 
   async function descargarPDF(tipo = tipoRecibo, soloBlob = false) {
@@ -3896,7 +4043,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                             : <Receipt size={22} style={{ color: '#059669' }} className="flex-shrink-0" />}
                           <div className="min-w-0">
                             <span className="text-[12px] font-bold text-green-700 flex items-center gap-1">
-                              <Check size={12} /> Comprobante guardado
+                              <Check size={12} /> Comprobante guardado · pendiente de revisión
                             </span>
                             <span className="text-[11px] text-gray-500">
                               Toca para ver{m.comprobanteUrl.toLowerCase().includes('.pdf') ? ' (PDF)' : ''}

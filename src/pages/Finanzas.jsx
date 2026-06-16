@@ -144,6 +144,14 @@ export default function Finanzas() {
         }
       }
 
+      // TODO Fase 5 (revisión financiera admin/coordinador):
+      //   - Listar recibos con comprobantes en `recibo_comprobantes`
+      //     (estado='PENDIENTE_REVISION') y permitir APROBAR/RECHAZAR
+      //     (UPDATE estado + reviewed_by=personal.id + reviewed_at=now()).
+      //   - Abrir el comprobante con `db.storage.from(bucket).createSignedUrl(storage_path, 60)`
+      //     en vez de la publicUrl del jsonb (ver TODO Fase 3/7 en TecnicoApp).
+      //   - Cierre financiero: detectar medios digitales (recibo_medios_pago.metodo
+      //     IN TRANSFERENCIA/NEQUI/DAVIPLATA/TARJETA) sin comprobante APROBADO.
       // 7. Recibos del técnico (últimos por servicio)
       const svcIds = rows.map(s => s.id)
       let reciboMap = {}

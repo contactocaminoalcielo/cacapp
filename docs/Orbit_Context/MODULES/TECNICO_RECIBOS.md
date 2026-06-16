@@ -31,8 +31,8 @@ la causa raíz del bucle).
 | `PAGO_PENDIENTE` | `datos_form.pago_pendiente = true` |
 | `COMPLETO` | resto |
 
-- **Sin migración de DB**: todo se deriva de `recibos_tecnico.medios_pago` (jsonb) y
-  `datos_form` (jsonb). No se agregaron estados a `servicios.estado`.
+- **Estado derivado** del jsonb por compatibilidad; la fuente de verdad nueva son
+  las tablas formales (ver "Modelo formal" abajo). No se agregaron estados a `servicios.estado`.
 
 ## Reglas del comprobante (ReciboForm)
 1. El comprobante **NO bloquea** guardar el recibo: se guarda igual y queda
@@ -55,7 +55,36 @@ la causa raíz del bucle).
   cuarto frío NO comprimen (ver memoria `feedback_mobile_image_oom`).
 - localStorage/IndexedDB son solo recovery best-effort, nunca la fuente del recibo.
 
-## Fase 2 (no implementada, preparada)
-- Badge contador de pendientes en el tab Recibos.
-- Panel del coordinador para revisar comprobantes pendientes (hoy: novedad NOTA por servicio).
-- Filtros/búsqueda en la lista de recibos.
+## Modelo formal (2026-06-16) — robustez del flujo recibo → medio → comprobante
+
+> Migraciones: `supabase/migrations/2026-06-16_recibos_tecnico_robustez.sql`
+> (tablas) y `2026-06-16_rpc_guardar_recibo_tecnico.sql` (RPC). Aplicar por SSH.
+
+- **Tablas nuevas (fuente de verdad):**
+  - `recibo_medios_pago` — un renglón por medio (metodo, monto≥0, referencia, servicio_id).
+  - `recibo_comprobantes` — un comprobante por `medio_pago_id` (no por índice). Guarda
+    `storage_path` (no publicUrl), `estado` (PENDIENTE/SUBIDO/PENDIENTE_REVISION/APROBADO/
+    RECHAZADO/ERROR), `uploaded_by`, `reviewed_by/at`. Único activo por medio.
+  - `recibos_tecnico.idempotency_key` (uuid único) — anti-duplicado.
+  - `recibos_tecnico.medios_pago` (jsonb) se **mantiene solo por compatibilidad**
+    (lo leen ReciboTab y Finanzas); la RPC lo sigue escribiendo.
+- **RPC `guardar_recibo_tecnico`** (transaccional, idempotente, SECURITY DEFINER):
+  valida servicio≠CANCELADO, montos≥0, no sobrepago (tope = valor del recibo),
+  toma el técnico de `recogidas.tecnico_id`, guarda `valor_cobrado = suma real de
+  medios`, actualiza `servicios.valor_pagado/estado_pago`, inserta la novedad una
+  sola vez. Doble-click/reintento/reinicio con la misma `idempotency_key` → no duplica.
+- **Front:** `guardarRecibo` llama la RPC; si la función no está desplegada
+  (PGRST202) cae a `guardarReciboLegacy` (mismo comportamiento previo, también con
+  el fix de `valor_cobrado`). La clave de idempotencia vive en `localStorage`
+  (`recibo_idem_<servicioId>`). `subirComprobante` además registra el comprobante en
+  `recibo_comprobantes` por `medio_pago_id` (aditivo y tragado).
+
+## Pendientes (preparados con TODO concreto)
+- **Fase 3/7 — privacidad del bucket**: marcar `evidencias` privado y servir
+  comprobantes con `createSignedUrl(storage_path)` (hoy se mantiene publicUrl por compat).
+- **Fase 5 — panel admin/coordinador**: listar `recibo_comprobantes` PENDIENTE_REVISION,
+  aprobar/rechazar (estado + reviewed_by/at), abrir con URL firmada, y detectar en el
+  cierre financiero medios digitales sin comprobante APROBADO. TODO en `Finanzas.jsx`.
+- **Fase 6 — RLS por-técnico**: `supabase/security/05_recibos_hardening.sql` (policies
+  estrictas COMENTADAS). Activar solo tras backfill de `personal.auth_user_id`.
+- Badge contador de pendientes en el tab Recibos. Filtros/búsqueda (búsqueda ya existe).
