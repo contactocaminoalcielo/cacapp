@@ -156,7 +156,10 @@ BEGIN
     medios_pago, datos_form, estado, idempotency_key
   ) VALUES (
     p_servicio_id, v_tecnico_final, p_numero_recibo, p_tipo,
-    p_fecha_emision, p_hora_emision, p_valor_total, v_valor_cobrado,
+    -- hora_emision es columna `time`: el parámetro es text → cast explícito
+    -- (Postgres no convierte text→time en un INSERT; PostgREST sí, por eso el
+    -- camino legacy no fallaba). NULLIF evita romper si llega vacío.
+    p_fecha_emision, NULLIF(p_hora_emision,'')::time, p_valor_total, v_valor_cobrado,
     -- medios_pago jsonb se conserva SOLO por compatibilidad con vistas/Finanzas actuales
     CASE WHEN p_pago_pendiente THEN '[]'::jsonb ELSE COALESCE(p_medios,'[]'::jsonb) END,
     COALESCE(p_datos_form,'{}'::jsonb) || jsonb_build_object('pago_pendiente', p_pago_pendiente),

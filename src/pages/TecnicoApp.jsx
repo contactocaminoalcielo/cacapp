@@ -3467,7 +3467,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         if (/SOBREPAGO/.test(msg))          { setErr('El total cobrado supera el valor del recibo. Revisa los montos.'); return }
         if (/NO_AUTORIZADO/.test(msg))      { setErr('No estás asignado a la recogida de este servicio. Avísale al coordinador.'); return }
         if (/MONTO_NEGATIVO/.test(msg))     { setErr('Los montos de pago no pueden ser negativos.'); return }
-        throw rpcErr
+        // Cualquier OTRO error de la RPC (bug, drift de esquema, etc.): la RPC es
+        // transaccional y ya hizo rollback → NO hay duplicado. Caemos al camino
+        // legacy (PostgREST castea los tipos) para no bloquear el cobro del técnico.
+        console.warn('[recibo] RPC fallback a legacy:', msg)
+        await guardarReciboLegacy(sinComprobante)
+        return
       }
 
       const res = rpcData || {}
