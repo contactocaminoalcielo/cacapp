@@ -16,6 +16,7 @@ import {
   ESTADO_ITEM, ESTADO_REPORTE,
 } from '@/lib/reportesGrupales'
 import { enviarWhatsApp, obtenerLineasWA, LINEAS_WHATSAPP } from '@/lib/whatsapp'
+import ControlGrupal from '@/components/ControlGrupal'
 import {
   FileText, RefreshCw, CheckCircle2, Printer, MessageCircle,
   ChevronDown, ChevronUp, Award, Flame, Send, AlertTriangle, Clock, XCircle, Sparkles,
@@ -369,6 +370,7 @@ export default function Certificados() {
 
   const TABS = [
     { id: 'pendientes', label: 'Pendientes', badge: totalPend, dot: totalPend > 0 },
+    { id: 'control', label: 'Control' },
     { id: 'historial', label: 'Historial', badge: historial.length },
   ]
 
@@ -498,6 +500,9 @@ export default function Certificados() {
             )}
           </div>
         )}
+
+        {/* ── CONTROL (tabla de servicios elegibles) ──────────────────────────── */}
+        {tab === 'control' && <ControlGrupal />}
 
         {/* ── HISTORIAL (evidencia de envíos) ─────────────────────────────────── */}
         {!loading && tab === 'historial' && (
