@@ -981,12 +981,13 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
             />
             <Checklist svc={svc} fotoUrl={fotoUrl} checked={checked} onChange={toggleCheck} />
 
-            {/* El recibo se genera después, en el tab Recibos — no bloquea la recogida */}
+            {/* Al completar, el técnico va directo al recibo. La mascota no
+                entra al cuarto frío sin recibo generado (gate por DB). */}
             <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-4"
               style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
               <Receipt size={14} style={{ color: '#7C3AED', flexShrink: 0, marginTop: 1 }} />
               <span className="text-[11px] font-medium" style={{ color: '#5B21B6' }}>
-                El recibo y el cobro se gestionan después desde el módulo <strong>Recibos</strong>.
+                Al completar irás directo a generar el <strong>recibo</strong>. La mascota no entra al cuarto frío sin recibo.
               </span>
             </div>
 
@@ -1593,7 +1594,18 @@ export default function TecnicoApp() {
       const pendientesCFArr = serviciosConCF.filter(s =>
         s.estado === 'EN_CUARTO_FRIO' && !s.cuarto_frio_data?.nevera_codigo
       )
-      setPendientesCF(pendientesCFArr)
+      // Gate por DB (NUNCA useState): la mascota no entra al cuarto frío sin
+      // recibo generado. Basta con que exista la fila en recibos_tecnico — un
+      // recibo en PAGO PENDIENTE también cuenta (el gate es "recibo generado",
+      // no "pago cobrado").
+      const idsPend = pendientesCFArr.map(s => s.id)
+      let conRecibo = new Set()
+      if (idsPend.length) {
+        const { data: recsPend } = await db.from('recibos_tecnico')
+          .select('servicio_id').in('servicio_id', idsPend)
+        conRecibo = new Set((recsPend || []).map(r => r.servicio_id))
+      }
+      setPendientesCF(pendientesCFArr.map(s => ({ ...s, tiene_recibo: conRecibo.has(s.id) })))
 
       // Mis registros en cuarto frío (ya registrados con nevera)
       const misCFArr = serviciosConCF.filter(s =>
@@ -1637,6 +1649,13 @@ export default function TecnicoApp() {
       db.removeChannel(canal)
     }
   }, [tecnico, cargar])
+
+  // Al volver a C. Frío, refrescar el estado del recibo (el gate "no entra sin
+  // recibo" es por DB): un recibo en PAGO PENDIENTE no toca `servicios`, así que
+  // el realtime no lo detecta — esta recarga garantiza `tiene_recibo` al día.
+  useEffect(() => {
+    if (tab === 'cuarto_frio') cargar(true)
+  }, [tab, cargar])
 
   // Obtener IDs de coordinadores/admins para notificarlos
   async function getCoordinadores() {
@@ -1777,12 +1796,25 @@ export default function TecnicoApp() {
         hora_realizada:  now.toTimeString().slice(0, 5),
       }).eq('id', recogidaId)
     }
-    setNotif('✅ Servicio guardado correctamente. Ahora puedes generar el recibo desde el módulo Recibos.')
+    setNotif('✅ Recogida completada. Genera el recibo para poder ingresar la mascota al cuarto frío.')
     setTimeout(() => setNotif(null), 8000)
     await cargar()
+    // Flujo guiado: ir directo al recibo de ESTA mascota (ReciboTab lo auto-abre
+    // vía tecnico_recibo_sel). La mascota no entra al cuarto frío sin recibo.
+    try { localStorage.setItem('tecnico_recibo_sel', svc.id) } catch (_) {}
+    setTab('recibo')
   }
 
   async function confirmarCuartoFrio(svc, { cfId, peso, nevera, fotoUrl }) {
+    // Gate por DB (defensa en profundidad ante UI desactualizada): la mascota
+    // no entra al cuarto frío sin recibo generado. No confía en el estado en
+    // memoria — verifica contra recibos_tecnico igual que estaCancelado().
+    const { data: reciboExiste } = await db.from('recibos_tecnico')
+      .select('id').eq('servicio_id', svc.id).limit(1).maybeSingle()
+    if (!reciboExiste) {
+      await cargar()
+      throw new Error('Genera el recibo antes de ingresar la mascota al cuarto frío.')
+    }
     const pesoNum = parseFloat(peso) || null
     const datosCF = {
       nevera_codigo:   nevera,
@@ -2008,11 +2040,32 @@ export default function TecnicoApp() {
                           </div>
                         </div>
                       </div>
-                      <RegistroCuartoFrio
-                        svc={svc}
-                        onCompletar={confirmarCuartoFrio}
-                        neverasList={neverasActivas}
-                      />
+                      {svc.tiene_recibo ? (
+                        <RegistroCuartoFrio
+                          svc={svc}
+                          onCompletar={confirmarCuartoFrio}
+                          neverasList={neverasActivas}
+                        />
+                      ) : (
+                        <div className="mt-1">
+                          <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-3"
+                            style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
+                            <Receipt size={15} style={{ color: '#7C3AED', flexShrink: 0, marginTop: 1 }} />
+                            <span className="text-[12px] font-semibold" style={{ color: '#5B21B6' }}>
+                              Genera el recibo antes de ingresar la mascota al cuarto frío.
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => {
+                              try { localStorage.setItem('tecnico_recibo_sel', svc.id) } catch (_) {}
+                              setTab('recibo')
+                            }}
+                            className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98"
+                            style={{ background: '#7C3AED', color: '#fff' }}>
+                            Generar recibo →
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
