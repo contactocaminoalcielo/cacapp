@@ -1899,12 +1899,13 @@ export default function TecnicoApp() {
   }
 
   const sinReporteHoy = !reporteHoy
+  // Orden = flujo real del técnico: recoger → recibo → comprobante → cuarto frío → entregar
   const TABS = [
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
-    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
-    { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: 0,                    color: '#7C3AED' },
     { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
+    { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
+    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
   ]
 
   return (
