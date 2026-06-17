@@ -242,7 +242,11 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
         envioOk = await enviarPlantillaGHL({
           telefono: item.canal_destino, nombre: item.propietario_nombre,
           plantillaNombre: config.plantilla_nombre, idioma: config.plantilla_idioma || 'es',
-          variables: [item.propietario_nombre, etiquetaProceso(lote.tipo_proceso), item.mascota_nombre],
+          // Plantilla certificado_proceso: 2 variables → {{1}}=propietario, {{2}}=proceso + mascota
+          variables: [
+            item.propietario_nombre,
+            `${etiquetaProceso(lote.tipo_proceso)} de ${item.mascota_nombre}`,
+          ],
           headerDocumentUrl: pdfUrl, fromNumber: body.fromNumber,
         })
       } else {
