@@ -3,6 +3,7 @@
 // revisa y confirma. No escribe estado ni envía.
 import { pool } from './db.js'
 import { llamarClaude } from './ia.js'
+import { cargarConfigGrupales } from './reglas-grupales.js'
 
 const SYSTEM = `Eres ORBIT, el asistente operativo de Camino al Cielo (funeraria de mascotas, Bogotá).
 Eres claro, breve y cálido. Trabajas para el coordinador: lo ayudas a no incumplir el envío de
@@ -85,6 +86,63 @@ Cierra con "— Camino al Cielo 🕊️". Devuelve SOLO el texto del mensaje.`
 
     const mensaje = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 300 })
     return { mensaje: mensaje.trim() }
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Alerta de vencimientos para la tabla de Control: clasifica los servicios grupales
+ * NO enviados por días hábiles restantes (con festivos) y redacta una alerta.
+ * Devuelve { alerta, buckets } — buckets también sirve para el semáforo del front.
+ */
+export async function alertaVencimientos() {
+  const client = await pool.connect()
+  try {
+    const cfg = await cargarConfigGrupales(client)
+    const sla = parseInt(cfg.sla_dias_habiles) || 3
+
+    const { rows } = await client.query(
+      `SELECT m.nombre AS mascota, p.tipo_proceso,
+              public.fn_sumar_dias_habiles(s.fecha_ingreso, $1::int)               AS vence,
+              (public.fn_sumar_dias_habiles(s.fecha_ingreso, $1::int) - CURRENT_DATE)::int AS dias
+       FROM public.servicios s
+       JOIN public.planes p   ON p.id = s.plan_id
+       JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+       WHERE p.tipo_proceso IN ('CREMACION_GRUPAL','COMPOSTAJE_GRUPAL')
+         AND s.estado NOT IN ('CANCELADO','ENTREGADO')
+         AND NOT EXISTS (
+           SELECT 1 FROM public.reportes_grupales_items i
+           WHERE i.servicio_id = s.id AND i.estado IN ('ENVIADO','REENVIADO'))
+       ORDER BY dias ASC`,
+      [sla]
+    )
+
+    const b = { vencidos: [], hoy: [], manana: [], pronto: [] }
+    for (const r of rows) {
+      const d = Number(r.dias)
+      const it = { mascota: r.mascota, tipo: r.tipo_proceso, vence: r.vence, dias: d }
+      if (d < 0)        b.vencidos.push(it)
+      else if (d === 0) b.hoy.push(it)
+      else if (d === 1) b.manana.push(it)
+      else if (d <= sla + 2) b.pronto.push(it)
+    }
+    const total = b.vencidos.length + b.hoy.length + b.manana.length + b.pronto.length
+    if (!total) return { alerta: 'No hay reportes próximos a vencer ni vencidos. ✅', buckets: b }
+
+    const hoy = new Date().toISOString().slice(0, 10)
+    const prompt =
+`Hoy es ${hoy}. Reportes grupales NO enviados, por urgencia (JSON):
+VENCIDOS (${b.vencidos.length}): ${JSON.stringify(b.vencidos.slice(0, 15))}
+VENCEN HOY (${b.hoy.length}): ${JSON.stringify(b.hoy)}
+VENCEN MAÑANA (${b.manana.length}): ${JSON.stringify(b.manana)}
+PRÓXIMOS (${b.pronto.length}): ${JSON.stringify(b.pronto.slice(0, 15))}
+
+Redacta una alerta breve y clara (2-4 frases) para el coordinador. Prioriza vencidos y los
+que vencen hoy/mañana, menciona los nombres de las mascotas. No inventes datos.`
+
+    const alerta = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 500 })
+    return { alerta, buckets: b }
   } finally {
     client.release()
   }

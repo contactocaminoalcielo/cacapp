@@ -7,8 +7,8 @@ import { generarPropuesta } from './jobs/propuesta.js'
 import { motorAlertas } from './jobs/alertas.js'
 import { confirmarLote, cerrarLote } from './lotes.js'
 import { jobReportesGrupales } from './jobs/grupales.js'
-import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal } from './grupales.js'
-import { resumenPendientes, redactarMensaje } from './grupales-ia.js'
+import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServicioAReporteGrupal } from './grupales.js'
+import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupales-ia.js'
 
 const app = express()
 app.use(express.json())
@@ -71,6 +71,19 @@ app.post('/grupales/sincronizar', requireAuth, requireRol('COORDINADOR', 'ADMIN'
   }
 })
 
+app.post('/grupales/agregar-a-lote', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await agregarServicioAReporteGrupal({
+      servicioId: req.body.servicio_id,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[grupales/agregar-a-lote] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/grupales/reportes/:id/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const r = await marcarGenerado({ reporteId: req.params.id, personalId: req.personal.id, body: req.body })
@@ -118,6 +131,15 @@ app.post('/grupales/ia/redactar', requireAuth, async (req, res) => {
     res.json(await redactarMensaje({ itemId: req.body.item_id }))
   } catch (e) {
     log('[grupales/ia/redactar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/grupales/ia/control', requireAuth, async (_req, res) => {
+  try {
+    res.json(await alertaVencimientos())
+  } catch (e) {
+    log('[grupales/ia/control] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

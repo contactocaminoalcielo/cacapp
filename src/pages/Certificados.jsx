@@ -502,7 +502,7 @@ export default function Certificados() {
         )}
 
         {/* ── CONTROL (tabla de servicios elegibles) ──────────────────────────── */}
-        {tab === 'control' && <ControlGrupal />}
+        {tab === 'control' && <ControlGrupal onChanged={cargar} onGoPendientes={() => setTab('pendientes')} />}
 
         {/* ── HISTORIAL (evidencia de envíos) ─────────────────────────────────── */}
         {!loading && tab === 'historial' && (

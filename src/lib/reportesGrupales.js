@@ -45,6 +45,14 @@ export function sincronizar() {
   return orbitApi('/grupales/sincronizar', { method: 'POST' })
 }
 
+// Escritura crítica: agregar un servicio al flujo reportable desde Control.
+export function agregarServicioALote(servicioId) {
+  return orbitApi('/grupales/agregar-a-lote', {
+    method: 'POST',
+    body: { servicio_id: servicioId },
+  })
+}
+
 // Mapea los ítems del reporte al shape que esperan los generadores de HTML
 function itemsAServicios(items) {
   return (items || [])
@@ -95,4 +103,9 @@ export function resumenIA() {
 
 export function redactarIA(itemId) {
   return orbitApi('/grupales/ia/redactar', { method: 'POST', body: { item_id: itemId } })
+}
+
+// Alerta de vencimientos para la tabla de Control (IA + buckets)
+export function alertaControlIA() {
+  return orbitApi('/grupales/ia/control', { method: 'POST' })
 }

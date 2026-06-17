@@ -5,7 +5,7 @@ import { pool, log } from './db.js'
 import { cargarConfigGrupales, validarItem, mensajeReporte, etiquetaProceso } from './reglas-grupales.js'
 import { enviarWhatsAppGHL, enviarPlantillaGHL } from './whatsapp.js'
 
-const ITEM_ACTIVOS = ['PENDIENTE', 'VALIDADO', 'ENVIADO', 'REENVIADO', 'VENCIDO']
+const ITEM_ACTIVOS = ['PENDIENTE', 'VALIDADO', 'ENVIADO', 'REENVIADO', 'VENCIDO', 'ERROR']
 
 // ─── Servicios de un lote, con todo lo necesario para validar ────────────────
 async function serviciosDelLote(client, loteId) {
@@ -165,6 +165,167 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
   )
   await recomputarReporte(client, reporteId)
   return { reporteId, creados, actualizados, excluidos }
+}
+
+export async function agregarServicioAReporteGrupal({ servicioId, personalId }) {
+  if (!servicioId) return { status: 422, body: { ok: false, error: 'servicio_id requerido' } }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows: servicios } = await client.query(
+      `SELECT s.id, s.estado, s.lote_id, p.tipo_proceso, p.nombre AS plan_nombre
+       FROM public.servicios s
+       JOIN public.planes p ON p.id = s.plan_id
+       WHERE s.id = $1
+       FOR UPDATE OF s`,
+      [servicioId]
+    )
+    const servicio = servicios[0]
+
+    if (!servicio) {
+      await client.query('ROLLBACK')
+      return { status: 404, body: { ok: false, error: 'Servicio no encontrado' } }
+    }
+
+    if (!['CREMACION_GRUPAL', 'COMPOSTAJE_GRUPAL'].includes(servicio.tipo_proceso)) {
+      await client.query('ROLLBACK')
+      return {
+        status: 422,
+        body: { ok: false, error: 'El servicio no pertenece a un proceso grupal reportable' },
+      }
+    }
+
+    if (servicio.estado === 'CANCELADO') {
+      await client.query('ROLLBACK')
+      return { status: 422, body: { ok: false, error: 'No se puede reportar un servicio cancelado' } }
+    }
+
+    const { rows: reporteExistente } = await client.query(
+      `SELECT r.id AS reporte_id, r.estado AS reporte_estado, l.id AS lote_id, l.numero_lote
+       FROM public.reportes_grupales_items i
+       JOIN public.reportes_grupales r ON r.id = i.reporte_id
+       JOIN public.lotes_grupales l ON l.id = r.lote_id
+       WHERE i.servicio_id = $1
+         AND i.estado = ANY($2::text[])
+       LIMIT 1`,
+      [servicioId, ITEM_ACTIVOS]
+    )
+
+    if (reporteExistente[0]) {
+      await client.query('COMMIT')
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          ya_en_reporte: true,
+          reporte_id: reporteExistente[0].reporte_id,
+          lote_id: reporteExistente[0].lote_id,
+          numero_lote: reporteExistente[0].numero_lote,
+          estado: reporteExistente[0].reporte_estado,
+        },
+      }
+    }
+
+    let lote = null
+    let loteCreado = false
+
+    if (servicio.lote_id) {
+      const { rows: lotesActuales } = await client.query(
+        `SELECT * FROM public.lotes_grupales WHERE id = $1 FOR UPDATE`,
+        [servicio.lote_id]
+      )
+      lote = lotesActuales[0]
+
+      if (!lote) {
+        await client.query('ROLLBACK')
+        return { status: 409, body: { ok: false, error: 'El servicio apunta a un lote inexistente' } }
+      }
+
+      if (lote.estado !== 'COMPLETADO') {
+        await client.query('ROLLBACK')
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            error: `El servicio ya pertenece al lote ${lote.numero_lote}, pero ese lote esta ${lote.estado}. Completalo antes de generar reporte.`,
+          },
+        }
+      }
+    } else {
+      const { rows: lotesDisponibles } = await client.query(
+        `SELECT l.*
+         FROM public.lotes_grupales l
+         LEFT JOIN public.reportes_grupales r ON r.lote_id = l.id
+         WHERE l.tipo_proceso = $1
+           AND l.estado = 'COMPLETADO'
+           AND (r.id IS NULL OR r.estado = 'PENDIENTE')
+         ORDER BY COALESCE(l.fecha_completado, l.fecha_proceso) DESC, l.created_at DESC
+         LIMIT 1
+         FOR UPDATE OF l`,
+        [servicio.tipo_proceso]
+      )
+      lote = lotesDisponibles[0]
+
+      if (!lote) {
+        await client.query('LOCK TABLE public.lotes_grupales IN SHARE ROW EXCLUSIVE MODE')
+        const { rows: conteo } = await client.query(
+          `SELECT COUNT(*)::int AS total
+           FROM public.lotes_grupales
+           WHERE EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM NOW())`
+        )
+        const numeroLote = `L-${new Date().getFullYear()}-${String((conteo[0]?.total || 0) + 1).padStart(3, '0')}`
+        const { rows: nuevo } = await client.query(
+          `INSERT INTO public.lotes_grupales
+             (numero_lote, tipo_proceso, fecha_proceso, fecha_completado, estado, cantidad_mascotas, coordinador_id)
+           VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE, 'COMPLETADO', 0, $3)
+           RETURNING *`,
+          [numeroLote, servicio.tipo_proceso, personalId || null]
+        )
+        lote = nuevo[0]
+        loteCreado = true
+      }
+
+      await client.query(`UPDATE public.servicios SET lote_id = $2 WHERE id = $1`, [servicioId, lote.id])
+    }
+
+    const { rows: conteoServicios } = await client.query(
+      `SELECT COUNT(*)::int AS total FROM public.servicios WHERE lote_id = $1`,
+      [lote.id]
+    )
+    await client.query(
+      `UPDATE public.lotes_grupales SET cantidad_mascotas = $2 WHERE id = $1`,
+      [conteoServicios[0]?.total || 0, lote.id]
+    )
+
+    const resultado = await construirReporteDeLote(client, lote, { generadoPor: personalId || null })
+    await evento(client, {
+      reporteId: resultado.reporteId,
+      servicioId,
+      tipo: 'SERVICIO_AGREGADO_DESDE_CONTROL',
+      detalle: { numero_lote: lote.numero_lote, lote_creado: loteCreado },
+      actor: personalId || null,
+    })
+
+    await client.query('COMMIT')
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        reporte_id: resultado.reporteId,
+        lote_id: lote.id,
+        numero_lote: lote.numero_lote,
+        lote_creado: loteCreado,
+        ...resultado,
+      },
+    }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 /** Endpoint: marcar reporte GENERADO con el PDF ya producido y subido. */
