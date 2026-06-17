@@ -153,6 +153,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   const fecha      = lote.fecha_completado || lote.fecha_envio || today()
   const fechaCorta = fmtFechaCorta(fecha)
   const fechaLarga = fmtFechaLarga(fecha)
+  const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
   const empresa    = lote.entidad_externa || 'INDUSTRIA AMBIENTAL S.A.S / ECOLOGIA Y ENTORNO S.A.S E S P'
   const duracion   = lote.duracion_proceso || '_____ horas y _____ minutos'
   const pesoTotal  = sumarPesos(servicios)
@@ -237,7 +238,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
 
   <p class="cierre">
     Para constancia del procedimiento, se elabora este reporte técnico a petición de las partes
-    interesadas el día ${fechaLarga}.
+    interesadas el día ${fechaEmision}.
   </p>
 
   <div class="firma">
@@ -262,6 +263,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
 export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
   const fecha      = lote.fecha_completado || lote.fecha_envio || today()
   const fechaLarga = fmtFechaLarga(fecha)
+  const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
 
   const filas = servicios.map(s => `
     <tr>
@@ -326,7 +328,7 @@ export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
 
   <p>
     Para constancia del procedimiento, se elabora esta certificación el día
-    <strong>${fechaLarga}.</strong>
+    <strong>${fechaEmision}.</strong>
   </p>
 
   <div class="sig-area">
@@ -416,7 +418,7 @@ export function generarHTMLIndividual({ traslado }) {
   `}
 
   <p class="cierre">
-    Para constancia del procedimiento, se elabora este certificado el día ${fmtFechaLarga(fecha)}.
+    Para constancia del procedimiento, se elabora este certificado el día ${fmtFechaLarga(today())}.
   </p>
 
   <div class="firma">

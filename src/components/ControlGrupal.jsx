@@ -9,7 +9,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { Button } from '@/components/ui/button'
 import { petEmoji, today, parsearErrorDB } from '@/lib/utils'
-import { Flame, Leaf, RefreshCw, PackagePlus, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { RefreshCw, PackagePlus, CheckCircle2, AlertTriangle, Search } from 'lucide-react'
 
 const TIPO = {
   CREMACION_GRUPAL:  { label: 'Cremación',  emoji: '🔥', color: '#B45309', bg: '#FEF3C7' },
@@ -32,6 +32,8 @@ export default function ControlGrupal() {
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState(null)
   const [filtro, setFiltro]   = useState('todos')  // todos | sin_lote | en_lote | enviados
+  const [tipoF, setTipoF]     = useState('todos')  // todos | CREMACION_GRUPAL | COMPOSTAJE_GRUPAL
+  const [q, setQ]             = useState('')
 
   const esCoord = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
 
@@ -139,7 +141,10 @@ export default function ControlGrupal() {
   }
 
   // ── Filtros ──────────────────────────────────────────────────────────────────
+  const ql = q.trim().toLowerCase()
   const filtrados = rows.filter(r => {
+    if (tipoF !== 'todos' && r.tipo_proceso !== tipoF) return false
+    if (ql && !`${r.mascota} ${r.cliente} ${r.plan} ${r.lote?.numero_lote || ''} ${r.estado}`.toLowerCase().includes(ql)) return false
     if (filtro === 'sin_lote')  return !r.lote_id
     if (filtro === 'en_lote')   return !!r.lote_id && !['ENVIADO', 'REENVIADO'].includes(r.reporte_estado)
     if (filtro === 'enviados')  return ['ENVIADO', 'REENVIADO'].includes(r.reporte_estado)
@@ -157,10 +162,40 @@ export default function ControlGrupal() {
     { id: 'en_lote',  label: 'En lote' },
     { id: 'enviados', label: 'Enviados' },
   ]
+  const TIPOS_F = [
+    { id: 'todos',             label: 'Todos los tipos' },
+    { id: 'CREMACION_GRUPAL',  label: '🔥 Cremación' },
+    { id: 'COMPOSTAJE_GRUPAL', label: '🌿 Eco-grupal' },
+  ]
 
   return (
     <div className="space-y-4">
-      {/* Filtros */}
+      {/* Búsqueda + tipo */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={q} onChange={e => setQ(e.target.value)}
+            placeholder="Buscar mascota, cliente, plan, lote..."
+            className="w-full pl-8 pr-3 py-1.5 text-[12px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#1A5CD8]" />
+        </div>
+        {TIPOS_F.map(t => (
+          <button key={t.id} onClick={() => setTipoF(t.id)}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-medium border transition-all"
+            style={{
+              background: tipoF === t.id ? '#263218' : 'white',
+              color: tipoF === t.id ? 'white' : '#374151',
+              borderColor: tipoF === t.id ? '#263218' : '#D1D5DB',
+            }}>
+            {t.label}
+          </button>
+        ))}
+        <button onClick={cargar} disabled={loading}
+          className="ml-auto px-2 py-1.5 rounded-lg text-gray-400 hover:text-gray-600 transition-colors">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {/* Filtros de estado */}
       <div className="flex items-center gap-2 flex-wrap">
         {FILTROS.map(f => (
           <button key={f.id} onClick={() => setFiltro(f.id)}
@@ -173,10 +208,7 @@ export default function ControlGrupal() {
             {f.label} <span className="opacity-70">({cont[f.id]})</span>
           </button>
         ))}
-        <button onClick={cargar} disabled={loading}
-          className="ml-auto px-2 py-1.5 rounded-lg text-gray-400 hover:text-gray-600 transition-colors">
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-        </button>
+        <span className="ml-auto text-[11px] text-gray-400">{filtrados.length} de {rows.length}</span>
       </div>
 
       {loading && <div className="text-center py-10 text-gray-400 text-[13px]">Cargando...</div>}
