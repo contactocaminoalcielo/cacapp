@@ -570,11 +570,12 @@ function RegistroCuartoFrio({ svc, onCompletar, neverasList = NEVERAS_DEFAULT })
         <Snowflake size={15} style={{ flexShrink: 0 }} /> Registrar ingreso al cuarto frío
       </div>
 
-      {/* Foto pesaje */}
+      {/* Foto pesaje — comprimida con el camino seguro para OOM (createImageBitmap
+          + resizeWidth, igual que la foto de la mascota que "nunca falla"). Subir
+          el original colgaba la subida en la señal débil del cuarto frío. */}
       <FotoEvidencia
         storagePath={cf?.id ? `cuarto_frio/${cf.id}` : `cuarto_frio/temp_${svc.id}`}
         dbSave={cf?.id ? { table: 'cuarto_frio', column: 'foto_pesaje_url', id: cf.id } : null}
-        comprimir={false}
         fotoUrl={fotoUrl}
         onFotoUploaded={fotoSubida}
         label="Foto de la báscula / pesaje"
