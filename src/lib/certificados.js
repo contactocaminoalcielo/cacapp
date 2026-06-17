@@ -1,5 +1,6 @@
 import { db } from './supabase'
 import { today, waLink } from './utils'
+import { LOGO_CAMINO } from './logoCamino'
 
 // ─── Generar PDF con jsPDF y subir a Supabase Storage ────────────────────────
 // Devuelve la URL pública del PDF subido
@@ -109,6 +110,11 @@ const CSS_CREMACION = `
   .footer-text { font-size: 11px; color: #555; }
   .footer-text strong { font-size: 12px; color: #1a1a1a; }
   .paws { font-size: 20px; letter-spacing: 2px; }
+  .logo-img { height: 66px; display:block; margin: 0 auto 8px; }
+  .firma { margin-top: 46px; text-align:center; }
+  .firma-line { width: 240px; border-top: 1px solid #333; margin: 0 auto 6px; }
+  .firma-name { font-weight: bold; font-size: 13px; }
+  .firma-role { font-size: 11px; color: #555; }
   @media print { body { margin: 20px; } }
 `
 
@@ -138,6 +144,7 @@ const CSS_COMPOSTAJE = `
   .footer-text { font-size: 11px; color: #555; }
   .footer-text strong { font-size: 12px; color: #1a1a1a; display:block; }
   .paws { font-size: 18px; letter-spacing: 2px; margin-bottom: 4px; }
+  .logo-img { height: 66px; display:block; margin: 0 auto 8px; }
   @media print { body { margin: 20px; } }
 `
 
@@ -166,7 +173,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   <div class="header">
     <div class="logo-row">
       <div class="logo-text">
-        <div class="logo-name">🕊️ Camino al Cielo</div>
+        <img class="logo-img" src="${LOGO_CAMINO}" alt="Camino al Cielo" />
         <div class="logo-sub">Servicios funerarios para mascotas</div>
         <div class="logo-sub">Cel: 319 358 5508 – 322 218 7087 &nbsp;·&nbsp; contacto@caminoalcielo.com.co</div>
       </div>
@@ -233,6 +240,12 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
     interesadas el día ${fechaLarga}.
   </p>
 
+  <div class="firma">
+    <div class="firma-line"></div>
+    <div class="firma-name">Carlos Lopez</div>
+    <div class="firma-role">Coordinador</div>
+  </div>
+
   <div class="footer">
     <span class="paws">🐾🐾🐾</span>
     <div class="footer-text">
@@ -249,9 +262,6 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
 export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
   const fecha      = lote.fecha_completado || lote.fecha_envio || today()
   const fechaLarga = fmtFechaLarga(fecha)
-  const nomCoord   = coordinador
-    ? `${coordinador.nombre} ${coordinador.apellido}`.toUpperCase()
-    : 'COORDINADOR'
 
   const filas = servicios.map(s => `
     <tr>
@@ -267,7 +277,7 @@ export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
 <style>${CSS_COMPOSTAJE}</style></head>
 <body>
   <div class="header">
-    <div class="logo-name">🕊️ Camino Al Cielo</div>
+    <img class="logo-img" src="${LOGO_CAMINO}" alt="Camino al Cielo" />
     <div class="logo-sub">Servicios Funerarios para mascotas</div>
     <div class="logo-contact">Cel: 319 358 5508 – 322 218 7087 &nbsp;·&nbsp; Email: contacto@caminoalcielo.com.co</div>
   </div>
@@ -321,8 +331,8 @@ export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
 
   <div class="sig-area">
     <div class="sig-line"></div>
-    <div class="sig-name">${nomCoord}</div>
-    <div class="sig-role">COORDINADOR</div>
+    <div class="sig-name">Carlos Lopez</div>
+    <div class="sig-role">Coordinador</div>
   </div>
 
   <div class="footer">
@@ -357,7 +367,7 @@ export function generarHTMLIndividual({ traslado }) {
 <body>
   <div class="header">
     <div class="logo-text">
-      <div class="logo-name">🕊️ Camino al Cielo</div>
+      <img class="logo-img" src="${LOGO_CAMINO}" alt="Camino al Cielo" />
       <div class="logo-sub">Servicios funerarios para mascotas</div>
       <div class="logo-sub">Cel: 319 358 5508 – 322 218 7087 &nbsp;·&nbsp; contacto@caminoalcielo.com.co</div>
     </div>
@@ -408,6 +418,12 @@ export function generarHTMLIndividual({ traslado }) {
   <p class="cierre">
     Para constancia del procedimiento, se elabora este certificado el día ${fmtFechaLarga(fecha)}.
   </p>
+
+  <div class="firma">
+    <div class="firma-line"></div>
+    <div class="firma-name">Carlos Lopez</div>
+    <div class="firma-role">Coordinador</div>
+  </div>
 
   <div class="footer">
     <span class="paws">🐾🐾🐾</span>
