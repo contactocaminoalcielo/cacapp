@@ -7,6 +7,12 @@ import { enviarWhatsAppGHL, enviarPlantillaGHL } from './whatsapp.js'
 
 const ITEM_ACTIVOS = ['PENDIENTE', 'VALIDADO', 'ENVIADO', 'REENVIADO', 'VENCIDO', 'ERROR']
 
+function uuidOrNull(value) {
+  if (!value) return null
+  const s = String(value)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s) ? s : null
+}
+
 // ─── Servicios de un lote, con todo lo necesario para validar ────────────────
 async function serviciosDelLote(client, loteId) {
   const { rows } = await client.query(
@@ -71,6 +77,7 @@ async function recomputarReporte(client, reporteId) {
  * Devuelve { reporteId, creados, actualizados, excluidos }.
  */
 export async function construirReporteDeLote(client, lote, { generadoPor = null, config = null } = {}) {
+  const actorId = uuidOrNull(generadoPor)
   config = config || await cargarConfigGrupales(client)
   const sla = parseInt(config.sla_dias_habiles) || 3
 
@@ -80,7 +87,7 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
      VALUES ($1, $2, 'PENDIENTE', $3)
      ON CONFLICT (lote_id) DO UPDATE SET updated_at = now()
      RETURNING id`,
-    [lote.id, lote.tipo_proceso, generadoPor]
+    [lote.id, lote.tipo_proceso, actorId]
   )
   const reporteId = repRows[0].id
 
@@ -126,7 +133,7 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
       )
       creados++
       await evento(client, { reporteId, itemId: ins[0].id, servicioId: svc.servicio_id,
-        tipo: 'CREADO', detalle: { datos_completos, motivo_exclusion }, actor: generadoPor })
+        tipo: 'CREADO', detalle: { datos_completos, motivo_exclusion, generado_por_raw: generadoPor || null }, actor: actorId })
     } else {
       // No tocar los ya enviados; refrescar validación de los demás
       if (['ENVIADO', 'REENVIADO'].includes(exist[0].estado)) { actualizados++; continue }
@@ -147,7 +154,7 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
       if (motivo_exclusion && exist[0].estado !== 'EXCLUIDO') {
         excluidos++
         await evento(client, { reporteId, itemId: exist[0].id, servicioId: svc.servicio_id,
-          tipo: 'EXCLUIDO_CAMBIO_PLAN', detalle: { motivo_exclusion }, actor: generadoPor })
+          tipo: 'EXCLUIDO_CAMBIO_PLAN', detalle: { motivo_exclusion, generado_por_raw: generadoPor || null }, actor: actorId })
       }
       actualizados++
     }
@@ -169,6 +176,7 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
 
 export async function agregarServicioAReporteGrupal({ servicioId, personalId }) {
   if (!servicioId) return { status: 422, body: { ok: false, error: 'servicio_id requerido' } }
+  const actorId = uuidOrNull(personalId)
 
   const client = await pool.connect()
   try {
@@ -278,10 +286,10 @@ export async function agregarServicioAReporteGrupal({ servicioId, personalId }) 
         const numeroLote = `L-${new Date().getFullYear()}-${String((conteo[0]?.total || 0) + 1).padStart(3, '0')}`
         const { rows: nuevo } = await client.query(
           `INSERT INTO public.lotes_grupales
-             (numero_lote, tipo_proceso, fecha_proceso, fecha_completado, estado, cantidad_mascotas, coordinador_id)
-           VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE, 'COMPLETADO', 0, $3)
-           RETURNING *`,
-          [numeroLote, servicio.tipo_proceso, personalId || null]
+           (numero_lote, tipo_proceso, fecha_proceso, fecha_completado, estado, cantidad_mascotas, coordinador_id)
+         VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE, 'COMPLETADO', 0, $3)
+         RETURNING *`,
+          [numeroLote, servicio.tipo_proceso, actorId]
         )
         lote = nuevo[0]
         loteCreado = true
@@ -299,13 +307,13 @@ export async function agregarServicioAReporteGrupal({ servicioId, personalId }) 
       [conteoServicios[0]?.total || 0, lote.id]
     )
 
-    const resultado = await construirReporteDeLote(client, lote, { generadoPor: personalId || null })
+    const resultado = await construirReporteDeLote(client, lote, { generadoPor: actorId })
     await evento(client, {
       reporteId: resultado.reporteId,
       servicioId,
       tipo: 'SERVICIO_AGREGADO_DESDE_CONTROL',
-      detalle: { numero_lote: lote.numero_lote, lote_creado: loteCreado },
-      actor: personalId || null,
+      detalle: { numero_lote: lote.numero_lote, lote_creado: loteCreado, actor_raw: personalId || null },
+      actor: actorId,
     })
 
     await client.query('COMMIT')
@@ -330,6 +338,7 @@ export async function agregarServicioAReporteGrupal({ servicioId, personalId }) 
 
 /** Endpoint: marcar reporte GENERADO con el PDF ya producido y subido. */
 export async function marcarGenerado({ reporteId, personalId, body = {} }) {
+  const actorId = uuidOrNull(personalId)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -343,9 +352,9 @@ export async function marcarGenerado({ reporteId, personalId, body = {} }) {
            estado = CASE WHEN estado = 'PENDIENTE' THEN 'GENERADO' ELSE estado END,
            pdf_generado_en = now(), generado_por = COALESCE(generado_por, $3)
        WHERE id = $1`,
-      [reporteId, body.storage_path || null, personalId]
+      [reporteId, body.storage_path || null, actorId]
     )
-    await evento(client, { reporteId, tipo: 'GENERADO', detalle: { storage_path: body.storage_path }, actor: personalId })
+    await evento(client, { reporteId, tipo: 'GENERADO', detalle: { storage_path: body.storage_path, actor_raw: personalId || null }, actor: actorId })
     await client.query('COMMIT')
     return { status: 200, body: { ok: true } }
   } catch (e) {
@@ -362,6 +371,7 @@ export async function marcarGenerado({ reporteId, personalId, body = {} }) {
  * - Cada intento (éxito o error) queda persistido (criterios #5, #6).
  */
 export async function enviarReporte({ reporteId, personalId, body = {} }) {
+  const actorId = uuidOrNull(personalId)
   const pool0 = pool
   const { rows: repRows } = await pool0.query(`SELECT * FROM public.reportes_grupales WHERE id=$1`, [reporteId])
   const rep = repRows[0]
@@ -427,7 +437,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
               estado, es_reenvio, motivo_reenvio, enviado_por)
            VALUES ($1,$2,$3,'WHATSAPP_ZOLUTIUM',$4,$5,$6,$7,'ENVIADO',$8,$9,$10)`,
           [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl,
-           envioOk.messageId, envioOk.contactId, !!body.reenvio, body.reenvio ? body.motivo.trim() : null, personalId]
+           envioOk.messageId, envioOk.contactId, !!body.reenvio, body.reenvio ? body.motivo.trim() : null, actorId]
         )
         await client.query(
           `UPDATE public.reportes_grupales_items SET estado=$2, enviado_en=now() WHERE id=$1`,
@@ -435,7 +445,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
         )
         await evento(client, { reporteId, itemId: item.id, servicioId: item.servicio_id,
           tipo: body.reenvio ? 'REENVIO' : 'ENVIADO',
-          detalle: { message_id: envioOk.messageId, contact_id: envioOk.contactId, motivo: body.motivo || null }, actor: personalId })
+          detalle: { message_id: envioOk.messageId, contact_id: envioOk.contactId, motivo: body.motivo || null, actor_raw: personalId || null }, actor: actorId })
         resumen.enviados++
       } else {
         await client.query(
@@ -443,11 +453,11 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
              (item_id, reporte_id, servicio_id, canal, destino, pdf_url, estado, error, es_reenvio, motivo_reenvio, enviado_por)
            VALUES ($1,$2,$3,'WHATSAPP_ZOLUTIUM',$4,$5,'ERROR',$6,$7,$8,$9)`,
           [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl, envioErr,
-           !!body.reenvio, body.reenvio ? body.motivo?.trim() : null, personalId]
+           !!body.reenvio, body.reenvio ? body.motivo?.trim() : null, actorId]
         )
         await client.query(`UPDATE public.reportes_grupales_items SET estado='ERROR' WHERE id=$1`, [item.id])
         await evento(client, { reporteId, itemId: item.id, servicioId: item.servicio_id,
-          tipo: 'ERROR', detalle: { error: envioErr }, actor: personalId })
+          tipo: 'ERROR', detalle: { error: envioErr, actor_raw: personalId || null }, actor: actorId })
         resumen.errores.push({ mascota: item.mascota_nombre, error: envioErr })
       }
       await recomputarReporte(client, reporteId)
@@ -470,6 +480,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
  * Idempotente y transaccional. Llamado desde Kanban al confirmar el cambio.
  */
 export async function desvincularServicioDeGrupal({ servicioId, personalId, motivo = 'Cambio de plan' }) {
+  const actorId = uuidOrNull(personalId)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -508,7 +519,7 @@ export async function desvincularServicioDeGrupal({ servicioId, personalId, moti
         [it.id, motivo]
       )
       await evento(client, { reporteId: it.reporte_id, itemId: it.id, servicioId,
-        tipo: 'EXCLUIDO_CAMBIO_PLAN', detalle: { motivo }, actor: personalId })
+        tipo: 'EXCLUIDO_CAMBIO_PLAN', detalle: { motivo, actor_raw: personalId || null }, actor: actorId })
       await recomputarReporte(client, it.reporte_id)
     }
 
