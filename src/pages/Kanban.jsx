@@ -10,6 +10,7 @@ import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, c
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
+import { orbitApi } from '@/lib/orbitApi'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
@@ -821,6 +822,22 @@ export default function Kanban() {
 
       const { error: svErr } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
       if (svErr) throw svErr
+
+      // Criterio #11: si el servicio estaba en proceso grupal y su clasificación cambia,
+      // sacarlo del lote + excluir del reporte + alerta (transaccional en backend).
+      const TIPOS_GRUPALES = ['CREMACION_GRUPAL', 'COMPOSTAJE_GRUPAL']
+      const tipoAnterior = planPorId(detalle?.plan_id)?.tipo_proceso
+      const tipoNuevo    = planPorId(editPlanId)?.tipo_proceso
+      if (TIPOS_GRUPALES.includes(tipoAnterior) && tipoAnterior !== tipoNuevo) {
+        try {
+          await orbitApi('/grupales/desvincular', {
+            method: 'POST',
+            body: { servicio_id: selected.servicio_id, motivo: `Cambio de plan: ${planAnterior} → ${planNuevo}` },
+          })
+        } catch (e) {
+          console.warn('No se pudo desvincular del lote grupal:', e.message)
+        }
+      }
 
       // Marcar REMOVIDO los ítems del plan anterior
       await db.from('servicio_recordatorios')

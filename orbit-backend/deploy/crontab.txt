@@ -7,3 +7,7 @@
 # orbit-backend — jobs Tenjo (06:00/06:30 Bogota = 11:00/11:30 UTC)
 0 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/generar-propuesta >> /var/log/orbit-backend-cron.log 2>&1
 30 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/alertas >> /var/log/orbit-backend-cron.log 2>&1
+
+# Reportes Grupales (Fase 5) — sincroniza reportes, marca vencidos y genera alertas.
+# 06:45 Bogota = 11:45 UTC (todos los dias). Idempotente.
+45 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/grupales >> /var/log/orbit-backend-cron.log 2>&1

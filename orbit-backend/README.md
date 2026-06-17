@@ -10,10 +10,18 @@ las capas de Supabase. Conecta **directo a PostgreSQL** (red `supabase_default`)
     próxima jornada (mar/jue/sáb) con sus items clasificados y notifica coordinadores.
   - `POST /jobs/alertas` — motor diario: crea alertas persistentes con dedupe y
     auto-resuelve las que ya no aplican (incluye LOTE_SIN_CERRAR).
+  - `POST /jobs/grupales` — Reportes Grupales (Fase 5): sincroniza reportes de
+    lotes COMPLETADOS, marca vencidos (3er día hábil desde fecha_ingreso) y corre
+    el motor de alertas con dedupe.
 - **API** (migración gradual desde PostgREST):
   - `GET /health`
   - `GET /tenjo/candidatos` (JWT)
   - `POST /tenjo/generar-propuesta` (JWT + rol COORDINADOR/ADMIN)
+  - Reportes Grupales (JWT + rol COORDINADOR/ADMIN): `POST /grupales/sincronizar`,
+    `POST /grupales/reportes/:id/generar`, `POST /grupales/reportes/:id/enviar`,
+    `POST /grupales/desvincular`; IA (JWT): `POST /grupales/ia/resumen`,
+    `POST /grupales/ia/redactar`.
+  - Requiere en `.env`: `GHL_TOKEN`, `GHL_LOCATION_ID` (Zolutium) y `CLAUDE_KEY` (IA).
 
 ## Seguridad
 - Jobs: header `x-job-token` (token en `.env`, solo conocido por el cron local).

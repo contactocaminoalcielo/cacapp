@@ -6,6 +6,9 @@ import { requireJob, requireAuth, requireRol } from './auth.js'
 import { generarPropuesta } from './jobs/propuesta.js'
 import { motorAlertas } from './jobs/alertas.js'
 import { confirmarLote, cerrarLote } from './lotes.js'
+import { jobReportesGrupales } from './jobs/grupales.js'
+import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal } from './grupales.js'
+import { resumenPendientes, redactarMensaje } from './grupales-ia.js'
 
 const app = express()
 app.use(express.json())
@@ -46,6 +49,75 @@ app.post('/jobs/alertas', requireJob, async (_req, res) => {
     res.json(await motorAlertas())
   } catch (e) {
     log('[alertas] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/jobs/grupales', requireJob, async (_req, res) => {
+  try {
+    res.json(await jobReportesGrupales())
+  } catch (e) {
+    log('[grupales] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── API Reportes Grupales — escrituras críticas, transaccionales (solo backend) ──
+app.post('/grupales/sincronizar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json(await jobReportesGrupales())
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/grupales/reportes/:id/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await marcarGenerado({ reporteId: req.params.id, personalId: req.personal.id, body: req.body })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[grupales/generar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/grupales/reportes/:id/enviar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await enviarReporte({ reporteId: req.params.id, personalId: req.personal.id, body: req.body })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[grupales/enviar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/grupales/desvincular', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await desvincularServicioDeGrupal({
+      servicioId: req.body.servicio_id, personalId: req.personal.id, motivo: req.body.motivo,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[grupales/desvincular] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Asistente IA (solo sugiere; el humano confirma) ──
+app.post('/grupales/ia/resumen', requireAuth, async (_req, res) => {
+  try {
+    res.json(await resumenPendientes())
+  } catch (e) {
+    log('[grupales/ia/resumen] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/grupales/ia/redactar', requireAuth, async (req, res) => {
+  try {
+    res.json(await redactarMensaje({ itemId: req.body.item_id }))
+  } catch (e) {
+    log('[grupales/ia/redactar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
