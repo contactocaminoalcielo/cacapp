@@ -89,7 +89,7 @@ export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl
  * @param variables  array posicional [{{1}}, {{2}}, {{3}}] del cuerpo de la plantilla
  */
 export async function enviarPlantillaGHL({
-  telefono, nombre = '', plantillaNombre, idioma = 'es', variables = [], headerDocumentUrl, fromNumber,
+  telefono, propietario = '', petName = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY', pdfUrl, pdfFilename,
 }) {
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
@@ -120,8 +120,8 @@ export async function enviarPlantillaGHL({
       method: 'POST', headers,
       body: JSON.stringify({
         locationId: GHL_LOCATION, phone: numero,
-        firstName: nombre.split(' ')[0] || nombre,
-        lastName:  nombre.split(' ').slice(1).join(' ') || '',
+        firstName: propietario.split(' ')[0] || propietario,
+        lastName:  propietario.split(' ').slice(1).join(' ') || '',
       }),
     })
     const creado = await crear.json()
@@ -129,26 +129,37 @@ export async function enviarPlantillaGHL({
     contactId = creado.contact?.id
   }
 
-  const body = construirPayloadPlantilla({ contactId, plantillaNombre, idioma, variables, headerDocumentUrl, fromNumber })
+  const body = construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename })
   const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
     method: 'POST', headers, body: JSON.stringify(body),
   })
   const dataEnvio = await envio.json()
-  if (!envio.ok) throw new Error(dataEnvio.message || `Error enviando plantilla: ${envio.status}`)
+  if (!envio.ok) {
+    // Persistir la respuesta completa de GHL/Twilio para diagnóstico fino
+    throw new Error(`GHL ${envio.status}: ${dataEnvio.message || ''} :: ${JSON.stringify(dataEnvio)}`)
+  }
   return { messageId: dataEnvio.messageId, contactId }
 }
 
-// Forma del payload de plantilla (aislada para ajustarla al contrato real de Zolutium).
-function construirPayloadPlantilla({ contactId, plantillaNombre, idioma, variables, headerDocumentUrl, fromNumber }) {
-  const body = {
+// Payload EXACTO que usa el UI de Zolutium contra /conversations/messages
+// (capturado por DevTools): message + whatsapp.placeholders con valores resueltos
+// y el PDF en el header tipo document.
+function construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename }) {
+  return {
+    MessageType: 19,
     type:        'WhatsApp',
     contactId,
-    templateName: plantillaNombre,
-    language:     idioma,
-    // Variables posicionales del cuerpo ({{1}}, {{2}}, {{3}})
-    templateParams: variables.map((v, i) => ({ key: String(i + 1), value: String(v ?? '') })),
+    message: `Hola ${propietario}, le compartimos el certificado de ${petName}. Este documento certifica el proceso realizado con nuestros más altos estándares. — Camino al Cielo 🕊️ \n\nCamino al cielo funeraria para mascotas.`,
+    whatsapp: {
+      type: 'template',
+      template: { name: plantillaNombre, lang: idioma, category },
+      placeholders: {
+        header: pdfUrl
+          ? [{ type: 'document', document: { link: pdfUrl, filename: pdfFilename || 'certificado.pdf' } }]
+          : [],
+        body:    [propietario, petName],  // valores resueltos → ContentVariables {{1}},{{2}}
+        buttons: [],
+      },
+    },
   }
-  if (headerDocumentUrl) body.attachments = [headerDocumentUrl]  // PDF de cabecera
-  if (fromNumber)        body.fromNumber  = fromNumber
-  return body
 }

@@ -240,14 +240,13 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
       if (usarPlantilla && config.plantilla_nombre) {
         // Fuera de la ventana de 24h: plantilla aprobada (HSM) con PDF de cabecera
         envioOk = await enviarPlantillaGHL({
-          telefono: item.canal_destino, nombre: item.propietario_nombre,
-          plantillaNombre: config.plantilla_nombre, idioma: config.plantilla_idioma || 'es',
-          // Plantilla certificado_proceso: 2 variables → {{1}}=propietario, {{2}}=proceso + mascota
-          variables: [
-            item.propietario_nombre,
-            `${etiquetaProceso(lote.tipo_proceso)} de ${item.mascota_nombre}`,
-          ],
-          headerDocumentUrl: pdfUrl, fromNumber: body.fromNumber,
+          telefono: item.canal_destino,
+          propietario: item.propietario_nombre,
+          petName: item.mascota_nombre,                 // {{contact.name_pets}} = solo mascota
+          plantillaNombre: config.plantilla_nombre,
+          idioma: config.plantilla_idioma || 'es_MX',
+          pdfUrl,
+          pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
         })
       } else {
         envioOk = await enviarWhatsAppGHL({
