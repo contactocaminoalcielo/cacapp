@@ -180,7 +180,7 @@ async function autoArmarLotes(client, config) {
        JOIN public.planes p ON p.id = s.plan_id
        WHERE p.tipo_proceso = $1
          AND s.lote_id IS NULL
-         AND s.estado NOT IN ('CANCELADO','ENTREGADO')
+         AND s.estado IN ('INGRESADO','EN_RECOGIDA','EN_CUARTO_FRIO')
          AND public.fn_sumar_dias_habiles(s.fecha_ingreso, $2::int)
              BETWEEN CURRENT_DATE AND (CURRENT_DATE + $3::int)
        ORDER BY s.fecha_ingreso ASC`,
