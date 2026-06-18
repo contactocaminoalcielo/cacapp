@@ -12,13 +12,13 @@ import { orbitApi } from '@/lib/orbitApi'
 import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
   generarPropuestaLote, evaluarCandidato, mensajeSugerido,
-  mensajeConfirmacionCliente, mensajeGrupoProceso, varianteProceso, TIPO_PROCESO_LABEL,
-  proximaJornada, esDiaPlanificacion, nombreDia,
+  mensajeConfirmacionCliente, mensajeGrupoProceso, varianteProceso, VARIANTE_LABEL, TIPO_PROCESO_LABEL,
+  proximaJornada, proximasJornadas, esDiaPlanificacion, nombreDia,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
 import {
   CalendarCheck, Sparkles, RefreshCw, CheckCircle2, Undo2,
-  MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check,
+  MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check, Info,
 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -45,6 +45,8 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const [sinTabla, setSinTabla] = useState(false)
   const [modalReprogramar, setModalReprogramar] = useState(null) // item
   const [motivoText,       setMotivoText]       = useState('')
+  const [fechaReprog,      setFechaReprog]      = useState('')
+  const [modalDetalle,     setModalDetalle]     = useState(null) // item
   const [modalContacto,    setModalContacto]    = useState(null) // item
   const [mensajeText,      setMensajeText]      = useState('')
   const [modalAgregar,     setModalAgregar]     = useState(false)
@@ -156,8 +158,9 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
       estado: 'REPROGRAMADO',
       motivo_reprogramacion: motivoText.trim(),
       veces_reprogramada: (modalReprogramar.veces_reprogramada || 0) + 1,
+      fecha_reprogramacion_objetivo: fechaReprog || null,
     })
-    setModalReprogramar(null); setMotivoText('')
+    setModalReprogramar(null); setMotivoText(''); setFechaReprog('')
   }
 
   async function registrarContacto(resultado) {
@@ -321,9 +324,18 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
           {item.motivo_reprogramacion && (
             <div className="text-[10px] text-ink3 italic mt-0.5">Motivo: {item.motivo_reprogramacion}</div>
           )}
+          {item.fecha_reprogramacion_objetivo && (
+            <div className="text-[10px] font-semibold mt-0.5" style={{ color: '#92400E' }}>
+              ↻ Reprogramada para {fmtFechaLarga(item.fecha_reprogramacion_objetivo)}
+            </div>
+          )}
         </div>
+        <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
+          <Button size="sm" variant="secondary" onClick={() => setModalDetalle(item)}>
+            <Info size={12} /> Detalles
+          </Button>
         {editable && ITEMS_ACTIVOS.includes(item.estado) && (
-          <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
+          <>
             {necesitaContacto && (
               <Button size="sm" variant="secondary" disabled={saving}
                 onClick={() => {
@@ -345,7 +357,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
               </Button>
             )}
             <Button size="sm" variant="secondary" disabled={saving}
-              onClick={() => { setModalReprogramar(item); setMotivoText('') }}>
+              onClick={() => { setModalReprogramar(item); setMotivoText(''); setFechaReprog(item.fecha_reprogramacion_objetivo || proximaJornada(config) || '') }}>
               ↻ Reprogramar
             </Button>
             <Button size="sm" variant="secondary" disabled={saving}
@@ -355,8 +367,9 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
               }}>
               <Trash2 size={12} />
             </Button>
-          </div>
+          </>
         )}
+        </div>
       </div>
     )
   }
@@ -502,7 +515,17 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             <Button onClick={reprogramar} disabled={saving}>{saving ? 'Guardando…' : 'Reprogramar'}</Button>
           </>}>
           <div className="space-y-3">
-            <p className="text-[12px] text-ink2">Quedará disponible para el siguiente ciclo de planificación. El motivo queda en la trazabilidad.</p>
+            <p className="text-[12px] text-ink2">Quedará disponible para el siguiente ciclo de planificación. El motivo y la fecha objetivo quedan en la trazabilidad.</p>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Reprogramar para la jornada del</label>
+              <select value={fechaReprog} onChange={e => setFechaReprog(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]">
+                <option value="">Sin fecha definida</option>
+                {proximasJornadas(config, 8).map(f => (
+                  <option key={f} value={f}>{fmtFechaLarga(f)}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Motivo de reprogramación *</label>
               <Textarea value={motivoText} onChange={e => setMotivoText(e.target.value)}
@@ -511,6 +534,58 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
           </div>
         </Modal>
       )}
+
+      {/* ── Modal detalles de la mascota ── */}
+      {modalDetalle && (() => {
+        const item = modalDetalle
+        const m  = item.servicios?.mascotas
+        const cl = m?.clientes
+        const c  = porServicio[item.servicio_id]
+        const variante = varianteProceso(item.servicios?.planes?.codigo, item.servicios?.tipo_acompanamiento)
+        const Fila = ({ label, value }) => (
+          <div className="flex justify-between gap-3 py-1.5 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+            <span className="text-[11px] text-ink3">{label}</span>
+            <span className="text-[12px] font-semibold text-ink text-right">{value ?? '—'}</span>
+          </div>
+        )
+        return (
+          <Modal open onClose={() => setModalDetalle(null)}
+            title={`${m?.nombre || 'Mascota'} — detalles`}
+            maxWidth="max-w-md"
+            footer={<Button variant="secondary" onClick={() => setModalDetalle(null)}>Cerrar</Button>}>
+            <div className="space-y-1">
+              <Fila label="Mascota" value={m?.nombre} />
+              <Fila label="Especie" value={m?.especies?.nombre} />
+              <Fila label="Peso" value={(m?.peso_kg || c?.peso_kg) ? `${m?.peso_kg || c?.peso_kg} kg` : null} />
+              <Fila label="Cliente" value={cl ? `${cl.nombre || ''} ${cl.apellido || ''}`.trim() : null} />
+              <Fila label="WhatsApp" value={cl?.whatsapp} />
+              <Fila label="Plan" value={item.servicios?.planes?.nombre} />
+              <Fila label="Tipo de proceso" value={TIPO_PROCESO_LABEL[item.servicios?.planes?.tipo_proceso]} />
+              <Fila label="Variante" value={VARIANTE_LABEL?.[variante] || variante} />
+              <Fila label="Nevera" value={c?.nevera_codigo} />
+              <Fila label="Días en custodia" value={c?.dias_custodia != null ? `${c.dias_custodia} días` : null} />
+              <Fila label="Ingreso a custodia" value={c?.fecha_ingreso ? fmtFechaLarga(c.fecha_ingreso.split('T')[0]) : null} />
+              <Fila label="Estado en lote" value={ITEM_ESTADO_CFG[item.estado]?.label || item.estado} />
+              <Fila label="Clasificación" value={CLASIF_CFG[item.clasificacion]?.label || item.clasificacion} />
+              <Fila label="Veces reprogramada" value={item.veces_reprogramada || 0} />
+              {item.fecha_reprogramacion_objetivo && (
+                <Fila label="Reprogramada para" value={fmtFechaLarga(item.fecha_reprogramacion_objetivo)} />
+              )}
+              {item.confirmacion_cliente === true && <Fila label="Cliente confirmó" value="Sí" />}
+              {item.checklist?.fecha_hora_acordada && <Fila label="Hora acordada" value={item.checklist.fecha_hora_acordada} />}
+              {item.motivo_reprogramacion && <Fila label="Motivo reprog." value={item.motivo_reprogramacion} />}
+              {[...(item.bloqueos || []), ...(item.validaciones || [])].length > 0 && (
+                <div className="pt-2">
+                  <div className="text-[11px] font-bold text-ink3 mb-1">Pendientes / bloqueos</div>
+                  {[...(item.bloqueos || []), ...(item.validaciones || [])].map((d, i) => (
+                    <div key={i} className="text-[11px] text-amber-700">• {d}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Modal>
+        )
+      })()}
 
       {/* ── Modal contacto asistido ── */}
       {modalContacto && (() => {

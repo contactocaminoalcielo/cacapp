@@ -109,6 +109,18 @@ export function proximaJornada(config, desde = new Date()) {
   return null
 }
 
+/** Próximas N jornadas Tenjo (fechas de operación) a partir de `desde`. */
+export function proximasJornadas(config, n = 8, desde = new Date()) {
+  const dias = config.dias_operacion || CONFIG_DEFAULTS.dias_operacion
+  const out = []
+  const d = new Date(desde)
+  for (let i = 1; i <= 90 && out.length < n; i++) {
+    d.setDate(d.getDate() + 1)
+    if (dias.includes(d.getDay())) out.push(d.toISOString().split('T')[0])
+  }
+  return out
+}
+
 export function esDiaPlanificacion(config, fecha = new Date()) {
   return (config.dias_planificacion || CONFIG_DEFAULTS.dias_planificacion).includes(fecha.getDay())
 }

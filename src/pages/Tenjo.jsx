@@ -18,7 +18,7 @@ import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
 import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
-import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock } from 'lucide-react'
+import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock, History } from 'lucide-react'
 
 function fmtFecha(s) {
   if (!s) return '-'
@@ -199,6 +199,8 @@ export default function Tenjo() {
   const [certIndModal,      setCertIndModal]      = useState(null)
   const [modalCubiculo,     setModalCubiculo]     = useState(null) // seguimiento_compostaje para registrar cubículo
   const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
+  const [modalRetro,        setModalRetro]        = useState(null) // cuarto_frio row — registro retroactivo
+  const [formRetro,         setFormRetro]         = useState({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
   const [tab,               setTab]               = useState('planificacion')
   const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
   const [candidatas,        setCandidatas]        = useState([]) // null = migración 003 sin aplicar
@@ -419,6 +421,48 @@ export default function Tenjo() {
     } catch (e) {
       await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     }
+  }
+
+  // Registro retroactivo: una mascota cuyo proceso YA se hizo pero no quedó
+  // registrado. Mira el flujo legado (traslado COMPLETADO + salida del cuarto
+  // frío + servicio avanzado), para que aparezca como procesada y certificable.
+  async function registrarProcesoRetroactivo() {
+    const r = modalRetro
+    if (!r) return
+    if (!formRetro.fecha_proceso) { await showAlert('Indica la fecha en que se realizó el proceso.', { title: 'Fecha requerida' }); return }
+    if (!await confirm(
+      `Se registrará el proceso de ${r.servicios?.mascotas?.nombre} como ya realizado el ${fmtFecha(formRetro.fecha_proceso)}, `
+      + `saldrá del cuarto frío y el servicio pasará a ${formRetro.listo ? 'EN PRODUCCIÓN (listo para certificado)' : 'EN PROCESO'}.`,
+      { title: '¿Registrar proceso ya realizado?', variant: 'warning', confirmLabel: 'Registrar' }
+    )) return
+    setSaving(true)
+    try {
+      // 1. Salida física del cuarto frío (idempotente)
+      await registrarSalidaCuartoFrio(r.servicio_id, {
+        personalId: personalData?.id,
+        tipo:       'SALIDA_TENJO',
+        motivo:     'Registro retroactivo — proceso ya realizado',
+      })
+      // 2. Traslado COMPLETADO con las fechas del proceso
+      const { error: errT } = await db.from('traslados_tenjo').insert({
+        servicio_id:      r.servicio_id,
+        estado:           'COMPLETADO',
+        fecha_traslado:   formRetro.fecha_proceso,
+        fecha_completado: formRetro.fecha_proceso,
+        tecnico_id:       formRetro.tecnico_id || null,
+        notas:            `Registro retroactivo${formRetro.notas ? ' — ' + formRetro.notas : ''}`,
+      })
+      if (errT && errT.code !== '23505') throw errT
+      // 3. Avanzar el servicio
+      await db.from('servicios')
+        .update({ estado: formRetro.listo ? 'EN_PRODUCCION' : 'EN_PROCESO' })
+        .eq('id', r.servicio_id)
+      setModalRetro(null)
+      setFormRetro({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
+      await cargar()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error registrando proceso', variant: 'danger' })
+    } finally { setSaving(false) }
   }
 
   async function crearTraslado() {
@@ -674,10 +718,16 @@ export default function Tenjo() {
                         <Td className="font-mono text-[11px]">{r.nevera_codigo || '-'}</Td>
                         <Td>{m?.peso_kg || '-'}</Td>
                         <Td>
-                          <Button size="sm" variant="secondary"
-                            onClick={() => { setMascotaParaTraslado({ ...r, servicio_id: r.servicio_id }); setModalNuevo(true) }}>
-                            <Plus size={12} /> Agregar traslado
-                          </Button>
+                          <div className="flex gap-1.5 justify-end">
+                            <Button size="sm" variant="secondary"
+                              onClick={() => { setMascotaParaTraslado({ ...r, servicio_id: r.servicio_id }); setModalNuevo(true) }}>
+                              <Plus size={12} /> Agregar traslado
+                            </Button>
+                            <Button size="sm" variant="secondary"
+                              onClick={() => { setModalRetro(r); setFormRetro({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true }) }}>
+                              <History size={12} /> Ya procesado
+                            </Button>
+                          </div>
                         </Td>
                       </Tr>
                     )
@@ -859,6 +909,49 @@ export default function Tenjo() {
               </Select></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
               <Textarea value={formTraslado.notas} onChange={e => setFormTraslado(p => ({ ...p, notas: e.target.value }))} /></div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal registro retroactivo de proceso ya realizado */}
+      {modalRetro && (
+        <Modal open onClose={() => setModalRetro(null)}
+          title={`Registrar proceso ya realizado — ${modalRetro.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setModalRetro(null)}>Cancelar</Button>
+              <Button onClick={registrarProcesoRetroactivo} disabled={saving}>{saving ? 'Guardando...' : 'Registrar proceso'}</Button>
+            </>
+          }>
+          <div className="space-y-4">
+            <div className="rounded-xl p-3 text-[12px]" style={{ background: '#FFFBEB', borderColor: '#FCD34D', border: '1px solid' }}>
+              Para procesos que <strong>ya se realizaron</strong> pero no quedaron registrados. Se registrará la salida del cuarto frío, un traslado completado con la fecha indicada y se avanzará el servicio.
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Fecha en que se hizo el proceso *</label>
+              <Input type="date" max={today()} value={formRetro.fecha_proceso}
+                onChange={e => setFormRetro(p => ({ ...p, fecha_proceso: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Responsable del proceso</label>
+              <Select value={formRetro.tecnico_id} onChange={e => setFormRetro(p => ({ ...p, tecnico_id: e.target.value }))}>
+                <option value="">Sin asignar</option>
+                {personal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
+              </Select>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-[#3D5A27]"
+                checked={formRetro.listo}
+                onChange={e => setFormRetro(p => ({ ...p, listo: e.target.checked }))} />
+              <span className="text-[12px] font-semibold text-ink2">El proceso está completo (cenizas/planta listas) → marcar EN PRODUCCIÓN</span>
+            </label>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
+              <Textarea value={formRetro.notas}
+                onChange={e => setFormRetro(p => ({ ...p, notas: e.target.value }))}
+                placeholder="Detalle del registro retroactivo…" />
+            </div>
           </div>
         </Modal>
       )}
