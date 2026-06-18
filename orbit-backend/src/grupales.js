@@ -304,7 +304,7 @@ export async function agregarServicioAReporteGrupal({ servicioId, personalId }) 
     )
     await client.query(
       `UPDATE public.lotes_grupales SET cantidad_mascotas = $2 WHERE id = $1`,
-      [conteoServicios[0]?.total || 0, lote.id]
+      [lote.id, conteoServicios[0]?.total || 0]
     )
 
     const resultado = await construirReporteDeLote(client, lote, { generadoPor: actorId })
