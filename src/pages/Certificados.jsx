@@ -17,6 +17,7 @@ import {
 } from '@/lib/reportesGrupales'
 import { enviarWhatsApp, obtenerLineasWA, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import ControlGrupal from '@/components/ControlGrupal'
+import LotesTab from '@/components/LotesTab'
 import {
   FileText, RefreshCw, CheckCircle2, Printer, MessageCircle,
   ChevronDown, ChevronUp, Award, Flame, Send, AlertTriangle, Clock, XCircle, Sparkles,
@@ -370,6 +371,7 @@ export default function Certificados() {
 
   const TABS = [
     { id: 'pendientes', label: 'Pendientes', badge: totalPend, dot: totalPend > 0 },
+    { id: 'lotes', label: 'Lotes' },
     { id: 'control', label: 'Control' },
     { id: 'historial', label: 'Historial', badge: historial.length },
   ]
@@ -502,6 +504,7 @@ export default function Certificados() {
         )}
 
         {/* ── CONTROL (tabla de servicios elegibles) ──────────────────────────── */}
+        {tab === 'lotes' && <LotesTab onChanged={cargar} onGoPendientes={() => setTab('pendientes')} />}
         {tab === 'control' && <ControlGrupal onChanged={cargar} onGoPendientes={() => setTab('pendientes')} />}
 
         {/* ── HISTORIAL (evidencia de envíos) ─────────────────────────────────── */}
