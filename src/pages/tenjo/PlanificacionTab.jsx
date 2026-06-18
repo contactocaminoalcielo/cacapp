@@ -18,7 +18,7 @@ import {
 } from '@/lib/tenjo'
 import {
   CalendarCheck, Sparkles, RefreshCw, CheckCircle2, Undo2,
-  MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check, Info,
+  MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check, Info, Ban,
 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -203,6 +203,37 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     if (!await confirm('Saldrá de este lote sin contar como reprogramación.', { title: '¿Retirar del lote?', confirmLabel: 'Retirar' })) return
     await cancelarTrasladoDe(item)
     await actualizarItem(item, { estado: 'RETIRADO_DEL_LOTE', traslado_id: null })
+  }
+
+  // Cancela el lote completo: saca todas las mascoticas activas (cancelando sus
+  // traslados) y marca el lote CANCELADO. Pensado para limpiar lotes viejos.
+  async function cancelarLote() {
+    if (!lote) return
+    const activosCancelar = items.filter(i => ITEMS_ACTIVOS.includes(i.estado))
+    if (!await confirm(
+      `Se cancelará el lote ${lote.numero_lote}. ${activosCancelar.length} mascotica${activosCancelar.length !== 1 ? 's' : ''} saldrá${activosCancelar.length !== 1 ? 'n' : ''} del lote, sus traslados programados se cancelan y vuelven al pool de candidatas. Esta acción no se puede deshacer.`,
+      { title: '¿Cancelar lote completo?', variant: 'danger', confirmLabel: 'Cancelar lote' }
+    )) return
+    setSaving(true)
+    try {
+      const trasladoIds = activosCancelar.map(i => i.traslado_id).filter(Boolean)
+      if (trasladoIds.length) {
+        await db.from('traslados_tenjo').update({ estado: 'CANCELADO' })
+          .in('id', trasladoIds).in('estado', ['PROGRAMADO', 'EN_CAMINO'])
+      }
+      if (activosCancelar.length) {
+        const { error: errItems } = await db.from('lotes_tenjo_items')
+          .update({ estado: 'RETIRADO_DEL_LOTE', traslado_id: null, decidido_por: personalData?.id || null })
+          .in('id', activosCancelar.map(i => i.id))
+        if (errItems) throw errItems
+      }
+      const { error } = await db.from('lotes_tenjo').update({ estado: 'CANCELADO' }).eq('id', lote.id)
+      if (error) throw error
+      await cargarLote(); onChanged?.()
+      await showAlert(`Lote ${lote.numero_lote} cancelado.`, { title: 'Lote cancelado' })
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error cancelando lote', variant: 'danger' })
+    } finally { setSaving(false) }
   }
 
   async function registrarContacto(resultado) {
@@ -490,6 +521,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             {canPlan && editable && agregables.length > 0 && (
               <Button size="sm" variant="secondary" onClick={() => setModalAgregar(true)}>
                 <Plus size={12} /> Agregar mascota
+              </Button>
+            )}
+            {gestionable && ['PROPUESTO', 'EN_REVISION', 'CONFIRMADO'].includes(lote.estado) && (
+              <Button size="sm" variant="danger" disabled={saving} onClick={cancelarLote}>
+                <Ban size={12} /> Cancelar lote
               </Button>
             )}
           </div>
