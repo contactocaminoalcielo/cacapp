@@ -157,8 +157,10 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   const fechaCorta = fmtFechaCorta(fecha)
   const fechaLarga = fmtFechaLarga(fecha)
   const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
-  const empresa    = lote.entidad_externa || 'INDUSTRIA AMBIENTAL S.A.S / ECOLOGIA Y ENTORNO S.A.S E S P'
-  const duracion   = lote.duracion_proceso || '_____ horas y _____ minutos'
+  const empresa    = (lote.entidad_externa && lote.entidad_externa !== 'Entidad certificada Bogotá')
+    ? lote.entidad_externa
+    : 'Ecologia y entorno S.A.S.'
+  const duracion   = lote.duracion_proceso || '6 horas y 18 minutos'
   const pesoTotal  = sumarPesos(servicios)
 
   const filas = servicios.map(s => `
