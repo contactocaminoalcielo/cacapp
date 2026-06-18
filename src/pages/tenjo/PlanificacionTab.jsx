@@ -2,7 +2,7 @@
 // El sistema propone; el coordinador aprueba, quita, reprograma o contacta.
 // Confirmar el lote = autorización de salida + traslados programados.
 // La salida FÍSICA del cuarto frío se registra después, al iniciar el traslado.
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
@@ -39,6 +39,8 @@ function Chip({ cfg, fallback }) {
 
 export default function PlanificacionTab({ config, candidatas, personalData, canPlan, onChanged }) {
   const { confirm, alert: showAlert } = useConfirm()
+  const [lotesList, setLotesList] = useState(undefined) // undefined=cargando, null=sin tabla, array
+  const [loteSel,   setLoteSel]   = useState(null)       // id del lote seleccionado
   const [lote,    setLote]    = useState(undefined) // undefined=cargando, null=no hay
   const [items,   setItems]   = useState([])
   const [saving,  setSaving]  = useState(false)
@@ -58,12 +60,28 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
 
   const fechaJornada = proximaJornada(config)
   const porServicio  = Object.fromEntries((candidatas || []).map(c => [c.servicio_id, c]))
+  const loteSelRef   = useRef(null)
+  useEffect(() => { loteSelRef.current = loteSel }, [loteSel])
 
-  const cargarLote = useCallback(async () => {
-    if (!fechaJornada) { setLote(null); return }
-    const { data: l, error } = await db.from('lotes_tenjo')
-      .select('*').eq('fecha_jornada', fechaJornada).neq('estado', 'CANCELADO').maybeSingle()
-    if (error) { setSinTabla(true); setLote(null); return }
+  // Lista de lotes navegables (todos menos cancelados)
+  const cargarLista = useCallback(async () => {
+    const { data, error } = await db.from('lotes_tenjo')
+      .select('*').neq('estado', 'CANCELADO')
+      .order('fecha_jornada', { ascending: false })
+    if (error) { setSinTabla(true); setLotesList(null); setLote(null); return }
+    const list = data || []
+    setLotesList(list)
+    setLoteSel(prev => {
+      if (prev && list.some(l => l.id === prev)) return prev
+      const prox      = list.find(l => l.fecha_jornada === fechaJornada)
+      const editLote  = list.find(l => ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
+      return prox?.id || editLote?.id || list[0]?.id || null
+    })
+  }, [fechaJornada])
+
+  const cargarItems = useCallback(async (loteId) => {
+    if (!loteId) { setLote(null); setItems([]); return }
+    const { data: l } = await db.from('lotes_tenjo').select('*').eq('id', loteId).maybeSingle()
     setLote(l || null)
     if (l) {
       const { data: its } = await db.from('lotes_tenjo_items')
@@ -72,14 +90,22 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
         .order('created_at', { ascending: true })
       setItems(its || [])
     } else setItems([])
-  }, [fechaJornada])
+  }, [])
 
-  useEffect(() => { cargarLote() }, [cargarLote])
+  // Recarga usada por los handlers (refresca lista + items del lote actual)
+  async function cargarLote() {
+    await cargarLista()
+    await cargarItems(loteSelRef.current)
+  }
+
+  useEffect(() => { cargarLista() }, [cargarLista])
+  useEffect(() => { cargarItems(loteSel) }, [loteSel, cargarItems])
 
   if (candidatas === null || sinTabla) return <SetupNotice />
-  if (lote === undefined) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando planificación…</span></div>
+  if (lotesList === undefined) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando planificación…</span></div>
 
-  const editable = lote && ['PROPUESTO', 'EN_REVISION'].includes(lote.estado)
+  const editable    = lote && ['PROPUESTO', 'EN_REVISION'].includes(lote.estado)
+  const gestionable = canPlan && lote && !['CERRADO', 'CANCELADO'].includes(lote.estado)
   const activos  = items.filter(i => ITEMS_ACTIVOS.includes(i.estado))
   const fuera    = items.filter(i => !ITEMS_ACTIVOS.includes(i.estado))
 
@@ -151,16 +177,32 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     } finally { setSaving(false) }
   }
 
+  // Si el item ya tenía traslado programado (lote confirmado), se cancela para
+  // liberar la mascota antes de sacarla del lote.
+  async function cancelarTrasladoDe(item) {
+    if (!item.traslado_id) return
+    await db.from('traslados_tenjo').update({ estado: 'CANCELADO' })
+      .eq('id', item.traslado_id).in('estado', ['PROGRAMADO', 'EN_CAMINO'])
+  }
+
   async function reprogramar() {
     if (!modalReprogramar) return
     if (!motivoText.trim()) { await showAlert('Registra el motivo de la reprogramación (queda en la trazabilidad).', { title: 'Motivo requerido' }); return }
+    await cancelarTrasladoDe(modalReprogramar)
     await actualizarItem(modalReprogramar, {
       estado: 'REPROGRAMADO',
       motivo_reprogramacion: motivoText.trim(),
       veces_reprogramada: (modalReprogramar.veces_reprogramada || 0) + 1,
       fecha_reprogramacion_objetivo: fechaReprog || null,
+      traslado_id: null,
     })
     setModalReprogramar(null); setMotivoText(''); setFechaReprog('')
+  }
+
+  async function retirarItem(item) {
+    if (!await confirm('Saldrá de este lote sin contar como reprogramación.', { title: '¿Retirar del lote?', confirmLabel: 'Retirar' })) return
+    await cancelarTrasladoDe(item)
+    await actualizarItem(item, { estado: 'RETIRADO_DEL_LOTE', traslado_id: null })
   }
 
   async function registrarContacto(resultado) {
@@ -356,15 +398,15 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
                 <Undo2 size={12} /> Deshacer
               </Button>
             )}
+          </>
+        )}
+        {gestionable && ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA'].includes(item.estado) && (
+          <>
             <Button size="sm" variant="secondary" disabled={saving}
               onClick={() => { setModalReprogramar(item); setMotivoText(''); setFechaReprog(item.fecha_reprogramacion_objetivo || proximaJornada(config) || '') }}>
               ↻ Reprogramar
             </Button>
-            <Button size="sm" variant="secondary" disabled={saving}
-              onClick={async () => {
-                if (await confirm('Saldrá de este lote sin contar como reprogramación.', { title: '¿Retirar del lote?', confirmLabel: 'Retirar' }))
-                  actualizarItem(item, { estado: 'RETIRADO_DEL_LOTE' })
-              }}>
+            <Button size="sm" variant="secondary" disabled={saving} onClick={() => retirarItem(item)}>
               <Trash2 size={12} />
             </Button>
           </>
@@ -376,15 +418,33 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
 
   return (
     <div className="space-y-5">
+      {/* ── Selector de lote (navegar entre jornadas) ── */}
+      {Array.isArray(lotesList) && lotesList.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <CalendarCheck size={15} className="text-ink3" />
+          <span className="text-[12px] font-semibold text-ink2">Lote:</span>
+          <select value={loteSel || ''} onChange={e => setLoteSel(e.target.value)}
+            className="px-3 py-1.5 rounded-xl border border-gray-200 text-[12px] outline-none focus:border-[#3D5A27] min-w-[260px]">
+            {lotesList.map(l => (
+              <option key={l.id} value={l.id}>
+                {l.numero_lote} · {fmtFechaLarga(l.fecha_jornada)} · {LOTE_ESTADO_CFG[l.estado]?.label || l.estado}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* ── Banner asistente ── */}
       <div className="rounded-2xl border-2 p-5" style={{ borderColor: '#C4A87A', background: '#FDFBF7' }}>
         <div className="flex items-start gap-3">
           <Sparkles size={18} style={{ color: '#C4A87A' }} className="mt-0.5 flex-shrink-0" />
           <div className="flex-1">
             <div className="font-semibold text-[15px] text-ink">
-              {fechaJornada
-                ? <>Próxima jornada: <strong>{fmtFechaLarga(fechaJornada)}</strong></>
-                : 'Sin días de operación configurados'}
+              {lote
+                ? <>Jornada: <strong>{fmtFechaLarga(lote.fecha_jornada)}</strong></>
+                : fechaJornada
+                  ? <>Próxima jornada: <strong>{fmtFechaLarga(fechaJornada)}</strong></>
+                  : 'Sin días de operación configurados'}
               {lote && <span className="ml-2 align-middle"><Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} /></span>}
             </div>
             <p className="text-[12px] text-ink2 mt-1 leading-relaxed">
