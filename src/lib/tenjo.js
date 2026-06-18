@@ -281,12 +281,14 @@ export async function confirmarLote({ lote, items, candidatas, config, personalI
         resultado.rechazadas.push({ item, motivo: ev?.bloqueos[0] || 'Requiere confirmación del cliente' })
         continue
       }
-      // Crear traslado programado de la jornada (protegido por índice único)
+      // Crear traslado programado de la jornada (protegido por índice único).
+      // NOTA: traslados_tenjo.lote_id es una FK legada a lotes_grupales (no a
+      // lotes_tenjo); el vínculo con este lote queda en lotes_tenjo_items.traslado_id
+      // y en `notas`. No se envía lote_id para no violar la FK.
       const { data: tras, error: errT } = await db.from('traslados_tenjo').insert({
         servicio_id:    item.servicio_id,
         estado:         'PROGRAMADO',
         fecha_traslado: lote.fecha_jornada,
-        lote_id:        lote.id,
         notas:          `Lote ${lote.numero_lote}`,
       }).select('id').single()
       if (errT && errT.code !== '23505') throw new Error(errT.message)

@@ -61,12 +61,15 @@ export async function confirmarLote({ loteId, personalId }) {
           resumen.rechazadas.push({ mascota: item.mascota, motivo })
           continue
         }
+        // NOTA: traslados_tenjo.lote_id es una FK legada a lotes_grupales (no a
+        // lotes_tenjo); el vínculo con este lote queda en lotes_tenjo_items.traslado_id
+        // y en `notas`. No se envía lote_id para no violar la FK.
         const { rows: tras } = await client.query(
-          `INSERT INTO public.traslados_tenjo (servicio_id, estado, fecha_traslado, lote_id, notas)
-           VALUES ($1, 'PROGRAMADO', $2, $3, $4)
+          `INSERT INTO public.traslados_tenjo (servicio_id, estado, fecha_traslado, notas)
+           VALUES ($1, 'PROGRAMADO', $2, $3)
            ON CONFLICT (servicio_id) WHERE estado IN ('PROGRAMADO','EN_CAMINO') DO NOTHING
            RETURNING id`,
-          [item.servicio_id, lote.fecha_jornada, lote.id, `Lote ${lote.numero_lote}`]
+          [item.servicio_id, lote.fecha_jornada, `Lote ${lote.numero_lote}`]
         )
         if (!tras[0]) {
           await client.query(
