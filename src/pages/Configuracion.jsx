@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -2419,6 +2419,99 @@ function TabTransporte() {
   )
 }
 
+// ─── FESTIVOS ────────────────────────────────────────────────────────────────
+function TabFestivos() {
+  const { confirm, alert: showAlert } = useConfirm()
+  const [data, setData]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [form, setForm]       = useState({ fecha: '', nombre: '' })
+  const [saving, setSaving]   = useState(false)
+  const [formErr, setFormErr] = useState('')
+  const [anio, setAnio]       = useState(String(new Date().getFullYear()))
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data: d } = await db.from('festivos').select('*').order('fecha', { ascending: true })
+    setData(d || []); setLoading(false)
+  }
+
+  function abrir() { setSelected({ _nuevo: true }); setForm({ fecha: '', nombre: '' }); setFormErr('') }
+
+  async function guardar() {
+    if (!form.fecha) return setFormErr('La fecha es requerida.')
+    if (!form.nombre?.trim()) return setFormErr('El nombre es requerido.')
+    setFormErr(''); setSaving(true)
+    const { error } = await db.from('festivos').insert({ fecha: form.fecha, nombre: form.nombre.trim() })
+    setSaving(false)
+    if (error) { setFormErr(error.code === '23505' ? 'Ya existe un festivo en esa fecha.' : parsearErrorDB(error)); return }
+    await cargar(); setSelected(null)
+  }
+
+  async function eliminar(f) {
+    if (!await confirm(`${f.nombre} — ${f.fecha}`, { title: '¿Eliminar este festivo?', variant: 'danger', confirmLabel: 'Eliminar' })) return
+    const { error } = await db.from('festivos').delete().eq('fecha', f.fecha)
+    if (error) await showAlert(parsearErrorDB(error), { title: 'Error' })
+    await cargar()
+  }
+
+  const DOW = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+  const diaSemana = f => DOW[new Date(f + 'T12:00:00').getDay()]
+  const fmtF = f => new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
+
+  const anios = [...new Set(data.map(f => f.fecha.slice(0, 4)))].sort()
+  const filtered = data.filter(f => f.fecha.slice(0, 4) === anio)
+
+  return (
+    <div>
+      <p className="text-[12px] text-gray-400 mb-4">Días festivos de Colombia. Se usan para calcular el 3er día hábil de los reportes grupales (vencimientos).</p>
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-1 flex-wrap">
+          {anios.map(a => (
+            <button key={a} onClick={() => setAnio(a)} className="px-3 py-1.5 rounded-lg text-[12px] font-medium border transition-all"
+              style={{ background: anio === a ? '#3D5A27' : 'white', color: anio === a ? 'white' : '#374151', borderColor: anio === a ? '#3D5A27' : '#D1D5DB' }}>{a}</button>
+          ))}
+        </div>
+        <Button size="sm" className="ml-auto" onClick={abrir}><Plus size={14} /> Nuevo festivo</Button>
+      </div>
+      {loading ? <div className="text-center py-8 text-gray-400">Cargando...</div> : (
+        <TableWrap><Table>
+          <thead><tr><Th>Fecha</Th><Th>Día</Th><Th>Nombre</Th><Th></Th></tr></thead>
+          <tbody>
+            {filtered.map(f => (
+              <Tr key={f.fecha}>
+                <Td className="font-semibold text-gray-900">{fmtF(f.fecha)}</Td>
+                <Td className="text-gray-600">{diaSemana(f.fecha)}</Td>
+                <Td className="text-gray-700">{f.nombre}</Td>
+                <Td><button onClick={() => eliminar(f)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={13} /></button></Td>
+              </Tr>
+            ))}
+            {filtered.length === 0 && <tr><td colSpan={4} className="text-center py-10 text-gray-400 text-sm">Sin festivos en {anio}</td></tr>}
+          </tbody>
+        </Table></TableWrap>
+      )}
+      {selected && (
+        <Modal open={!!selected} onClose={() => setSelected(null)} title="Nuevo festivo" maxWidth="max-w-sm"
+          footer={<><Button variant="secondary" onClick={() => setSelected(null)}>Cancelar</Button><Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button></>}>
+          {formErr && <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{formErr}</div>}
+          <div className="space-y-3">
+            <div>
+              <label className={LABEL}>Fecha *</label>
+              <Input type="date" value={form.fecha} onChange={e => setForm(p => ({ ...p, fecha: e.target.value }))} />
+            </div>
+            <div>
+              <label className={LABEL}>Nombre del festivo *</label>
+              <Input value={form.nombre} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} placeholder="Ej: Día de la Independencia" maxLength={80} />
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -2460,6 +2553,9 @@ export default function Configuracion() {
             <TabsTrigger value="transporte">
               <Truck size={13} className="mr-1.5" /> Transporte
             </TabsTrigger>
+            <TabsTrigger value="festivos">
+              <CalendarDays size={13} className="mr-1.5" /> Festivos
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2473,6 +2569,7 @@ export default function Configuracion() {
           <TabsContent value="precios"><TabPreciosPlanes /></TabsContent>
           <TabsContent value="whatsapp"><TabWhatsApp /></TabsContent>
           <TabsContent value="transporte"><TabTransporte /></TabsContent>
+          <TabsContent value="festivos"><TabFestivos /></TabsContent>
         </Tabs>
       </div>
     </div>
