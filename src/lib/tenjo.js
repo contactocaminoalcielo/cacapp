@@ -376,6 +376,42 @@ export function mensajeSugerido(proposito, { mascota = 'tu mascotica' } = {}) {
   return `Hola, te saludamos de Camino al Cielo respecto al proceso de ${mascota}.`
 }
 
+export const TIPO_PROCESO_LABEL = {
+  CREMACION_INDIVIDUAL:  'Cremación individual',
+  COMPOSTAJE_INDIVIDUAL: 'Compostaje individual',
+}
+
+/** Mensaje wa.me para el cliente confirmando que su proceso quedó programado. */
+export function mensajeConfirmacionCliente({ mascota = 'tu mascotica', fechaLarga, presencial, hora } = {}) {
+  let msg = `Hola, te saludamos con mucho respeto de Camino al Cielo 🕊️. `
+    + `Queremos confirmarte que el proceso de ${mascota} quedó programado`
+    + (fechaLarga ? ` para el ${fechaLarga}` : '') + `. `
+  if (presencial)
+    msg += hora
+      ? `Te esperamos a las ${hora} para acompañarnos en este momento. `
+      : `Te esperamos para acompañarnos en este momento; te confirmaremos la hora. `
+  msg += `Acompañaremos todo el proceso con el mayor cuidado y te mantendremos informad@. `
+    + `Cualquier inquietud, con gusto te ayudamos.`
+  return msg
+}
+
+/** Mensaje para el grupo operativo con las mascoticas a procesar en la jornada. */
+export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
+  const lineas = mascotas.map(m => {
+    const datos = []
+    if (m.cliente) datos.push(`Cliente: ${m.cliente}`)
+    if (m.peso)    datos.push(`${m.peso} kg`)
+    if (m.presencial) datos.push(m.hora ? `🕐 Presencial ${m.hora}` : `🕐 Presencial`)
+    const proceso = [m.plan, m.tipoProceso].filter(Boolean).join(' · ')
+    return `${m.emoji || '🐾'} *${m.nombre}*${m.especie ? ` (${m.especie})` : ''}`
+      + (proceso ? `\n   ${proceso}` : '')
+      + (datos.length ? `\n   ${datos.join(' · ')}` : '')
+  })
+  return `🐾 *Procesos individuales — ${fechaLarga || 'próxima jornada'}*\n`
+    + `${mascotas.length} mascotica${mascotas.length !== 1 ? 's' : ''} a proceso:\n\n`
+    + lineas.join('\n\n')
+}
+
 // ─── Etiquetas y colores para la UI ──────────────────────────────────────────
 export const CLASIF_CFG = {
   APTA:                 { label: 'Apta',                 bg: '#D1FAE5', text: '#065F46' },

@@ -12,12 +12,13 @@ import { orbitApi } from '@/lib/orbitApi'
 import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
   generarPropuestaLote, evaluarCandidato, mensajeSugerido,
+  mensajeConfirmacionCliente, mensajeGrupoProceso, varianteProceso, TIPO_PROCESO_LABEL,
   proximaJornada, esDiaPlanificacion, nombreDia,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
 import {
   CalendarCheck, Sparkles, RefreshCw, CheckCircle2, Undo2,
-  MessageCircle, Plus, Trash2, ShieldCheck,
+  MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check,
 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -47,6 +48,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const [modalContacto,    setModalContacto]    = useState(null) // item
   const [mensajeText,      setMensajeText]      = useState('')
   const [modalAgregar,     setModalAgregar]     = useState(false)
+  const [modalAviso,       setModalAviso]       = useState(null) // item (aviso post-confirmación)
+  const [avisoText,        setAvisoText]        = useState('')
+  const [horaAsist,        setHoraAsist]        = useState('')
+  const [modalGrupo,       setModalGrupo]        = useState(false)
+  const [copiado,          setCopiado]           = useState(false)
 
   const fechaJornada = proximaJornada(config)
   const porServicio  = Object.fromEntries((candidatas || []).map(c => [c.servicio_id, c]))
@@ -59,7 +65,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     setLote(l || null)
     if (l) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios(estado, mascotas(nombre, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo))')
+        .select('*, servicios(estado, tipo_acompanamiento, mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso))')
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
       setItems(its || [])
@@ -74,6 +80,33 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const editable = lote && ['PROPUESTO', 'EN_REVISION'].includes(lote.estado)
   const activos  = items.filter(i => ITEMS_ACTIVOS.includes(i.estado))
   const fuera    = items.filter(i => !ITEMS_ACTIVOS.includes(i.estado))
+
+  // ── Post-confirmación: avisos al cliente (wa.me) + mensaje al grupo ──
+  const confirmado  = lote && ['CONFIRMADO', 'EN_EJECUCION', 'CERRADO'].includes(lote.estado)
+  const autorizadas = items.filter(i => ['AUTORIZADA_SALIDA', 'EN_TRASLADO', 'RECIBIDA', 'EN_PROCESO'].includes(i.estado))
+
+  function datosMascota(item) {
+    const m  = item.servicios?.mascotas
+    const cl = m?.clientes
+    const presencial = varianteProceso(item.servicios?.planes?.codigo, item.servicios?.tipo_acompanamiento) === 'EXCLUSIVO_PRESENCIAL'
+    return {
+      emoji:       petEmoji(m?.especies?.nombre),
+      nombre:      m?.nombre || '—',
+      especie:     m?.especies?.nombre,
+      plan:        item.servicios?.planes?.nombre,
+      tipoProceso: TIPO_PROCESO_LABEL[item.servicios?.planes?.tipo_proceso] || null,
+      cliente:     cl ? `${cl.nombre || ''} ${cl.apellido || ''}`.trim() : null,
+      peso:        m?.peso_kg || porServicio[item.servicio_id]?.peso_kg || null,
+      presencial,
+      hora:        item.checklist?.fecha_hora_acordada || null,
+      wa:          cl?.whatsapp,
+    }
+  }
+
+  const grupoText = mensajeGrupoProceso({
+    fechaLarga: fmtFechaLarga(lote?.fecha_jornada),
+    mascotas:   autorizadas.map(datosMascota),
+  })
 
   // Candidatas que aún no están en el lote (para agregar manualmente)
   const agregables = (candidatas || []).filter(c => !c.item_activo_id && !c.traslado_activo
@@ -197,6 +230,61 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     } catch (e) {
       await showAlert(e.message, { title: 'Error confirmando lote', variant: 'danger' })
     } finally { setSaving(false) }
+  }
+
+  function abrirAviso(item) {
+    const d = datosMascota(item)
+    setModalAviso(item)
+    setHoraAsist(d.hora || '')
+    setAvisoText(mensajeConfirmacionCliente({
+      mascota: d.nombre, fechaLarga: fmtFechaLarga(lote?.fecha_jornada),
+      presencial: d.presencial, hora: d.hora,
+    }))
+  }
+
+  function regenerarAviso() {
+    const d = datosMascota(modalAviso)
+    setAvisoText(mensajeConfirmacionCliente({
+      mascota: d.nombre, fechaLarga: fmtFechaLarga(lote?.fecha_jornada),
+      presencial: d.presencial, hora: horaAsist.trim(),
+    }))
+  }
+
+  async function marcarAvisado() {
+    const item = modalAviso
+    if (!item) return
+    setSaving(true)
+    try {
+      const merged = {
+        ...(item.checklist || {}),
+        aviso_cliente_enviado: true,
+        ...(horaAsist.trim() && { fecha_hora_acordada: horaAsist.trim() }),
+      }
+      await db.from('lotes_tenjo_items').update({ checklist: merged }).eq('id', item.id)
+      await db.from('contactos_cliente').insert({
+        servicio_id:     item.servicio_id,
+        lote_item_id:    item.id,
+        cliente_id:      porServicio[item.servicio_id]?.cliente_id || null,
+        canal:           'WHATSAPP_MANUAL',
+        proposito:       'OTRO',
+        mensaje_enviado: avisoText,
+        estado:          'CONTACTADO',
+        enviado_por:     personalData?.id || null,
+      })
+      setModalAviso(null); setHoraAsist(''); setAvisoText('')
+      await cargarLote(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  async function copiarGrupo() {
+    try {
+      await navigator.clipboard.writeText(grupoText)
+      setCopiado(true); setTimeout(() => setCopiado(false), 2000)
+    } catch {
+      await showAlert('No se pudo copiar automáticamente. Selecciona y copia el texto manualmente.', { title: 'Copiar mensaje' })
+    }
   }
 
   // ── Render de un item ──
@@ -350,6 +438,60 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
         </div>
       )}
 
+      {/* ── Panel post-confirmación: avisos al cliente + mensaje al grupo ── */}
+      {confirmado && autorizadas.length > 0 && (
+        <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+            <Send size={15} className="text-ink3" />
+            <div className="font-semibold text-[15px] text-ink flex-1">
+              Avisos del lote confirmado
+              <span className="text-[11px] font-normal text-ink3 ml-2">
+                {autorizadas.filter(i => i.checklist?.aviso_cliente_enviado).length}/{autorizadas.length} clientes avisados
+              </span>
+            </div>
+            <Button size="sm" variant="gold" onClick={() => setModalGrupo(true)}>
+              <Users size={12} /> Mensaje al grupo
+            </Button>
+          </div>
+          <div className="p-4 space-y-2.5">
+            {autorizadas.map(item => {
+              const d = datosMascota(item)
+              const avisado = item.checklist?.aviso_cliente_enviado === true
+              return (
+                <div key={item.id} className="flex items-center gap-3 p-3 rounded-xl border"
+                  style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                  <span className="text-xl">{d.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-ink text-[13px]">{d.nombre}</span>
+                      {d.presencial && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: '#EDE9FE', color: '#5B21B6' }}>
+                          Presencial{d.hora ? ` · ${d.hora}` : ''}
+                        </span>
+                      )}
+                      {avisado && (
+                        <span className="text-[10px] font-bold text-green-700 inline-flex items-center gap-0.5">
+                          <Check size={11} /> avisado
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-ink3">{d.cliente || 'Sin cliente'} · {d.plan}</div>
+                  </div>
+                  {d.wa ? (
+                    <Button size="sm" variant={avisado ? 'secondary' : 'primary'} disabled={saving}
+                      onClick={() => abrirAviso(item)}>
+                      <MessageCircle size={12} /> {avisado ? 'Reenviar' : 'Avisar al cliente'}
+                    </Button>
+                  ) : (
+                    <span className="text-[11px] text-amber-700">sin WhatsApp</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Modal reprogramar ── */}
       {modalReprogramar && (
         <Modal open onClose={() => setModalReprogramar(null)}
@@ -439,6 +581,79 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
               ))}
             </div>
           )}
+        </Modal>
+      )}
+
+      {/* ── Modal aviso al cliente (post-confirmación, wa.me) ── */}
+      {modalAviso && (() => {
+        const d = datosMascota(modalAviso)
+        return (
+          <Modal open onClose={() => setModalAviso(null)}
+            title={`Avisar al cliente — ${d.nombre}`}
+            maxWidth="max-w-lg"
+            footer={<Button variant="secondary" onClick={() => setModalAviso(null)}>Cerrar</Button>}>
+            <div className="space-y-4">
+              {d.presencial && (
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 mb-1 flex items-center gap-1">
+                    <Clock size={12} /> Hora de asistencia (presencial)
+                  </label>
+                  <div className="flex gap-2">
+                    <input value={horaAsist} onChange={e => setHoraAsist(e.target.value)}
+                      placeholder="Ej: 10:00 a.m."
+                      className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]" />
+                    <Button size="sm" variant="secondary" onClick={regenerarAviso}>
+                      <RefreshCw size={12} /> Actualizar mensaje
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-ink3 mt-1">Se guarda en la mascota y aparece en el mensaje del grupo.</p>
+                </div>
+              )}
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Mensaje (editable)</label>
+                <Textarea rows={6} value={avisoText} onChange={e => setAvisoText(e.target.value)} />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {d.wa ? (
+                  <a href={waLink(d.wa, avisoText)} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-white"
+                    style={{ background: '#25D366' }}>
+                    <MessageCircle size={13} /> Abrir WhatsApp
+                  </a>
+                ) : (
+                  <span className="text-[12px] text-amber-700">⚠ El cliente no tiene WhatsApp registrado.</span>
+                )}
+                <Button size="sm" disabled={saving} onClick={marcarAvisado}>
+                  <Check size={12} /> Marcar como avisado
+                </Button>
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
+
+      {/* ── Modal mensaje al grupo ── */}
+      {modalGrupo && (
+        <Modal open onClose={() => setModalGrupo(false)}
+          title="Mensaje para el grupo operativo" maxWidth="max-w-lg"
+          footer={<Button variant="secondary" onClick={() => setModalGrupo(false)}>Cerrar</Button>}>
+          <div className="space-y-4">
+            <p className="text-[12px] text-ink2">
+              Mensaje con las mascoticas a procesar en la jornada. Usa <strong>Reenviar</strong> para
+              abrir WhatsApp y elegir el grupo, o <strong>Copiar</strong> para pegarlo donde quieras.
+            </p>
+            <Textarea rows={12} value={grupoText} readOnly className="font-mono text-[12px]" />
+            <div className="flex flex-wrap gap-2">
+              <a href={`https://wa.me/?text=${encodeURIComponent(grupoText)}`} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-white"
+                style={{ background: '#25D366' }}>
+                <Send size={13} /> Reenviar a un grupo
+              </a>
+              <Button size="sm" variant="secondary" onClick={copiarGrupo}>
+                {copiado ? <><Check size={12} /> Copiado</> : <><Copy size={12} /> Copiar mensaje</>}
+              </Button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
