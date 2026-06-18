@@ -134,13 +134,30 @@ export const fmtDateTime = ts => {
          d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+// Caché de festivos (Colombia). Se carga 1 vez en background desde la tabla `festivos`;
+// addDiasHabiles los salta igual que los fines de semana, para que el frontend respete
+// los festivos configurados en Configuración (igual que las funciones SQL del backend).
+let _festivos = new Set()
+let _festLoaded = false
+function _cargarFestivos() {
+  if (_festLoaded) return
+  _festLoaded = true
+  import('./supabase')
+    .then(({ db }) => db.from('festivos').select('fecha'))
+    .then(({ data }) => { _festivos = new Set((data || []).map(f => f.fecha)) })
+    .catch(() => {})
+}
+
+const _iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 export function addDiasHabiles(fecha, dias) {
+  _cargarFestivos()
   const d = new Date(fecha + 'T12:00:00') // mediodía para evitar ambigüedad de zona horaria
   let count = 0
   while (count < dias) {
     d.setDate(d.getDate() + 1)
     const dow = d.getDay()
-    if (dow !== 0 && dow !== 6) count++
+    if (dow !== 0 && dow !== 6 && !_festivos.has(_iso(d))) count++
   }
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return _iso(d)
 }
