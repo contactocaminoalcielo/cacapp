@@ -496,7 +496,7 @@ function TabClientes({ isAdmin }) {
 }
 
 // --- MASCOTAS TAB ---
-function TabMascotas({ isAdmin }) {
+function TabMascotas({ isAdmin, canEdit }) {
   const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
   const [especies, setEspecies] = useState([])
@@ -566,7 +566,7 @@ function TabMascotas({ isAdmin }) {
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Cliente</Th>{isAdmin && <Th></Th>}</tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Cliente</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(m => (
               <Tr key={m.id_mascota}>
@@ -575,13 +575,15 @@ function TabMascotas({ isAdmin }) {
                 <Td className="text-ink3">{m.raza || '-'}</Td>
                 <Td className="text-ink3">{m.peso_kg}kg</Td>
                 <Td className="text-ink3">{m.clientes?.nombre} {m.clientes?.apellido}</Td>
-                {isAdmin && (
+                {(canEdit || isAdmin) && (
                   <Td>
                     <div className="flex items-center gap-1">
                       <Button size="sm" variant="ghost" onClick={() => abrir(m)}>Editar</Button>
-                      <button onClick={() => eliminar(m)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
-                        <Trash2 size={13} />
-                      </button>
+                      {isAdmin && (
+                        <button onClick={() => eliminar(m)} title="Eliminar" className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </Td>
                 )}
@@ -1647,7 +1649,7 @@ export default function Gestion() {
           </TabsList>
           <TabsContent value="historial"><TabHistorialServicios /></TabsContent>
           <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
-          <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} /></TabsContent>
+          <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="personal"><TabPersonal isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="inventario"><TabInventario isAdmin={isAdmin} /></TabsContent>
