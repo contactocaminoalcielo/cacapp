@@ -15,6 +15,9 @@ export const CONFIG_DEFAULTS_GRUPALES = {
   usar_plantilla:              false,
   plantilla_nombre:            '',
   plantilla_idioma:            'es',
+  // Auto-armar lote ABIERTO (cron diario) con las mascotas que vencen hoy.
+  auto_armar_lotes:            true,
+  auto_armar_dias_antes:       0,   // 0 = solo las que vencen hoy; 1 = también las de mañana
 }
 
 /** Etiqueta legible del tipo de proceso (para la variable {{2}} de la plantilla) */
