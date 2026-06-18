@@ -1,6 +1,7 @@
 import { db } from './supabase'
 import { today, waLink } from './utils'
 import { LOGO_CAMINO } from './logoCamino'
+import { FIRMA_CAMINO } from './firmaCamino'
 
 // ─── Generar PDF con jsPDF y subir a Supabase Storage ────────────────────────
 // Devuelve la URL pública del PDF subido
@@ -112,6 +113,7 @@ const CSS_CREMACION = `
   .paws { font-size: 20px; letter-spacing: 2px; }
   .logo-img { height: 66px; display:block; margin: 0 auto 8px; }
   .firma { margin-top: 46px; text-align:center; }
+  .firma-img { height: 58px; display:block; margin: 0 auto -6px; }
   .firma-line { width: 240px; border-top: 1px solid #333; margin: 0 auto 6px; }
   .firma-name { font-weight: bold; font-size: 13px; }
   .firma-role { font-size: 11px; color: #555; }
@@ -145,6 +147,7 @@ const CSS_COMPOSTAJE = `
   .footer-text strong { font-size: 12px; color: #1a1a1a; display:block; }
   .paws { font-size: 18px; letter-spacing: 2px; margin-bottom: 4px; }
   .logo-img { height: 66px; display:block; margin: 0 auto 8px; }
+  .firma-img { height: 58px; display:block; margin-bottom: -6px; }
   @media print { body { margin: 20px; } }
 `
 
@@ -242,6 +245,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   </p>
 
   <div class="firma">
+    <img class="firma-img" src="${FIRMA_CAMINO}" alt="Firma" />
     <div class="firma-line"></div>
     <div class="firma-name">Carlos Lopez</div>
     <div class="firma-role">Coordinador</div>
@@ -332,6 +336,7 @@ export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
   </p>
 
   <div class="sig-area">
+    <img class="firma-img" src="${FIRMA_CAMINO}" alt="Firma" />
     <div class="sig-line"></div>
     <div class="sig-name">Carlos Lopez</div>
     <div class="sig-role">Coordinador</div>
@@ -422,6 +427,7 @@ export function generarHTMLIndividual({ traslado }) {
   </p>
 
   <div class="firma">
+    <img class="firma-img" src="${FIRMA_CAMINO}" alt="Firma" />
     <div class="firma-line"></div>
     <div class="firma-name">Carlos Lopez</div>
     <div class="firma-role">Coordinador</div>
