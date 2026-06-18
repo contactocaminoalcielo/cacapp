@@ -10,6 +10,7 @@ export const ROLE_CONFIG = {
       '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
       '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
       '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
+      '/eutanasias',
     ]),
   },
   COORDINADOR: {
@@ -19,6 +20,7 @@ export const ROLE_CONFIG = {
       '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
       '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
       '/presequiales', '/reportes', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
+      '/eutanasias',
     ]),
   },
   TECNICO: {

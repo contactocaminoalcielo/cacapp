@@ -8,6 +8,7 @@ const PAGE_META = {
   '/':             { title: 'Dashboard',              sub: 'Resumen operacional' },
   '/kanban':       { title: 'Tablero de servicios',   sub: 'Seguimiento en tiempo real' },
   '/registro':     { title: 'Nuevo servicio',         sub: 'Registro paso a paso' },
+  '/eutanasias':   { title: 'Eutanasia compasiva',    sub: 'Servicio, agenda, veterinario y cierre' },
   '/calendario':   { title: 'Calendario',             sub: 'Fechas límite por servicio' },
   '/cuarto-frio':  { title: 'Cuarto frío',            sub: 'Control de ingreso y ubicación' },
   '/tenjo':        { title: 'Planta Tenjo',           sub: 'Traslados y procesos individuales' },

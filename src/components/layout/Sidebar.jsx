@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
-  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award,
+  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -18,6 +18,7 @@ const ALL_NAV_GROUPS = [
       { path: '/',           label: 'Dashboard',       icon: LayoutDashboard, end: true },
       { path: '/kanban',     label: 'Tablero',          icon: LayoutGrid,      badge: 'kanban' },
       { path: '/registro',   label: 'Nuevo servicio',   icon: PlusCircle },
+      { path: '/eutanasias', label: 'Eutanasias',        icon: HeartPulse },
       { path: '/calendario', label: 'Calendario',       icon: Calendar },
     ],
   },

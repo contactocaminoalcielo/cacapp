@@ -368,7 +368,8 @@ export default function Registro() {
     setPlanes(pls || [])
     setAliados(als || [])
     setPersonal(per || [])
-    setRecordatoriosAdic(rec || [])
+    // Eutanasia se gestiona en su propio módulo (/eutanasias), NO como adicional
+    setRecordatoriosAdic((rec || []).filter(r => !/eutanas/i.test(r.nombre || '')))
     setTarifasTransporte(tar || [])
 
     // Auto-cargar desde plan presequial activado

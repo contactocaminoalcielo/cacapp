@@ -623,7 +623,8 @@ export default function Kanban() {
       })
     db.from('recordatorios').select('id,nombre,precio_base,categoria')
       .eq('activo', true).order('nombre')
-      .then(({ data }) => setRecListOpts(data || []))
+      // Eutanasia se gestiona en su propio módulo (/eutanasias), NO como adicional
+      .then(({ data }) => setRecListOpts((data || []).filter(r => !/eutanas/i.test(r.nombre || ''))))
 
     const canal = db
       .channel('kanban-servicios-cambios')
