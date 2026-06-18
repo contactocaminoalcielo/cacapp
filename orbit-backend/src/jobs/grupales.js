@@ -5,7 +5,7 @@
 // El humano solo revisa y confirma; aquí no se envía nada.
 import { pool, log } from '../db.js'
 import { cargarConfigGrupales } from '../reglas-grupales.js'
-import { construirReporteDeLote } from '../grupales.js'
+import { construirReporteDeLote, agregarServicioAReporteGrupal } from '../grupales.js'
 
 const MOD = 'REPORTES_GRUPALES'
 
@@ -157,82 +157,42 @@ export async function jobReportesGrupales() {
 }
 
 /**
- * Auto-armar lote ABIERTO con las mascotas grupales que vencen hoy (cron diario).
- * Agrupa por tipo en el lote ABIERTO existente (o crea uno). El humano luego lo
- * completa y envía. No marca completado ni envía nada.
+ * Auto-armar (cron diario): las mascotas grupales que vencen hoy quedan en un
+ * lote+reporte COMPLETADO que aparece directo en Certificados → Pendientes, listo
+ * para revisar y enviar. Reutiliza agregarServicioAReporteGrupal (la 1ª crea el
+ * lote del día, las demás se unen). No envía nada; el humano valida y envía.
  */
 async function autoArmarLotes(client, config) {
   const habilitado = config.auto_armar_lotes === true || config.auto_armar_lotes === 'true'
-  if (!habilitado) return { armados: 0, lotes: [] }
+  if (!habilitado) return { armados: 0 }
   const sla     = parseInt(config.sla_dias_habiles) || 3
   const ventana = parseInt(config.auto_armar_dias_antes) || 0
 
-  const tipos = ['CREMACION_GRUPAL', 'COMPOSTAJE_GRUPAL']
+  // Mascotas grupales que vencen hoy, sin lote y sin reporte activo.
+  const { rows: urgentes } = await client.query(
+    `SELECT s.id
+     FROM public.servicios s
+     JOIN public.planes p ON p.id = s.plan_id
+     WHERE p.tipo_proceso IN ('CREMACION_GRUPAL','COMPOSTAJE_GRUPAL')
+       AND s.lote_id IS NULL
+       AND s.estado NOT IN ('CANCELADO','ENTREGADO')
+       AND public.fn_sumar_dias_habiles(s.fecha_ingreso, $1::int)
+           BETWEEN CURRENT_DATE AND (CURRENT_DATE + $2::int)
+       AND NOT EXISTS (
+         SELECT 1 FROM public.reportes_grupales_items i
+         WHERE i.servicio_id = s.id
+           AND i.estado IN ('PENDIENTE','VALIDADO','ENVIADO','REENVIADO','VENCIDO','ERROR'))
+     ORDER BY s.fecha_ingreso ASC`,
+    [sla, ventana]
+  )
+
   let armados = 0
-  const lotes = []
-
-  for (const tipo of tipos) {
-    // Mascotas grupales sin lote cuyo vencimiento cae HOY (o dentro de la ventana).
-    // No barre el backlog vencido (eso se maneja manual en Control).
-    const { rows: urgentes } = await client.query(
-      `SELECT s.id
-       FROM public.servicios s
-       JOIN public.planes p ON p.id = s.plan_id
-       WHERE p.tipo_proceso = $1
-         AND s.lote_id IS NULL
-         AND s.estado IN ('INGRESADO','EN_RECOGIDA','EN_CUARTO_FRIO')
-         AND public.fn_sumar_dias_habiles(s.fecha_ingreso, $2::int)
-             BETWEEN CURRENT_DATE AND (CURRENT_DATE + $3::int)
-       ORDER BY s.fecha_ingreso ASC`,
-      [tipo, sla, ventana]
-    )
-    if (!urgentes.length) continue
-
-    await client.query('BEGIN')
+  for (const u of urgentes) {
     try {
-      // Lote ABIERTO existente del tipo, o crear uno nuevo
-      const { rows: abiertos } = await client.query(
-        `SELECT id, numero_lote FROM public.lotes_grupales
-         WHERE tipo_proceso = $1 AND estado = 'ABIERTO'
-         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [tipo]
-      )
-      let lote = abiertos[0]
-      let creado = false
-      if (!lote) {
-        await client.query(`LOCK TABLE public.lotes_grupales IN SHARE ROW EXCLUSIVE MODE`)
-        const { rows: cnt } = await client.query(
-          `SELECT COUNT(*)::int AS total FROM public.lotes_grupales
-           WHERE EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM NOW())`
-        )
-        const numero = `L-${new Date().getFullYear()}-${String((cnt[0]?.total || 0) + 1).padStart(3, '0')}`
-        const { rows: nuevo } = await client.query(
-          `INSERT INTO public.lotes_grupales
-             (numero_lote, tipo_proceso, fecha_proceso, estado, cantidad_mascotas, entidad_externa)
-           VALUES ($1, $2, CURRENT_DATE, 'ABIERTO', 0, 'Entidad certificada Bogotá')
-           RETURNING id, numero_lote`,
-          [numero, tipo]
-        )
-        lote = nuevo[0]; creado = true
-      }
-
-      const ids = urgentes.map(u => u.id)
-      const { rowCount } = await client.query(
-        `UPDATE public.servicios SET lote_id = $1 WHERE id = ANY($2::uuid[]) AND lote_id IS NULL`,
-        [lote.id, ids]
-      )
-      const { rows: tot } = await client.query(
-        `SELECT COUNT(*)::int AS t FROM public.servicios WHERE lote_id = $1`, [lote.id]
-      )
-      await client.query(
-        `UPDATE public.lotes_grupales SET cantidad_mascotas = $2 WHERE id = $1`, [lote.id, tot[0]?.t || 0]
-      )
-      await client.query('COMMIT')
-      armados += rowCount
-      lotes.push({ numero_lote: lote.numero_lote, tipo, agregados: rowCount, creado })
+      const r = await agregarServicioAReporteGrupal({ servicioId: u.id, personalId: null })
+      if (r?.status === 200 && r.body?.ok && !r.body?.ya_en_reporte) armados++
     } catch (e) {
-      await client.query('ROLLBACK').catch(() => {})
-      log('[grupales/auto-armar] ERROR', tipo, e.message)
+      log('[grupales/auto-armar] ERROR', u.id, e.message)
     }
   }
 
@@ -241,15 +201,14 @@ async function autoArmarLotes(client, config) {
     try {
       await client.query(
         `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, datos)
-         SELECT p.id, 'GRUPAL_AUTO_LOTE', 'Lote grupal armado automáticamente', $1, $2::jsonb
+         SELECT p.id, 'GRUPAL_AUTO_LOTE', 'Reporte grupal listo para enviar', $1, '{}'::jsonb
          FROM public.personal p JOIN public.roles_personal r ON r.id = p.rol_principal_id
          WHERE r.nombre IN ('COORDINADOR','ADMIN') AND p.activo`,
-        [`Se agruparon ${armados} mascota(s) que vencen hoy en lote(s) abierto(s). Revísalos, complétalos y envía.`,
-         JSON.stringify({ lotes })]
+        [`${armados} mascota(s) que vencen hoy quedaron en un reporte en Certificados → Pendientes. Revísalas y envía.`]
       )
     } catch (e) { log('[grupales/auto-armar] aviso no enviado:', e.message) }
   }
 
-  log('[grupales/auto-armar]', JSON.stringify({ armados, lotes }))
-  return { armados, lotes }
+  log('[grupales/auto-armar]', JSON.stringify({ armados }))
+  return { armados }
 }
