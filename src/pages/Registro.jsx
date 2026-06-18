@@ -14,8 +14,18 @@ import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
-  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle
+  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse
 } from 'lucide-react'
+
+// Precio de eutanasia por peso (tabla eutanasia_tarifas; peso_max_kg null = "o más")
+function precioEutanasiaPorPeso(tarifas, pesoKg) {
+  const p = parseFloat(pesoKg)
+  if (Number.isNaN(p)) return null
+  const orden = [...tarifas].filter(t => t.activo !== false)
+    .sort((a, b) => (a.peso_max_kg == null ? Infinity : +a.peso_max_kg) - (b.peso_max_kg == null ? Infinity : +b.peso_max_kg))
+  const m = orden.find(t => t.peso_max_kg == null || p <= +t.peso_max_kg)
+  return m ? +m.precio : null
+}
 
 const ESPECIE_NOMBRE_A_ID = { 'Perro':1, 'Gato':2, 'Conejo':3, 'Ave':4, 'Hámster':5, 'Pez':6, 'Reptil':7, 'Otro':8 }
 
@@ -226,6 +236,8 @@ export default function Registro() {
   const [personal, setPersonal]           = useState([])
   const [recordatoriosAdic, setRecordatoriosAdic] = useState([])
   const [tarifasTransporte, setTarifasTransporte] = useState([])
+  const [eutanasiaTarifas, setEutanasiaTarifas]   = useState([])
+  const [veterinarios, setVeterinarios]           = useState([])
 
   // paso 0: cliente
   const [clienteBusqueda, setClienteBusqueda]           = useState('')
@@ -264,6 +276,12 @@ export default function Registro() {
   const [adicionalBusqueda, setAdicionalBusqueda]   = useState('')
   const [comisionPorcentaje, setComisionPorcentaje] = useState(borrador?.comisionPorcentaje ?? 0)
   const [desamparadoPrioridad, setDesamparadoPrioridad] = useState(borrador?.desamparadoPrioridad ?? false)
+  // Eutanasia compasiva combinada con el plan (Caso 2/3) — entidad propia vinculada
+  const [eutanasiaIncluida,   setEutanasiaIncluida]   = useState(borrador?.eutanasiaIncluida ?? false)
+  const [eutanasiaVetId,      setEutanasiaVetId]      = useState(borrador?.eutanasiaVetId ?? '')
+  const [eutanasiaFecha,      setEutanasiaFecha]      = useState(borrador?.eutanasiaFecha ?? '')
+  const [eutanasiaHora,       setEutanasiaHora]       = useState(borrador?.eutanasiaHora ?? '')
+  const [eutanasiaValorManual, setEutanasiaValorManual] = useState(borrador?.eutanasiaValorManual ?? '')
 
   // paso 3: recogida + pago
   const [formRecogida, setFormRecogida] = useState(borrador?.formRecogida ?? {
@@ -347,13 +365,18 @@ export default function Registro() {
   const descuentoAdicionalNum = Math.max(0, parseFloat(descuentoAdicional) || 0)
   const recargoNocturnoNum    = Math.max(0, parseFloat(recargoNocturno) || 0)
   const esHorarioNocturno     = new Date().getHours() >= 21
-  const valorCobrado          = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad + recargoNocturnoNum - descuentoAdicionalNum
+  // Eutanasia: valor propio (cuenta aparte) que además se SUMA al total del servicio (cobro conjunto)
+  const precioEutanasiaAuto   = eutanasiaIncluida ? precioEutanasiaPorPeso(eutanasiaTarifas, pesoKg) : null
+  const valorEutanasia        = eutanasiaIncluida
+    ? (eutanasiaValorManual !== '' ? (parseFloat(eutanasiaValorManual) || 0) : (precioEutanasiaAuto || 0))
+    : 0
+  const valorCobrado          = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad + recargoNocturnoNum - descuentoAdicionalNum + valorEutanasia
 
   // ── cargar catálogos ──
   useEffect(() => { cargarCatalogos() }, [])
 
   async function cargarCatalogos() {
-    const [{ data: esp }, { data: pls }, { data: als }, { data: per }, { data: rec }, { data: tar }] =
+    const [{ data: esp }, { data: pls }, { data: als }, { data: per }, { data: rec }, { data: tar }, { data: eutTar }, { data: vets }] =
       await Promise.all([
         db.from('especies').select('*').order('nombre'),
         db.from('planes').select('*')
@@ -363,6 +386,8 @@ export default function Registro() {
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         db.from('recordatorios').select('id,nombre,precio_base,categoria').eq('activo', true).order('nombre'),
         db.from('tarifas_transporte').select('ciudad,tarifa_moto,tarifa_camioneta').eq('activo', true).order('ciudad'),
+        db.from('eutanasia_tarifas').select('*').order('peso_min_kg'),
+        db.from('veterinarios').select('id,nombre,telefono,activo').eq('activo', true).order('nombre'),
       ])
     setEspecies(esp || [])
     setPlanes(pls || [])
@@ -371,6 +396,8 @@ export default function Registro() {
     // Eutanasia se gestiona en su propio módulo (/eutanasias), NO como adicional
     setRecordatoriosAdic((rec || []).filter(r => !/eutanas/i.test(r.nombre || '')))
     setTarifasTransporte(tar || [])
+    setEutanasiaTarifas(eutTar || [])
+    setVeterinarios(vets || [])
 
     // Auto-cargar desde plan presequial activado
     const pre = location.state?.presequial
@@ -834,6 +861,30 @@ export default function Registro() {
           aliado_id:          aliadoSeleccionado?.id_aliado || null,
           tecnico_id:         tecnicoSeleccionado?.id || null,
         }).eq('servicio_id', svcData[0].id)
+      }
+
+      // Eutanasia combinada (Caso 2/3): entidad propia vinculada al servicio.
+      // cobro_conjunto=true → su valor ya está sumado en valor_total, pero se
+      // conserva aparte en `eutanasias.valor` para reportes/cuenta separada.
+      if (eutanasiaIncluida && svcData?.[0]?.id) {
+        const { data: eutData, error: eutErr } = await db.from('eutanasias').insert({
+          cliente_id:       clienteId,
+          mascota_id:       mascotaId,
+          peso_kg:          pesoKg || null,
+          direccion:        formRecogida.direccion_recogida || null,
+          ciudad:           formRecogida.ciudad_recogida || null,
+          fecha_solicitada: eutanasiaFecha || null,
+          hora_solicitada:  eutanasiaHora || null,
+          veterinario_id:   eutanasiaVetId || null,
+          estado:           eutanasiaVetId ? 'VETERINARIO_ASIGNADO' : 'SOLICITADA',
+          valor:            valorEutanasia || null,
+          cobro_conjunto:   true,
+          servicio_id:      svcData[0].id,
+        }).select('id').single()
+        if (eutErr) throw eutErr
+        if (eutData?.id) {
+          await db.from('servicios').update({ eutanasia_id: eutData.id }).eq('id', svcData[0].id)
+        }
       }
 
       limpiarBorrador()
@@ -1415,6 +1466,52 @@ export default function Registro() {
                   </div>
                 </div>
               )}
+
+              {/* Eutanasia compasiva combinada (Caso 2/3) */}
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={eutanasiaIncluida}
+                    onChange={e => { setEutanasiaIncluida(e.target.checked); if (e.target.checked && !eutanasiaFecha) setEutanasiaFecha(today()) }} />
+                  <HeartPulse size={15} className="text-rose-500" />
+                  <span className="text-[13px] font-bold text-rose-700">Incluir eutanasia compasiva</span>
+                </label>
+                <p className="text-[11px] text-rose-500/90 mt-1 ml-6">Se registra como servicio propio vinculado a este plan. Su valor se suma al total y queda con cuenta aparte.</p>
+
+                {eutanasiaIncluida && (
+                  <div className="mt-3 space-y-2">
+                    {pesoKg > 0 ? (
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="text-gray-600">Valor por peso ({pesoKg} kg)</span>
+                        <span className="font-bold text-rose-700">{fmt(valorEutanasia)}</span>
+                      </div>
+                    ) : (
+                      <p className="text-[12px] text-amber-600">Indica el peso de la mascota (paso anterior) para calcular el valor.</p>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className={LABEL}>Fecha</label>
+                        <Input type="date" value={eutanasiaFecha} onChange={e => setEutanasiaFecha(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Hora</label>
+                        <Input type="time" value={eutanasiaHora} onChange={e => setEutanasiaHora(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Veterinario <span className="font-normal text-gray-400">(opcional)</span></label>
+                        <Select value={eutanasiaVetId} onChange={e => setEutanasiaVetId(e.target.value)}>
+                          <option value="">Sin asignar…</option>
+                          {veterinarios.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}
+                        </Select>
+                      </div>
+                      <div>
+                        <label className={LABEL}>Valor ($) <span className="font-normal text-gray-400">auto por peso</span></label>
+                        <Input type="number" placeholder={precioEutanasiaAuto != null ? String(precioEutanasiaAuto) : 'Valor'}
+                          value={eutanasiaValorManual} onChange={e => setEutanasiaValorManual(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1648,6 +1745,12 @@ export default function Registro() {
                     <div className="flex justify-between text-[12px]">
                       <span className="text-amber-600">+ Recargo nocturno 🌙</span>
                       <span className="font-medium text-amber-600">+ {fmt(recargoNocturnoNum)}</span>
+                    </div>
+                  )}
+                  {valorEutanasia > 0 && (
+                    <div className="flex justify-between text-[12px]">
+                      <span className="text-rose-600">+ Eutanasia compasiva 🕊️</span>
+                      <span className="font-medium text-rose-600">+ {fmt(valorEutanasia)}</span>
                     </div>
                   )}
                   {descuentoAdicionalNum > 0 && (
