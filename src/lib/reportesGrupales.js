@@ -53,6 +53,14 @@ export function agregarServicioALote(servicioId) {
   })
 }
 
+// Escritura crítica: sacar manualmente un servicio de su lote/reporte grupal.
+export function sacarServicioDeLote(servicioId, motivo = 'Retirado manualmente del lote') {
+  return orbitApi('/grupales/desvincular', {
+    method: 'POST',
+    body: { servicio_id: servicioId, motivo, manual: true },
+  })
+}
+
 // Mapea los ítems del reporte al shape que esperan los generadores de HTML
 function itemsAServicios(items) {
   return (items || [])

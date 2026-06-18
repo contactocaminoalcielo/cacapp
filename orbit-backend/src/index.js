@@ -107,7 +107,8 @@ app.post('/grupales/reportes/:id/enviar', requireAuth, requireRol('COORDINADOR',
 app.post('/grupales/desvincular', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const r = await desvincularServicioDeGrupal({
-      servicioId: req.body.servicio_id, personalId: req.personal.id, motivo: req.body.motivo,
+      servicioId: req.body.servicio_id, personalId: req.personal.id,
+      motivo: req.body.motivo, manual: req.body.manual === true,
     })
     res.status(r.status).json(r.body)
   } catch (e) {

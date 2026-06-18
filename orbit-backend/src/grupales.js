@@ -479,7 +479,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
  * - Crea una alerta operativa (dedupe NULL para que el job no la auto-resuelva).
  * Idempotente y transaccional. Llamado desde Kanban al confirmar el cambio.
  */
-export async function desvincularServicioDeGrupal({ servicioId, personalId, motivo = 'Cambio de plan' }) {
+export async function desvincularServicioDeGrupal({ servicioId, personalId, motivo = 'Cambio de plan', manual = false }) {
   const actorId = uuidOrNull(personalId)
   const client = await pool.connect()
   try {
@@ -503,6 +503,13 @@ export async function desvincularServicioDeGrupal({ servicioId, personalId, moti
       eraGrupal = !!lg[0]
       if (eraGrupal) {
         await client.query(`UPDATE public.servicios SET lote_id = NULL WHERE id = $1`, [servicioId])
+        // Actualizar el conteo del lote del que se retiró (svc.lote_id sigue siendo el viejo)
+        const { rows: cnt } = await client.query(
+          `SELECT COUNT(*)::int AS total FROM public.servicios WHERE lote_id = $1`, [svc.lote_id]
+        )
+        await client.query(
+          `UPDATE public.lotes_grupales SET cantidad_mascotas = $2 WHERE id = $1`, [svc.lote_id, cnt[0]?.total || 0]
+        )
       }
     }
 
@@ -519,12 +526,14 @@ export async function desvincularServicioDeGrupal({ servicioId, personalId, moti
         [it.id, motivo]
       )
       await evento(client, { reporteId: it.reporte_id, itemId: it.id, servicioId,
-        tipo: 'EXCLUIDO_CAMBIO_PLAN', detalle: { motivo, actor_raw: personalId || null }, actor: actorId })
+        tipo: manual ? 'RETIRADO_DE_LOTE_MANUAL' : 'EXCLUIDO_CAMBIO_PLAN',
+        detalle: { motivo, manual, actor_raw: personalId || null }, actor: actorId })
       await recomputarReporte(client, it.reporte_id)
     }
 
-    // Alerta (clave_dedupe NULL → el job grupal no la auto-resuelve; la cierra un humano)
-    if (eraGrupal || items.length) {
+    // Alerta solo para cambios NO intencionales (cambio de plan). El retiro manual
+    // es deliberado, así que no genera alerta. clave_dedupe NULL → no auto-resuelve.
+    if (!manual && (eraGrupal || items.length)) {
       await client.query(
         `INSERT INTO public.alertas_operativas
            (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)

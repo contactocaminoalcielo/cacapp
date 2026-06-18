@@ -9,8 +9,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { Button } from '@/components/ui/button'
 import { petEmoji, today, parsearErrorDB, addDiasHabiles } from '@/lib/utils'
-import { agregarServicioALote, alertaControlIA } from '@/lib/reportesGrupales'
-import { RefreshCw, PackagePlus, CheckCircle2, AlertTriangle, Search, Sparkles, Clock } from 'lucide-react'
+import { agregarServicioALote, sacarServicioDeLote, alertaControlIA } from '@/lib/reportesGrupales'
+import { RefreshCw, PackagePlus, PackageX, CheckCircle2, AlertTriangle, Search, Sparkles, Clock } from 'lucide-react'
 
 const TIPO = {
   CREMACION_GRUPAL:  { label: 'Cremación',  emoji: '🔥', color: '#B45309', bg: '#FEF3C7' },
@@ -150,6 +150,24 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
       await showAlert(texto, { title: 'Reporte pendiente listo' })
     } catch (e) {
       await showAlert(parsearErrorDB(e), { title: 'Error al agregar a lote' })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  // ── Sacar manualmente un servicio de su lote/reporte ────────────────────────
+  async function sacarDeLote(svc) {
+    if (!esCoord) return
+    if (!await confirm(`Se sacará ${svc.mascota} del lote ${svc.lote?.numero_lote || ''} y se excluirá de su reporte.`,
+      { title: '¿Sacar de lote?', confirmLabel: 'Sacar', variant: 'danger' })) return
+    setSavingId(svc.servicio_id)
+    try {
+      await sacarServicioDeLote(svc.servicio_id)
+      await cargar()
+      if (onChanged) await onChanged()
+      await showAlert(`${svc.mascota} fue retirada del lote.`, { title: 'Listo' })
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al sacar de lote' })
     } finally {
       setSavingId(null)
     }
@@ -333,6 +351,12 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
                         <Button size="sm" variant="secondary" disabled={savingId === r.servicio_id}
                           onClick={() => agregarALote(r)}>
                           <PackagePlus size={12} /> {savingId === r.servicio_id ? '...' : 'Agregar a lote'}
+                        </Button>
+                      )}
+                      {esCoord && r.lote_id && !enviado && (
+                        <Button size="sm" variant="secondary" className="text-red-600" disabled={savingId === r.servicio_id}
+                          onClick={() => sacarDeLote(r)}>
+                          <PackageX size={12} /> {savingId === r.servicio_id ? '...' : 'Sacar de lote'}
                         </Button>
                       )}
                     </td>
