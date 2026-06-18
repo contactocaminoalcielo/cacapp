@@ -446,6 +446,19 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
         await evento(client, { reporteId, itemId: item.id, servicioId: item.servicio_id,
           tipo: body.reenvio ? 'REENVIO' : 'ENVIADO',
           detalle: { message_id: envioOk.messageId, contact_id: envioOk.contactId, motivo: body.motivo || null, actor_raw: personalId || null }, actor: actorId })
+        // Marcar el recordatorio de certificado/reporte como ENTREGADO en el tablero de Producción
+        await client.query(
+          `UPDATE public.servicio_recordatorios sr
+           SET estado = 'ENTREGADO', fecha_fin_prod = COALESCE(sr.fecha_fin_prod, CURRENT_DATE)
+           FROM public.recordatorios r
+           WHERE sr.recordatorio_id = r.id
+             AND sr.servicio_id = $1
+             AND sr.estado <> 'ENTREGADO'
+             AND COALESCE(sr.origen, '') <> 'REMOVIDO'
+             AND r.categoria = 'digital'
+             AND (r.nombre ILIKE '%certificad%' OR r.nombre ILIKE '%reporte%')`,
+          [item.servicio_id]
+        )
         resumen.enviados++
       } else {
         await client.query(
