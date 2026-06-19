@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
@@ -156,6 +157,7 @@ function limpiarBorrador() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function Registro() {
   const { confirm } = useConfirm()
+  const { personalData } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -833,6 +835,7 @@ export default function Registro() {
         fecha_ingreso:        today(),
         tipo_acompanamiento:  tipoAcomp,
         canal_entrada:        canalEntrada,
+        registrado_por:       personalData?.id || null,
         aliado_origen_id:     aliadoSeleccionado?.id_aliado || null,
         valor_total:          valorCobrado,
         valor_pagado:         parseFloat(formRecogida.valor_pagado) || 0,

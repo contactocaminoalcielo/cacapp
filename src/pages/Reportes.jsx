@@ -11,6 +11,8 @@ import { Download, CalendarDays } from 'lucide-react'
 
 const COLORS = ['#0B1D4F','#C4A87A','#3B6FBF','#9A5500','#1D8A55','#5B21B6']
 
+const ROL_NOMBRES = { 1: 'COORDINADOR', 2: 'TECNICO', 3: 'MENSAJERO', 4: 'PRODUCTOR', 5: 'OPERARIO', 6: 'ADMIN' }
+
 // --- Utilidades de rango de fechas ---
 function getRango(key) {
   const hoy = new Date()
@@ -414,6 +416,128 @@ function TabProduccion({ rango }) {
   )
 }
 
+// --- Tab Ventas por usuario / rol ---
+function TabVentasUsuario({ rango }) {
+  const [data, setData] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const { from, to } = getRango(rango)
+    let q = db.from('servicios')
+      .select('id, fecha_ingreso, valor_total, registrado_por, registrador:registrado_por(nombre, apellido, rol_principal_id)')
+      .neq('estado', 'CANCELADO')
+    if (from) q = q.gte('fecha_ingreso', toISO(from))
+    if (to)   q = q.lte('fecha_ingreso', toISO(to))
+    q.order('fecha_ingreso', { ascending: false }).then(({ data: d }) => {
+      setData(d || [])
+      setLoading(false)
+    })
+  }, [rango])
+
+  if (loading) return <div className="text-center py-8 text-ink3">Cargando...</div>
+
+  // Agrupar por usuario
+  const porUsuario = {}
+  data.forEach(s => {
+    const r = s.registrador
+    const key = s.registrado_por || '__none__'
+    if (!porUsuario[key]) porUsuario[key] = {
+      nombre: r ? `${r.nombre} ${r.apellido || ''}`.trim() : 'Sin registrar',
+      rol:    r ? (ROL_NOMBRES[r.rol_principal_id] || '—') : '—',
+      sin:    !r,
+      count:  0, valor: 0,
+    }
+    porUsuario[key].count++
+    porUsuario[key].valor += s.valor_total || 0
+  })
+  const usuarios = Object.values(porUsuario).sort((a, b) => b.count - a.count)
+  const barData = usuarios.filter(u => !u.sin).map(u => ({ name: u.nombre, value: u.count }))
+
+  // Agrupar por rol
+  const porRol = {}
+  data.forEach(s => {
+    const rol = s.registrador ? (ROL_NOMBRES[s.registrador.rol_principal_id] || '—') : 'Sin registrar'
+    if (!porRol[rol]) porRol[rol] = { count: 0, valor: 0 }
+    porRol[rol].count++
+    porRol[rol].valor += s.valor_total || 0
+  })
+  const roles = Object.entries(porRol).map(([name, d]) => ({ name, ...d })).sort((a, b) => b.count - a.count)
+
+  const registrados = data.filter(s => s.registrado_por).length
+  const sinRegistrar = data.length - registrados
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Total servicios" value={data.length} />
+        <StatCard label="Con usuario"     value={registrados}  valueColor="#1D8A55" />
+        <StatCard label="Sin registrar"   value={sinRegistrar} valueColor={sinRegistrar > 0 ? '#9A5500' : '#1D8A55'} />
+        <StatCard label="Usuarios activos" value={barData.length} valueColor="#5B21B6" />
+      </div>
+
+      {sinRegistrar > 0 && (
+        <div className="bg-[#FFF8EC] border border-[#FFD980] rounded-xl px-4 py-3 text-[12px] text-[#9A5500]">
+          {sinRegistrar} servicio{sinRegistrar !== 1 ? 's' : ''} en este período no tiene{sinRegistrar !== 1 ? 'n' : ''} usuario registrado (creados antes de activar esta función). El conteo por usuario es confiable solo de aquí en adelante.
+        </div>
+      )}
+
+      {barData.length > 0 && (
+        <div className="bg-surface border rounded-2xl p-4" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div className="font-serif text-base text-ink mb-3">Servicios registrados por usuario</div>
+          <ResponsiveContainer width="100%" height={Math.max(200, barData.length * 38)}>
+            <BarChart data={barData} layout="vertical" margin={{ left: 20, right: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,80,40,0.07)" />
+              <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={120} />
+              <Tooltip />
+              <Bar dataKey="value" fill="#0B1D4F" radius={[0,4,4,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Detalle por usuario */}
+        <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div className="px-5 py-4 border-b font-serif text-base text-ink" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>Por usuario</div>
+          <TableWrap><Table>
+            <thead><tr><Th>Usuario</Th><Th>Rol</Th><Th>Servicios</Th><Th>Valor total</Th></tr></thead>
+            <tbody>
+              {usuarios.map((u, i) => (
+                <Tr key={i}>
+                  <Td className={`font-semibold ${u.sin ? 'text-ink3 italic' : 'text-ink'}`}>{u.nombre}</Td>
+                  <Td className="text-ink3">{u.rol}</Td>
+                  <Td className="font-bold text-ink">{u.count}</Td>
+                  <Td className="text-ink2">{fmt(u.valor)}</Td>
+                </Tr>
+              ))}
+              {usuarios.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-ink3 text-sm">Sin servicios en este período</td></tr>}
+            </tbody>
+          </Table></TableWrap>
+        </div>
+
+        {/* Resumen por rol */}
+        <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          <div className="px-5 py-4 border-b font-serif text-base text-ink" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>Por rol</div>
+          <TableWrap><Table>
+            <thead><tr><Th>Rol</Th><Th>Servicios</Th><Th>Valor total</Th></tr></thead>
+            <tbody>
+              {roles.map((r, i) => (
+                <Tr key={i}>
+                  <Td className={`font-semibold ${r.name === 'Sin registrar' ? 'text-ink3 italic' : 'text-ink'}`}>{r.name}</Td>
+                  <Td className="font-bold text-ink">{r.count}</Td>
+                  <Td className="text-ink2">{fmt(r.valor)}</Td>
+                </Tr>
+              ))}
+              {roles.length === 0 && <tr><td colSpan={3} className="text-center py-6 text-ink3 text-sm">Sin servicios en este período</td></tr>}
+            </tbody>
+          </Table></TableWrap>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Reportes() {
   const [rango, setRango] = useState('mes')
 
@@ -426,12 +550,14 @@ export default function Reportes() {
           <TabsList className="mb-6">
             <TabsTrigger value="contabilidad">Contabilidad</TabsTrigger>
             <TabsTrigger value="servicios">Servicios</TabsTrigger>
+            <TabsTrigger value="ventas">Ventas por usuario</TabsTrigger>
             <TabsTrigger value="tiempo">Tiempo promesa</TabsTrigger>
             <TabsTrigger value="comisiones">Comisiones</TabsTrigger>
             <TabsTrigger value="produccion">Producción</TabsTrigger>
           </TabsList>
           <TabsContent value="contabilidad"><TabContabilidad rango={rango} /></TabsContent>
           <TabsContent value="servicios"><TabServicios rango={rango} /></TabsContent>
+          <TabsContent value="ventas"><TabVentasUsuario rango={rango} /></TabsContent>
           <TabsContent value="tiempo"><TabTiempoPromesa rango={rango} /></TabsContent>
           <TabsContent value="comisiones"><TabComisiones rango={rango} /></TabsContent>
           <TabsContent value="produccion"><TabProduccion rango={rango} /></TabsContent>

@@ -108,8 +108,8 @@ export default function Kanban() {
   // ── Estado tablero activo (solo para ADMIN) ───────────────────────────────
   const [tableroActivo, setTableroActivo] = useState('coordinacion') // 'coordinacion' | 'produccion'
 
-  // Derivados de rol
-  const esAdmin     = rol === 'ADMIN'
+  // Derivados de rol — COORDINADOR tiene los mismos permisos que ADMIN
+  const esAdmin     = ['ADMIN', 'COORDINADOR'].includes(rol)
   const esCoord     = rol === 'COORDINADOR'
   const esProductor = rol === 'PRODUCTOR'
   const puedeVerImagenes = esAdmin || esProductor
@@ -545,6 +545,7 @@ export default function Kanban() {
         fecha_ingreso:         today(),
         tipo_acompanamiento:   esIndividual ? convForm.tipo_acompanamiento : 'EVIDENCIA',
         canal_entrada:         selSolicitud.aliado_id ? 'ALIADO' : 'DIRECTO',
+        registrado_por:        personalData?.id || null,
         aliado_origen_id:      selSolicitud.aliado_id || null,
         valor_total:           valorTotal,
         valor_pagado:          0,

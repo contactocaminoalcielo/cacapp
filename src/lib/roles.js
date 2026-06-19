@@ -2,27 +2,23 @@
 // isTecnico: true → ve TecnicoApp (vista móvil de campo)
 // routes: Set de rutas del AppShell permitidas (solo aplica si isTecnico es false)
 
+// ADMIN y COORDINADOR comparten exactamente la misma configuración:
+// el coordinador tiene los mismos permisos que el admin (sigue llamándose
+// COORDINADOR). Cualquier ruta nueva que se agregue aquí aplica a ambos.
+const ACCESO_TOTAL = {
+  isTecnico:  false,
+  redirectTo: '/',
+  routes: new Set([
+    '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
+    '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
+    '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
+    '/eutanasias',
+  ]),
+}
+
 export const ROLE_CONFIG = {
-  ADMIN: {
-    isTecnico:  false,
-    redirectTo: '/',
-    routes: new Set([
-      '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
-      '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
-      '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
-      '/eutanasias',
-    ]),
-  },
-  COORDINADOR: {
-    isTecnico:  false,
-    redirectTo: '/',
-    routes: new Set([
-      '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
-      '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
-      '/presequiales', '/reportes', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
-      '/eutanasias',
-    ]),
-  },
+  ADMIN:       ACCESO_TOTAL,
+  COORDINADOR: ACCESO_TOTAL,
   TECNICO: {
     isTecnico:  true,
     redirectTo: '/tecnico',

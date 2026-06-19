@@ -1352,7 +1352,8 @@ const SELECT_HISTORIAL = `
   ),
   planes:plan_id(nombre, codigo),
   aliados:aliado_origen_id(nombre),
-  tecnico:tecnico_id(nombre, apellido)
+  tecnico:tecnico_id(nombre, apellido),
+  registrador:registrado_por(nombre, apellido)
 `
 
 function TabHistorialServicios() {
@@ -1371,6 +1372,7 @@ function TabHistorialServicios() {
   const [filtroPlan,    setFiltroPlan]    = useState('')
   const [filtroAliado,  setFiltroAliado]  = useState('')
   const [filtroTecnico, setFiltroTecnico] = useState('')
+  const [filtroUsuario, setFiltroUsuario] = useState('')
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
@@ -1393,6 +1395,8 @@ function TabHistorialServicios() {
     if (filtroPlan)    base = base.eq('plan_id', filtroPlan)
     if (filtroAliado)  base = base.eq('aliado_origen_id', filtroAliado)
     if (filtroTecnico) base = base.eq('tecnico_id', filtroTecnico)
+    if (filtroUsuario === '__none__') base = base.is('registrado_por', null)
+    else if (filtroUsuario)           base = base.eq('registrado_por', filtroUsuario)
     if (desde)         base = base.gte('fecha_ingreso', desde)
     if (hasta)         base = base.lte('fecha_ingreso', hasta)
     return base
@@ -1412,7 +1416,7 @@ function TabHistorialServicios() {
     setLoading(false)
   }
 
-  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, desde, hasta])
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, desde, hasta])
 
   async function exportarCSV() {
     setExporting(true)
@@ -1421,7 +1425,7 @@ function TabHistorialServicios() {
     )
     const { data: d } = await q
     const filas = d || []
-    const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Técnico','Estado','Estado pago','Valor total','Valor pagado']
+    const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Técnico','Registró','Estado','Estado pago','Valor total','Valor pagado']
     const rows = filas.map(s => {
       const cli = s.mascotas?.clientes || {}
       const tec = s.tecnico
@@ -1437,6 +1441,7 @@ function TabHistorialServicios() {
         s.aliados?.nombre || '',
         s.ciudad_recogida || '',
         tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '',
+        s.registrador ? `${s.registrador.nombre} ${s.registrador.apellido || ''}`.trim() : '',
         ESTADO_LABEL[s.estado] || s.estado || '',
         s.estado_pago || '',
         s.valor_total ?? 0,
@@ -1472,10 +1477,10 @@ function TabHistorialServicios() {
   const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
   const fmtFecha = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
 
-  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || desde || hasta || busqueda
+  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || filtroUsuario || desde || hasta || busqueda
   function limpiarFiltros() {
     setBusqueda(''); setFiltroEstado(''); setFiltroPago('')
-    setFiltroPlan(''); setFiltroAliado(''); setFiltroTecnico('')
+    setFiltroPlan(''); setFiltroAliado(''); setFiltroTecnico(''); setFiltroUsuario('')
     setDesde(''); setHasta('')
   }
 
@@ -1498,6 +1503,11 @@ function TabHistorialServicios() {
         <Select value={filtroTecnico} onChange={e => setFiltroTecnico(e.target.value)} className="w-40">
           <option value="">Todos los técnicos</option>
           {catPersonal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido || ''}</option>)}
+        </Select>
+        <Select value={filtroUsuario} onChange={e => setFiltroUsuario(e.target.value)} className="w-44">
+          <option value="">Registrado por (todos)</option>
+          {catPersonal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido || ''}</option>)}
+          <option value="__none__">— Sin registrar —</option>
         </Select>
       </div>
       {/* Filtros — fila 2 */}
@@ -1556,6 +1566,7 @@ function TabHistorialServicios() {
                   <Th>Aliado</Th>
                   <Th>Ciudad</Th>
                   <Th>Técnico</Th>
+                  <Th>Registró</Th>
                   <Th>Estado</Th>
                   <Th>Pago</Th>
                   <Th>Valor</Th>
@@ -1591,6 +1602,7 @@ function TabHistorialServicios() {
                       <Td className="text-[11px] text-ink3">{s.aliados?.nombre || '—'}</Td>
                       <Td className="text-[11px] text-ink3 whitespace-nowrap">{s.ciudad_recogida || '—'}</Td>
                       <Td className="text-[11px] text-ink3 whitespace-nowrap">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</Td>
+                      <Td className="text-[11px] text-ink3 whitespace-nowrap">{s.registrador ? `${s.registrador.nombre} ${s.registrador.apellido || ''}`.trim() : '—'}</Td>
                       <Td>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
                           style={{ background: ec.bg, color: ec.text, border: `1px solid ${ec.border || ec.bg}` }}>
@@ -1608,7 +1620,7 @@ function TabHistorialServicios() {
                   )
                 })}
                 {filtrados.length === 0 && !loading && (
-                  <tr><td colSpan={11} className="text-center py-10 text-ink3 text-sm">Sin servicios para los filtros aplicados</td></tr>
+                  <tr><td colSpan={12} className="text-center py-10 text-ink3 text-sm">Sin servicios para los filtros aplicados</td></tr>
                 )}
               </tbody>
             </Table>
@@ -1629,7 +1641,8 @@ function TabHistorialServicios() {
 
 export default function Gestion() {
   const { personalData } = useAuth()
-  const isAdmin = personalData?.rol === 'ADMIN'
+  // COORDINADOR tiene los mismos permisos que ADMIN
+  const isAdmin = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
   const isCoord = personalData?.rol === 'COORDINADOR'
   const canEdit = isAdmin || isCoord
 
