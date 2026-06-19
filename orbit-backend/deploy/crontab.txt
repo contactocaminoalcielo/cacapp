@@ -11,3 +11,7 @@
 # Reportes Grupales (Fase 5) — sincroniza reportes, marca vencidos y genera alertas.
 # 06:45 Bogota = 11:45 UTC (todos los dias). Idempotente.
 45 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/grupales >> /var/log/orbit-backend-cron.log 2>&1
+
+# Solicitud de imagenes — prepara los contactos del dia (NO envia; una persona valida).
+# 10:00 Bogota = 15:00 UTC (todos los dias). Idempotente; recupera vencidos no procesados.
+0 15 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1

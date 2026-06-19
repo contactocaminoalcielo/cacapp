@@ -9,6 +9,8 @@ import { confirmarLote, cerrarLote } from './lotes.js'
 import { jobReportesGrupales } from './jobs/grupales.js'
 import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServicioAReporteGrupal } from './grupales.js'
 import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupales-ia.js'
+import { jobContactosImagenes } from './jobs/imagenes.js'
+import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 
 const app = express()
 app.use(express.json())
@@ -59,6 +61,76 @@ app.post('/jobs/grupales', requireJob, async (_req, res) => {
   } catch (e) {
     log('[grupales] ERROR', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Job: preparar contactos de solicitud de imágenes (NO envía) ──
+app.post('/jobs/contactos-imagenes', requireJob, async (_req, res) => {
+  try {
+    res.json(await jobContactosImagenes())
+  } catch (e) {
+    log('[imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── API Solicitud de imágenes — el coordinador valida y autoriza el envío ──
+app.post('/imagenes/preparar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json(await jobContactosImagenes())
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/imagenes/enviar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await enviarSolicitud({ solicitudId: req.body.solicitud_id, personalId: req.personal.id, body: { fromNumber: req.body.fromNumber } })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[imagenes/enviar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/imagenes/reintentar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await enviarSolicitud({ solicitudId: req.body.solicitud_id, personalId: req.personal.id, body: { fromNumber: req.body.fromNumber, reintentar: true } })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[imagenes/reintentar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/imagenes/cancelar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await cancelarSolicitud({ solicitudId: req.body.solicitud_id, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[imagenes/cancelar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Portal público de imágenes (el código de acceso es el secreto; sin JWT) ──
+app.get('/portal/imagenes/:codigo', async (req, res) => {
+  try {
+    const r = await datosPortal({ codigo: req.params.codigo })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[portal/imagenes GET] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'Error interno' })
+  }
+})
+
+app.post('/portal/imagenes/:codigo', async (req, res) => {
+  try {
+    const r = await recibirImagenesPortal({ codigo: req.params.codigo, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[portal/imagenes POST] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'Error interno' })
   }
 })
 

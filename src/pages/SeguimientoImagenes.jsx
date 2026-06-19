@@ -1,113 +1,147 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
-import { db } from '@/lib/supabase'
-import { petEmoji, today } from '@/lib/utils'
-import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
-import { MessageCircle, RefreshCw, CheckCircle2, Send } from 'lucide-react'
+import { useConfirm } from '@/contexts/ConfirmContext'
+import { petEmoji } from '@/lib/utils'
+import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
+import {
+  ESTADO_SOLICITUD, obtenerSolicitudes, enviarSolicitud, reintentarSolicitud,
+  cancelarSolicitud, prepararContactos,
+} from '@/lib/imagenes'
+import {
+  MessageCircle, RefreshCw, CheckCircle2, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
+} from 'lucide-react'
 
 const FILTROS = [
-  { key: 'todos',         label: 'Todos' },
-  { key: 'PENDIENTE',     label: 'Pendientes' },
-  { key: 'ENVIADA',       label: 'Enviadas' },
-  { key: 'RECIBIDA',      label: 'Recibidas' },
-  { key: 'SIN_RESPUESTA', label: 'Sin respuesta' },
+  { key: 'todos',       label: 'Todos' },
+  { key: 'POR_VALIDAR', label: 'Por validar' },
+  { key: 'ENVIADO',     label: 'Enviados' },
+  { key: 'RECIBIDO',    label: 'Recibidos' },
+  { key: 'ERROR',       label: 'Error' },
 ]
 
-const ESTADO_COLORS = {
-  PENDIENTE:     { bg: '#FFF3DC', text: '#9A5500',  border: '#FFD980' },
-  ENVIADA:       { bg: '#EEF3FB', text: '#3B6FBF',  border: '#C5D8F5' },
-  RECIBIDA:      { bg: '#E8F3EB', text: '#1D8A55',  border: '#A0D4B0' },
-  SIN_RESPUESTA: { bg: '#FEE8E8', text: '#C03030',  border: '#FCA5A5' },
-}
+const ENVIABLE = new Set(['POR_VALIDAR', 'ERROR'])
 
-const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
-
-function buildMensaje(nombreCliente, nombreMascota, codigoFotos) {
-  const link = codigoFotos ? `${APP_URL}/#/fotos/${codigoFotos}` : null
-  return [
-    `Hola ${nombreCliente}, le escribe el equipo de *Camino al Cielo* 🐾`,
-    ``,
-    `Estamos preparando con amor el servicio de *${nombreMascota}*. Para continuar, necesitamos que nos comparta algunas fotos de ${nombreMascota} que más atesore.`,
-    ``,
-    link
-      ? `Puede hacerlo fácilmente desde este enlace:\n${link}`
-      : `Puede enviárnoslas aquí mismo por WhatsApp.`,
-    ``,
-    `¡Gracias por confiar en nosotros! 💚`,
-  ].join('\n')
+function fechaCorta(v) {
+  if (!v) return '-'
+  try { return new Date(v).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) } catch { return '-' }
 }
 
 export default function SeguimientoImagenes() {
-  const [solicitudes,  setSolicitudes]  = useState([])
-  const [loading,      setLoading]      = useState(true)
-  const [error,        setError]        = useState(null)
-  const [filtro,       setFiltro]       = useState('PENDIENTE')
-  const [lineaOrigen,  setLineaOrigen]  = useState(LINEAS_WHATSAPP[0].numero)
-  const [enviando,     setEnviando]     = useState(null)  // id de solicitud en curso
+  const { confirm, alert: showAlert } = useConfirm()
+  const [solicitudes, setSolicitudes] = useState([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState(null)
+  const [filtro,   setFiltro]   = useState('POR_VALIDAR')
+  const [linea,    setLinea]    = useState(LINEAS_WHATSAPP[0].numero)
+  const [busy,     setBusy]     = useState(null)   // id de solicitud o 'bulk' o 'preparar'
+  const [sel,      setSel]      = useState(() => new Set())
+  const [copiado,  setCopiado]  = useState(null)
+  const [info,     setInfo]     = useState(null)   // banner informativo (p.ej. plantilla pendiente)
 
   useEffect(() => { cargar() }, [])
 
   async function cargar() {
     try {
       setLoading(true)
-      const { data, error: err } = await db
-        .from('solicitudes_imagenes')
-        .select('*, servicios(codigo_fotos, mascotas(nombre,especies(nombre),clientes(nombre,apellido,whatsapp)),planes(nombre,codigo)), recordatorios(nombre)')
-        .order('fecha_solicitud', { ascending: false })
-      if (err) throw err
-      setSolicitudes(data || [])
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
+      setSolicitudes(await obtenerSolicitudes())
+      setError(null)
+    } catch (e) { setError(e.message) }
+    finally { setLoading(false) }
   }
 
-  async function actualizarEstado(id, nuevoEstado) {
-    const update = { estado: nuevoEstado }
-    if (nuevoEstado === 'RECIBIDA') {
-      update.fecha_recepcion = today()
-      const sol = solicitudes.find(s => s.id === id)
-      if (sol?.servicio_id) {
-        await db.from('servicios')
-          .update({ fecha_imagenes_recibidas: today() })
-          .eq('id', sol.servicio_id)
-          .is('fecha_imagenes_recibidas', null)
-      }
-    }
-    await db.from('solicitudes_imagenes').update(update).eq('id', id)
-    setSolicitudes(prev => prev.map(s => s.id === id ? { ...s, ...update } : s))
+  const conteo = useMemo(() => {
+    const c = { POR_VALIDAR: 0, ENVIADO: 0, RECIBIDO: 0, ERROR: 0 }
+    solicitudes.forEach(s => { if (c[s.estado] !== undefined) c[s.estado]++ })
+    return c
+  }, [solicitudes])
+
+  const filtradas = filtro === 'todos' ? solicitudes : solicitudes.filter(s => s.estado === filtro)
+  const seleccionables = filtradas.filter(s => ENVIABLE.has(s.estado))
+
+  function toggleSel(id) {
+    setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function toggleTodos() {
+    const ids = seleccionables.map(s => s.id)
+    const todosSel = ids.length > 0 && ids.every(id => sel.has(id))
+    setSel(todosSel ? new Set() : new Set(ids))
   }
 
-  async function handleEnviarWA(sol) {
-    const m     = sol.servicios?.mascotas
-    const c     = m?.clientes
-    const codigo = sol.servicios?.codigo_fotos
+  async function copiar(texto, key) {
+    try { await navigator.clipboard.writeText(texto); setCopiado(key); setTimeout(() => setCopiado(null), 1500) }
+    catch { /* noop */ }
+  }
 
-    if (!c?.whatsapp) return
-    setEnviando(sol.id)
+  // Devuelve { ok, sinPlantilla, error } interpretando el backend
+  async function ejecutarEnvio(s) {
+    const fn = s.estado === 'ERROR' ? reintentarSolicitud : enviarSolicitud
     try {
-      const mensaje = buildMensaje(c.nombre, m?.nombre || 'su mascota', codigo)
-      await enviarWhatsApp({
-        telefono:   c.whatsapp,
-        nombre:     `${c.nombre} ${c.apellido || ''}`.trim(),
-        mensaje,
-        fromNumber: lineaOrigen,
-      })
-      await actualizarEstado(sol.id, 'ENVIADA')
+      const r = await fn(s.id, linea)
+      if (r?.ok) return { ok: true }
+      // status 200 con ok:false → fallo de envío (estado ERROR)
+      return { ok: false, error: r?.error || 'Error al enviar' }
     } catch (e) {
-      alert(`Error al enviar: ${e.message}`)
-    } finally {
-      setEnviando(null)
+      if (e.detalle?.sin_plantilla) return { ok: false, sinPlantilla: true }
+      return { ok: false, error: e.message }
     }
   }
 
-  const filtradas = filtro === 'todos'
-    ? solicitudes
-    : solicitudes.filter(s => s.estado === filtro)
+  async function enviarUno(s) {
+    if (busy) return
+    setBusy(s.id); setInfo(null)
+    const res = await ejecutarEnvio(s)
+    setBusy(null)
+    if (res.sinPlantilla) {
+      setInfo('La plantilla de WhatsApp aún no está aprobada en Meta/Zolutium. La solicitud quedó lista (código y enlace generados); el envío se activará al aprobar la plantilla.')
+    } else if (!res.ok) {
+      await showAlert(res.error, { title: 'No se pudo enviar' })
+    }
+    await cargar()
+  }
+
+  async function enviarSeleccionados() {
+    if (busy || sel.size === 0) return
+    setBusy('bulk'); setInfo(null)
+    const objetivos = solicitudes.filter(s => sel.has(s.id) && ENVIABLE.has(s.estado))
+    let ok = 0, err = 0, sinPlantilla = 0
+    for (const s of objetivos) {
+      const r = await ejecutarEnvio(s)
+      if (r.ok) ok++
+      else if (r.sinPlantilla) sinPlantilla++
+      else err++
+    }
+    setBusy(null); setSel(new Set())
+    if (sinPlantilla > 0)
+      setInfo(`${sinPlantilla} solicitud(es) quedaron listas pero NO se enviaron: la plantilla de WhatsApp aún no está aprobada. Se enviarán al activarla.`)
+    if (ok > 0 || err > 0)
+      await showAlert(`Enviadas: ${ok}${err ? ` · Con error: ${err}` : ''}`, { title: 'Envío de seleccionados', variant: err ? 'danger' : 'success' })
+    await cargar()
+  }
+
+  async function cancelar(s) {
+    const m = s.servicios?.mascotas
+    const okc = await confirm(`¿Cancelar la solicitud de imágenes de ${m?.nombre || 'esta mascota'}?`, {
+      title: 'Cancelar solicitud', confirmLabel: 'Sí, cancelar',
+    })
+    if (!okc) return
+    setBusy(s.id)
+    try { await cancelarSolicitud(s.id) }
+    catch (e) { await showAlert(e.message, { title: 'No se pudo cancelar' }) }
+    finally { setBusy(null); await cargar() }
+  }
+
+  async function preparar() {
+    if (busy) return
+    setBusy('preparar'); setInfo(null)
+    try {
+      const r = await prepararContactos()
+      setInfo(`Preparación lista: ${r.creados || 0} contacto(s) nuevo(s) por validar (de ${r.candidatos || 0} candidatos).`)
+    } catch (e) { await showAlert(e.message, { title: 'No se pudo preparar' }) }
+    finally { setBusy(null); await cargar() }
+  }
 
   if (loading) return (
     <div className="flex items-center justify-center h-64 gap-3">
@@ -120,14 +154,45 @@ export default function SeguimientoImagenes() {
     </div>
   )
 
+  const todosSelMarcado = seleccionables.length > 0 && seleccionables.every(s => sel.has(s.id))
+
   return (
     <div>
       <Topbar actions={
-        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
-          <RefreshCw size={15} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={preparar} disabled={!!busy}
+            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg border transition-colors hover:bg-surface2 disabled:opacity-50"
+            style={{ borderColor: 'rgba(30,80,40,0.2)', color: '#3D5A27' }}
+            title="Buscar servicios del día que requieren imágenes y dejarlos por validar">
+            {busy === 'preparar' ? 'Preparando…' : 'Preparar contactos'}
+          </button>
+          <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
+            <RefreshCw size={15} />
+          </button>
+        </div>
       } />
       <div className="p-7 space-y-6">
+
+        {/* Alerta de pendientes por validar */}
+        {conteo.POR_VALIDAR > 0 && (
+          <div className="rounded-xl p-3.5 border flex items-center gap-3"
+            style={{ background: '#FFF7E6', borderColor: '#FFD980' }}>
+            <AlertTriangle size={16} style={{ color: '#9A5500' }} />
+            <span className="text-[13px] font-semibold" style={{ color: '#9A5500' }}>
+              Tienes {conteo.POR_VALIDAR} contacto{conteo.POR_VALIDAR > 1 ? 's' : ''} pendiente{conteo.POR_VALIDAR > 1 ? 's' : ''} de validar y autorizar el envío.
+            </span>
+          </div>
+        )}
+
+        {/* Banner informativo (plantilla pendiente / resultado de preparar) */}
+        {info && (
+          <div className="rounded-xl p-3.5 border flex items-start gap-3"
+            style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
+            <MessageCircle size={16} style={{ color: '#3B6FBF', marginTop: 1 }} />
+            <span className="text-[13px] text-[#2C5AA0] flex-1">{info}</span>
+            <button onClick={() => setInfo(null)} className="text-[#3B6FBF]"><X size={15} /></button>
+          </div>
+        )}
 
         {/* Selector de línea WhatsApp */}
         <div className="rounded-xl p-4 border flex items-center gap-4 flex-wrap"
@@ -137,42 +202,47 @@ export default function SeguimientoImagenes() {
             <span className="text-[12px] font-semibold text-green-800">Línea de envío Zolutium:</span>
           </div>
           {LINEAS_WHATSAPP.map(l => (
-            <button
-              key={l.numero}
-              onClick={() => setLineaOrigen(l.numero)}
+            <button key={l.numero} onClick={() => setLinea(l.numero)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all border"
               style={{
-                background:  lineaOrigen === l.numero ? '#16A34A' : 'white',
-                color:       lineaOrigen === l.numero ? 'white'   : '#374151',
-                borderColor: lineaOrigen === l.numero ? '#16A34A' : '#D1D5DB',
-              }}
-            >
-              {lineaOrigen === l.numero && <CheckCircle2 size={12} />}
-              {l.label}
+                background:  linea === l.numero ? '#16A34A' : 'white',
+                color:       linea === l.numero ? 'white'   : '#374151',
+                borderColor: linea === l.numero ? '#16A34A' : '#D1D5DB',
+              }}>
+              {linea === l.numero && <CheckCircle2 size={12} />}{l.label}
             </button>
           ))}
-          <span className="text-[11px] text-green-700 ml-auto hidden md:block">
-            El mensaje incluye el enlace del portal de fotos del cliente.
-          </span>
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Pendientes"    value={solicitudes.filter(s => s.estado === 'PENDIENTE').length}     valueColor="#9A5500" />
-          <StatCard label="Enviadas"      value={solicitudes.filter(s => s.estado === 'ENVIADA').length}       valueColor="#3B6FBF" />
-          <StatCard label="Recibidas"     value={solicitudes.filter(s => s.estado === 'RECIBIDA').length}      valueColor="#1D8A55" />
-          <StatCard label="Sin respuesta" value={solicitudes.filter(s => s.estado === 'SIN_RESPUESTA').length} valueColor="#C03030" />
+          <StatCard label="Por validar" value={conteo.POR_VALIDAR} valueColor="#9A5500" />
+          <StatCard label="Enviados"    value={conteo.ENVIADO}     valueColor="#3B6FBF" />
+          <StatCard label="Recibidos"   value={conteo.RECIBIDO}    valueColor="#1D8A55" />
+          <StatCard label="Con error"   value={conteo.ERROR}       valueColor="#C03030" />
         </div>
 
-        {/* Filtros */}
-        <div className="flex gap-1 bg-surface2 rounded-[10px] p-1 border w-fit" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-          {FILTROS.map(f => (
-            <button key={f.key}
-              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${filtro === f.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
-              onClick={() => setFiltro(f.key)}>
-              {f.label}
-            </button>
-          ))}
+        {/* Filtros + acción masiva */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex gap-1 bg-surface2 rounded-[10px] p-1 border w-fit" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+            {FILTROS.map(f => (
+              <button key={f.key}
+                className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${filtro === f.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
+                onClick={() => { setFiltro(f.key); setSel(new Set()) }}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+          {sel.size > 0 && (
+            <div className="flex items-center gap-3">
+              <span className="text-[12px] font-semibold text-ink2">{sel.size} seleccionado{sel.size > 1 ? 's' : ''}</span>
+              <Button size="sm" onClick={enviarSeleccionados} disabled={busy === 'bulk'}>
+                {busy === 'bulk'
+                  ? <span className="flex items-center gap-1.5"><span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Enviando…</span>
+                  : <span className="flex items-center gap-1.5"><Send size={13} /> Enviar seleccionados</span>}
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Tabla */}
@@ -180,80 +250,118 @@ export default function SeguimientoImagenes() {
           <Table>
             <thead>
               <tr>
-                <Th>Mascota / Cliente</Th>
+                <Th className="w-8">
+                  {seleccionables.length > 0 && (
+                    <input type="checkbox" checked={todosSelMarcado} onChange={toggleTodos} className="cursor-pointer" />
+                  )}
+                </Th>
+                <Th>Cliente / Mascota</Th>
                 <Th>Plan</Th>
-                <Th>Ítem</Th>
-                <Th>Solicitud #</Th>
-                <Th>Fecha</Th>
+                <Th>WhatsApp</Th>
+                <Th>Ingreso</Th>
+                <Th>Recordatorios con imagen</Th>
+                <Th>Código / Enlace</Th>
                 <Th>Estado</Th>
                 <Th>Acciones</Th>
               </tr>
             </thead>
             <tbody>
               {filtradas.map(s => {
-                const m   = s.servicios?.mascotas
+                const svc = s.servicios || {}
+                const m   = svc.mascotas
                 const c   = m?.clientes
-                const e   = ESTADO_COLORS[s.estado] || {}
-                const esc = enviando === s.id
+                const wa  = s.whatsapp_destino || c?.whatsapp
+                const est = ESTADO_SOLICITUD[s.estado] || {}
+                const enviable = ENVIABLE.has(s.estado)
+                const trabajando = busy === s.id
                 return (
                   <Tr key={s.id}>
+                    <Td>
+                      {enviable && (
+                        <input type="checkbox" checked={sel.has(s.id)} onChange={() => toggleSel(s.id)} className="cursor-pointer" />
+                      )}
+                    </Td>
                     <Td>
                       <div className="flex items-center gap-2">
                         <span>{petEmoji(m?.especies?.nombre)}</span>
                         <div>
-                          <div className="font-semibold text-ink">{m?.nombre || '-'}</div>
-                          <div className="text-[10px] text-ink3">{c?.nombre} {c?.apellido}</div>
+                          <div className="font-semibold text-ink">{c?.nombre} {c?.apellido}</div>
+                          <div className="text-[10px] text-ink3">{m?.nombre || '-'}</div>
                         </div>
                       </div>
                     </Td>
-                    <Td className="text-ink3">{s.servicios?.planes?.nombre}</Td>
-                    <Td className="text-ink2">{s.recordatorios?.nombre || '-'}</Td>
-                    <Td className="font-mono text-[11px]">#{s.numero_solicitud || s.id}</Td>
                     <Td className="text-ink3">
-                      {s.fecha_solicitud ? new Date(s.fecha_solicitud).toLocaleDateString('es-CO') : '-'}
+                      {svc.planes?.nombre}
+                      {s.solo_adicional && <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: '#FEF3C7', color: '#92400E' }}>solo adicional</span>}
+                    </Td>
+                    <Td className="text-ink2 font-mono text-[11px]">{wa || <span className="text-danger">sin WhatsApp</span>}</Td>
+                    <Td className="text-ink3 text-[11px]">{fechaCorta(svc.fecha_ingreso)}</Td>
+                    <Td>
+                      <div className="flex flex-col gap-1">
+                        {(s.recordatorios_img || []).length === 0 && <span className="text-ink3 text-[11px]">-</span>}
+                        {(s.recordatorios_img || []).map((r, i) => (
+                          <span key={i} className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full w-fit"
+                            style={{ background: '#EEF3FB', color: '#2C5AA0' }}>
+                            {r.nombre}<span className="font-bold">×{r.cantidad}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </Td>
+                    <Td>
+                      {s.codigo ? (
+                        <div className="flex flex-col gap-1">
+                          <button onClick={() => copiar(s.codigo, `c${s.id}`)}
+                            className="inline-flex items-center gap-1 font-mono text-[11px] font-bold text-ink hover:text-primary-dark w-fit"
+                            title="Copiar código">
+                            {copiado === `c${s.id}` ? <Check size={11} className="text-green-600" /> : <Copy size={11} />}{s.codigo}
+                          </button>
+                          {s.enlace && (
+                            <button onClick={() => copiar(s.enlace, `e${s.id}`)}
+                              className="inline-flex items-center gap-1 text-[10px] text-ink3 hover:text-primary-dark w-fit"
+                              title="Copiar enlace">
+                              {copiado === `e${s.id}` ? <Check size={10} className="text-green-600" /> : <Link2 size={10} />}enlace
+                            </button>
+                          )}
+                        </div>
+                      ) : <span className="text-ink3 text-[11px]">—</span>}
                     </Td>
                     <Td>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
-                        style={{ background: e.bg, color: e.text, borderColor: e.border }}>
-                        {s.estado}
+                        style={{ background: est.bg, color: est.color, borderColor: est.border }}>
+                        {est.label || s.estado}
                       </span>
+                      {s.estado === 'ERROR' && s.ultimo_error && (
+                        <div className="text-[9px] text-danger mt-1 max-w-[180px] truncate" title={s.ultimo_error}>
+                          {s.ultimo_error}
+                        </div>
+                      )}
+                      {s.estado === 'ENVIADO' && s.intentos > 0 && (
+                        <div className="text-[9px] text-ink3 mt-1">intento{s.intentos > 1 ? `s ×${s.intentos}` : ''}</div>
+                      )}
                     </Td>
                     <Td>
                       <div className="flex gap-1.5 flex-wrap">
-                        {s.estado === 'PENDIENTE' && (
-                          <Button size="sm" variant="secondary"
-                            onClick={() => actualizarEstado(s.id, 'ENVIADA')}>
-                            Marcar enviada
-                          </Button>
-                        )}
-                        {s.estado === 'ENVIADA' && (
-                          <Button size="sm" onClick={() => actualizarEstado(s.id, 'RECIBIDA')}>
-                            ✓ Recibida
-                          </Button>
-                        )}
-
-                        {/* Botón enviar por Zolutium */}
-                        {c?.whatsapp && s.estado !== 'RECIBIDA' && (
-                          <button
-                            onClick={() => handleEnviarWA(s)}
-                            disabled={esc}
+                        {s.estado === 'POR_VALIDAR' && wa && (
+                          <button onClick={() => enviarUno(s)} disabled={trabajando}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-opacity disabled:opacity-50"
-                            style={{ background: '#25D366', color: 'white' }}
-                            title={`Enviar enlace de fotos por WhatsApp desde ${lineaOrigen}`}
-                          >
-                            {esc
-                              ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              : <Send size={11} />
-                            }
-                            {s.estado === 'ENVIADA' ? 'Reenviar' : 'Enviar WA'}
+                            style={{ background: '#25D366', color: 'white' }} title={`Enviar desde ${linea}`}>
+                            {trabajando ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Send size={11} />}
+                            Enviar
                           </button>
                         )}
-
-                        {s.estado === 'ENVIADA' && (
-                          <button onClick={() => actualizarEstado(s.id, 'SIN_RESPUESTA')}
-                            className="text-[10px] font-semibold px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
-                            style={{ color: '#C03030' }}>
-                            Sin resp.
+                        {s.estado === 'ERROR' && (
+                          <button onClick={() => enviarUno(s)} disabled={trabajando}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-opacity disabled:opacity-50"
+                            style={{ background: '#3B6FBF', color: 'white' }} title="Reintentar envío">
+                            {trabajando ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <RotateCw size={11} />}
+                            Reintentar
+                          </button>
+                        )}
+                        {ENVIABLE.has(s.estado) && (
+                          <button onClick={() => cancelar(s)} disabled={trabajando}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors hover:bg-red-50 disabled:opacity-50"
+                            style={{ color: '#C03030' }} title="Cancelar solicitud">
+                            <X size={11} /> Cancelar
                           </button>
                         )}
                       </div>
@@ -262,9 +370,7 @@ export default function SeguimientoImagenes() {
                 )
               })}
               {filtradas.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="text-center py-8 text-ink3 text-sm">Sin solicitudes</td>
-                </tr>
+                <tr><td colSpan={9} className="text-center py-8 text-ink3 text-sm">Sin solicitudes</td></tr>
               )}
             </tbody>
           </Table>

@@ -141,6 +141,79 @@ export async function enviarPlantillaGHL({
   return { messageId: dataEnvio.messageId, contactId }
 }
 
+/**
+ * Envía una PLANTILLA aprobada genérica (HSM) con variables de cuerpo posicionales.
+ * Para el flujo de solicitud de imágenes: body = [nombre, mascota, enlace, codigo].
+ * Mismo contrato real de Zolutium/GHL que enviarPlantillaGHL, pero sin header de
+ * documento y con los placeholders.body que reciba quien llama.
+ *
+ * @param bodyParams  array posicional resuelto [{{1}},{{2}},...]
+ * @param mensaje     texto ya resuelto (lo que verá el cliente)
+ * @returns {{ messageId, contactId }}
+ */
+export async function enviarPlantillaGenerica({
+  telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
+  mensaje, bodyParams = [], fromNumber,
+}) {
+  const GHL_TOKEN    = process.env.GHL_TOKEN
+  const GHL_LOCATION = process.env.GHL_LOCATION_ID
+  if (!GHL_TOKEN || !GHL_LOCATION) throw new Error('GHL no configurado en el backend (GHL_TOKEN/GHL_LOCATION_ID)')
+  if (!plantillaNombre) throw new Error('Falta el nombre de la plantilla aprobada')
+
+  const numero = normalizarTelefono(telefono)
+  if (!numero) throw new Error(`Teléfono inválido: ${telefono}`)
+
+  const headers = {
+    'Authorization': `Bearer ${GHL_TOKEN}`,
+    'Version':       '2021-07-28',
+    'Content-Type':  'application/json',
+  }
+
+  // Buscar/crear contacto (idéntico patrón a las otras funciones)
+  let contactId
+  const buscar = await fetch(
+    `${GHL_BASE}/contacts/?locationId=${GHL_LOCATION}&query=${encodeURIComponent(numero)}&limit=1`,
+    { headers }
+  )
+  const dataBuscar = await buscar.json()
+  if (!buscar.ok) throw new Error(dataBuscar.message || `Error buscando contacto: ${buscar.status}`)
+  if (dataBuscar.contacts?.length) {
+    contactId = dataBuscar.contacts[0].id
+  } else {
+    const crear = await fetch(`${GHL_BASE}/contacts/`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        locationId: GHL_LOCATION, phone: numero,
+        firstName: nombre.split(' ')[0] || nombre,
+        lastName:  nombre.split(' ').slice(1).join(' ') || '',
+      }),
+    })
+    const creado = await crear.json()
+    if (!crear.ok) throw new Error(creado.message || `Error creando contacto: ${crear.status}`)
+    contactId = creado.contact?.id
+  }
+
+  const body = {
+    MessageType: 19,
+    type:        'WhatsApp',
+    contactId,
+    message:     mensaje || '',
+    whatsapp: {
+      type: 'template',
+      template: { name: plantillaNombre, lang: idioma, category },
+      placeholders: { header: [], body: bodyParams, buttons: [] },
+    },
+  }
+  if (fromNumber) body.fromNumber = fromNumber
+
+  const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
+    method: 'POST', headers, body: JSON.stringify(body),
+  })
+  const dataEnvio = await envio.json()
+  if (!envio.ok) throw new Error(`GHL ${envio.status}: ${dataEnvio.message || ''} :: ${JSON.stringify(dataEnvio)}`)
+  return { messageId: dataEnvio.messageId, contactId }
+}
+
 // Payload EXACTO que usa el UI de Zolutium contra /conversations/messages
 // (capturado por DevTools): message + whatsapp.placeholders con valores resueltos
 // y el PDF en el header tipo document.
