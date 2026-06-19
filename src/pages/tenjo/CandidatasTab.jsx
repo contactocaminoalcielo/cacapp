@@ -2,11 +2,13 @@
 // Muestra qué mascotas individuales en custodia pueden programarse, con la
 // evaluación del motor de reglas (clasificación, bloqueos, alertas, acción).
 import { useState } from 'react'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { StatCard } from '@/components/ui/card'
-import { petEmoji } from '@/lib/utils'
-import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada } from '@/lib/tenjo'
-import { Search, X, Snowflake } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { petEmoji, parsearErrorDB } from '@/lib/utils'
+import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada, agregarCandidataALote } from '@/lib/tenjo'
+import { Search, X, Snowflake, Plus, Check, Truck } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 function fmtFecha(ts) {
@@ -24,8 +26,27 @@ function ChipClasif({ clasificacion }) {
   )
 }
 
-export default function CandidatasTab({ candidatas, config }) {
+export default function CandidatasTab({ candidatas, config, canPlan, personalData, onChanged }) {
+  const { alert: showAlert } = useConfirm()
   const [busqueda, setBusqueda] = useState('')
+  const [savingId, setSavingId] = useState(null)
+
+  async function agregarAlLote(c) {
+    setSavingId(c.servicio_id)
+    try {
+      const { lote, agregada } = await agregarCandidataALote({
+        candidata: c, config, personalId: personalData?.id,
+      })
+      onChanged?.()
+      if (!agregada) {
+        await showAlert(`${c.mascota} ya estaba en el lote ${lote.numero_lote}.`, { title: 'Sin cambios' })
+      }
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo agregar al lote', variant: 'danger' })
+    } finally {
+      setSavingId(null)
+    }
+  }
 
   if (candidatas === null) return <SetupNotice />
 
@@ -89,6 +110,7 @@ export default function CandidatasTab({ candidatas, config }) {
                   <Th>Programación</Th>
                   <Th>Clasificación</Th>
                   <Th>Acción recomendada</Th>
+                  {canPlan && <Th></Th>}
                 </tr>
               </thead>
               <tbody>
@@ -141,6 +163,25 @@ export default function CandidatasTab({ candidatas, config }) {
                           <div key={i} className="text-[10px] text-ink3 mt-0.5">• {b}</div>
                         ))}
                       </Td>
+                      {canPlan && (
+                        <Td>
+                          {c.traslado_activo ? (
+                            <span className="text-[10px] text-ink3 inline-flex items-center gap-1 whitespace-nowrap">
+                              <Truck size={11} /> Traslado activo
+                            </span>
+                          ) : c.item_activo_id ? (
+                            <span className="text-[10px] text-green-700 font-semibold inline-flex items-center gap-1 whitespace-nowrap">
+                              <Check size={11} /> En el lote
+                            </span>
+                          ) : (
+                            <Button size="sm" variant="secondary"
+                              disabled={savingId === c.servicio_id}
+                              onClick={() => agregarAlLote(c)}>
+                              <Plus size={12} /> Agregar al lote
+                            </Button>
+                          )}
+                        </Td>
+                      )}
                     </Tr>
                   )
                 })}

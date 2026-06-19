@@ -537,7 +537,13 @@ export default function Tenjo() {
           </TabsContent>
 
           <TabsContent value="candidatas">
-            <CandidatasTab candidatas={candidatas} config={config} />
+            <CandidatasTab
+              candidatas={candidatas}
+              config={config}
+              canPlan={canPlan}
+              personalData={personalData}
+              onChanged={cargar}
+            />
           </TabsContent>
 
           <TabsContent value="operacion">

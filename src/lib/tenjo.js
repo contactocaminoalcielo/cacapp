@@ -260,6 +260,59 @@ export async function generarPropuestaLote({ config, candidatas, personalId, gen
 }
 
 /**
+ * Agrega UNA candidata al lote PROPUESTO de la próxima jornada, creándolo si
+ * aún no existe. Idempotente: si la mascota ya está en un lote/traslado activo
+ * el índice único la descarta sin duplicar. Pensado para agregar desde la
+ * pestaña Candidatas sin pasar por Planificación.
+ * @returns { lote, agregada: boolean }
+ */
+export async function agregarCandidataALote({ candidata: c, config, personalId }) {
+  const fechaJornada = proximaJornada(config)
+  if (!fechaJornada) throw new Error('No hay días de operación configurados')
+
+  // 1. Lote de la jornada (existente o nuevo PROPUESTO)
+  let { data: lote, error: errLote } = await db.from('lotes_tenjo')
+    .select('*').eq('fecha_jornada', fechaJornada).neq('estado', 'CANCELADO').maybeSingle()
+  if (errLote) throw new Error(errLote.message)
+
+  if (!lote) {
+    const { data: nuevo, error: errIns } = await db.from('lotes_tenjo').insert({
+      numero_lote:   numeroLote(fechaJornada),
+      fecha_jornada: fechaJornada,
+      estado:        'PROPUESTO',
+      generado_por:  'MANUAL',
+      creado_por:    personalId || null,
+    }).select().single()
+    if (errIns) {
+      if (errIns.code === '23505') { // creado en paralelo — recuperarlo
+        const { data: existente } = await db.from('lotes_tenjo')
+          .select('*').eq('fecha_jornada', fechaJornada).neq('estado', 'CANCELADO').maybeSingle()
+        lote = existente
+      } else throw new Error(errIns.message)
+    } else lote = nuevo
+  }
+  if (!lote) throw new Error('No se pudo crear ni recuperar el lote')
+  if (['CONFIRMADO', 'EN_EJECUCION', 'CERRADO'].includes(lote.estado))
+    throw new Error(`El lote del ${fechaJornada} ya está ${LOTE_ESTADO_CFG[lote.estado]?.label || lote.estado}; no admite nuevas mascotas.`)
+
+  // 2. Insertar el item (el índice único parcial evita duplicados)
+  const ev = evaluarCandidato(c, config)
+  const { error } = await db.from('lotes_tenjo_items').insert({
+    lote_id:         lote.id,
+    servicio_id:     c.servicio_id,
+    clasificacion:   ev.clasificacion,
+    estado:          'PROPUESTO',
+    bloqueos:        ev.bloqueos,
+    validaciones:    ev.validaciones,
+    contacto_estado: ev.reqConfirma ? 'PENDIENTE' : 'NO_REQUERIDO',
+    veces_reprogramada: c.veces_reprogramada || 0,
+    notas:           'Agregada desde Candidatas',
+  })
+  if (error && error.code !== '23505') throw new Error(error.message)
+  return { lote, agregada: !error }
+}
+
+/**
  * Confirma el lote: revalida cada item APROBADO contra las candidatas
  * frescas, lo pasa a AUTORIZADA_SALIDA y crea su traslado PROGRAMADO.
  * Los items que quedaron sin decisión pasan a REPROGRAMADO.
