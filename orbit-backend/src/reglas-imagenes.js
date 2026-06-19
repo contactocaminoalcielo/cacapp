@@ -16,6 +16,7 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   usar_plantilla:    false,
   plantilla_nombre:  'solicitud_imagenes',
   plantilla_idioma:  'es_MX',
+  plantilla_categoria: 'UTILITY',   // debe coincidir con la categoría aprobada en Meta (UTILITY o MARKETING)
 }
 
 export async function cargarConfigImagenes(client) {

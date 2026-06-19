@@ -108,7 +108,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         nombre:   sol.propietario || sol.cliente_nombre || '',
         plantillaNombre: config.plantilla_nombre,
         idioma:   config.plantilla_idioma || 'es_MX',
-        category: 'UTILITY',
+        category: config.plantilla_categoria || 'UTILITY',
         mensaje,
         bodyParams: [sol.cliente_nombre || sol.propietario || '', sol.mascota || '', enlace, codigo],
         fromNumber: linea,
