@@ -313,6 +313,23 @@ export async function agregarCandidataALote({ candidata: c, config, personalId }
 }
 
 /**
+ * Reautoriza una mascota bloqueada por exceso de reprogramaciones: convierte
+ * sus items REPROGRAMADO en RETIRADO_DEL_LOTE para que dejen de contar como
+ * "strikes" en v_candidatos_tenjo (que solo cuenta los REPROGRAMADO). Es la
+ * "nueva autorización" que pide la regla: vuelve al pool con el contador en 0.
+ * @returns número de reprogramaciones limpiadas
+ */
+export async function reautorizarCandidata({ servicioId }) {
+  const { data, error } = await db.from('lotes_tenjo_items')
+    .update({ estado: 'RETIRADO_DEL_LOTE' })
+    .eq('servicio_id', servicioId)
+    .eq('estado', 'REPROGRAMADO')
+    .select('id')
+  if (error) throw new Error(error.message)
+  return data?.length || 0
+}
+
+/**
  * Confirma el lote: revalida cada item APROBADO contra las candidatas
  * frescas, lo pasa a AUTORIZADA_SALIDA y crea su traslado PROGRAMADO.
  * Los items que quedaron sin decisión pasan a REPROGRAMADO.

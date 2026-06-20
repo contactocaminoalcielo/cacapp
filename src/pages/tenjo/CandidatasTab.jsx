@@ -7,8 +7,8 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { petEmoji, parsearErrorDB } from '@/lib/utils'
-import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada, agregarCandidataALote } from '@/lib/tenjo'
-import { Search, X, Snowflake, Plus, Check, Truck } from 'lucide-react'
+import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada, agregarCandidataALote, reautorizarCandidata } from '@/lib/tenjo'
+import { Search, X, Snowflake, Plus, Check, Truck, RotateCcw } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 function fmtFecha(ts) {
@@ -27,9 +27,26 @@ function ChipClasif({ clasificacion }) {
 }
 
 export default function CandidatasTab({ candidatas, config, canPlan, personalData, onChanged }) {
-  const { alert: showAlert } = useConfirm()
+  const { confirm, alert: showAlert } = useConfirm()
   const [busqueda, setBusqueda] = useState('')
   const [savingId, setSavingId] = useState(null)
+  const maxReprog = config.max_reprogramaciones ?? 2
+
+  async function reautorizar(c) {
+    if (!await confirm(
+      `Se limpiarán las ${c.veces_reprogramada} reprogramaciones de ${c.mascota} y volverá a quedar disponible para programar (nueva autorización).`,
+      { title: '¿Reautorizar mascota?', variant: 'warning', confirmLabel: 'Reautorizar' }
+    )) return
+    setSavingId(c.servicio_id)
+    try {
+      await reautorizarCandidata({ servicioId: c.servicio_id })
+      onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo reautorizar', variant: 'danger' })
+    } finally {
+      setSavingId(null)
+    }
+  }
 
   async function agregarAlLote(c) {
     setSavingId(c.servicio_id)
@@ -173,6 +190,13 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
                             <span className="text-[10px] text-green-700 font-semibold inline-flex items-center gap-1 whitespace-nowrap">
                               <Check size={11} /> En el lote
                             </span>
+                          ) : (c.veces_reprogramada || 0) >= maxReprog ? (
+                            <Button size="sm" variant="secondary"
+                              disabled={savingId === c.servicio_id}
+                              title="Limpia las reprogramaciones acumuladas y la devuelve al pool"
+                              onClick={() => reautorizar(c)}>
+                              <RotateCcw size={12} /> Reautorizar
+                            </Button>
                           ) : (
                             <Button size="sm" variant="secondary"
                               disabled={savingId === c.servicio_id}
