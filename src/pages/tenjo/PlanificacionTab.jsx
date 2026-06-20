@@ -236,6 +236,31 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     } finally { setSaving(false) }
   }
 
+  // Reabre un lote CONFIRMADO → EN_REVISION para volver a gestionarlo (agregar
+  // mascotas que llegaron tarde, etc.). Las ya autorizadas y sus traslados se
+  // conservan; al reconfirmar solo se autorizan las nuevas aprobadas.
+  async function reabrirLote() {
+    if (!lote) return
+    if (!await confirm(
+      `El lote ${lote.numero_lote} volverá a EN REVISIÓN para que puedas agregar o gestionar mascoticas. `
+      + `Las que ya estaban autorizadas y sus traslados programados se conservan. Cuando termines, vuelve a confirmar el lote.`,
+      { title: '¿Reabrir lote confirmado?', variant: 'warning', confirmLabel: 'Reabrir lote' }
+    )) return
+    setSaving(true)
+    try {
+      const { data: rows, error } = await db.from('lotes_tenjo')
+        .update({ estado: 'EN_REVISION' })
+        .eq('id', lote.id).eq('estado', 'CONFIRMADO')
+        .select('id')
+      if (error) throw error
+      if (!rows?.length) throw new Error('El lote ya no está confirmado (¿cambió de estado?). Recarga la página.')
+      await cargarLote(); onChanged?.()
+      await showAlert(`Lote ${lote.numero_lote} reabierto. Agrega o gestiona las mascoticas y vuelve a confirmar.`, { title: 'Lote reabierto' })
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error reabriendo lote', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
   async function registrarContacto(resultado) {
     const item = modalContacto
     if (!item) return
@@ -521,6 +546,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             {canPlan && editable && agregables.length > 0 && (
               <Button size="sm" variant="secondary" onClick={() => setModalAgregar(true)}>
                 <Plus size={12} /> Agregar mascota
+              </Button>
+            )}
+            {canPlan && lote.estado === 'CONFIRMADO' && (
+              <Button size="sm" variant="secondary" disabled={saving} onClick={reabrirLote}>
+                <Undo2 size={12} /> Reabrir lote
               </Button>
             )}
             {gestionable && ['PROPUESTO', 'EN_REVISION', 'CONFIRMADO'].includes(lote.estado) && (
