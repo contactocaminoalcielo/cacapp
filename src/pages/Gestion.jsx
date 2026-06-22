@@ -574,6 +574,8 @@ function TabMascotas({ isAdmin, canEdit }) {
         calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId),
       ])
       if (!nuevoPrecioBase) continue
+      // Si el precio del rango no cambió, no hay nada que hacer
+      if (oldPrecioBase != null && Math.abs(nuevoPrecioBase - oldPrecioBase) < 0.5) continue
 
       // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
       let nuevaComision = null
@@ -601,30 +603,20 @@ function TabMascotas({ isAdmin, canEdit }) {
         if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
       }
 
-      // Preservar extras (adicionales, transporte, etc.) calculando la diferencia contra el precio base anterior.
-      // Si comision_descontada=true el precio efectivo almacenado es (oldBase - comisionVieja), no oldBase.
-      const oldBaseEfectivo = oldPrecioBase != null
-        ? (svc.comision_descontada ? oldPrecioBase - (svc.comision_aliado ?? 0) : oldPrecioBase)
-        : (svc.valor_total ?? 0)
-      const extras = (svc.valor_total ?? 0) - oldBaseEfectivo
+      // El nuevo valor total es directamente el precio del nuevo rango.
+      // Para comision_descontada=true (recogida en clínica aliada) se resta la comisión.
       const nuevoValorTotal = Math.round(
-        nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0) + extras
+        nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0)
       )
 
-      const valorTotalActual = svc.valor_total ?? 0
-      const comisionActual   = svc.comision_aliado ?? 0
-      const cambioPrecio     = Math.abs(nuevoValorTotal - valorTotalActual) > 0.5
-      const cambioComision   = nuevaComision != null && Math.abs(nuevaComision - comisionActual) > 0.5
-      if (!cambioPrecio && !cambioComision) continue
-
+      const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (svc.comision_aliado ?? 0)) > 0.5
       const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
-      cambios.push({ svc, nuevoValorTotal, nuevaComision, planNombre, cambioPrecio, cambioComision })
+      cambios.push({ svc, nuevoValorTotal, nuevaComision, planNombre, cambioComision })
     }
     if (!cambios.length) return
 
     const detalleCambios = cambios.map(c => {
-      const lineas = []
-      if (c.cambioPrecio) lineas.push(`${c.planNombre}: ${fmt(c.svc.valor_total)} → ${fmt(c.nuevoValorTotal)}`)
+      const lineas = [`${c.planNombre}: ${fmt(c.svc.valor_total)} → ${fmt(c.nuevoValorTotal)}`]
       if (c.cambioComision) lineas.push(`Comisión aliado: ${fmt(c.svc.comision_aliado)} → ${fmt(c.nuevaComision)}`)
       return lineas.join('\n')
     }).join('\n\n')
@@ -636,9 +628,8 @@ function TabMascotas({ isAdmin, canEdit }) {
     if (!ok) return
 
     await Promise.all(
-      cambios.map(({ svc, nuevoValorTotal, nuevaComision, cambioPrecio, cambioComision }) => {
-        const updates = {}
-        if (cambioPrecio)   updates.valor_total     = nuevoValorTotal
+      cambios.map(({ svc, nuevoValorTotal, nuevaComision, cambioComision }) => {
+        const updates = { valor_total: nuevoValorTotal }
         if (cambioComision) updates.comision_aliado = nuevaComision
         return db.from('servicios').update(updates).eq('id', svc.id)
       })
