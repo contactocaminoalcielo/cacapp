@@ -2084,6 +2084,29 @@ export default function Kanban() {
                       <option value="COMPLETO">Completo</option>
                     </Select>
                   </div>
+
+                  {/* Recalcular precio según peso actual de la mascota */}
+                  {(esAdmin || rol === 'COORDINADOR') && mascotaParaPlan?.peso_kg > 0 && detalle?.plan_id && !['ENTREGADO','CANCELADO'].includes(selected.estado) && (
+                    <button
+                      onClick={async () => {
+                        const precio = await calcularPrecioPlan(detalle.plan_id)
+                        if (!precio) { await showAlert('No se pudo calcular el precio para este peso y plan.', { title: 'Sin precio' }); return }
+                        if (precio === selected.valor_total) { await showAlert(`El precio ya está correcto para el peso actual (${mascotaParaPlan.peso_kg} kg).`, { title: 'Sin cambios' }); return }
+                        const ok = await confirm(
+                          `Precio según peso actual (${mascotaParaPlan.peso_kg} kg):\n${fmt(selected.valor_total)} → ${fmt(precio)}\n\n¿Actualizar el valor total del servicio?`,
+                          { title: 'Recalcular precio por peso', confirmLabel: 'Sí, actualizar' }
+                        )
+                        if (!ok) return
+                        const { error } = await db.from('servicios').update({ valor_total: precio }).eq('id', selected.servicio_id)
+                        if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
+                        setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, valor_total: precio } : s))
+                        setSelected(prev => ({ ...prev, valor_total: precio }))
+                      }}
+                      className="w-full py-1.5 px-3 rounded-lg border border-gray-200 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw size={11} /> Recalcular precio por peso actual
+                    </button>
+                  )}
                 </div>
 
                 <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">

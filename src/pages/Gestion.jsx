@@ -13,6 +13,7 @@ import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB } from '@/lib/utils'
+import { calcularPrecioPara } from '@/lib/precios'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 
@@ -535,13 +536,61 @@ function TabMascotas({ isAdmin, canEdit }) {
   async function guardar() {
     if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
     setSaving(true)
-    const body = nullify({ ...form, peso_kg: parseFloat(form.peso_kg) || 0 }, ['especie_id'])
+    const pesoNuevo  = parseFloat(form.peso_kg)       || 0
+    const pesoPrevio = parseFloat(selected?.peso_kg)  || 0
+    const especieId  = parseInt(form.especie_id || selected?.especie_id) || 0
+    const body = nullify({ ...form, peso_kg: pesoNuevo }, ['especie_id'])
     const { error } = selected?.id_mascota
       ? await db.from('mascotas').update(body).eq('id_mascota', selected.id_mascota)
       : await db.from('mascotas').insert(body)
     setSaving(false)
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+
+    // Si se editó el peso, verificar si los servicios activos cambian de rango de precio
+    if (selected?.id_mascota && Math.abs(pesoNuevo - pesoPrevio) > 0.01) {
+      await ofrecerRecalcularPrecio(selected.id_mascota, pesoPrevio, pesoNuevo, especieId)
+    }
+
     await cargar(); setSelected(null)
+  }
+
+  async function ofrecerRecalcularPrecio(mascotaId, pesoPrevio, pesoNuevo, especieId) {
+    const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
+      db.from('servicios')
+        .select('id, valor_total, plan_id')
+        .eq('mascota_id', mascotaId)
+        .neq('estado', 'ENTREGADO')
+        .neq('estado', 'CANCELADO'),
+      db.from('planes').select('id, codigo, nombre'),
+    ])
+    if (!svcsActivos?.length || !planesData?.length) return
+
+    const cambios = []
+    for (const svc of svcsActivos) {
+      if (!svc.plan_id) continue
+      const nuevoPrecio = await calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId)
+      if (nuevoPrecio != null && Math.abs(nuevoPrecio - (svc.valor_total || 0)) > 0.5) {
+        const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
+        cambios.push({ svc, nuevoPrecio, planNombre })
+      }
+    }
+    if (!cambios.length) return
+
+    const detalleCambios = cambios
+      .map(c => `${c.planNombre}: ${fmt(c.svc.valor_total)} → ${fmt(c.nuevoPrecio)}`)
+      .join('\n')
+
+    const ok = await confirm(
+      `El nuevo peso (${pesoPrevio} kg → ${pesoNuevo} kg) cambia el rango de precio del servicio activo:\n\n${detalleCambios}\n\n¿Actualizar el valor?`,
+      { title: 'Peso cambió de rango', confirmLabel: 'Sí, actualizar precio' }
+    )
+    if (!ok) return
+
+    await Promise.all(
+      cambios.map(({ svc, nuevoPrecio }) =>
+        db.from('servicios').update({ valor_total: nuevoPrecio }).eq('id', svc.id)
+      )
+    )
   }
   async function eliminar(m) {
     if (!await confirm(`Esta acción no se puede deshacer.`, { title: `¿Eliminar a ${m.nombre}?`, variant: 'danger', confirmLabel: 'Eliminar' })) return
