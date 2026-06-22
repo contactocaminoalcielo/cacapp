@@ -557,7 +557,7 @@ function TabMascotas({ isAdmin, canEdit }) {
   async function ofrecerRecalcularPrecio(mascotaId, pesoPrevio, pesoNuevo, especieId) {
     const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
       db.from('servicios')
-        .select('id, valor_total, plan_id')
+        .select('id, valor_total, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
         .eq('mascota_id', mascotaId)
         .neq('estado', 'ENTREGADO')
         .neq('estado', 'CANCELADO'),
@@ -568,28 +568,80 @@ function TabMascotas({ isAdmin, canEdit }) {
     const cambios = []
     for (const svc of svcsActivos) {
       if (!svc.plan_id) continue
-      const nuevoPrecio = await calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId)
-      if (nuevoPrecio != null && Math.abs(nuevoPrecio - (svc.valor_total || 0)) > 0.5) {
-        const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
-        cambios.push({ svc, nuevoPrecio, planNombre })
+
+      const [oldPrecioBase, nuevoPrecioBase] = await Promise.all([
+        calcularPrecioPara(planesData, svc.plan_id, pesoPrevio, especieId),
+        calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId),
+      ])
+      if (!nuevoPrecioBase) continue
+
+      // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
+      let nuevaComision = null
+      if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
+        const hoy = new Date()
+        const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
+        const [{ data: aliado }, { data: svcsDelMes }, { data: filas }] = await Promise.all([
+          db.from('aliados').select('vip').eq('id_aliado', svc.aliado_origen_id).maybeSingle(),
+          db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', svc.aliado_origen_id).gte('fecha_ingreso', inicioMes),
+          db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
+        ])
+        const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+        const match = (filas || [])
+          .filter(c =>
+            (c.plan_id === svc.plan_id || c.plan_id === null) &&
+            c.rango_min <= serviciosMes &&
+            (c.rango_max === null || c.rango_max >= serviciosMes)
+          )
+          .sort((a, b) => {
+            if (a.plan_id && !b.plan_id) return -1
+            if (!a.plan_id && b.plan_id) return 1
+            return b.rango_min - a.rango_min
+          })[0]
+        const pct = parseFloat(match?.porcentaje) || 0
+        if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
       }
+
+      // Preservar extras (adicionales, transporte, etc.) calculando la diferencia contra el precio base anterior.
+      // Si comision_descontada=true el precio efectivo almacenado es (oldBase - comisionVieja), no oldBase.
+      const oldBaseEfectivo = oldPrecioBase != null
+        ? (svc.comision_descontada ? oldPrecioBase - (svc.comision_aliado ?? 0) : oldPrecioBase)
+        : (svc.valor_total ?? 0)
+      const extras = (svc.valor_total ?? 0) - oldBaseEfectivo
+      const nuevoValorTotal = Math.round(
+        nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0) + extras
+      )
+
+      const valorTotalActual = svc.valor_total ?? 0
+      const comisionActual   = svc.comision_aliado ?? 0
+      const cambioPrecio     = Math.abs(nuevoValorTotal - valorTotalActual) > 0.5
+      const cambioComision   = nuevaComision != null && Math.abs(nuevaComision - comisionActual) > 0.5
+      if (!cambioPrecio && !cambioComision) continue
+
+      const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
+      cambios.push({ svc, nuevoValorTotal, nuevaComision, planNombre, cambioPrecio, cambioComision })
     }
     if (!cambios.length) return
 
-    const detalleCambios = cambios
-      .map(c => `${c.planNombre}: ${fmt(c.svc.valor_total)} → ${fmt(c.nuevoPrecio)}`)
-      .join('\n')
+    const detalleCambios = cambios.map(c => {
+      const lineas = []
+      if (c.cambioPrecio) lineas.push(`${c.planNombre}: ${fmt(c.svc.valor_total)} → ${fmt(c.nuevoValorTotal)}`)
+      if (c.cambioComision) lineas.push(`Comisión aliado: ${fmt(c.svc.comision_aliado)} → ${fmt(c.nuevaComision)}`)
+      return lineas.join('\n')
+    }).join('\n\n')
 
     const ok = await confirm(
-      `El nuevo peso (${pesoPrevio} kg → ${pesoNuevo} kg) cambia el rango de precio del servicio activo:\n\n${detalleCambios}\n\n¿Actualizar el valor?`,
-      { title: 'Peso cambió de rango', confirmLabel: 'Sí, actualizar precio' }
+      `El nuevo peso (${pesoPrevio} kg → ${pesoNuevo} kg) cambia el rango de precio del servicio activo:\n\n${detalleCambios}\n\n¿Actualizar los valores?`,
+      { title: 'Peso cambió de rango', confirmLabel: 'Sí, actualizar' }
     )
     if (!ok) return
 
     await Promise.all(
-      cambios.map(({ svc, nuevoPrecio }) =>
-        db.from('servicios').update({ valor_total: nuevoPrecio }).eq('id', svc.id)
-      )
+      cambios.map(({ svc, nuevoValorTotal, nuevaComision, cambioPrecio, cambioComision }) => {
+        const updates = {}
+        if (cambioPrecio)   updates.valor_total     = nuevoValorTotal
+        if (cambioComision) updates.comision_aliado = nuevaComision
+        return db.from('servicios').update(updates).eq('id', svc.id)
+      })
     )
   }
   async function eliminar(m) {

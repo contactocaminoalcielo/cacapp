@@ -2085,22 +2085,65 @@ export default function Kanban() {
                     </Select>
                   </div>
 
-                  {/* Recalcular precio según peso actual de la mascota */}
+                  {/* Recalcular precio y comisión según peso actual de la mascota */}
                   {(esAdmin || rol === 'COORDINADOR') && mascotaParaPlan?.peso_kg > 0 && detalle?.plan_id && !['ENTREGADO','CANCELADO'].includes(selected.estado) && (
                     <button
                       onClick={async () => {
-                        const precio = await calcularPrecioPlan(detalle.plan_id)
-                        if (!precio) { await showAlert('No se pudo calcular el precio para este peso y plan.', { title: 'Sin precio' }); return }
-                        if (precio === selected.valor_total) { await showAlert(`El precio ya está correcto para el peso actual (${mascotaParaPlan.peso_kg} kg).`, { title: 'Sin cambios' }); return }
+                        const nuevoPrecioBase = await calcularPrecioPlan(detalle.plan_id)
+                        if (!nuevoPrecioBase) { await showAlert('No se pudo calcular el precio para este peso y plan.', { title: 'Sin precio' }); return }
+
+                        // Recalcular comisión si hay aliado con comisión registrada
+                        let nuevaComision = null
+                        if (detalle?.aliado_origen_id && (detalle?.comision_aliado ?? 0) > 0) {
+                          const hoy = new Date()
+                          const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
+                          const [{ data: aliado }, { data: svcsDelMes }, { data: filas }] = await Promise.all([
+                            db.from('aliados').select('vip').eq('id_aliado', detalle.aliado_origen_id).maybeSingle(),
+                            db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', detalle.aliado_origen_id).gte('fecha_ingreso', inicioMes),
+                            db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
+                          ])
+                          const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+                          const match = (filas || [])
+                            .filter(c =>
+                              (c.plan_id === detalle.plan_id || c.plan_id === null) &&
+                              c.rango_min <= serviciosMes &&
+                              (c.rango_max === null || c.rango_max >= serviciosMes)
+                            )
+                            .sort((a, b) => {
+                              if (a.plan_id && !b.plan_id) return -1
+                              if (!a.plan_id && b.plan_id) return 1
+                              return b.rango_min - a.rango_min
+                            })[0]
+                          const pct = parseFloat(match?.porcentaje) || 0
+                          if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
+                        }
+
+                        const cambioPrecio   = Math.abs(nuevoPrecioBase - selected.valor_total) > 0.5
+                        const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (detalle?.comision_aliado ?? 0)) > 0.5
+                        if (!cambioPrecio && !cambioComision) {
+                          await showAlert(`Los valores ya están correctos para el peso actual (${mascotaParaPlan.peso_kg} kg).`, { title: 'Sin cambios' })
+                          return
+                        }
+
+                        const lineas = []
+                        if (cambioPrecio)   lineas.push(`Precio: ${fmt(selected.valor_total)} → ${fmt(nuevoPrecioBase)}`)
+                        if (cambioComision) lineas.push(`Comisión aliado: ${fmt(detalle.comision_aliado)} → ${fmt(nuevaComision)}`)
+
                         const ok = await confirm(
-                          `Precio según peso actual (${mascotaParaPlan.peso_kg} kg):\n${fmt(selected.valor_total)} → ${fmt(precio)}\n\n¿Actualizar el valor total del servicio?`,
+                          `Recalcular según peso actual (${mascotaParaPlan.peso_kg} kg):\n\n${lineas.join('\n')}\n\n¿Actualizar?`,
                           { title: 'Recalcular precio por peso', confirmLabel: 'Sí, actualizar' }
                         )
                         if (!ok) return
-                        const { error } = await db.from('servicios').update({ valor_total: precio }).eq('id', selected.servicio_id)
+
+                        const updates = {}
+                        if (cambioPrecio)   updates.valor_total     = nuevoPrecioBase
+                        if (cambioComision) updates.comision_aliado = nuevaComision
+
+                        const { error } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
                         if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
-                        setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, valor_total: precio } : s))
-                        setSelected(prev => ({ ...prev, valor_total: precio }))
+                        setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...updates } : s))
+                        setSelected(prev => ({ ...prev, ...updates }))
+                        if (cambioComision) setDetalle(prev => prev ? { ...prev, comision_aliado: nuevaComision } : prev)
                       }}
                       className="w-full py-1.5 px-3 rounded-lg border border-gray-200 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition flex items-center justify-center gap-1.5"
                     >
