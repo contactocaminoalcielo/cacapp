@@ -569,13 +569,8 @@ function TabMascotas({ isAdmin, canEdit }) {
     for (const svc of svcsActivos) {
       if (!svc.plan_id) continue
 
-      const [oldPrecioBase, nuevoPrecioBase] = await Promise.all([
-        calcularPrecioPara(planesData, svc.plan_id, pesoPrevio, especieId),
-        calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId),
-      ])
+      const nuevoPrecioBase = await calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId)
       if (!nuevoPrecioBase) continue
-      // Si el precio del rango no cambió, no hay nada que hacer
-      if (oldPrecioBase != null && Math.abs(nuevoPrecioBase - oldPrecioBase) < 0.5) continue
 
       // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
       let nuevaComision = null
@@ -609,7 +604,10 @@ function TabMascotas({ isAdmin, canEdit }) {
         nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0)
       )
 
+      const cambioPrecio   = Math.abs(nuevoValorTotal - (svc.valor_total ?? 0)) > 0.5
       const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (svc.comision_aliado ?? 0)) > 0.5
+      if (!cambioPrecio && !cambioComision) continue
+
       const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
       cambios.push({ svc, nuevoValorTotal, nuevaComision, planNombre, cambioComision })
     }
@@ -622,8 +620,8 @@ function TabMascotas({ isAdmin, canEdit }) {
     }).join('\n\n')
 
     const ok = await confirm(
-      `El nuevo peso (${pesoPrevio} kg → ${pesoNuevo} kg) cambia el rango de precio del servicio activo:\n\n${detalleCambios}\n\n¿Actualizar los valores?`,
-      { title: 'Peso cambió de rango', confirmLabel: 'Sí, actualizar' }
+      `El precio calculado para el nuevo peso (${pesoNuevo} kg) difiere del valor guardado:\n\n${detalleCambios}\n\n¿Actualizar los valores?`,
+      { title: 'Actualizar precio por peso', confirmLabel: 'Sí, actualizar' }
     )
     if (!ok) return
 
