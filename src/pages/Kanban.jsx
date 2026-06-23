@@ -16,7 +16,7 @@ import {
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
-  Copy, Check,
+  Copy, Check, Phone,
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -669,8 +669,34 @@ export default function Kanban() {
       const { data, error: err } = await db
         .from('v_kanban').select('*').order('fecha_ingreso', { ascending: false })
       if (err) throw err
-      setServicios(data || [])
-      await autoCorregirDesdeKanban(data || [])
+      let rows = data || []
+
+      // v_kanban solo expone un número (cliente_wa); traemos los teléfonos
+      // alternos del cliente (telefono / telefono2) para mostrarlos en la tarjeta.
+      const ids = rows.map(s => s.servicio_id).filter(Boolean)
+      if (ids.length) {
+        const { data: tels } = await db.from('servicios')
+          .select('id, mascotas(clientes(whatsapp, telefono, telefono2))')
+          .in('id', ids)
+        const mapa = {}
+        ;(tels || []).forEach(t => {
+          const c = t.mascotas?.clientes
+          if (c) mapa[t.id] = c
+        })
+        rows = rows.map(s => {
+          const c = mapa[s.servicio_id]
+          if (!c) return s
+          return {
+            ...s,
+            cliente_wa:        s.cliente_wa || c.whatsapp || null,
+            cliente_telefono:  c.telefono  || null,
+            cliente_telefono2: c.telefono2 || null,
+          }
+        })
+      }
+
+      setServicios(rows)
+      await autoCorregirDesdeKanban(rows)
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
@@ -1556,6 +1582,11 @@ export default function Kanban() {
                           const al  = alertLevel(s)
                           const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
                           const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
+                          // Números registrados del cliente (WhatsApp + alternos), sin repetir
+                          const telefonos = [...new Set(
+                            [s.cliente_wa, s.cliente_telefono, s.cliente_telefono2]
+                              .map(t => (t || '').trim()).filter(Boolean)
+                          )]
                           const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
                           const puedeNotifTec  = !esVistaProd && col === 'INGRESADO' && !!s.tecnico_id
                           const sinTecnico     = !esVistaProd && ['INGRESADO','EN_RECOGIDA'].includes(col) && !s.tecnico_id
@@ -1582,6 +1613,18 @@ export default function Kanban() {
                                   </div>
                                 )}
                               </div>
+                              {telefonos.length > 0 && (
+                                <div className="flex flex-col gap-1 mb-2">
+                                  {telefonos.map((tel, i) => (
+                                    <a key={i} href={waLink(tel)} target="_blank" rel="noreferrer"
+                                      onClick={e => e.stopPropagation()}
+                                      className="inline-flex items-center gap-1.5 text-[11px] font-medium text-gray-600 hover:text-green-600 transition-colors w-fit">
+                                      <Phone size={11} className="text-green-600 shrink-0" />
+                                      {tel}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
                               {al && (
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
                                   <AlertTriangle size={9} />
