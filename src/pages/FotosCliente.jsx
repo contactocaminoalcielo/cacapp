@@ -95,7 +95,10 @@ export default function FotosCliente({ codigo: codigoProp }) {
       if (r.ya_recibido) { setFase('ya_procesado'); return }
       setLimites({ max_mb: r.limites?.max_mb || 8, mimes: r.limites?.mimes || MIMES_OK })
 
-      const it = r.items || []
+      // El backend devuelve cada ítem como { sr_id, recordatorio }; el portal usa
+      // { id, recordatorios }. Normalizamos para que coincidan (si no, no aparece
+      // la UI de carga y el envío iría con sr_id indefinido).
+      const it = (r.items || []).map(x => ({ ...x, id: x.sr_id, recordatorios: x.recordatorio }))
       setItems(it)
 
       const fi = {}
