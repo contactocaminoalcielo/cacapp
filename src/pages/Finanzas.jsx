@@ -1257,10 +1257,10 @@ export default function Finanzas() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                          <table className="w-full min-w-[1140px]">
+                          <table className="w-full min-w-[1000px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Valor plan', 'Adicionales', 'A cobrar', 'Recogido', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
+                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total a cobrar', 'Recogido', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -1275,8 +1275,6 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it.valor_plan != null ? fmt(it.valor_plan) : '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it.valor_adicionales ? fmt(it.valor_adicionales) : '—'}</td>
                                   <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
                                     {it.total_cobrado > 0 ? fmt(it.total_cobrado)
