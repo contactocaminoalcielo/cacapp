@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
 import { fmt, parsearErrorDB } from '@/lib/utils'
@@ -7,6 +8,7 @@ import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
   Banknote, Building2, Receipt, User2, Tag,
+  Calendar, Lock, Download,
 } from 'lucide-react'
 
 // ── Helpers de badge ─────────────────────────────────────────────────────────
@@ -41,6 +43,7 @@ function BadgeCanal({ canal }) {
 
 export default function Finanzas() {
   const { confirm, alert: showAlert } = useConfirm()
+  const { personalData } = useAuth()
   // ── State principal ─────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true)
   const [servicios, setServicios] = useState([])   // array enriquecido
@@ -61,6 +64,20 @@ export default function Finanzas() {
   // ── State comisiones ────────────────────────────────────────────────────────
   const [liquidandoAliado,  setLiquidandoAliado]  = useState(null)  // null | aliado_id
   const [expandedAliados,   setExpandedAliados]   = useState(new Set())
+
+  // ── State cuadre con técnicos ───────────────────────────────────────────────
+  const [tecnicos,        setTecnicos]        = useState([])
+  const [cuadreTec,       setCuadreTec]       = useState('')
+  const [cuadreDesde,     setCuadreDesde]     = useState('')
+  const [cuadreHasta,     setCuadreHasta]     = useState('')
+  const [cuadreAjustes,   setCuadreAjustes]   = useState('')
+  const [cuadreAjusteMot, setCuadreAjusteMot] = useState('')
+  const [cuadreData,      setCuadreData]      = useState(null)   // cabecera cuadres_tecnico
+  const [cuadreItems,     setCuadreItems]     = useState([])
+  const [cuadreLoading,   setCuadreLoading]   = useState(false)
+  const [cuadreError,     setCuadreError]     = useState('')
+  const [cerrando,        setCerrando]        = useState(false)
+  const [cuadrePdfGen,    setCuadrePdfGen]    = useState(false)
 
   // ── Carga de datos ──────────────────────────────────────────────────────────
   async function cargar() {
@@ -188,6 +205,99 @@ export default function Finanzas() {
   }
 
   useEffect(() => { cargar() }, [])
+
+  // Lista de técnicos/mensajeros para el selector del cuadre.
+  useEffect(() => {
+    db.from('personal')
+      .select('id, nombre, apellido, rol_principal_id')
+      .eq('activo', true)
+      .in('rol_principal_id', [2, 3])
+      .order('nombre')
+      .then(({ data }) => setTecnicos(data || []))
+  }, [])
+
+  // ── Cuadre con técnicos: generar / cerrar / PDF ─────────────────────────────
+  const cuadreCerrado = cuadreData?.estado === 'CERRADO'
+
+  function nombreTecnicoSel(id = cuadreTec) {
+    const t = tecnicos.find(t => t.id === id)
+    return t ? `${t.nombre} ${t.apellido || ''}`.trim() : '—'
+  }
+
+  async function generarCuadre() {
+    if (!cuadreTec || !cuadreDesde || !cuadreHasta) {
+      setCuadreError('Selecciona el técnico y el rango de fechas.')
+      return
+    }
+    if (cuadreHasta < cuadreDesde) {
+      setCuadreError('La fecha "hasta" no puede ser anterior a "desde".')
+      return
+    }
+    setCuadreLoading(true); setCuadreError('')
+    try {
+      const { data, error } = await db.rpc('generar_cuadre_tecnico', {
+        p_tecnico_id:       cuadreTec,
+        p_desde:            cuadreDesde,
+        p_hasta:            cuadreHasta,
+        p_actor_id:         personalData?.id || null,
+        p_ajustes_manuales: parseFloat(cuadreAjustes) || 0,
+        p_ajustes_motivo:   cuadreAjusteMot.trim() || null,
+      })
+      if (error) throw error
+      const cid = data.cuadre_id
+      const [{ data: hdr }, { data: items }] = await Promise.all([
+        db.from('cuadres_tecnico').select('*').eq('id', cid).single(),
+        db.from('cuadre_items').select('*').eq('cuadre_id', cid).order('fecha').order('hora'),
+      ])
+      setCuadreData(hdr); setCuadreItems(items || [])
+    } catch (err) {
+      setCuadreError(parsearErrorDB(err))
+    } finally {
+      setCuadreLoading(false)
+    }
+  }
+
+  async function cerrarCuadre() {
+    if (!cuadreData) return
+    if (!await confirm('Una vez cerrado, el cuadre queda congelado y no se podrá editar. El técnico confirma el dinero a entregar.', { title: '¿Cerrar cuadre?', variant: 'warning', confirmLabel: 'Cerrar cuadre' })) return
+    setCerrando(true)
+    try {
+      const firma = {
+        tecnico:        nombreTecnicoSel(cuadreData.tecnico_id),
+        confirmado_en:  new Date().toISOString(),
+        cerrado_por:    personalData ? `${personalData.nombre || ''} ${personalData.apellido || ''}`.trim() : null,
+      }
+      const { error } = await db.rpc('cerrar_cuadre', {
+        p_cuadre_id: cuadreData.id,
+        p_actor_id:  personalData?.id || null,
+        p_firma:     firma,
+      })
+      if (error) throw error
+      const { data: hdr } = await db.from('cuadres_tecnico').select('*').eq('id', cuadreData.id).single()
+      setCuadreData(hdr)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al cerrar el cuadre' })
+    } finally {
+      setCerrando(false)
+    }
+  }
+
+  function limpiarCuadre() {
+    setCuadreData(null); setCuadreItems([]); setCuadreError('')
+    setCuadreAjustes(''); setCuadreAjusteMot('')
+  }
+
+  async function descargarCuadrePDF() {
+    if (!cuadreData) return
+    setCuadrePdfGen(true)
+    try {
+      await generarCuadrePDF(cuadreData, cuadreItems, nombreTecnicoSel(cuadreData.tecnico_id))
+    } catch (err) {
+      await showAlert('Error al generar el PDF: ' + (err.message || err), { title: 'Error' })
+    } finally {
+      setCuadrePdfGen(false)
+    }
+  }
 
   // ── Computed ────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -831,100 +941,192 @@ export default function Finanzas() {
 
               {/* ── Tab: Cuadre técnicos ─────────────────────────────── */}
               {tab === 'tecnicos' && (
-                <div className="p-5">
-                  <p className="text-[12px] text-gray-500 mb-4">
-                    Resumen de dinero recogido por cada técnico. Úsalo para citarlos al cuadre de cuentas.
+                <div className="p-5 space-y-5">
+                  <p className="text-[12px] text-gray-500">
+                    Cuadre de cuentas por técnico y rango de fechas. Solo el <strong>efectivo</strong> cuenta como
+                    recibido por el técnico (lo digital entra directo a la empresa). El dinero a entregar a gerencia
+                    es: efectivo − reconocimientos (transporte + recargos) − ajustes.
                   </p>
-                  {(() => {
-                    const porTecnico = {}
-                    servicios.forEach(s => {
-                      if (!s.tecnico_id || !s.valor_pagado) return
-                      const key = s.tecnico_id
-                      if (!porTecnico[key]) porTecnico[key] = {
-                        tecnico: s.tecnico,
-                        servicios: 0,
-                        efectivo: 0,
-                        transferencia: 0,
-                        nequi: 0,
-                        daviplata: 0,
-                        tarjeta: 0,
-                        otro: 0,
-                        total: 0,
-                      }
-                      porTecnico[key].servicios++
-                      porTecnico[key].total += s.valor_pagado || 0
-                      // Desglose por medios de pago del recibo
-                      const medios = s.recibo?.medios_pago || []
-                      medios.forEach(m => {
-                        const monto = parseFloat(m.monto) || 0
-                        const met   = (m.metodo || '').toLowerCase()
-                        if (met === 'efectivo')       porTecnico[key].efectivo      += monto
-                        else if (met === 'transferencia') porTecnico[key].transferencia += monto
-                        else if (met === 'nequi')     porTecnico[key].nequi         += monto
-                        else if (met === 'daviplata') porTecnico[key].daviplata     += monto
-                        else if (met === 'tarjeta')   porTecnico[key].tarjeta       += monto
-                        else                          porTecnico[key].otro          += monto
-                      })
-                      if (medios.length === 0 && s.valor_pagado > 0) {
-                        // Sin recibo detallado: sumar al total sin desglose
-                      }
-                    })
-                    const lista = Object.values(porTecnico).sort((a, b) => b.total - a.total)
 
-                    if (lista.length === 0) return (
-                      <div className="py-12 text-center">
-                        <div className="text-3xl mb-2">👤</div>
-                        <p className="text-[13px] text-gray-500">Sin técnicos con cobros registrados</p>
+                  {/* Formulario */}
+                  <div className="bg-white border rounded-2xl p-4" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Técnico</label>
+                        <select value={cuadreTec} onChange={e => setCuadreTec(e.target.value)} disabled={cuadreCerrado}
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
+                          style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                          <option value="">Selecciona…</option>
+                          {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido || ''}</option>)}
+                        </select>
                       </div>
-                    )
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Desde</label>
+                        <input type="date" value={cuadreDesde} onChange={e => setCuadreDesde(e.target.value)} disabled={cuadreCerrado}
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
+                          style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Hasta</label>
+                        <input type="date" value={cuadreHasta} onChange={e => setCuadreHasta(e.target.value)} disabled={cuadreCerrado}
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
+                          style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Ajuste manual ($)</label>
+                        <input type="number" step={1000} value={cuadreAjustes} onChange={e => setCuadreAjustes(e.target.value)} disabled={cuadreCerrado}
+                          placeholder="0 (+ a favor téc.)"
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
+                          style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 mt-3 items-end">
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Motivo del ajuste <span className="font-normal text-gray-400">(opcional)</span></label>
+                        <input type="text" value={cuadreAjusteMot} onChange={e => setCuadreAjusteMot(e.target.value)} disabled={cuadreCerrado}
+                          placeholder="Ej: préstamo, descuento acordado…"
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
+                          style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+                      </div>
+                      {!cuadreCerrado && (
+                        <button onClick={generarCuadre} disabled={cuadreLoading}
+                          className="flex items-center justify-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold transition-colors disabled:opacity-60 whitespace-nowrap">
+                          {cuadreLoading
+                            ? <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Calculando…</>
+                            : <><Calendar size={14} /> {cuadreData ? 'Actualizar cuadre' : 'Generar cuadre'}</>}
+                        </button>
+                      )}
+                    </div>
+                    {cuadreError && (
+                      <div className="flex items-center gap-2 bg-red-50 text-red-700 text-[12px] font-medium px-3 py-2 rounded-xl border border-red-100 mt-3">
+                        <AlertCircle size={13} className="flex-shrink-0" /> {cuadreError}
+                      </div>
+                    )}
+                  </div>
 
-                    return (
-                      <div className="space-y-4">
-                        {lista.map(t => (
-                          <div key={t.tecnico?.id} className="border rounded-2xl overflow-hidden"
-                            style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                            <div className="px-5 py-3 flex items-center gap-3"
-                              style={{ background: 'linear-gradient(135deg,#EEF3FB 0%,#fff 60%)' }}>
-                              <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-[13px] flex-shrink-0"
-                                style={{ background: '#1A5CD8' }}>
-                                {(t.tecnico?.nombre?.[0] || '?').toUpperCase()}{(t.tecnico?.apellido?.[0] || '').toUpperCase()}
-                              </div>
-                              <div className="flex-1">
-                                <div className="font-bold text-gray-900 text-[14px]">
-                                  {t.tecnico ? `${t.tecnico.nombre} ${t.tecnico.apellido}` : 'Sin nombre'}
-                                </div>
-                                <div className="text-[11px] text-gray-400">{t.servicios} servicio{t.servicios !== 1 ? 's' : ''}</div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-[18px] font-extrabold tabular-nums" style={{ color: '#1A5CD8' }}>{fmt(t.total)}</div>
-                                <div className="text-[10px] text-gray-400">Total cobrado</div>
-                              </div>
-                            </div>
-                            {/* Desglose medios */}
-                            {(t.efectivo + t.transferencia + t.nequi + t.daviplata + t.tarjeta + t.otro) > 0 && (
-                              <div className="px-5 py-3 border-t flex flex-wrap gap-3"
-                                style={{ borderColor: 'rgba(30,80,40,0.06)', background: '#FAFAFA' }}>
-                                {[
-                                  ['Efectivo',       t.efectivo,      '#16A34A'],
-                                  ['Transferencia',  t.transferencia, '#1A5CD8'],
-                                  ['Nequi',          t.nequi,         '#7C3AED'],
-                                  ['Daviplata',      t.daviplata,     '#D97706'],
-                                  ['Tarjeta',        t.tarjeta,       '#0E7490'],
-                                  ['Otro',           t.otro,          '#6B7280'],
-                                ].filter(([,v]) => v > 0).map(([label, valor, color]) => (
-                                  <div key={label} className="flex flex-col items-center px-3 py-2 rounded-xl border"
-                                    style={{ borderColor: `${color}30`, background: `${color}08` }}>
-                                    <span className="text-[10px] font-bold uppercase" style={{ color }}>{label}</span>
-                                    <span className="text-[14px] font-extrabold tabular-nums" style={{ color }}>{fmt(valor)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                  {/* Resultado */}
+                  {cuadreData && (
+                    <div className="space-y-4">
+                      {/* Cabecera */}
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-[13px]" style={{ background: '#1A5CD8' }}>
+                            {nombreTecnicoSel(cuadreData.tecnico_id).slice(0, 2).toUpperCase()}
                           </div>
-                        ))}
+                          <div>
+                            <div className="font-bold text-gray-900 text-[14px]">{nombreTecnicoSel(cuadreData.tecnico_id)}</div>
+                            <div className="text-[11px] text-gray-400">{fmtFecha(cuadreData.fecha_desde)} → {fmtFecha(cuadreData.fecha_hasta)} · {cuadreData.total_servicios} servicio{cuadreData.total_servicios !== 1 ? 's' : ''}</div>
+                          </div>
+                        </div>
+                        <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${cuadreCerrado ? 'bg-gray-200 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {cuadreCerrado ? <span className="flex items-center gap-1"><Lock size={11} /> CERRADO</span> : 'BORRADOR'}
+                        </span>
+                        <div className="flex items-center gap-2 ml-auto">
+                          <button onClick={descargarCuadrePDF} disabled={cuadrePdfGen}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60"
+                            style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                            {cuadrePdfGen ? <div className="w-3.5 h-3.5 border-2 border-[#1A5CD8]/30 border-t-[#1A5CD8] rounded-full animate-spin" /> : <Download size={13} />} PDF
+                          </button>
+                          {!cuadreCerrado && (
+                            <button onClick={cerrarCuadre} disabled={cerrando}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white rounded-xl text-[12px] font-semibold transition-colors disabled:opacity-60">
+                              {cerrando ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Lock size={13} />} Cerrar
+                            </button>
+                          )}
+                          <button onClick={limpiarCuadre}
+                            className="px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-gray-600 hover:bg-gray-50 transition-colors"
+                            style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                            Nuevo
+                          </button>
+                        </div>
                       </div>
-                    )
-                  })()}
+
+                      {/* Tabla detalle */}
+                      {cuadreItems.length === 0 ? (
+                        <div className="py-12 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <div className="text-3xl mb-2">🧾</div>
+                          <p className="text-[13px] text-gray-500">Sin recibos del técnico en este rango.</p>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <table className="w-full min-w-[860px]">
+                            <thead style={{ background: '#FAFAFA' }}>
+                              <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
+                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total cobrado', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Recargo'].map(h => (
+                                  <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {cuadreItems.map(it => (
+                                <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-gray-900">{it.mascota_nombre || '—'}</td>
+                                  <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
+                                  <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">{fmt(it.total_cobrado)}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">{fmt(it.efectivo)}</td>
+                                  <td className="px-3 py-2.5 text-gray-500 tabular-nums">{it.digital > 0 ? fmt(it.digital) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums">
+                                    {it.transporte_sin_dato ? (
+                                      <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md" title="Servicio sin transporte registrado (anterior a la mejora). Verificar manualmente.">sin dato ⚠</span>
+                                    ) : (it.transporte_reconocido > 0 ? <span className="font-semibold text-[#7C3AED]">{fmt(it.transporte_reconocido)}</span> : '—')}
+                                  </td>
+                                  <td className="px-3 py-2.5">
+                                    {it.recargo_aplicado > 0 ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="font-semibold text-[#d97706] tabular-nums">{fmt(it.recargo_aplicado)}</span>
+                                        <div className="flex gap-1">
+                                          {it.es_festivo  && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">FEST</span>}
+                                          {it.es_dominical && !it.es_festivo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-600">DOM</span>}
+                                          {it.es_nocturno && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-600">NOC</span>}
+                                        </div>
+                                      </div>
+                                    ) : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Totales */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {/* Desglose */}
+                        <div className="bg-white border rounded-2xl p-5 space-y-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Resumen</p>
+                          <FilaTotal label="Total cobrado al cliente" valor={cuadreData.total_cobrado} />
+                          <FilaTotal label="Efectivo recibido (técnico)" valor={cuadreData.efectivo_recibido} color="#16a34a" />
+                          <FilaTotal label="Digital → directo a empresa" valor={cuadreData.digital_empresa} color="#6B7280" />
+                          <div className="border-t my-1" style={{ borderColor: 'rgba(30,80,40,0.08)' }} />
+                          <FilaTotal label="Transporte reconocido" valor={cuadreData.total_transporte} color="#7C3AED" />
+                          <FilaTotal label="Recargos reconocidos" valor={cuadreData.total_recargos} color="#d97706" />
+                          <FilaTotal label="Total reconocido al técnico" valor={cuadreData.total_reconocido} color="#7C3AED" bold />
+                          {Number(cuadreData.ajustes_manuales) !== 0 && (
+                            <FilaTotal label={`Ajuste manual${cuadreData.ajustes_motivo ? ` (${cuadreData.ajustes_motivo})` : ''}`} valor={cuadreData.ajustes_manuales} color="#ea580c" />
+                          )}
+                        </div>
+                        {/* Resultado */}
+                        <div className="rounded-2xl p-5 flex flex-col justify-center" style={{ background: 'linear-gradient(135deg,#0B1D4F 0%,#1A5CD8 100%)' }}>
+                          <span className="text-[12px] font-semibold text-white/70 uppercase tracking-wide">Dinero a entregar a gerencia</span>
+                          <span className="text-[34px] font-extrabold text-white tabular-nums leading-tight mt-1">{fmt(cuadreData.dinero_a_entregar)}</span>
+                          <span className="text-[11px] text-white/60 mt-1">= efectivo − reconocido − ajuste</span>
+                          {Number(cuadreData.saldo_a_favor_tecnico) > 0 && (
+                            <div className="mt-3 px-3 py-2 rounded-xl bg-white/15 border border-white/20">
+                              <span className="text-[11px] font-semibold text-white/80">⚠ La empresa le queda debiendo al técnico</span>
+                              <div className="text-[18px] font-extrabold text-white tabular-nums">{fmt(cuadreData.saldo_a_favor_tecnico)}</div>
+                            </div>
+                          )}
+                          {cuadreCerrado && (
+                            <div className="mt-3 flex items-center gap-1.5 text-[11px] text-white/70">
+                              <Lock size={12} /> Cerrado y firmado {cuadreData.cerrado_en ? `· ${new Date(cuadreData.cerrado_en).toLocaleDateString('es-CO')}` : ''}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1092,4 +1294,105 @@ function KpiCard({ icon, label, value, sub, color }) {
       {sub && <div className="text-[11px] text-gray-400 mt-1 font-medium">{sub}</div>}
     </div>
   )
+}
+
+// ── Sub-componente FilaTotal (resumen del cuadre) ────────────────────────────
+function FilaTotal({ label, valor, color = '#374151', bold = false }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className={`text-[12px] ${bold ? 'font-bold text-gray-800' : 'text-gray-500'}`}>{label}</span>
+      <span className={`tabular-nums ${bold ? 'text-[14px] font-extrabold' : 'text-[13px] font-semibold'}`} style={{ color }}>{fmt(valor)}</span>
+    </div>
+  )
+}
+
+// ── PDF del cuadre (jsPDF directo — patrón del proyecto, NUNCA html2canvas) ──
+async function generarCuadrePDF(c, items, tecnicoNombre) {
+  const { default: jsPDF } = await import('jspdf')
+  const pdf = new jsPDF('p', 'mm', 'a4')
+  const W = 210, M = 12, CW = W - M * 2
+  const G = [31, 90, 50]
+  const t = (text, x, y, opts = {}) => pdf.text(String(text ?? ''), x, y, opts)
+  const fechaCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
+
+  // Cabecera
+  pdf.setFillColor(...G); pdf.rect(0, 0, W, 26, 'F')
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.setTextColor(255, 255, 255)
+  t('Camino al Cielo', M, 11)
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(196, 168, 122)
+  t('CUADRE DE CUENTAS — TÉCNICO', M, 18)
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(220, 230, 222)
+  t(`${c.estado}${c.cerrado_en ? '  ·  Cerrado ' + new Date(c.cerrado_en).toLocaleDateString('es-CO') : ''}`, W - M, 18, { align: 'right' })
+
+  let y = 34
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(20, 20, 20)
+  t(tecnicoNombre, M, y)
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(90, 90, 90)
+  t(`Periodo: ${fechaCorta(c.fecha_desde)} a ${fechaCorta(c.fecha_hasta)}  ·  ${c.total_servicios} servicio(s)`, M, y + 5)
+  y += 12
+
+  // Tabla
+  const cols = [
+    ['Fecha', 16, 'l'], ['Mascota', 32, 'l'], ['Ciudad', 26, 'l'],
+    ['Cobrado', 26, 'r'], ['Efectivo', 26, 'r'], ['Transp.', 22, 'r'], ['Recargo', 22, 'r'],
+  ]
+  pdf.setFillColor(240, 243, 240); pdf.rect(M, y, CW, 7, 'F')
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60)
+  let x = M + 2
+  cols.forEach(([h, w, a]) => { t(h, a === 'r' ? x + w - 2 : x, y + 4.6, { align: a === 'r' ? 'right' : 'left' }); x += w })
+  y += 7
+
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(40, 40, 40)
+  items.forEach(it => {
+    if (y > 250) { pdf.addPage(); y = 18 }
+    x = M + 2
+    const vals = [
+      [fechaCorta(it.fecha), 'l'],
+      [(it.mascota_nombre || '—').slice(0, 18), 'l'],
+      [(it.ciudad || '—').slice(0, 14), 'l'],
+      [fmt(it.total_cobrado), 'r'],
+      [fmt(it.efectivo), 'r'],
+      [it.transporte_sin_dato ? 's/d' : fmt(it.transporte_reconocido), 'r'],
+      [fmt(it.recargo_aplicado), 'r'],
+    ]
+    cols.forEach(([, w, a], i) => { t(vals[i][0], a === 'r' ? x + w - 2 : x, y + 4, { align: a === 'r' ? 'right' : 'left' }); x += w })
+    pdf.setDrawColor(225, 232, 226); pdf.setLineWidth(0.1); pdf.line(M, y + 5.5, W - M, y + 5.5)
+    y += 6
+  })
+
+  y += 4
+  // Totales
+  const fila = (label, val, bold) => {
+    pdf.setFont('helvetica', bold ? 'bold' : 'normal'); pdf.setFontSize(bold ? 10 : 9)
+    pdf.setTextColor(bold ? 20 : 80, bold ? 20 : 80, bold ? 20 : 80)
+    t(label, W - M - 60, y); t(fmt(val), W - M, y, { align: 'right' }); y += bold ? 7 : 5.5
+  }
+  fila('Total cobrado al cliente', c.total_cobrado)
+  fila('Efectivo recibido (técnico)', c.efectivo_recibido)
+  fila('Digital directo a empresa', c.digital_empresa)
+  fila('Transporte reconocido', c.total_transporte)
+  fila('Recargos reconocidos', c.total_recargos)
+  fila('Total reconocido al técnico', c.total_reconocido)
+  if (Number(c.ajustes_manuales) !== 0) fila(`Ajuste manual${c.ajustes_motivo ? ' (' + c.ajustes_motivo + ')' : ''}`, c.ajustes_manuales)
+  y += 2
+  pdf.setDrawColor(...G); pdf.setLineWidth(0.4); pdf.line(W - M - 70, y, W - M, y); y += 6
+  pdf.setFillColor(...G); pdf.rect(W - M - 80, y - 4, 80, 11, 'F')
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(255, 255, 255)
+  t('A ENTREGAR A GERENCIA', W - M - 78, y + 3)
+  t(fmt(c.dinero_a_entregar), W - M - 2, y + 3, { align: 'right' }); y += 14
+  if (Number(c.saldo_a_favor_tecnico) > 0) {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(180, 40, 40)
+    t('Saldo a favor del técnico (empresa le debe):', W - M - 70, y)
+    t(fmt(c.saldo_a_favor_tecnico), W - M, y, { align: 'right' }); y += 8
+  }
+
+  // Firma
+  y = Math.max(y + 10, 250)
+  pdf.setDrawColor(120, 120, 120); pdf.setLineWidth(0.3)
+  pdf.line(M, y, M + 70, y); pdf.line(W - M - 70, y, W - M, y)
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(90, 90, 90)
+  t(`Técnico: ${tecnicoNombre}`, M, y + 5)
+  t('Recibido por gerencia', W - M - 70, y + 5)
+
+  pdf.save(`Cuadre_${tecnicoNombre.replace(/\s+/g, '_')}_${c.fecha_desde}_${c.fecha_hasta}.pdf`)
 }

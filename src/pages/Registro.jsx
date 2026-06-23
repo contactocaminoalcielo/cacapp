@@ -853,6 +853,11 @@ export default function Registro() {
         comision_descontada:         aplicaDescuento,
         descuento_adicional:         descuentoAdicionalNum,
         descuento_adicional_motivo:  descuentoAdicionalMotivo.trim() || null,
+        // Desglose congelado del cobro (migración 010) — para el cuadre con técnicos.
+        valor_plan:                  valorBase,
+        valor_adicionales:           valorAdicionales,
+        valor_transporte:            recargoCiudad,
+        recargo_nocturno:            recargoNocturnoNum,
       }).select('id')
       if (svcErr) throw svcErr
 

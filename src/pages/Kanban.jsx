@@ -561,6 +561,12 @@ export default function Kanban() {
         comision_aliado:       comisionSol || 0,
         comision_descontada:   false,  // Solicitudes públicas: cliente paga completo siempre
         notas:                 notasServicio,
+        // Desglose congelado (migración 010). El flujo público NO cobra transporte
+        // ni adicionales: el valor es solo el plan → transporte = 0 (no "sin dato").
+        valor_plan:            valorTotal,
+        valor_adicionales:     0,
+        valor_transporte:      0,
+        recargo_nocturno:      0,
       }).select('id')
       if (se) throw se
       const servicioId = sv[0].id

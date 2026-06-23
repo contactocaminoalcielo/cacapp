@@ -2512,6 +2512,85 @@ function TabFestivos() {
   )
 }
 
+// ─── RECONOCIMIENTOS AL TÉCNICO ──────────────────────────────────────────────
+// Montos FIJOS por recogida que se le reconocen al técnico (recargo dominical /
+// festivo / nocturno). Fila única de configuración global (migración 010).
+// El transporte NO se configura aquí: se reconoce el valor cobrado al cliente,
+// congelado en cada servicio (servicios.valor_transporte).
+function TabReconocimientos() {
+  const { alert: showAlert } = useConfirm()
+  const [row, setRow]       = useState(null)
+  const [form, setForm]     = useState({ recargo_dominical: 0, recargo_festivo: 0, recargo_nocturno: 0 })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [ok, setOk]           = useState(false)
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('tarifas_reconocimiento_tecnico')
+      .select('*').eq('activo', true).order('updated_at', { ascending: false }).limit(1)
+    const r = data?.[0] || null
+    setRow(r)
+    setForm({
+      recargo_dominical: r?.recargo_dominical ?? 0,
+      recargo_festivo:   r?.recargo_festivo   ?? 0,
+      recargo_nocturno:  r?.recargo_nocturno  ?? 0,
+    })
+    setLoading(false)
+  }
+
+  async function guardar() {
+    setSaving(true); setOk(false)
+    const body = {
+      recargo_dominical: parseInt(form.recargo_dominical) || 0,
+      recargo_festivo:   parseInt(form.recargo_festivo)   || 0,
+      recargo_nocturno:  parseInt(form.recargo_nocturno)  || 0,
+      activo: true,
+    }
+    const { error } = row?.id
+      ? await db.from('tarifas_reconocimiento_tecnico').update(body).eq('id', row.id)
+      : await db.from('tarifas_reconocimiento_tecnico').insert(body)
+    setSaving(false)
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+    setOk(true)
+    await cargar()
+  }
+
+  if (loading) return <div className="text-center py-8 text-gray-400">Cargando...</div>
+
+  const CAMPOS = [
+    ['recargo_dominical', 'Recargo dominical', 'Por cada recogida en domingo'],
+    ['recargo_festivo',   'Recargo festivo',   'Por cada recogida en festivo (usa el calendario de Festivos)'],
+    ['recargo_nocturno',  'Recargo nocturno',  'Por cada recogida desde las 6:00 p. m.'],
+  ]
+
+  return (
+    <div className="max-w-lg">
+      <p className="text-[12px] text-gray-400 mb-4">
+        Montos fijos que se le reconocen al técnico por recogida, en el cuadre de cuentas.
+        El transporte se reconoce aparte (valor cobrado al cliente, congelado en cada servicio).
+      </p>
+      <div className="space-y-4 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
+        {CAMPOS.map(([key, label, hint]) => (
+          <div key={key}>
+            <label className={LABEL}>{label} ($)</label>
+            <Input type="number" min="0" step="1000" value={form[key] ?? ''}
+              onChange={e => { setForm(p => ({ ...p, [key]: e.target.value })); setOk(false) }}
+              placeholder="0" />
+            <p className="text-[11px] text-gray-400 mt-1">{hint}</p>
+          </div>
+        ))}
+        <div className="flex items-center gap-3 pt-1">
+          <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar recargos'}</Button>
+          {ok && <span className="flex items-center gap-1 text-[12px] font-semibold text-green-700"><CheckCircle size={14} /> Guardado</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -2556,6 +2635,9 @@ export default function Configuracion() {
             <TabsTrigger value="festivos">
               <CalendarDays size={13} className="mr-1.5" /> Festivos
             </TabsTrigger>
+            <TabsTrigger value="reconocimientos">
+              <DollarSign size={13} className="mr-1.5" /> Recargos técnico
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2570,6 +2652,7 @@ export default function Configuracion() {
           <TabsContent value="whatsapp"><TabWhatsApp /></TabsContent>
           <TabsContent value="transporte"><TabTransporte /></TabsContent>
           <TabsContent value="festivos"><TabFestivos /></TabsContent>
+          <TabsContent value="reconocimientos"><TabReconocimientos /></TabsContent>
         </Tabs>
       </div>
     </div>
