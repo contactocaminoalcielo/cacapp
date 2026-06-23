@@ -205,6 +205,7 @@ export default function Kanban() {
   const [filtroPlan, setFiltroPlan]       = useState('todos')
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
+  const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
 
   // ── DnD ───────────────────────────────────────────────────────────────────
   const [draggingId, setDraggingId]       = useState(null)
@@ -1241,8 +1242,12 @@ export default function Kanban() {
   // ── Valores derivados del modal de solicitud (evita IIFE en JSX) ─────────
   const SOL_LABL = 'block text-[11px] font-bold text-gray-500 mb-1'
   const SOL_INP  = 'w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10 transition-all bg-white'
+  const hoyStr = today()
   const filtrados = servicios.filter(s => {
     if (!COLUMNAS.includes(s.estado)) return false
+    // "Solo hoy": muestra únicamente lo que ingresó hoy. Las solicitudes pendientes
+    // (columna SOLICITUDES) no se ven afectadas porque viven en otro arreglo.
+    if (soloHoy && s.fecha_ingreso !== hoyStr) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
     if (filtroPlan   !== 'todos' && s.plan    !== filtroPlan)   return false
     if (busqueda.trim()) {
@@ -1481,6 +1486,16 @@ export default function Kanban() {
               })}
             </div>
           )}
+
+          <button
+            onClick={() => setSoloHoy(v => !v)}
+            title={soloHoy ? 'Mostrando solo la operación de hoy — clic para ver todo' : 'Mostrando todo — clic para ver solo hoy'}
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloHoy ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
+            style={soloHoy ? { background: '#06B6D4' } : {}}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${soloHoy ? 'bg-white' : 'bg-gray-300'}`} />
+            {soloHoy ? 'Solo hoy' : 'Todo'}
+          </button>
 
           <div className="ml-auto flex items-center gap-2">
             <span className="text-[12px] text-gray-400 font-medium hidden sm:block">{filtrados.length} servicio{filtrados.length !== 1 ? 's' : ''}</span>
