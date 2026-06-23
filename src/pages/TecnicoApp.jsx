@@ -8,7 +8,7 @@ import {
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
   AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
   FileText, ChevronDown, ChevronUp, History, Download, Pen,
-  Plus, Trash2, Upload as UploadIcon, Receipt,
+  Plus, Trash2, Upload as UploadIcon, Receipt, Wallet,
 } from 'lucide-react'
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
@@ -1428,7 +1428,7 @@ export default function TecnicoApp() {
   const { personalData: tecnico, logout } = useAuth()
   // La pestaña activa sobrevive reinicios de la PWA (Android mata la pestaña
   // al abrir cámara/galería): el técnico vuelve exactamente donde estaba.
-  const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo', 'comprobantes']
+  const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo', 'comprobantes', 'mis_cuadres']
   const [tab, setTab] = useState(() => {
     try {
       const t = localStorage.getItem('tecnico_ui_tab')
@@ -1915,6 +1915,7 @@ export default function TecnicoApp() {
     { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
+    { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: 0,                     color: '#16a34a' },
   ]
 
   return (
@@ -2102,6 +2103,8 @@ export default function TecnicoApp() {
           <ReciboTab tecnico={tecnico} />
         ) : tab === 'comprobantes' ? (
           <ComprobanteTab tecnico={tecnico} onCount={setCompPend} />
+        ) : tab === 'mis_cuadres' ? (
+          <MisCuadresTab tecnico={tecnico} />
         ) : null}
       </div>
 
@@ -2218,6 +2221,106 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
           {cuartoFrio.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── MIS CUADRES (técnico ve sus pagos de cuadres CERRADOS) ────────────
+function MisCuadresTab({ tecnico }) {
+  const [cuadres, setCuadres]   = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [expandido, setExpandido] = useState(null)
+  const [items, setItems]       = useState({})
+
+  useEffect(() => { cargar() }, [tecnico?.id])
+
+  async function cargar() {
+    if (!tecnico?.id) { setLoading(false); return }
+    setLoading(true)
+    const { data } = await db.from('cuadres_tecnico')
+      .select('*')
+      .eq('tecnico_id', tecnico.id)
+      .eq('estado', 'CERRADO')
+      .order('fecha_hasta', { ascending: false })
+    setCuadres(data || [])
+    setLoading(false)
+  }
+
+  async function toggle(c) {
+    if (expandido === c.id) { setExpandido(null); return }
+    setExpandido(c.id)
+    if (!items[c.id]) {
+      const { data } = await db.from('cuadre_items').select('*').eq('cuadre_id', c.id).order('fecha')
+      setItems(prev => ({ ...prev, [c.id]: data || [] }))
+    }
+  }
+
+  const totalGanado = cuadres.reduce((a, c) => a + (Number(c.total_reconocido) || 0), 0)
+  const fechaCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+
+  if (loading) return <div className="text-center py-16 text-gray-400 text-sm">Cargando…</div>
+  if (!cuadres.length) return <EmptyState icon="💵" texto="Aún no tienes cuadres" sub="Cuando el coordinador cierre un cuadre de cuentas, aquí verás cuánto ganaste." />
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl p-4 text-white" style={{ background: 'linear-gradient(135deg,#15803d,#16a34a)' }}>
+        <div className="text-[11px] font-semibold text-white/70 uppercase tracking-wide">Total ganado (cuadres cerrados)</div>
+        <div className="text-[28px] font-extrabold tabular-nums leading-tight mt-0.5">{fmt(totalGanado)}</div>
+        <div className="text-[11px] text-white/60">{cuadres.length} cuadre{cuadres.length !== 1 ? 's' : ''}</div>
+      </div>
+
+      {cuadres.map(c => {
+        const abierto = expandido === c.id
+        return (
+          <div key={c.id} className="rounded-2xl border bg-white overflow-hidden" style={{ borderColor: '#E5E7EB' }}>
+            <button onClick={() => toggle(c)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
+              <div className="flex-1">
+                <div className="font-bold text-gray-900 text-[13px]">{fechaCorta(c.fecha_desde)} → {fechaCorta(c.fecha_hasta)}</div>
+                <div className="text-[11px] text-gray-400">{c.total_servicios} servicio{c.total_servicios !== 1 ? 's' : ''}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[16px] font-extrabold tabular-nums text-[#16a34a]">{fmt(c.total_reconocido)}</div>
+                <div className="text-[10px] text-gray-400">ganado</div>
+              </div>
+              {abierto ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+            </button>
+            {abierto && (
+              <div className="border-t px-4 py-3" style={{ borderColor: '#F3F4F6' }}>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-3">
+                  <MiLinea label="Transporte" val={c.total_transporte} />
+                  <MiLinea label="Pago servicios" val={c.total_pago_servicio} />
+                  <MiLinea label="Recargos" val={c.total_recargos} />
+                  <MiLinea label="Cancelados" val={c.total_cancelados} />
+                </div>
+                <div className="space-y-0.5">
+                  {(items[c.id] || []).map(it => {
+                    const ganado = (Number(it.transporte_reconocido) || 0) + (Number(it.recargo_aplicado) || 0) + (Number(it.pago_servicio) || 0)
+                    return (
+                      <div key={it.id} className="flex items-center justify-between text-[12px] py-1 border-b" style={{ borderColor: '#F3F4F6' }}>
+                        <span className="text-gray-600">
+                          {it.mascota_nombre || '—'}
+                          {it.es_cancelado && <span className="ml-1 text-[9px] font-bold text-red-500">CANC</span>}
+                        </span>
+                        <span className="font-semibold tabular-nums text-gray-800">{fmt(ganado)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function MiLinea({ label, val }) {
+  if (!Number(val)) return null
+  return (
+    <div className="flex justify-between text-[12px]">
+      <span className="text-gray-400">{label}</span>
+      <span className="font-semibold text-gray-700 tabular-nums">{fmt(val)}</span>
     </div>
   )
 }
