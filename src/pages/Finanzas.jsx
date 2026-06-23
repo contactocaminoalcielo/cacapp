@@ -341,7 +341,14 @@ export default function Finanzas() {
         else if (modalidad === 'FACTURACION_MENSUAL') motivo = 'FACTURACION_MENSUAL'
         else if ((r.valor_cobrado || 0) === 0) motivo = 'SIN_COBRO'
         return { ...r, motivo }
-      }).filter(r => r.motivo && r.servicios?.estado !== 'CANCELADO' && r.servicios?.estado_pago !== 'COMPLETO')
+      }).filter(r => {
+        if (!r.motivo || r.servicios?.estado === 'CANCELADO') return false
+        // Facturación mensual: se muestran TODOS (aunque tengan valor o ya estén
+        // saldados) — son de gestión mensual con la veterinaria.
+        if (r.motivo === 'FACTURACION_MENSUAL') return true
+        // Pago pendiente / sin cobro: solo mientras no se complete el pago.
+        return r.servicios?.estado_pago !== 'COMPLETO'
+      })
 
       // Mascotas
       const mascIds = [...new Set(clasificados.map(r => r.servicios?.mascota_id).filter(Boolean))]
@@ -1021,7 +1028,10 @@ export default function Finanzas() {
                                 <td className="py-3 pr-4 text-[12px] text-gray-700">{r.personal ? `${r.personal.nombre} ${r.personal.apellido || ''}`.trim() : '—'}</td>
                                 <td className="py-3 pr-4 font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmt(r.valor_total || svc.valor_total)}</td>
                                 <td className="py-3 pr-4">
-                                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${MOT[1]}`}>{MOT[0]}</span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${MOT[1]}`}>{MOT[0]}</span>
+                                    <BadgeEstadoPago estado={svc.estado_pago} />
+                                  </div>
                                   {svc.aliados?.nombre && <div className="text-[10px] text-gray-400 mt-0.5">🏥 {svc.aliados.nombre}</div>}
                                 </td>
                                 <td className="py-3 pr-4 text-[11px] text-gray-500 max-w-[260px]">
