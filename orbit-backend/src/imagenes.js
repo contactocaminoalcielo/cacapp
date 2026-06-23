@@ -113,7 +113,10 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         // Plantilla aprobada `solicitud_imagenes_cliente`: 2 variables → {{1}} mascota, {{2}} enlace.
         // El enlace lleva el código embebido (/#/fotos/CODIGO); el cliente entra sin teclear código.
         bodyParams: [sol.mascota || '', enlace],
-        fromNumber: linea,
+        // No se pasa fromNumber: GHL/Zolutium lo IGNORA para números de WhatsApp
+        // importados de Meta (WABA) y rutea por el canal por defecto de la cuenta.
+        // La línea emisora se fija en la configuración de Zolutium. linea_wa queda
+        // solo como registro de la línea esperada (= linea_default).
       })
     } catch (e) { envioErr = e.message }
 

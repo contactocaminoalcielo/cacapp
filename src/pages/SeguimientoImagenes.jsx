@@ -11,7 +11,7 @@ import {
   cancelarSolicitud, prepararContactos,
 } from '@/lib/imagenes'
 import {
-  MessageCircle, RefreshCw, CheckCircle2, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
+  MessageCircle, RefreshCw, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
 } from 'lucide-react'
 
 const FILTROS = [
@@ -35,7 +35,6 @@ export default function SeguimientoImagenes() {
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [filtro,   setFiltro]   = useState('POR_VALIDAR')
-  const [linea,    setLinea]    = useState(LINEAS_WHATSAPP[0].numero)
   const [busy,     setBusy]     = useState(null)   // id de solicitud o 'bulk' o 'preparar'
   const [sel,      setSel]      = useState(() => new Set())
   const [copiado,  setCopiado]  = useState(null)
@@ -79,7 +78,7 @@ export default function SeguimientoImagenes() {
   async function ejecutarEnvio(s) {
     const fn = s.estado === 'ERROR' ? reintentarSolicitud : enviarSolicitud
     try {
-      const r = await fn(s.id, linea)
+      const r = await fn(s.id)
       if (r?.ok) return { ok: true }
       // status 200 con ok:false → fallo de envío (estado ERROR)
       return { ok: false, error: r?.error || 'Error al enviar' }
@@ -194,24 +193,13 @@ export default function SeguimientoImagenes() {
           </div>
         )}
 
-        {/* Selector de línea WhatsApp */}
-        <div className="rounded-xl p-4 border flex items-center gap-4 flex-wrap"
+        {/* Línea de envío WhatsApp — fijada en la configuración de Zolutium */}
+        <div className="rounded-xl p-4 border flex items-center gap-2 flex-wrap"
           style={{ background: '#F0FDF4', borderColor: '#86EFAC' }}>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <MessageCircle size={15} className="text-green-600" />
-            <span className="text-[12px] font-semibold text-green-800">Línea de envío Zolutium:</span>
-          </div>
-          {LINEAS_WHATSAPP.map(l => (
-            <button key={l.numero} onClick={() => setLinea(l.numero)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all border"
-              style={{
-                background:  linea === l.numero ? '#16A34A' : 'white',
-                color:       linea === l.numero ? 'white'   : '#374151',
-                borderColor: linea === l.numero ? '#16A34A' : '#D1D5DB',
-              }}>
-              {linea === l.numero && <CheckCircle2 size={12} />}{l.label}
-            </button>
-          ))}
+          <MessageCircle size={15} className="text-green-600 flex-shrink-0" />
+          <span className="text-[12px] font-semibold text-green-800">Línea de envío Zolutium:</span>
+          <span className="text-[12px] font-bold text-green-900">{LINEAS_WHATSAPP[0].label}</span>
+          <span className="text-[11px] text-green-700">— configurada como línea por defecto en Zolutium</span>
         </div>
 
         {/* Stats */}
@@ -344,7 +332,7 @@ export default function SeguimientoImagenes() {
                         {s.estado === 'POR_VALIDAR' && wa && (
                           <button onClick={() => enviarUno(s)} disabled={trabajando}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-opacity disabled:opacity-50"
-                            style={{ background: '#25D366', color: 'white' }} title={`Enviar desde ${linea}`}>
+                            style={{ background: '#25D366', color: 'white' }} title="Enviar por WhatsApp">
                             {trabajando ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Send size={11} />}
                             Enviar
                           </button>

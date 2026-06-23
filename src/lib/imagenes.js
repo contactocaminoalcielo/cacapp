@@ -53,12 +53,14 @@ export function prepararContactos() {
   return orbitApi('/imagenes/preparar', { method: 'POST' })
 }
 
-export function enviarSolicitud(solicitudId, fromNumber) {
-  return orbitApi('/imagenes/enviar', { method: 'POST', body: { solicitud_id: solicitudId, fromNumber } })
+// La línea emisora se fija en la configuración de Zolutium (GHL ignora fromNumber
+// para números de WhatsApp importados de Meta), por eso no se envía aquí.
+export function enviarSolicitud(solicitudId) {
+  return orbitApi('/imagenes/enviar', { method: 'POST', body: { solicitud_id: solicitudId } })
 }
 
-export function reintentarSolicitud(solicitudId, fromNumber) {
-  return orbitApi('/imagenes/reintentar', { method: 'POST', body: { solicitud_id: solicitudId, fromNumber } })
+export function reintentarSolicitud(solicitudId) {
+  return orbitApi('/imagenes/reintentar', { method: 'POST', body: { solicitud_id: solicitudId } })
 }
 
 export function cancelarSolicitud(solicitudId) {
