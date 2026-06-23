@@ -253,25 +253,7 @@ export default function Finanzas() {
         db.from('cuadres_tecnico').select('*').eq('id', cid).single(),
         db.from('cuadre_items').select('*').eq('cuadre_id', cid).order('fecha').order('hora'),
       ])
-      // Valores "a cobrar" (plan / adicionales / total) desde el servicio — informativos
-      const svcIds = [...new Set((items || []).map(i => i.servicio_id).filter(Boolean))]
-      let svcMap = {}
-      if (svcIds.length) {
-        const { data: svcs } = await db.from('servicios')
-          .select('id, valor_total, valor_plan, valor_adicionales')
-          .in('id', svcIds)
-        svcMap = Object.fromEntries((svcs || []).map(s => [s.id, s]))
-      }
-      const itemsEnriquecidos = (items || []).map(it => {
-        const s = svcMap[it.servicio_id] || {}
-        return {
-          ...it,
-          _a_cobrar:    s.valor_total ?? null,
-          _valor_plan:  s.valor_plan ?? null,
-          _valor_adic:  s.valor_adicionales ?? null,
-        }
-      })
-      setCuadreData(hdr); setCuadreItems(itemsEnriquecidos)
+      setCuadreData(hdr); setCuadreItems(items || [])
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
     } finally {
@@ -1293,9 +1275,9 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it._valor_plan != null ? fmt(it._valor_plan) : '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it._valor_adic ? fmt(it._valor_adic) : '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it._a_cobrar != null ? fmt(it._a_cobrar) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it.valor_plan != null ? fmt(it.valor_plan) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{it.valor_adicionales ? fmt(it.valor_adicionales) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
                                     {it.total_cobrado > 0 ? fmt(it.total_cobrado)
                                       : (it.es_cancelado ? '—'
@@ -1344,7 +1326,7 @@ export default function Finanzas() {
                         {/* Desglose */}
                         <div className="bg-white border rounded-2xl p-5 space-y-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Resumen</p>
-                          <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it._a_cobrar) || 0)), 0)} />
+                          <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)} />
                           <FilaTotal label="Total recogido (cliente)" valor={cuadreData.total_cobrado} />
                           <FilaTotal label="Efectivo recibido (técnico)" valor={cuadreData.efectivo_recibido} color="#16a34a" />
                           <FilaTotal label="Digital → directo a empresa" valor={cuadreData.digital_empresa} color="#6B7280" />
@@ -1621,7 +1603,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     pdf.setTextColor(bold ? 20 : 80, bold ? 20 : 80, bold ? 20 : 80)
     t(label, W - M - 60, y); t(fmt(val), W - M, y, { align: 'right' }); y += bold ? 7 : 5.5
   }
-  const totalACobrar = items.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it._a_cobrar) || 0)), 0)
+  const totalACobrar = items.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)
   fila('Total a cobrar (servicios)', totalACobrar)
   fila('Total recogido (cliente)', c.total_cobrado)
   fila('Efectivo recibido (técnico)', c.efectivo_recibido)
