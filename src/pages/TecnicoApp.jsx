@@ -13,6 +13,7 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
+import { aplicarRecalculoPorPeso } from '@/lib/precios'
 
 const POLL = 30_000
 
@@ -1834,7 +1835,14 @@ export default function TecnicoApp() {
     }
     // El peso de báscula pasa a ser el oficial para la mascota
     if (pesoNum && svc.mascotas?.id_mascota) {
+      const pesoPrevio = parseFloat(svc.mascotas?.peso_kg) || 0
       await db.from('mascotas').update({ peso_kg: pesoNum }).eq('id_mascota', svc.mascotas.id_mascota)
+      // Si el peso de báscula cambió de rango, el precio del servicio se actualiza
+      // automáticamente (en silencio: el técnico no gestiona precios). Centralizado
+      // en lib/precios.js para que el valor siga al peso oficial.
+      if (Math.abs(pesoNum - pesoPrevio) > 0.01) {
+        try { await aplicarRecalculoPorPeso(svc.mascotas.id_mascota, pesoNum, svc.mascotas?.especie_id) } catch (_) {}
+      }
     }
     await cargar()
   }

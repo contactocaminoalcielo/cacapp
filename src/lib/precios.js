@@ -65,3 +65,87 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
 
   return null
 }
+
+/**
+ * Recalcula y APLICA el precio (y la comisión del aliado) de los servicios
+ * activos de una mascota cuando su peso cambió de rango. Centraliza la lógica
+ * que antes vivía duplicada en Gestión y Kanban, para que el precio siga al
+ * peso en TODOS los puntos donde éste se edita (Gestión, báscula del técnico).
+ *
+ * Aplica directamente (sin confirmación) y devuelve la lista de cambios
+ * realizados, para que el llamador decida si informa al usuario.
+ *
+ * @returns {Promise<Array<{servicioId, planNombre, valorAntes, valorDespues, comisionAntes, comisionDespues}>>}
+ */
+export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw) {
+  const especieId = parseInt(especieIdRaw) || 0
+  const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
+    db.from('servicios')
+      .select('id, valor_total, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
+      .eq('mascota_id', mascotaId)
+      .neq('estado', 'ENTREGADO')
+      .neq('estado', 'CANCELADO'),
+    db.from('planes').select('id, codigo, nombre'),
+  ])
+  if (!svcsActivos?.length || !planesData?.length) return []
+
+  const cambios = []
+  for (const svc of svcsActivos) {
+    if (!svc.plan_id) continue
+
+    const nuevoPrecioBase = await calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId)
+    if (!nuevoPrecioBase) continue
+
+    // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
+    let nuevaComision = null
+    if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
+      const hoy = new Date()
+      const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
+      const [{ data: aliado }, { data: svcsDelMes }, { data: filas }] = await Promise.all([
+        db.from('aliados').select('vip').eq('id_aliado', svc.aliado_origen_id).maybeSingle(),
+        db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', svc.aliado_origen_id).gte('fecha_ingreso', inicioMes),
+        db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
+      ])
+      const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+      const match = (filas || [])
+        .filter(c =>
+          (c.plan_id === svc.plan_id || c.plan_id === null) &&
+          c.rango_min <= serviciosMes &&
+          (c.rango_max === null || c.rango_max >= serviciosMes)
+        )
+        .sort((a, b) => {
+          if (a.plan_id && !b.plan_id) return -1
+          if (!a.plan_id && b.plan_id) return 1
+          return b.rango_min - a.rango_min
+        })[0]
+      const pct = parseFloat(match?.porcentaje) || 0
+      if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
+    }
+
+    // El nuevo valor total es el precio del nuevo rango.
+    // Para comision_descontada=true (recogida en clínica aliada) se resta la comisión.
+    const nuevoValorTotal = Math.round(
+      nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0)
+    )
+
+    const cambioPrecio   = Math.abs(nuevoValorTotal - (svc.valor_total ?? 0)) > 0.5
+    const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (svc.comision_aliado ?? 0)) > 0.5
+    if (!cambioPrecio && !cambioComision) continue
+
+    const updates = { valor_total: nuevoValorTotal }
+    if (cambioComision) updates.comision_aliado = nuevaComision
+    const { error } = await db.from('servicios').update(updates).eq('id', svc.id)
+    if (error) continue
+
+    const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
+    cambios.push({
+      servicioId:      svc.id,
+      planNombre,
+      valorAntes:      svc.valor_total,
+      valorDespues:    nuevoValorTotal,
+      comisionAntes:   svc.comision_aliado,
+      comisionDespues: cambioComision ? nuevaComision : null,
+    })
+  }
+  return cambios
+}

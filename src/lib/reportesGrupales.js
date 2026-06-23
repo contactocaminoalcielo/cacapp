@@ -69,6 +69,10 @@ function itemsAServicios(items) {
       mascota:  i.mascota_nombre || '-',
       cliente:  i.propietario_nombre || '-',
       peso_kg:  i.peso_kg,
+      // Fecha de proceso = ingreso + 3 días hábiles (calculada en el backend con
+      // festivos y guardada como fecha_vencimiento del ítem). El generador usa la
+      // más reciente del lote como fecha de la cremación/compostaje colectivo.
+      fecha_proceso: i.fecha_vencimiento || null,
     }))
 }
 

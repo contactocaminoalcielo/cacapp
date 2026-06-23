@@ -86,6 +86,15 @@ function sumarPesos(servicios) {
   return total.toFixed(1)
 }
 
+// Fecha del proceso colectivo = la fecha de proceso MÁS RECIENTE del lote
+// (= ingreso de la última mascota en entrar + 3 días hábiles, ya calculado por el
+// backend como fecha_vencimiento de cada ítem). Así todas las mascotas cumplen los
+// 3 días hábiles desde su ingreso. Cae a la fecha del lote solo si faltara el dato.
+function fechaProcesoColectiva(servicios, lote) {
+  const fechas = (servicios || []).map(s => s.fecha_proceso).filter(Boolean).sort()
+  return fechas.length ? fechas[fechas.length - 1] : (lote.fecha_completado || lote.fecha_envio || today())
+}
+
 // ─── CSS compartido ───────────────────────────────────────────────────────────
 const CSS_CREMACION = `
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -153,7 +162,7 @@ const CSS_COMPOSTAJE = `
 
 // ─── Reporte Técnico de Cremación Grupal ──────────────────────────────────────
 export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
-  const fecha      = lote.fecha_completado || lote.fecha_envio || today()
+  const fecha      = fechaProcesoColectiva(servicios, lote)
   const fechaCorta = fmtFechaCorta(fecha)
   const fechaLarga = fmtFechaLarga(fecha)
   const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
@@ -267,7 +276,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
 
 // ─── Certificado de Compostaje Grupal ─────────────────────────────────────────
 export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
-  const fecha      = lote.fecha_completado || lote.fecha_envio || today()
+  const fecha      = fechaProcesoColectiva(servicios, lote)
   const fechaLarga = fmtFechaLarga(fecha)
   const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
 
