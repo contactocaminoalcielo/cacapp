@@ -1257,10 +1257,10 @@ export default function Finanzas() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                          <table className="w-full min-w-[1000px]">
+                          <table className="w-full min-w-[1180px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total a cobrar', 'Recogido', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
+                                {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -1274,8 +1274,10 @@ export default function Finanzas() {
                                     {it.es_cancelado && <span className="ml-1.5 text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 align-middle">CANCELADO</span>}
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
+                                  <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
                                   <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
                                     {it.total_cobrado > 0 ? fmt(it.total_cobrado)
                                       : (it.es_cancelado ? '—'
@@ -1325,6 +1327,9 @@ export default function Finanzas() {
                         <div className="bg-white border rounded-2xl p-5 space-y-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Resumen</p>
                           <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)} />
+                          {cuadreItems.some(it => Number(it.comision) > 0) && (
+                            <FilaTotal label="Comisión veterinarias" valor={cuadreItems.reduce((a, it) => a + (Number(it.comision) || 0), 0)} color="#d97706" />
+                          )}
                           <FilaTotal label="Total recogido (cliente)" valor={cuadreData.total_cobrado} />
                           <FilaTotal label="Efectivo recibido (técnico)" valor={cuadreData.efectivo_recibido} color="#16a34a" />
                           <FilaTotal label="Digital → directo a empresa" valor={cuadreData.digital_empresa} color="#6B7280" />
@@ -1602,7 +1607,9 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     t(label, W - M - 60, y); t(fmt(val), W - M, y, { align: 'right' }); y += bold ? 7 : 5.5
   }
   const totalACobrar = items.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)
+  const totalComision = items.reduce((a, it) => a + (Number(it.comision) || 0), 0)
   fila('Total a cobrar (servicios)', totalACobrar)
+  if (totalComision > 0) fila('Comisión veterinarias', totalComision)
   fila('Total recogido (cliente)', c.total_cobrado)
   fila('Efectivo recibido (técnico)', c.efectivo_recibido)
   fila('Digital directo a empresa', c.digital_empresa)
