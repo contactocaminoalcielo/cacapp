@@ -2594,6 +2594,82 @@ function TabReconocimientos() {
   )
 }
 
+// ─── PAGO AL TÉCNICO POR SERVICIO ────────────────────────────────────────────
+// Valor reconocido al técnico por cada servicio, según plan × vehículo (moto /
+// carro). El vehículo sale del perfil del técnico (personal.tipo_vehiculo).
+function TabPagoTecnico() {
+  const { alert: showAlert } = useConfirm()
+  const [planes, setPlanes]   = useState([])
+  const [tar, setTar]         = useState({})   // plan_id -> { monto_moto, monto_carro }
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [ok, setOk]           = useState(false)
+
+  const PRESEQ = ['BRONCE', 'PLATA', 'ORO_EXCLUSIVO', 'DIAMANTE', 'VITALICIO']
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const [{ data: pls }, { data: tarifas }] = await Promise.all([
+      db.from('planes').select('id, nombre, codigo').eq('activo', true).order('nombre'),
+      db.from('tarifas_pago_tecnico_servicio').select('*'),
+    ])
+    setPlanes((pls || []).filter(p => !PRESEQ.includes(p.codigo)))
+    const map = {}
+    ;(tarifas || []).forEach(t => { map[t.plan_id] = { monto_moto: t.monto_moto ?? 0, monto_carro: t.monto_carro ?? 0 } })
+    setTar(map)
+    setLoading(false)
+  }
+
+  function setVal(planId, campo, val) {
+    setTar(prev => ({ ...prev, [planId]: { monto_moto: 0, monto_carro: 0, ...(prev[planId] || {}), [campo]: val } }))
+    setOk(false)
+  }
+
+  async function guardar() {
+    setSaving(true); setOk(false)
+    const rows = planes.map(p => ({
+      plan_id:     p.id,
+      monto_moto:  parseInt(tar[p.id]?.monto_moto)  || 0,
+      monto_carro: parseInt(tar[p.id]?.monto_carro) || 0,
+    }))
+    const { error } = await db.from('tarifas_pago_tecnico_servicio').upsert(rows, { onConflict: 'plan_id' })
+    setSaving(false)
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+    setOk(true); await cargar()
+  }
+
+  if (loading) return <div className="text-center py-8 text-gray-400">Cargando...</div>
+
+  return (
+    <div>
+      <p className="text-[12px] text-gray-400 mb-4">
+        Valor que se le reconoce al técnico por cada servicio, según el plan y el vehículo del técnico
+        (moto o carro). El vehículo se toma del perfil del técnico (Personal). Entra en el cuadre como
+        pago al técnico. <strong>Camioneta se trata como carro.</strong>
+      </p>
+      <TableWrap><Table>
+        <thead><tr><Th>Plan</Th><Th>Pago Moto ($)</Th><Th>Pago Carro ($)</Th></tr></thead>
+        <tbody>
+          {planes.map(p => (
+            <Tr key={p.id}>
+              <Td className="font-semibold text-gray-900">{p.nombre}</Td>
+              <Td><Input type="number" min="0" step="1000" className="max-w-[150px]" value={tar[p.id]?.monto_moto ?? ''} onChange={e => setVal(p.id, 'monto_moto', e.target.value)} placeholder="0" /></Td>
+              <Td><Input type="number" min="0" step="1000" className="max-w-[150px]" value={tar[p.id]?.monto_carro ?? ''} onChange={e => setVal(p.id, 'monto_carro', e.target.value)} placeholder="0" /></Td>
+            </Tr>
+          ))}
+          {planes.length === 0 && <tr><td colSpan={3} className="text-center py-10 text-gray-400 text-sm">Sin planes operativos</td></tr>}
+        </tbody>
+      </Table></TableWrap>
+      <div className="flex items-center gap-3 mt-4">
+        <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar tarifas'}</Button>
+        {ok && <span className="flex items-center gap-1 text-[12px] font-semibold text-green-700"><CheckCircle size={14} /> Guardado</span>}
+      </div>
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -2641,6 +2717,9 @@ export default function Configuracion() {
             <TabsTrigger value="reconocimientos">
               <DollarSign size={13} className="mr-1.5" /> Recargos técnico
             </TabsTrigger>
+            <TabsTrigger value="pago-tecnico">
+              <Tag size={13} className="mr-1.5" /> Pago técnico
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2656,6 +2735,7 @@ export default function Configuracion() {
           <TabsContent value="transporte"><TabTransporte /></TabsContent>
           <TabsContent value="festivos"><TabFestivos /></TabsContent>
           <TabsContent value="reconocimientos"><TabReconocimientos /></TabsContent>
+          <TabsContent value="pago-tecnico"><TabPagoTecnico /></TabsContent>
         </Tabs>
       </div>
     </div>

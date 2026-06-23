@@ -1041,7 +1041,14 @@ export default function Finanzas() {
                             {nombreTecnicoSel(cuadreData.tecnico_id).slice(0, 2).toUpperCase()}
                           </div>
                           <div>
-                            <div className="font-bold text-gray-900 text-[14px]">{nombreTecnicoSel(cuadreData.tecnico_id)}</div>
+                            <div className="font-bold text-gray-900 text-[14px]">
+                              {nombreTecnicoSel(cuadreData.tecnico_id)}
+                              {cuadreItems[0]?.vehiculo && (
+                                <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#E0F2FE] text-[#0E7490] align-middle">
+                                  {cuadreItems[0].vehiculo}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-gray-400">{fmtFecha(cuadreData.fecha_desde)} → {fmtFecha(cuadreData.fecha_hasta)} · {cuadreData.total_servicios} servicio{cuadreData.total_servicios !== 1 ? 's' : ''}</div>
                           </div>
                         </div>
@@ -1079,7 +1086,7 @@ export default function Finanzas() {
                           <table className="w-full min-w-[860px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total cobrado', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Recargo', 'Lejanía'].map(h => (
+                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total cobrado', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -1098,6 +1105,9 @@ export default function Finanzas() {
                                     {it.transporte_sin_dato ? (
                                       <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md" title="Servicio sin transporte registrado (anterior a la mejora). Verificar manualmente.">sin dato ⚠</span>
                                     ) : (it.transporte_reconocido > 0 ? <span className="font-semibold text-[#7C3AED]">{fmt(it.transporte_reconocido)}</span> : '—')}
+                                  </td>
+                                  <td className="px-3 py-2.5 tabular-nums">
+                                    {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : '—'}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     {it.recargo_aplicado > 0 ? (
@@ -1137,6 +1147,7 @@ export default function Finanzas() {
                           <FilaTotal label="Digital → directo a empresa" valor={cuadreData.digital_empresa} color="#6B7280" />
                           <div className="border-t my-1" style={{ borderColor: 'rgba(30,80,40,0.08)' }} />
                           <FilaTotal label="Transporte reconocido" valor={cuadreData.total_transporte} color="#7C3AED" />
+                          <FilaTotal label="Pago por servicio" valor={cuadreData.total_pago_servicio} color="#0E7490" />
                           <FilaTotal label="Recargos reconocidos" valor={cuadreData.total_recargos} color="#d97706" />
                           <FilaTotal label="Total reconocido al técnico" valor={cuadreData.total_reconocido} color="#7C3AED" bold />
                           {Number(cuadreData.ajustes_manuales) !== 0 && (
@@ -1369,8 +1380,8 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
 
   // Tabla
   const cols = [
-    ['Fecha', 16, 'l'], ['Mascota', 32, 'l'], ['Ciudad', 26, 'l'],
-    ['Cobrado', 26, 'r'], ['Efectivo', 26, 'r'], ['Transp.', 22, 'r'], ['Recargo', 22, 'r'],
+    ['Fecha', 15, 'l'], ['Mascota', 28, 'l'], ['Ciudad', 22, 'l'],
+    ['Cobrado', 24, 'r'], ['Efvo', 22, 'r'], ['Transp.', 20, 'r'], ['Pago', 20, 'r'], ['Recargo', 15, 'r'],
   ]
   pdf.setFillColor(240, 243, 240); pdf.rect(M, y, CW, 7, 'F')
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60)
@@ -1384,11 +1395,12 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     x = M + 2
     const vals = [
       [fechaCorta(it.fecha), 'l'],
-      [(it.mascota_nombre || '—').slice(0, 18), 'l'],
-      [(it.ciudad || '—').slice(0, 14), 'l'],
+      [(it.mascota_nombre || '—').slice(0, 15), 'l'],
+      [(it.ciudad || '—').slice(0, 12), 'l'],
       [fmt(it.total_cobrado), 'r'],
       [fmt(it.efectivo), 'r'],
       [it.transporte_sin_dato ? 's/d' : fmt(it.transporte_reconocido), 'r'],
+      [fmt(it.pago_servicio), 'r'],
       [fmt(it.recargo_aplicado), 'r'],
     ]
     cols.forEach(([, w, a], i) => { t(vals[i][0], a === 'r' ? x + w - 2 : x, y + 4, { align: a === 'r' ? 'right' : 'left' }); x += w })
@@ -1407,6 +1419,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   fila('Efectivo recibido (técnico)', c.efectivo_recibido)
   fila('Digital directo a empresa', c.digital_empresa)
   fila('Transporte reconocido', c.total_transporte)
+  fila('Pago por servicio', c.total_pago_servicio)
   fila('Recargos reconocidos', c.total_recargos)
   fila('Total reconocido al técnico', c.total_reconocido)
   if (Number(c.ajustes_manuales) !== 0) fila(`Ajuste manual${c.ajustes_motivo ? ' (' + c.ajustes_motivo + ')' : ''}`, c.ajustes_manuales)
