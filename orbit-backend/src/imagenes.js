@@ -301,7 +301,8 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     }
 
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
-    const esCompostaje = (s.tipo_proceso || '').startsWith('COMPOSTAJE')
+    // "anticipados" solo aplica a compostaje INDIVIDUAL; en eco-grupal no se pregunta ni se guarda.
+    const esCompostaje = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
     await client.query(
       `UPDATE public.servicios
        SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, now()),

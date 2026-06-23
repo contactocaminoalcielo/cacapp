@@ -70,7 +70,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const totalPasos   = items.length + 1
   const esFinal      = paso === totalPasos - 1
   const itemActual   = items[paso]
-  const esCompostaje = (servicio?.tipo_proceso || '').startsWith('COMPOSTAJE')
+  // La pregunta de "recordatorios anticipados" SOLO aplica a compostaje INDIVIDUAL.
+  // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
+  const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
   const mascota      = servicio?.mascota || 'tu mascota'
   const todoListo    = items.every(it => itemListo(it, fotos, textos))
 
@@ -165,7 +167,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       const payload = {
         recordatorios,
         comentarios: comentarios.trim() || null,
-        anticipados: esCompostaje ? anticipados : undefined,
+        anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
       }
       const r = await portalRecibir(codigo, payload)
@@ -244,7 +246,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   mascota={mascota}
                   items={items} fotos={fotos} textos={textos}
                   catalogo={catalogo} interes={interes} setInteres={setInteres}
-                  esCompostaje={esCompostaje}
+                  esCompostaje={esCompostajeIndividual}
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
                   onGoTo={ir}
