@@ -1080,6 +1080,7 @@ export default function Finanzas() {
                                           {it.es_festivo  && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">FEST</span>}
                                           {it.es_dominical && !it.es_festivo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-600">DOM</span>}
                                           {it.es_nocturno && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-600">NOC</span>}
+                                          {it.es_lejania && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-600">LEJ</span>}
                                         </div>
                                       </div>
                                     ) : '—'}
