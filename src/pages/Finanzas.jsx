@@ -79,6 +79,10 @@ export default function Finanzas() {
   const [cerrando,        setCerrando]        = useState(false)
   const [cuadrePdfGen,    setCuadrePdfGen]    = useState(false)
 
+  // ── State "No cobrados" (pago pendiente / facturación mensual) ──────────────
+  const [noCobrados,    setNoCobrados]    = useState(null)   // null = aún no cargado
+  const [noCobLoading,  setNoCobLoading]  = useState(false)
+
   // ── Carga de datos ──────────────────────────────────────────────────────────
   async function cargar() {
     setLoading(true)
@@ -314,6 +318,73 @@ export default function Finanzas() {
     }
   }
 
+  // ── "No cobrados": recibos del técnico sin cobro (pendiente / fact. mensual) ─
+  async function cargarNoCobrados() {
+    setNoCobLoading(true)
+    try {
+      const { data: recibos } = await db
+        .from('recibos_tecnico')
+        .select(`id, servicio_id, tecnico_id, numero_recibo, tipo, fecha_emision, valor_total, valor_cobrado, datos_form,
+          servicios:servicio_id ( id, estado, estado_pago, valor_total, valor_pagado, metodo_pago, mascota_id, aliado_origen_id,
+            aliados:aliado_origen_id ( nombre, modalidad_comision ),
+            planes:plan_id ( nombre ) ),
+          personal:tecnico_id ( nombre, apellido )`)
+        .order('fecha_emision', { ascending: false })
+        .limit(800)
+
+      const clasificados = (recibos || []).map(r => {
+        const svc = r.servicios || {}
+        const modalidad = svc.aliados?.modalidad_comision || null
+        const pagoPend  = String(r.datos_form?.pago_pendiente) === 'true'
+        let motivo = null
+        if (pagoPend) motivo = 'PAGO_PENDIENTE'
+        else if (modalidad === 'FACTURACION_MENSUAL') motivo = 'FACTURACION_MENSUAL'
+        else if ((r.valor_cobrado || 0) === 0) motivo = 'SIN_COBRO'
+        return { ...r, motivo }
+      }).filter(r => r.motivo && r.servicios?.estado !== 'CANCELADO' && r.servicios?.estado_pago !== 'COMPLETO')
+
+      // Mascotas
+      const mascIds = [...new Set(clasificados.map(r => r.servicios?.mascota_id).filter(Boolean))]
+      let mascMap = {}
+      if (mascIds.length) {
+        const { data: ms } = await db.from('mascotas').select('id_mascota, nombre, cliente_id').in('id_mascota', mascIds)
+        mascMap = Object.fromEntries((ms || []).map(m => [m.id_mascota, m]))
+        const cliIds = [...new Set(Object.values(mascMap).map(m => m.cliente_id).filter(Boolean))]
+        if (cliIds.length) {
+          const { data: cs } = await db.from('clientes').select('id_cliente, nombre, apellido').in('id_cliente', cliIds)
+          const cliMap = Object.fromEntries((cs || []).map(c => [c.id_cliente, c]))
+          Object.values(mascMap).forEach(m => { m.cliente = cliMap[m.cliente_id] || null })
+        }
+      }
+
+      // Última novedad NOTA por servicio
+      const svcIds = [...new Set(clasificados.map(r => r.servicio_id).filter(Boolean))]
+      let novMap = {}
+      if (svcIds.length) {
+        const { data: novs } = await db.from('novedades_servicio')
+          .select('servicio_id, descripcion, created_at, tipo_novedad')
+          .in('servicio_id', svcIds)
+          .order('created_at', { ascending: false })
+        ;(novs || []).forEach(n => { if (!novMap[n.servicio_id]) novMap[n.servicio_id] = n })
+      }
+
+      const enriched = clasificados.map(r => {
+        const masc = mascMap[r.servicios?.mascota_id] || null
+        return { ...r, mascota: masc, cliente: masc?.cliente || null, novedad: novMap[r.servicio_id] || null }
+      })
+      setNoCobrados(enriched)
+    } catch (err) {
+      console.error('[Finanzas] Error cargando no cobrados:', err)
+      setNoCobrados([])
+    } finally {
+      setNoCobLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'nocobrados' && noCobrados === null && !noCobLoading) cargarNoCobrados()
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function descargarCuadrePDF() {
     if (!cuadreData) return
     setCuadrePdfGen(true)
@@ -494,6 +565,7 @@ export default function Finanzas() {
       if (error) throw error
       cerrarPagoModal()
       await cargar()
+      if (noCobrados !== null) cargarNoCobrados()
     } catch (err) {
       setPagoError('Error al registrar el pago: ' + (err.message || err))
     } finally {
@@ -599,6 +671,7 @@ export default function Finanzas() {
                 {[
                   { key: 'cartera',     label: 'Cartera' },
                   { key: 'comisiones',  label: 'Comisiones' },
+                  { key: 'nocobrados',  label: 'No cobrados' },
                   { key: 'historial',   label: 'Historial' },
                   { key: 'tecnicos',    label: 'Cuadre técnicos' },
                 ].map(t => (
@@ -893,6 +966,97 @@ export default function Finanzas() {
                 </div>
               )}
 
+              {/* ── Tab: No cobrados ─────────────────────────────────── */}
+              {tab === 'nocobrados' && (
+                <div className="p-5 space-y-4">
+                  <div className="flex items-start justify-between flex-wrap gap-2">
+                    <p className="text-[12px] text-gray-500 max-w-2xl">
+                      Servicios donde el técnico <strong>no recibió el pago</strong>: quedó <strong>pendiente</strong> o
+                      se <strong>factura mensual</strong> a la veterinaria. Aquí se gestionan aparte del cuadre. Se
+                      muestra la última novedad de cada servicio.
+                    </p>
+                    <button onClick={cargarNoCobrados}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border border-[rgba(30,80,40,0.15)] text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors">
+                      <RefreshCw size={13} /> Actualizar
+                    </button>
+                  </div>
+
+                  {noCobLoading || noCobrados === null ? (
+                    <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
+                      <div className="spinner" /><span className="text-sm font-medium">Cargando…</span>
+                    </div>
+                  ) : noCobrados.length === 0 ? (
+                    <div className="py-16 text-center">
+                      <div className="text-4xl mb-3">✅</div>
+                      <p className="text-[14px] font-semibold text-gray-700">No hay servicios sin cobrar pendientes</p>
+                      <p className="text-[12px] text-gray-400 mt-1">Todo lo emitido por los técnicos fue cobrado o ya se completó.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto -mx-5 px-5">
+                      <table className="w-full min-w-[920px]">
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
+                            {['Fecha', 'Mascota / Cliente', 'Plan', 'Técnico', 'Valor', 'Motivo', 'Novedad', ''].map(h => (
+                              <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {noCobrados.map(r => {
+                            const svc = r.servicios || {}
+                            const cli = r.cliente
+                            const MOT = {
+                              PAGO_PENDIENTE:      ['Pago pendiente',     'bg-[#FFF3DC] text-[#9A5500]'],
+                              FACTURACION_MENSUAL: ['Facturación mensual', 'bg-[#EEF2FF] text-[#3730A3]'],
+                              SIN_COBRO:           ['Sin cobro',          'bg-gray-100 text-gray-600'],
+                            }[r.motivo] || ['—', 'bg-gray-100 text-gray-600']
+                            return (
+                              <tr key={r.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors align-top" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                                <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{fmtFecha(r.fecha_emision)}</td>
+                                <td className="py-3 pr-4">
+                                  <div className="font-semibold text-gray-900 leading-tight">{r.mascota?.nombre || '—'}</div>
+                                  <div className="text-[11px] text-gray-400">{cli ? `${cli.nombre || ''} ${cli.apellido || ''}`.trim() : '—'}</div>
+                                </td>
+                                <td className="py-3 pr-4 text-gray-600 text-[12px]">{svc.planes?.nombre || '—'}</td>
+                                <td className="py-3 pr-4 text-[12px] text-gray-700">{r.personal ? `${r.personal.nombre} ${r.personal.apellido || ''}`.trim() : '—'}</td>
+                                <td className="py-3 pr-4 font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmt(r.valor_total || svc.valor_total)}</td>
+                                <td className="py-3 pr-4">
+                                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${MOT[1]}`}>{MOT[0]}</span>
+                                  {svc.aliados?.nombre && <div className="text-[10px] text-gray-400 mt-0.5">🏥 {svc.aliados.nombre}</div>}
+                                </td>
+                                <td className="py-3 pr-4 text-[11px] text-gray-500 max-w-[260px]">
+                                  {r.novedad?.descripcion
+                                    ? <span title={r.novedad.descripcion}>{r.novedad.descripcion}</span>
+                                    : <span className="text-gray-300 italic">Sin novedad</span>}
+                                </td>
+                                <td className="py-3">
+                                  {r.motivo !== 'FACTURACION_MENSUAL' && (
+                                    <button
+                                      onClick={() => abrirPagoModal({
+                                        id: r.servicio_id,
+                                        valor_total:  svc.valor_total || r.valor_total || 0,
+                                        valor_pagado: svc.valor_pagado || 0,
+                                        saldo: Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0)),
+                                        metodo_pago: svc.metodo_pago || 'EFECTIVO',
+                                        canal_entrada: svc.aliado_origen_id ? 'ALIADO' : 'DIRECTO',
+                                        mascota: r.mascota, cliente: r.cliente,
+                                        aliado: svc.aliados || null,
+                                      })}
+                                      className="px-3 py-1.5 bg-[#1A5CD8] hover:bg-[#1550C0] text-white text-[11px] font-semibold rounded-xl transition-colors whitespace-nowrap">
+                                      Registrar pago
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* ── Tab: Historial ───────────────────────────────────── */}
               {tab === 'historial' && (
                 <div className="p-5">
@@ -1101,7 +1265,11 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
-                                  <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">{fmt(it.total_cobrado)}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
+                                    {it.total_cobrado > 0 ? fmt(it.total_cobrado)
+                                      : (it.es_cancelado ? '—'
+                                        : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
+                                  </td>
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">{fmt(it.efectivo)}</td>
                                   <td className="px-3 py-2.5 text-gray-500 tabular-nums">{it.digital > 0 ? fmt(it.digital) : '—'}</td>
                                   <td className="px-3 py-2.5 tabular-nums">
