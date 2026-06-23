@@ -3422,6 +3422,25 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setMediosPago(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m))
   }
 
+  // Al cambiar el tipo de recibo el monto por defecto es distinto: el CLIENTE paga
+  // el precio del servicio; la VETERINARIA paga el neto (precio − comisión). Sin
+  // esto, al pasar de cliente a veterinaria quedaba el valor del cliente en el
+  // recibo de la vet. Reseteamos a un único medio con el monto correcto del tipo.
+  function cambiarTipo(nuevoTipo) {
+    if (nuevoTipo === tipoRecibo) return
+    setTipoRecibo(nuevoTipo)
+    const monto = nuevoTipo === 'VETERINARIA' ? valorVet : montoClienteDefault
+    setMediosPago([{ metodo: 'EFECTIVO', monto, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+  }
+
+  // En recibo de veterinaria el monto a cobrar es el neto (valorVet); si el técnico
+  // ajusta la comisión %, el medio único sigue ese valor. No toca recibos ya
+  // guardados ni pagos divididos (más de un medio).
+  useEffect(() => {
+    if (guardado || reciboExistente || tipoRecibo !== 'VETERINARIA') return
+    setMediosPago(prev => prev.length === 1 ? [{ ...prev[0], monto: valorVet }] : prev)
+  }, [valorVet, tipoRecibo, guardado]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Clave de idempotencia estable por borrador: sobrevive a reinicios
   // (localStorage) y a doble-click (mismo valor) → la RPC no duplica el recibo
   // ni vuelve a sumar el pago. Se limpia al volver / cuando el recibo queda OK.
@@ -4209,7 +4228,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(form.valor_servicio)}` },
             ...(aliado ? [{ key: 'VETERINARIA', label: '🏥 Para veterinaria', desc: `Cobrar: ${fmt(valorVet)}` }] : []),
           ].map(op => (
-            <button key={op.key} onClick={() => setTipoRecibo(op.key)}
+            <button key={op.key} onClick={() => cambiarTipo(op.key)}
               className="flex-1 py-2.5 px-3 rounded-xl border-2 text-left transition-all active:scale-98"
               style={{
                 borderColor: tipoRecibo === op.key ? '#1A5CD8' : '#E5E7EB',
@@ -4702,7 +4721,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           <button
             onClick={() => {
               const otroTipo = tipoRecibo === 'CLIENTE' ? 'VETERINARIA' : 'CLIENTE'
-              setTipoRecibo(otroTipo)
+              cambiarTipo(otroTipo)
               setTipoFijado(false)
               setGuardado(false)
             }}
