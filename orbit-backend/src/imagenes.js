@@ -291,11 +291,11 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
         `UPDATE public.servicio_recordatorios
          SET estado = 'EN_PROCESO',
              imagen_cliente_url = $3,
-             imagenes_cliente_urls = $4::jsonb,
+             imagenes_cliente_urls = $4::text[],
              datos_cliente = COALESCE($5::jsonb, datos_cliente)
          WHERE id = $1 AND servicio_id = $2
            AND COALESCE(origen,'') <> 'REMOVIDO' AND estado <> 'NA'`,
-        [item.sr_id, s.id, urls[0] || null, JSON.stringify(urls),
+        [item.sr_id, s.id, urls[0] || null, urls,
          entry.textos && Object.keys(entry.textos).length ? JSON.stringify(entry.textos) : null]
       )
     }
