@@ -118,7 +118,7 @@ INSERT INTO public.config_operativa (modulo, clave, valor, descripcion) VALUES
  ('SOLICITUDES_IMAGENES','max_mb','8','Tamaño máximo por imagen (MB) aceptado en el portal'),
  ('SOLICITUDES_IMAGENES','mimes_permitidos','["image/jpeg","image/png","image/webp","image/heic","image/heif"]','Tipos MIME de imagen autorizados'),
  ('SOLICITUDES_IMAGENES','usar_plantilla','false','Enviar como plantilla HSM aprobada (true cuando Meta apruebe la plantilla)'),
- ('SOLICITUDES_IMAGENES','plantilla_nombre','"solicitud_imagenes"','Nombre exacto de la plantilla aprobada en Zolutium/GHL'),
+ ('SOLICITUDES_IMAGENES','plantilla_nombre','"solicitud_imagenes_cliente"','Nombre exacto de la plantilla aprobada en Zolutium/GHL'),
  ('SOLICITUDES_IMAGENES','plantilla_idioma','"es_MX"','Código de idioma de la plantilla')
 ON CONFLICT (modulo, clave) DO NOTHING;
 

@@ -98,7 +98,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         error: 'La plantilla de WhatsApp aún no está aprobada en Meta/Zolutium. Cuando lo esté, activa config_operativa SOLICITUDES_IMAGENES.usar_plantilla=true. La solicitud queda lista para validar; aún no se envió.' } }
     }
 
-    const mensaje = mensajeSolicitud({ nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace, codigo })
+    const mensaje = mensajeSolicitud({ nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace })
 
     // Envío (red, dentro del advisory lock para serializar; volumen bajo y manual)
     let envioOk = null, envioErr = null
@@ -110,7 +110,9 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         idioma:   config.plantilla_idioma || 'es_MX',
         category: config.plantilla_categoria || 'UTILITY',
         mensaje,
-        bodyParams: [sol.cliente_nombre || sol.propietario || '', sol.mascota || '', enlace, codigo],
+        // Plantilla aprobada `solicitud_imagenes_cliente`: 2 variables → {{1}} mascota, {{2}} enlace.
+        // El enlace lleva el código embebido (/#/fotos/CODIGO); el cliente entra sin teclear código.
+        bodyParams: [sol.mascota || '', enlace],
         fromNumber: linea,
       })
     } catch (e) { envioErr = e.message }

@@ -14,7 +14,7 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   mimes_permitidos:  ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
   // Plantilla HSM (fuera de la ventana de 24h). Activar cuando Meta apruebe.
   usar_plantilla:    false,
-  plantilla_nombre:  'solicitud_imagenes',
+  plantilla_nombre:  'solicitud_imagenes_cliente',
   plantilla_idioma:  'es_MX',
   plantilla_categoria: 'UTILITY',   // debe coincidir con la categoría aprobada en Meta (UTILITY o MARKETING)
 }
@@ -34,13 +34,13 @@ export function construirEnlace(codigo) {
   return `${base}/#/fotos/${codigo}`
 }
 
-/** Mensaje por defecto (espejo del cuerpo de la plantilla aprobada). */
-export function mensajeSolicitud({ nombre, mascota, enlace, codigo }) {
+/** Mensaje por defecto (espejo del cuerpo de la plantilla aprobada `solicitud_imagenes_cliente`,
+ *  2 variables: mascota + enlace directo, sin código). */
+export function mensajeSolicitud({ nombre, mascota, enlace }) {
   const n = (nombre || '').split(' ')[0] || nombre || ''
   return `Hola, ${n}. Recibe un saludo de Camino al Cielo. Para continuar con los ` +
     `recordatorios de ${mascota || 'tu mascota'}, por favor adjunta las fotografías ` +
-    `solicitadas en el siguiente enlace: ${enlace}. Tu código de acceso es: ${codigo}. ` +
-    `Gracias por confiar en nosotros.`
+    `solicitadas en el siguiente enlace: ${enlace}. Gracias por confiar en nosotros.`
 }
 
 /** ¿El recordatorio requiere imagen? (gate de selección del flujo) */
