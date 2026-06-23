@@ -2520,7 +2520,7 @@ function TabFestivos() {
 function TabReconocimientos() {
   const { alert: showAlert } = useConfirm()
   const [row, setRow]       = useState(null)
-  const [form, setForm]     = useState({ recargo_dominical: 0, recargo_festivo: 0, recargo_nocturno: 0, recargo_lejania: 0 })
+  const [form, setForm]     = useState({ recargo_dominical: 0, recargo_festivo: 0, recargo_nocturno: 0, recargo_lejania: 0, pago_cancelado: 0 })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [ok, setOk]           = useState(false)
@@ -2538,6 +2538,7 @@ function TabReconocimientos() {
       recargo_festivo:   r?.recargo_festivo   ?? 0,
       recargo_nocturno:  r?.recargo_nocturno  ?? 0,
       recargo_lejania:   r?.recargo_lejania   ?? 0,
+      pago_cancelado:    r?.pago_cancelado    ?? 0,
     })
     setLoading(false)
   }
@@ -2549,6 +2550,7 @@ function TabReconocimientos() {
       recargo_festivo:   parseInt(form.recargo_festivo)   || 0,
       recargo_nocturno:  parseInt(form.recargo_nocturno)  || 0,
       recargo_lejania:   parseInt(form.recargo_lejania)   || 0,
+      pago_cancelado:    parseInt(form.pago_cancelado)    || 0,
       activo: true,
     }
     const { error } = row?.id
@@ -2567,6 +2569,7 @@ function TabReconocimientos() {
     ['recargo_festivo',   'Recargo festivo',   'Por cada recogida en festivo (usa el calendario de Festivos)'],
     ['recargo_nocturno',  'Recargo nocturno',  'Por cada recogida desde las 6:00 p. m.'],
     ['recargo_lejania',   'Recargo de lejanía', 'Se marca manualmente por recogida en el cuadre (aplica a cualquier ciudad, incluso Bogotá)'],
+    ['pago_cancelado',    'Pago por servicio cancelado', 'Por cada servicio cancelado cuando el técnico ya había salido (etapa de recogida o posterior)'],
   ]
 
   return (

@@ -1095,7 +1095,10 @@ export default function Finanzas() {
                               {cuadreItems.map(it => (
                                 <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
-                                  <td className="px-3 py-2.5 font-semibold text-gray-900">{it.mascota_nombre || '—'}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-gray-900">
+                                    {it.mascota_nombre || '—'}
+                                    {it.es_cancelado && <span className="ml-1.5 text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 align-middle">CANCELADO</span>}
+                                  </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">{fmt(it.total_cobrado)}</td>
@@ -1124,9 +1127,9 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <label className={`flex items-center gap-1.5 ${cuadreCerrado ? 'cursor-default' : 'cursor-pointer'}`} title="Marcar lejanía (recargo manual al técnico)">
-                                      <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado}
+                                      <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado || it.es_cancelado}
                                         onChange={e => toggleLejania(it, e.target.checked)}
-                                        className="w-4 h-4 accent-[#7C3AED] disabled:opacity-60" />
+                                        className="w-4 h-4 accent-[#7C3AED] disabled:opacity-40" />
                                       <span className="text-[11px] text-gray-500">{it.es_lejania ? 'Sí' : '—'}</span>
                                     </label>
                                   </td>
@@ -1148,6 +1151,9 @@ export default function Finanzas() {
                           <div className="border-t my-1" style={{ borderColor: 'rgba(30,80,40,0.08)' }} />
                           <FilaTotal label="Transporte reconocido" valor={cuadreData.total_transporte} color="#7C3AED" />
                           <FilaTotal label="Pago por servicio" valor={cuadreData.total_pago_servicio} color="#0E7490" />
+                          {Number(cuadreData.total_cancelados) > 0 && (
+                            <FilaTotal label="Pago por cancelados" valor={cuadreData.total_cancelados} color="#DC2626" />
+                          )}
                           <FilaTotal label="Recargos reconocidos" valor={cuadreData.total_recargos} color="#d97706" />
                           <FilaTotal label="Total reconocido al técnico" valor={cuadreData.total_reconocido} color="#7C3AED" bold />
                           {Number(cuadreData.ajustes_manuales) !== 0 && (
@@ -1420,6 +1426,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   fila('Digital directo a empresa', c.digital_empresa)
   fila('Transporte reconocido', c.total_transporte)
   fila('Pago por servicio', c.total_pago_servicio)
+  if (Number(c.total_cancelados) > 0) fila('Pago por cancelados', c.total_cancelados)
   fila('Recargos reconocidos', c.total_recargos)
   fila('Total reconocido al técnico', c.total_reconocido)
   if (Number(c.ajustes_manuales) !== 0) fila(`Ajuste manual${c.ajustes_motivo ? ' (' + c.ajustes_motivo + ')' : ''}`, c.ajustes_manuales)
