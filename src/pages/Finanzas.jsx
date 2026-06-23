@@ -287,6 +287,33 @@ export default function Finanzas() {
     setCuadreAjustes(''); setCuadreAjusteMot('')
   }
 
+  // Marca/desmarca lejanía manual en una fila del cuadre (solo BORRADOR).
+  async function toggleLejania(item, aplica) {
+    // Optimista en la fila
+    setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, es_lejania: aplica } : it))
+    try {
+      const { data, error } = await db.rpc('set_cuadre_item_lejania', {
+        p_item_id:  item.id,
+        p_aplica:   aplica,
+        p_actor_id: personalData?.id || null,
+      })
+      if (error) throw error
+      // Refrescar fila (recargo recalculado) + cabecera (totales)
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, es_lejania: aplica, recargo_aplicado: data.recargo_aplicado } : it))
+      setCuadreData(prev => prev ? {
+        ...prev,
+        total_recargos:        data.total_recargos,
+        total_reconocido:      data.total_reconocido,
+        dinero_a_entregar:     data.dinero_a_entregar,
+        saldo_a_favor_tecnico: data.saldo_a_favor_tecnico,
+      } : prev)
+    } catch (err) {
+      // Revertir
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, es_lejania: !aplica } : it))
+      await showAlert(parsearErrorDB(err), { title: 'Error al marcar lejanía' })
+    }
+  }
+
   async function descargarCuadrePDF() {
     if (!cuadreData) return
     setCuadrePdfGen(true)
@@ -1052,7 +1079,7 @@ export default function Finanzas() {
                           <table className="w-full min-w-[860px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total cobrado', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Recargo'].map(h => (
+                                {['Fecha', 'Mascota', 'Ciudad', 'Plan', 'Total cobrado', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Recargo', 'Lejanía'].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -1084,6 +1111,14 @@ export default function Finanzas() {
                                         </div>
                                       </div>
                                     ) : '—'}
+                                  </td>
+                                  <td className="px-3 py-2.5">
+                                    <label className={`flex items-center gap-1.5 ${cuadreCerrado ? 'cursor-default' : 'cursor-pointer'}`} title="Marcar lejanía (recargo manual al técnico)">
+                                      <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado}
+                                        onChange={e => toggleLejania(it, e.target.checked)}
+                                        className="w-4 h-4 accent-[#7C3AED] disabled:opacity-60" />
+                                      <span className="text-[11px] text-gray-500">{it.es_lejania ? 'Sí' : '—'}</span>
+                                    </label>
                                   </td>
                                 </tr>
                               ))}

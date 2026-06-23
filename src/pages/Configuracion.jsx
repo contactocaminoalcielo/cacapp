@@ -2323,8 +2323,8 @@ function TabTransporte() {
   function abrir(item) {
     setSelected(item || { _nuevo: true }); setFormErr('')
     setForm(item
-      ? { ciudad: item.ciudad || '', tarifa_moto: item.tarifa_moto ?? 0, tarifa_camioneta: item.tarifa_camioneta ?? 0, activo: item.activo !== false, es_lejana: !!item.es_lejana }
-      : { ciudad: '', tarifa_moto: 0, tarifa_camioneta: 0, activo: true, es_lejana: false })
+      ? { ciudad: item.ciudad || '', tarifa_moto: item.tarifa_moto ?? 0, tarifa_camioneta: item.tarifa_camioneta ?? 0, activo: item.activo !== false }
+      : { ciudad: '', tarifa_moto: 0, tarifa_camioneta: 0, activo: true })
   }
 
   async function guardar() {
@@ -2335,7 +2335,6 @@ function TabTransporte() {
       tarifa_moto: parseInt(form.tarifa_moto) || 0,
       tarifa_camioneta: parseInt(form.tarifa_camioneta) || 0,
       activo: form.activo !== false,
-      es_lejana: !!form.es_lejana,
     }
     const { error } = selected?.id
       ? await db.from('tarifas_transporte').update(body).eq('id', selected.id)
@@ -2369,14 +2368,13 @@ function TabTransporte() {
       </div>
       {loading ? <div className="text-center py-8 text-gray-400">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Ciudad / Municipio</Th><Th>Tarifa Moto</Th><Th>Tarifa Camioneta</Th><Th>Lejana</Th><Th>Estado</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Ciudad / Municipio</Th><Th>Tarifa Moto</Th><Th>Tarifa Camioneta</Th><Th>Estado</Th><Th></Th></tr></thead>
           <tbody>
             {filtered.map(t => (
               <Tr key={t.id}>
                 <Td className="font-semibold text-gray-900">{t.ciudad}</Td>
                 <Td className="text-gray-700">{COP(t.tarifa_moto)}</Td>
                 <Td className="text-gray-700">{COP(t.tarifa_camioneta)}</Td>
-                <Td>{t.es_lejana ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Lejana</span> : <span className="text-gray-300 text-[11px]">—</span>}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${t.activo !== false ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{t.activo !== false ? 'Activo' : 'Inactivo'}</span></Td>
                 <Td>
                   <div className="flex items-center gap-1">
@@ -2386,7 +2384,7 @@ function TabTransporte() {
                 </Td>
               </Tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={6} className="text-center py-10 text-gray-400 text-sm">Sin tarifas configuradas</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={5} className="text-center py-10 text-gray-400 text-sm">Sin tarifas configuradas</td></tr>}
           </tbody>
         </Table></TableWrap>
       )}
@@ -2410,10 +2408,6 @@ function TabTransporte() {
                 <Input type="number" min="0" step="1000" value={form.tarifa_camioneta ?? ''} onChange={e => setForm(p => ({ ...p, tarifa_camioneta: e.target.value }))} placeholder="0" />
               </div>
             </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={!!form.es_lejana} onChange={e => setForm(p => ({ ...p, es_lejana: e.target.checked }))} className="w-4 h-4 accent-[#7C3AED]" />
-              <span className="text-[12px] font-semibold text-gray-700">Ciudad lejana (aplica recargo de lejanía al técnico en el cuadre)</span>
-            </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" />
               <span className="text-[12px] font-semibold text-gray-700">Activo (aparece en Registro)</span>
@@ -2572,7 +2566,7 @@ function TabReconocimientos() {
     ['recargo_dominical', 'Recargo dominical', 'Por cada recogida en domingo'],
     ['recargo_festivo',   'Recargo festivo',   'Por cada recogida en festivo (usa el calendario de Festivos)'],
     ['recargo_nocturno',  'Recargo nocturno',  'Por cada recogida desde las 6:00 p. m.'],
-    ['recargo_lejania',   'Recargo de lejanía', 'Por cada recogida en una ciudad marcada como "lejana" (en Transporte)'],
+    ['recargo_lejania',   'Recargo de lejanía', 'Se marca manualmente por recogida en el cuadre (aplica a cualquier ciudad, incluso Bogotá)'],
   ]
 
   return (
