@@ -4,7 +4,7 @@ import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { useConfirm } from '@/contexts/ConfirmContext'
-import { petEmoji } from '@/lib/utils'
+import { petEmoji, parseDate } from '@/lib/utils'
 import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import {
   ESTADO_SOLICITUD, obtenerSolicitudes, enviarSolicitud, reintentarSolicitud,
@@ -25,8 +25,10 @@ const FILTROS = [
 const ENVIABLE = new Set(['POR_VALIDAR', 'ERROR'])
 
 function fechaCorta(v) {
-  if (!v) return '-'
-  try { return new Date(v).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) } catch { return '-' }
+  // fecha_ingreso es DATE ("YYYY-MM-DD"): parseDate lo interpreta como mediodía
+  // LOCAL, no medianoche UTC, para no restar un día en Colombia (UTC-5).
+  const d = parseDate(v)
+  return d ? d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '-'
 }
 
 export default function SeguimientoImagenes() {
