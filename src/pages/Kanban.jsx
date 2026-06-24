@@ -25,6 +25,10 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
 const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
 
+// Las alertas de inicio de ruta / declinación de más de estos días se marcan
+// leídas automáticamente (evita el backlog viejo que reaparecía y bloqueaba).
+const DIAS_EXPIRA_ALERTA = 2
+
 // ── Motivos de cancelación de servicio ───────────────────────────────────────
 const MOTIVOS_CANCELACION = [
   'Cliente canceló',
@@ -213,7 +217,7 @@ export default function Kanban() {
   const [groupsOpen, setGroupsOpen]       = useState({}) // `${col}-${tierKey}` → bool
 
   // ── Alertas inicio ruta ───────────────────────────────────────────────────
-  const [alertaRuta, setAlertaRuta]       = useState(null) // notificación TECNICO_INICIO_RUTA activa
+  const [alertasRuta, setAlertasRuta]     = useState([])   // notificaciones TECNICO_INICIO_RUTA pendientes (toasts en esquina)
 
   // ── Modal ─────────────────────────────────────────────────────────────────
   const [selected, setSelected]           = useState(null)
@@ -654,15 +658,35 @@ export default function Kanban() {
     if (!esCoord) return
     const verificar = async () => {
       const notifs = await obtenerNoLeidas(personalData.id)
-      const rutaNotif = notifs.find(n => n.tipo === 'TECNICO_INICIO_RUTA')
-      if (rutaNotif && !alertaRuta) setAlertaRuta(rutaNotif)
-      const declinas = notifs.filter(n => ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo))
-      setAlertasDeclinas(declinas)
+      const TIPOS_ALERTA = ['TECNICO_INICIO_RUTA', 'TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA']
+      // Auto-expirar: las alertas de más de DIAS_EXPIRA_ALERTA se marcan leídas
+      // solas para que no se acumule un backlog viejo que reaparece cada vez.
+      const limite = Date.now() - DIAS_EXPIRA_ALERTA * 24 * 60 * 60 * 1000
+      const viejas = notifs.filter(n =>
+        TIPOS_ALERTA.includes(n.tipo) && n.created_at && new Date(n.created_at).getTime() < limite
+      )
+      if (viejas.length) await Promise.all(viejas.map(n => marcarLeida(n.id)))
+      const viejasIds = new Set(viejas.map(n => n.id))
+      const vigentes  = notifs.filter(n => !viejasIds.has(n.id))
+      setAlertasRuta(vigentes.filter(n => n.tipo === 'TECNICO_INICIO_RUTA'))
+      setAlertasDeclinas(vigentes.filter(n => ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo)))
     }
     verificar()
     const iv = setInterval(verificar, 20_000)
     return () => clearInterval(iv)
   }, [personalData?.id, personalData?.rol])
+
+  // Marca leídas todas las alertas de inicio de ruta mostradas (botón "limpiar").
+  async function limpiarAlertasRuta() {
+    const ids = alertasRuta.map(n => n.id)
+    setAlertasRuta([])
+    await Promise.all(ids.map(id => marcarLeida(id)))
+  }
+  // Marca leída una sola alerta de inicio de ruta y la saca de la pila.
+  async function descartarAlertaRuta(id) {
+    setAlertasRuta(prev => prev.filter(n => n.id !== id))
+    await marcarLeida(id)
+  }
 
   async function cargar() {
     setLoading(true); setError(null)
@@ -1321,51 +1345,54 @@ export default function Kanban() {
 
   return (
     <>
-    {/* ── ALERTA INICIO RUTA (popup coordinador) ── */}
-    {alertaRuta && (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-          <div className="px-5 py-4 border-b" style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
-            <div className="flex items-center gap-2">
-              <span className="text-xl">🚗</span>
-              <div>
-                <p className="font-bold text-gray-900 text-sm">{alertaRuta.titulo}</p>
-                <p className="text-[11px] text-gray-500">{alertaRuta.mensaje}</p>
+    {/* ── ALERTAS INICIO RUTA — toasts apilados en esquina (no bloquean) ── */}
+    {alertasRuta.length > 0 && (
+      <div className="fixed bottom-4 right-4 z-[60] w-80 max-w-[calc(100vw-2rem)] flex flex-col gap-2 pointer-events-none">
+        {alertasRuta.length > 1 && (
+          <div className="flex items-center justify-between bg-white/95 backdrop-blur rounded-xl shadow border border-gray-100 px-3 py-2 pointer-events-auto">
+            <span className="text-[11px] font-bold text-gray-600">{alertasRuta.length} inicios de ruta</span>
+            <button onClick={limpiarAlertasRuta}
+              className="text-[11px] font-semibold text-gray-500 hover:text-gray-800 transition-colors">
+              Marcar todas como leídas
+            </button>
+          </div>
+        )}
+        {alertasRuta.map(n => {
+          const d     = n.datos || {}
+          const waNum = d.wa_cliente || d.wa_aliado || ''
+          const msg   = generarMsgRuta(n)
+          return (
+            <div key={n.id} className="bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden pointer-events-auto">
+              <div className="px-4 py-3 border-b flex items-start gap-2" style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
+                <span className="text-lg leading-none">🚗</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-gray-900 text-[13px] leading-tight">{n.titulo}</p>
+                  <p className="text-[11px] text-gray-500 truncate">{n.mensaje}</p>
+                </div>
+                <button onClick={() => descartarAlertaRuta(n.id)}
+                  className="w-6 h-6 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-white/60 transition-colors flex-shrink-0"
+                  title="Marcar visto sin enviar">
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="px-4 py-3">
+                {waNum ? (
+                  <a href={waLink(waNum, msg)}
+                    target="_blank" rel="noreferrer"
+                    onClick={() => descartarAlertaRuta(n.id)}
+                    className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-[13px] font-bold"
+                    style={{ background: '#25D366', color: '#fff' }}>
+                    <MessageCircle size={15} /> Avisar al cliente por WhatsApp
+                  </a>
+                ) : (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                    ⚠️ No hay número WhatsApp registrado para este servicio.
+                  </p>
+                )}
               </div>
             </div>
-          </div>
-          <div className="px-5 py-4">
-            <p className="text-[12px] text-gray-600 mb-3">¿Confirmar y notificar al cliente por WhatsApp?</p>
-            {(() => {
-              const d = alertaRuta.datos || {}
-              const waNum = d.wa_cliente || d.wa_aliado || ''
-              const msg   = generarMsgRuta(alertaRuta)
-              return (
-                <div className="space-y-2">
-                  {waNum ? (
-                    <a href={waLink(waNum, msg)}
-                      target="_blank" rel="noreferrer"
-                      onClick={async () => { await marcarLeida(alertaRuta.id); setAlertaRuta(null) }}
-                      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold"
-                      style={{ background: '#25D366', color: '#fff' }}>
-                      <MessageCircle size={16} /> Enviar WhatsApp al cliente
-                    </a>
-                  ) : (
-                    <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
-                      ⚠️ No hay número WhatsApp registrado para este servicio.
-                    </p>
-                  )}
-                  <button
-                    onClick={async () => { await marcarLeida(alertaRuta.id); setAlertaRuta(null) }}
-                    className="w-full py-2.5 rounded-xl text-sm font-semibold border"
-                    style={{ borderColor: '#E5E7EB', color: '#374151' }}>
-                    Marcar visto sin enviar
-                  </button>
-                </div>
-              )
-            })()}
-          </div>
-        </div>
+          )
+        })}
       </div>
     )}
     <div className="flex flex-col flex-1 min-h-0">
