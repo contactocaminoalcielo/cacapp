@@ -122,10 +122,16 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
     }
 
-    // El nuevo valor total es el precio del nuevo rango.
-    // Para comision_descontada=true (recogida en clínica aliada) se resta la comisión.
+    // El nuevo valor total es el precio del nuevo rango (BRUTO).
+    // Para comision_descontada=true (recogida en clínica aliada) valor_total se
+    // guarda NETO (precio − comisión). DEBE restarse SIEMPRE una comisión: la
+    // recalculada si se pudo recalcular, y si no, la que ya tenía el servicio.
+    // Si aquí se resta 0 pero el servicio conserva comision_aliado>0, el cuadre
+    // (bruto = valor_total + comision_aliado, migración 017) la vuelve a sumar y
+    // sale un valor inflado que no coincide con ninguna tarifa.
+    const comisionVigente = nuevaComision != null ? nuevaComision : (svc.comision_aliado ?? 0)
     const nuevoValorTotal = Math.round(
-      nuevoPrecioBase - (svc.comision_descontada && nuevaComision != null ? nuevaComision : 0)
+      nuevoPrecioBase - (svc.comision_descontada ? comisionVigente : 0)
     )
 
     const cambioPrecio   = Math.abs(nuevoValorTotal - (svc.valor_total ?? 0)) > 0.5
