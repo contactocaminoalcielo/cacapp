@@ -315,6 +315,7 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
   const allDone  = maxFotos > 0 && filled === maxFotos
   const singleRef = useRef(null)
   const multiRef  = useRef(null)
+  const [confirmar, setConfirmar] = useState(false) // confirmación de "no deseo"
 
   function setFile(idx, file) { const n = [...arreglo]; n[idx] = file; onFilesChange(n) }
   function onMulti(e) {
@@ -500,10 +501,32 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
         </div>
       )}
 
-      <button onClick={() => onToggleDeclined(true)}
-        className="w-full text-center text-[14px] font-semibold py-3 text-gray-400 hover:text-gray-600 transition-colors">
-        No deseo este recordatorio
-      </button>
+      {confirmar ? (
+        <div className="rounded-2xl border-2 p-5 space-y-3" style={{ borderColor: '#FCA5A5', background: '#FEF2F2' }}>
+          <p className="text-[15px] font-bold text-center" style={{ color: '#B91C1C' }}>
+            ¿Seguro que no deseas este recordatorio?
+          </p>
+          <p className="text-[13px] text-center text-gray-500">No te pediremos sus fotos. Podrás reactivarlo después.</p>
+          <div className="flex gap-2">
+            <button onClick={() => setConfirmar(false)}
+              className="flex-1 py-3.5 rounded-2xl font-bold text-[15px] border-2 transition-all"
+              style={{ borderColor: BORD, color: '#6B7280', background: 'white' }}>
+              Cancelar
+            </button>
+            <button onClick={() => { setConfirmar(false); onToggleDeclined(true) }}
+              className="flex-1 py-3.5 rounded-2xl font-bold text-[15px] text-white transition-all"
+              style={{ background: '#DC2626' }}>
+              Sí, no lo deseo
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setConfirmar(true)}
+          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-[14px] border-2 transition-all"
+          style={{ borderColor: '#FCA5A5', color: '#DC2626', background: '#FEF2F2' }}>
+          <X size={16} /> No deseo este recordatorio
+        </button>
+      )}
     </div>
   )
 }
