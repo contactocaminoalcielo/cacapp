@@ -6,7 +6,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji, fmt } from '@/lib/utils'
+import { petEmoji, fmt, parseDate } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { AlertTriangle, TrendingUp, TrendingDown, PlusCircle, Activity, Snowflake, Package, Truck, Layers, Camera, Star, Calendar, DollarSign, BadgePercent, Clock } from 'lucide-react'
 
@@ -435,12 +435,12 @@ function TablaRecientes({ servicios, navigate, destino }) {
                 <Td className="text-gray-400 font-medium">{s.plan}</Td>
                 <Td><EstadoBadge estado={s.estado} /></Td>
                 <Td className="text-gray-500 tabular-nums">
-                  {s.fecha_ingreso ? new Date(s.fecha_ingreso).toLocaleDateString('es-CO') : '—'}
+                  {s.fecha_ingreso ? parseDate(s.fecha_ingreso).toLocaleDateString('es-CO') : '—'}
                 </Td>
                 <Td>
                   {s.fecha_limite_entrega ? (
                     <span className={`font-medium tabular-nums ${s.dias_para_vencer < 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                      {new Date(s.fecha_limite_entrega).toLocaleDateString('es-CO')}
+                      {parseDate(s.fecha_limite_entrega).toLocaleDateString('es-CO')}
                     </span>
                   ) : '—'}
                 </Td>

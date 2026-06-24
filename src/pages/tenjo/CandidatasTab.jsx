@@ -6,14 +6,14 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { petEmoji, parsearErrorDB } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, parseDate } from '@/lib/utils'
 import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada, agregarCandidataALote, reautorizarCandidata } from '@/lib/tenjo'
 import { Search, X, Snowflake, Plus, Check, Truck, RotateCcw } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 function fmtFecha(ts) {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' })
+  const d = parseDate(ts)
+  return d ? d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) : '—'
 }
 
 function ChipClasif({ clasificacion }) {

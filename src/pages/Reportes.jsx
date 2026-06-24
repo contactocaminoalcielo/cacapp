@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
-import { fmt, waLink } from '@/lib/utils'
+import { fmt, waLink, parseDate } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from 'recharts'
 import { Download, CalendarDays } from 'lucide-react'
 
@@ -165,7 +165,7 @@ function TabContabilidad({ rango }) {
                     <div className="text-[10px] text-ink3">{s.cliente}</div>
                   </Td>
                   <Td className="text-ink3">{s.plan}</Td>
-                  <Td className="text-ink3">{s.fecha_ingreso ? new Date(s.fecha_ingreso).toLocaleDateString('es-CO') : '-'}</Td>
+                  <Td className="text-ink3">{s.fecha_ingreso ? parseDate(s.fecha_ingreso).toLocaleDateString('es-CO') : '-'}</Td>
                   <Td className="font-semibold text-ink">{fmt(s.valor_total)}</Td>
                   <Td className="text-[#1D8A55]">{fmt(s.valor_pagado)}</Td>
                   <Td className="font-bold text-danger">{fmt(s.saldo_pendiente)}</Td>
@@ -301,9 +301,9 @@ function TabTiempoPromesa({ rango }) {
             <Tr key={i}>
               <Td className="font-semibold text-ink">{r.mascota || '-'}</Td>
               <Td className="text-ink3">{r.plan}</Td>
-              <Td className="text-ink3">{r.fecha_ingreso ? new Date(r.fecha_ingreso).toLocaleDateString('es-CO') : '-'}</Td>
-              <Td className="text-ink3">{r.fecha_limite_entrega ? new Date(r.fecha_limite_entrega).toLocaleDateString('es-CO') : '-'}</Td>
-              <Td className="text-ink3">{r.fecha_entrega_real ? new Date(r.fecha_entrega_real).toLocaleDateString('es-CO') : '-'}</Td>
+              <Td className="text-ink3">{r.fecha_ingreso ? parseDate(r.fecha_ingreso).toLocaleDateString('es-CO') : '-'}</Td>
+              <Td className="text-ink3">{r.fecha_limite_entrega ? parseDate(r.fecha_limite_entrega).toLocaleDateString('es-CO') : '-'}</Td>
+              <Td className="text-ink3">{r.fecha_entrega_real ? parseDate(r.fecha_entrega_real).toLocaleDateString('es-CO') : '-'}</Td>
               <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.entrego_a_tiempo ? 'bg-green-light text-primary-dark' : 'bg-danger-light text-danger'}`}>{r.entrego_a_tiempo ? 'Sí' : 'No'}</span></Td>
               <Td className={`font-bold ${(r.dias_diferencia || 0) > 0 ? 'text-danger' : 'text-ink2'}`}>{r.dias_diferencia || 0}</Td>
             </Tr>

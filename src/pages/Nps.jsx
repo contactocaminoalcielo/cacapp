@@ -7,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji, today, waLink } from '@/lib/utils'
+import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
 import { Star, MessageCircle, RefreshCw } from 'lucide-react'
 
 const FILTROS = [
@@ -138,7 +138,7 @@ export default function Nps() {
                         {s.tipo?.replace(/_/g,' ')}
                       </span>
                     </Td>
-                    <Td className="text-ink3">{s.fecha_programada ? new Date(s.fecha_programada).toLocaleDateString('es-CO') : '-'}</Td>
+                    <Td className="text-ink3">{s.fecha_programada ? parseDate(s.fecha_programada).toLocaleDateString('es-CO') : '-'}</Td>
                     <Td>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isPendiente ? 'bg-[#FFF3DC] text-[#9A5500] border border-[#FFD980]' : 'bg-green-light text-primary-dark border border-green-mid'}`}>
                         {s.estado}
