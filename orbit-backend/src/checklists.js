@@ -24,13 +24,13 @@ export function validarItemParaCierre(item, plan, config) {
   const faltantes = []
   const variante = varianteProceso(plan?.codigo, plan?.tipo_acompanamiento)
   const checklist = item.checklist || {}
-  const evidencias = Array.isArray(item.evidencia_urls) ? item.evidencia_urls : []
 
   // ── Reglas estructurales (siempre) ──
   if (!item.responsable_proceso_id) faltantes.push('Sin responsable de proceso asignado')
   if (!item.fecha_inicio_proceso)   faltantes.push('Sin fecha/hora de inicio de proceso')
   if (!item.fecha_fin_proceso)      faltantes.push('Sin fecha/hora de finalización')
-  if (evidencias.length < 1)        faltantes.push('Sin evidencia cargada (mínimo 1 foto)')
+  // La evidencia (foto) es RECOMENDADA pero NO bloquea el cierre (decisión 2026-06-24):
+  // se puede cargar en el Checklist cuando se tenga; no impide cerrar procesos ya hechos.
 
   if (['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA'].includes(variante)
       && item.confirmacion_cliente !== true) {

@@ -67,12 +67,11 @@ export function validarItemCierre(item, codigoPlan, tipoAcompanamiento, config) 
   const faltantes = []
   const variante = varianteProceso(codigoPlan, tipoAcompanamiento)
   const checklist = item.checklist || {}
-  const evidencias = Array.isArray(item.evidencia_urls) ? item.evidencia_urls : []
 
   if (!item.responsable_proceso_id) faltantes.push('Sin responsable de proceso asignado')
   if (!item.fecha_inicio_proceso)   faltantes.push('Sin fecha/hora de inicio de proceso')
   if (!item.fecha_fin_proceso)      faltantes.push('Sin fecha/hora de finalización')
-  if (evidencias.length < 1)        faltantes.push('Sin evidencia cargada (mínimo 1 foto)')
+  // La evidencia (foto) es recomendada pero NO bloquea el cierre (espejo del backend, 2026-06-24)
   if (['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA'].includes(variante) && item.confirmacion_cliente !== true)
     faltantes.push('Sin confirmación del cliente registrada')
 
@@ -566,6 +565,7 @@ const ITEMS_PRE_PROCESO = ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA', 'EN_TRA
  * @param {string}  opts.fechaProceso         fecha/hora de fin de proceso (cremación/ingreso). Default: ahora.
  * @param {string?} opts.fechaCompostajeInicio fecha de ingreso al cubículo (compostaje)
  * @param {string?} opts.personalId
+ * @param {string?} opts.responsableId        responsable del proceso (para que el cierre no lo marque faltante)
  * @param {string}  opts.motivo               texto para el log de salida
  * @param {boolean} opts.retirarItems         retirar items pre-proceso del pool (limpieza de terminadas)
  * @param {boolean} opts.marcarItemProcesado  fijar el item activo a PROCESADO (marcar como ya hecha)
@@ -575,16 +575,26 @@ export async function reconciliarServicioTenjo(servicioId, {
   fechaProceso = new Date().toISOString(),
   fechaCompostajeInicio = null,
   personalId = null,
+  responsableId = null,
   motivo = 'Puesto en orden — proceso finalizado en Tenjo',
   retirarItems = false,
   marcarItemProcesado = false,
 } = {}) {
   if (!servicioId) return
 
-  // 1. (opcional) marcar el item activo como PROCESADO antes de retirar/avanzar
+  // 1. (opcional) marcar el item activo como PROCESADO antes de retirar/avanzar.
+  //    Se completan responsable y fechas para que el cierre del lote no lo bloquee.
   if (marcarItemProcesado) {
+    const resp = responsableId || personalId
+    const cambios = {
+      estado:               'PROCESADO',
+      fecha_inicio_proceso: fechaProceso,
+      fecha_fin_proceso:    fechaProceso,
+      notas:                'Puesto en orden manualmente',
+    }
+    if (resp) cambios.responsable_proceso_id = resp
     await db.from('lotes_tenjo_items')
-      .update({ estado: 'PROCESADO', fecha_fin_proceso: fechaProceso, notas: 'Puesto en orden manualmente' })
+      .update(cambios)
       .eq('servicio_id', servicioId)
       .in('estado', ['RECIBIDA', 'EN_PROCESO', 'AUTORIZADA_SALIDA', 'EN_TRASLADO'])
   }

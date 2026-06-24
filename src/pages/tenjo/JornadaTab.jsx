@@ -233,8 +233,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               🌿 Cubículo {item.cubiculo_codigo}
             </div>
           )}
-          {item.estado === 'AUTORIZADA_SALIDA' && (
-            <div className="text-[10px] text-ink3 mt-0.5">Traslado programado — la salida física se gestiona en la pestaña Operación</div>
+          {['AUTORIZADA_SALIDA', 'EN_TRASLADO'].includes(item.estado) && (
+            <div className="text-[10px] text-ink3 mt-0.5">Autorizada para Tenjo — si ya está en la planta, podés iniciar el proceso directamente.</div>
           )}
           {item.estado === 'PROCESADO' && faltantes.length > 0 && (
             <div className="mt-1">
@@ -248,7 +248,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           )}
         </div>
         <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
-          {item.estado === 'RECIBIDA' && (
+          {['AUTORIZADA_SALIDA', 'EN_TRASLADO', 'RECIBIDA'].includes(item.estado) && (
             <Button size="sm" disabled={saving}
               onClick={() => { setModalIniciar(item); setRespId(item.responsable_proceso_id || personalData?.id || '') }}>
               <Play size={12} /> Iniciar proceso
@@ -436,7 +436,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
             <div className="space-y-4">
               <p className="text-[12px] text-ink2">
                 {procesados.length} procesado{procesados.length !== 1 ? 's' : ''} · {pendientes.length} sin ejecutar.
-                El backend valida evidencias y checklists antes de cerrar.
+                El backend valida responsable, fechas y checklists antes de cerrar (la evidencia es recomendada, no obligatoria).
               </p>
               {conFaltantes.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">

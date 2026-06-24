@@ -86,6 +86,7 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
         await reconciliarServicioTenjo(r.servicio_id, {
           tipoProceso: r.servicios?.planes?.tipo_proceso,
           personalId: personalData?.id,
+          responsableId: personalData?.id,
           retirarItems: true,
           marcarItemProcesado: marcar,
         })
