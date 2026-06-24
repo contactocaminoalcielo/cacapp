@@ -394,7 +394,9 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
                   <Camera size={22} /> Abrir cámara o galería
                 </button>
               )}
-              <input ref={singleRef} type="file" accept="image/*" capture="environment" className="hidden"
+              {/* Sin `capture`: en móvil el sistema ofrece cámara Y galería (con
+                  capture="environment" forzaba solo la cámara). */}
+              <input ref={singleRef} type="file" accept="image/*" className="hidden"
                 onChange={e => { setFile(0, e.target.files?.[0] || null); e.target.value = '' }} />
             </>
           )}
