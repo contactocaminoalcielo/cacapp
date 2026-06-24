@@ -271,10 +271,17 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
 
     const items = await itemsPortal(client, s.id, soloAdicional)
     const entradas = new Map((payload.recordatorios || []).map(r => [String(r.sr_id), r]))
+    // Recordatorios que el cliente declinó ("no deseo este recordatorio"). Solo
+    // valen los que están entre SUS items curados (no se confía en el cliente).
+    const declinados = new Set(
+      (payload.declinados || []).map(String).filter(id => items.some(it => String(it.sr_id) === id))
+    )
 
-    // Validar completitud server-side (carga parcial NO pasa a Producción)
+    // Validar completitud server-side (carga parcial NO pasa a Producción).
+    // Los declinados se omiten: no requieren imágenes ni textos.
     const faltantes = []
     for (const item of items) {
+      if (declinados.has(String(item.sr_id))) continue
       const entry = entradas.get(String(item.sr_id))
       if (!itemCompleto(item, entry, s.id)) faltantes.push(item.recordatorio.nombre)
     }
@@ -283,8 +290,19 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       return { status: 422, body: { ok: false, error: 'incompleto', faltantes } }
     }
 
-    // Persistir cada recordatorio → EN_PROCESO (solo los que recibieron requisitos)
+    // Persistir cada recordatorio. Los declinados → 'NA' (no entran a producción);
+    // el resto → 'EN_PROCESO' con sus imágenes/textos.
     for (const item of items) {
+      if (declinados.has(String(item.sr_id))) {
+        await client.query(
+          `UPDATE public.servicio_recordatorios
+           SET estado = 'NA'
+           WHERE id = $1 AND servicio_id = $2
+             AND COALESCE(origen,'') <> 'REMOVIDO' AND estado <> 'NA'`,
+          [item.sr_id, s.id]
+        )
+        continue
+      }
       const entry = entradas.get(String(item.sr_id))
       const urls  = (entry.urls || []).filter(u => typeof u === 'string' && u.includes(s.id))
       await client.query(
@@ -341,6 +359,21 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
          'El cliente solicitó información para comprar un recordatorio adicional',
          'Contactar al cliente y, si confirma, agregar el adicional por el flujo de Kanban',
          JSON.stringify({ recordatorio_id: ai.recordatorio_id || null, texto: ai.texto || null })]
+      )
+    }
+
+    // Recordatorios declinados → alerta para coordinación (quedaron en 'NA').
+    if (declinados.size) {
+      const declList = items.filter(it => declinados.has(String(it.sr_id)))
+      const nombres  = declList.map(it => it.recordatorio?.nombre || 'Recordatorio').join(', ')
+      await client.query(
+        `INSERT INTO public.alertas_operativas
+           (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+         VALUES ($1, NULL, $2, 'RECORDATORIO_DECLINADO', 'MEDIA', $3, $4, NULL, $5::jsonb)`,
+        [s.id, MOD,
+         `El cliente indicó que NO desea ${declList.length} recordatorio(s): ${nombres}`,
+         'Quedaron marcados como NO aplica (no entran a producción). Revisar con el cliente si corresponde.',
+         JSON.stringify({ declinados: declList.map(it => ({ sr_id: it.sr_id, nombre: it.recordatorio?.nombre || null })) })]
       )
     }
 
