@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
-import { petEmoji, parsearErrorDB } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS,
@@ -24,6 +24,15 @@ const fmtFechaLarga = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
   : '—'
 const ahoraISO = () => new Date().toISOString()
+// Fin estimado del compostaje = inicio + 2 meses calendario
+const finCompostaje = fechaStr => {
+  if (!fechaStr) return null
+  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + 2)
+  return d.toISOString().split('T')[0]
+}
+const fmtFechaCorta = f => f
+  ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
+  : '—'
 
 function Chip({ cfg, fallback }) {
   return (
@@ -50,6 +59,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [motivos,        setMotivos]        = useState({})
   const [obsCierre,      setObsCierre]      = useState('')
   const [novCierre,      setNovCierre]      = useState('')
+  const [modalCubiculo,  setModalCubiculo]  = useState(null) // item (compostaje a finalizar)
+  const [cubForm,        setCubForm]        = useState({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
 
   const cargar = useCallback(async () => {
     const { data: ls, error } = await db.from('lotes_tenjo')
@@ -61,7 +72,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     const map = {}
     for (const l of (ls || [])) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios(tipo_acompanamiento, planes(nombre, codigo), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
+        .select('*, servicios(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido, whatsapp)))')
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
       map[l.id] = its || []
@@ -100,6 +111,22 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       .eq('id', item.lote_id).eq('estado', 'CONFIRMADO')
     setModalIniciar(null); setRespId('')
     await cargar(); onChanged?.()
+  }
+
+  async function finalizarCompostaje() {
+    const item = modalCubiculo
+    if (!item) return
+    if (!cubForm.cubiculo_codigo.trim()) {
+      await showAlert('Indica el código del cubículo donde quedó la mascota.', { title: 'Cubículo requerido' }); return
+    }
+    await updateItem(item, {
+      estado: 'PROCESADO',
+      fecha_fin_proceso: ahoraISO(),
+      cubiculo_codigo: cubForm.cubiculo_codigo.trim(),
+      fecha_compostaje_inicio: cubForm.fecha_compostaje_inicio || today(),
+    })
+    setModalCubiculo(null)
+    setCubForm({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
   }
 
   function abrirChecklist(item) {
@@ -165,6 +192,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       : []
     const resp = personal?.find(p => p.id === item.responsable_proceso_id)
     const nEvid = (item.evidencia_urls || []).length
+    const esCompostaje = plan?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+    const rec = Array.isArray(item.servicios?.recogidas) ? item.servicios.recogidas[0] : item.servicios?.recogidas
+    const contacto = m?.clientes?.whatsapp || rec?.contacto_telefono || null
+    const observaciones = item.servicios?.notas || rec?.notas || null
 
     return (
       <div className="flex items-start gap-3 p-3.5 rounded-xl border hover:bg-surface2 transition-all"
@@ -181,6 +212,17 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
             {resp && ` · Responsable: ${resp.nombre} ${resp.apellido}`}
             {nEvid > 0 && ` · 📷 ${nEvid} evidencia${nEvid !== 1 ? 's' : ''}`}
           </div>
+          {contacto && (
+            <div className="text-[11px] text-ink2 mt-0.5">📞 {contacto}</div>
+          )}
+          {observaciones && (
+            <div className="text-[11px] text-ink2 mt-0.5 italic">📝 {observaciones}</div>
+          )}
+          {item.estado === 'PROCESADO' && esCompostaje && item.cubiculo_codigo && (
+            <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
+              🌿 Cubículo {item.cubiculo_codigo}
+            </div>
+          )}
           {item.estado === 'AUTORIZADA_SALIDA' && (
             <div className="text-[10px] text-ink3 mt-0.5">Traslado programado — la salida física se gestiona en la pestaña Operación</div>
           )}
@@ -205,10 +247,17 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           {item.estado === 'EN_PROCESO' && (
             <Button size="sm" disabled={saving}
               onClick={async () => {
-                if (!await confirm(`Se registrará la finalización del proceso de ${m?.nombre}.`, { title: '¿Finalizar proceso?', confirmLabel: 'Finalizar' })) return
+                if (esCompostaje) {
+                  // Compostaje: capturar el cubículo donde quedó la mascota
+                  setCubForm({ cubiculo_codigo: item.cubiculo_codigo || '', fecha_compostaje_inicio: today() })
+                  setModalCubiculo(item)
+                  return
+                }
+                // Cremación (u otros): la finalización registra la fecha de cremación
+                if (!await confirm(`Se registrará la cremación de ${m?.nombre} con la fecha de hoy.`, { title: '¿Finalizar cremación?', confirmLabel: 'Finalizar' })) return
                 await updateItem(item, { estado: 'PROCESADO', fecha_fin_proceso: ahoraISO() })
               }}>
-              <Square size={12} /> Finalizar
+              <Square size={12} /> {esCompostaje ? 'Finalizar · cubículo' : 'Finalizar'}
             </Button>
           )}
           {['EN_PROCESO', 'PROCESADO'].includes(item.estado) && (
@@ -408,6 +457,36 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           </Modal>
         )
       })()}
+
+      {/* ── Modal registrar cubículo (finalizar compostaje) ── */}
+      {modalCubiculo && (
+        <Modal open onClose={() => setModalCubiculo(null)}
+          title={`Finalizar compostaje — ${modalCubiculo.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={<>
+            <Button variant="secondary" onClick={() => setModalCubiculo(null)}>Cancelar</Button>
+            <Button onClick={finalizarCompostaje} disabled={saving}>{saving ? 'Guardando…' : 'Finalizar y registrar cubículo'}</Button>
+          </>}>
+          <div className="space-y-4">
+            <div className="rounded-xl p-3 text-[12px]" style={{ background: '#F0FDF4', borderColor: '#86EFAC', border: '1px solid' }}>
+              Registra en qué cubículo quedó la mascota. El sistema calculará la fecha estimada de finalización del compostaje sumando <strong>2 meses</strong> a la fecha de ingreso.
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Código del cubículo *</label>
+              <Input placeholder="Ej: C-03" value={cubForm.cubiculo_codigo}
+                onChange={e => setCubForm(p => ({ ...p, cubiculo_codigo: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Fecha de ingreso al cubículo</label>
+              <Input type="date" max={today()} value={cubForm.fecha_compostaje_inicio}
+                onChange={e => setCubForm(p => ({ ...p, fecha_compostaje_inicio: e.target.value }))} />
+              {cubForm.fecha_compostaje_inicio && (
+                <p className="text-[11px] text-ink3 mt-1">→ Compostaje listo estimado: <strong>{fmtFechaCorta(finCompostaje(cubForm.fecha_compostaje_inicio))}</strong></p>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

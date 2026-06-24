@@ -36,8 +36,8 @@ export const ROLE_CONFIG = {
   },
   OPERARIO: {
     isTecnico:  false,
-    redirectTo: '/cuarto-frio',
-    routes:     new Set(['/cuarto-frio', '/tenjo']),
+    redirectTo: '/tenjo',
+    routes:     new Set(['/tenjo']),
   },
 }
 

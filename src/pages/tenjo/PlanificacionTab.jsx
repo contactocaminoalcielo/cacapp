@@ -85,7 +85,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     setLote(l || null)
     if (l) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios(estado, tipo_acompanamiento, mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso))')
+        .select('*, servicios(estado, notas, tipo_acompanamiento, recogidas(notas, contacto_telefono), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso))')
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
       setItems(its || [])
@@ -116,18 +116,21 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   function datosMascota(item) {
     const m  = item.servicios?.mascotas
     const cl = m?.clientes
+    const rec = Array.isArray(item.servicios?.recogidas) ? item.servicios.recogidas[0] : item.servicios?.recogidas
     const presencial = varianteProceso(item.servicios?.planes?.codigo, item.servicios?.tipo_acompanamiento) === 'EXCLUSIVO_PRESENCIAL'
     return {
-      emoji:       petEmoji(m?.especies?.nombre),
-      nombre:      m?.nombre || '—',
-      especie:     m?.especies?.nombre,
-      plan:        item.servicios?.planes?.nombre,
-      tipoProceso: TIPO_PROCESO_LABEL[item.servicios?.planes?.tipo_proceso] || null,
-      cliente:     cl ? `${cl.nombre || ''} ${cl.apellido || ''}`.trim() : null,
-      peso:        m?.peso_kg || porServicio[item.servicio_id]?.peso_kg || null,
+      emoji:        petEmoji(m?.especies?.nombre),
+      nombre:       m?.nombre || '—',
+      especie:      m?.especies?.nombre,
+      plan:         item.servicios?.planes?.nombre,
+      tipoProceso:  TIPO_PROCESO_LABEL[item.servicios?.planes?.tipo_proceso] || null,
+      cliente:      cl ? `${cl.nombre || ''} ${cl.apellido || ''}`.trim() : null,
+      peso:         m?.peso_kg || porServicio[item.servicio_id]?.peso_kg || null,
       presencial,
-      hora:        item.checklist?.fecha_hora_acordada || null,
-      wa:          cl?.whatsapp,
+      hora:         item.checklist?.fecha_hora_acordada || null,
+      wa:           cl?.whatsapp,
+      contacto:     cl?.whatsapp || rec?.contacto_telefono || porServicio[item.servicio_id]?.cliente_whatsapp || null,
+      observaciones: item.servicios?.notas || rec?.notas || null,
     }
   }
 

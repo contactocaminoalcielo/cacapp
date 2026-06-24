@@ -488,10 +488,63 @@ export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
     return `${m.emoji || '🐾'} *${m.nombre}*${m.especie ? ` (${m.especie})` : ''}`
       + (proceso ? `\n   ${proceso}` : '')
       + (datos.length ? `\n   ${datos.join(' · ')}` : '')
+      + (m.contacto ? `\n   📞 Contacto: ${m.contacto}` : '')
+      + (m.observaciones ? `\n   📝 Obs: ${m.observaciones}` : '')
   })
   return `🐾 *Procesos individuales — ${fechaLarga || 'próxima jornada'}*\n`
     + `${mascotas.length} mascotica${mascotas.length !== 1 ? 's' : ''} a proceso:\n\n`
     + lineas.join('\n\n')
+}
+
+// ─── Control de procesos (cenizas / compostaje) ──────────────────────────────
+// Regla unica de plazos, reutilizable por la UI (pestana Control) y, a futuro,
+// por el backend. Confirmado con David 2026-06-24:
+//   - Cremacion:  cenizas listas = fecha de cremacion + 5 dias CALENDARIO.
+//   - Compostaje: compostaje listo = fecha de ingreso al cubiculo + 2 MESES.
+export const DIAS_CENIZAS  = 5   // dias calendario tras la cremacion
+export const MESES_COMPOST = 2   // meses calendario tras ingresar al cubiculo
+
+const soloFecha = v => v ? new Date(v).toISOString().split('T')[0] : null
+const sumarDias = (fechaStr, n) => {
+  const d = new Date(fechaStr + 'T12:00:00'); d.setDate(d.getDate() + n)
+  return d.toISOString().split('T')[0]
+}
+const sumarMeses = (fechaStr, n) => {
+  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + n)
+  return d.toISOString().split('T')[0]
+}
+
+/**
+ * Calcula el timeline de un lotes_tenjo_items segun el tipo de proceso del plan.
+ * @param {object} item  fila de lotes_tenjo_items (con servicios.planes.tipo_proceso)
+ * @returns {{ tipo, esCompostaje, fechaInicio, fechaProceso, cubiculo, fechaListo, diasRestantes, estado }}
+ *   estado: 'EN_PROCESO' | 'EN_ESPERA' | 'LISTO'
+ */
+export function calcularListoProceso(item) {
+  const tipo = item?.servicios?.planes?.tipo_proceso || null
+  const esCompostaje = tipo === 'COMPOSTAJE_INDIVIDUAL'
+  const fechaInicio  = soloFecha(item?.fecha_inicio_proceso)
+  const fechaProceso = soloFecha(item?.fecha_fin_proceso) // fin = cremacion / fin de proceso
+  const cubiculo     = item?.cubiculo_codigo || null
+
+  // Aun no finaliza el proceso → en proceso, sin plazo todavia
+  if (!fechaProceso) {
+    return { tipo, esCompostaje, fechaInicio, fechaProceso: null, cubiculo,
+             fechaListo: null, diasRestantes: null, estado: 'EN_PROCESO' }
+  }
+
+  const baseComp = soloFecha(item?.fecha_compostaje_inicio) || fechaProceso
+  const fechaListo = esCompostaje
+    ? sumarMeses(baseComp, MESES_COMPOST)
+    : sumarDias(fechaProceso, DIAS_CENIZAS)
+
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const diasRestantes = Math.ceil((new Date(fechaListo + 'T12:00:00') - hoy) / 86400000)
+  const estado = diasRestantes <= 0 ? 'LISTO' : 'EN_ESPERA'
+
+  return { tipo, esCompostaje,
+           fechaInicio: esCompostaje ? baseComp : fechaInicio,
+           fechaProceso, cubiculo, fechaListo, diasRestantes, estado }
 }
 
 // ─── Etiquetas y colores para la UI ──────────────────────────────────────────

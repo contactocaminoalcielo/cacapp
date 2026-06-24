@@ -17,6 +17,7 @@ import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/l
 import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
 import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
+import ControlTab from '@/pages/tenjo/ControlTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock, History } from 'lucide-react'
 
@@ -201,7 +202,8 @@ export default function Tenjo() {
   const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
   const [modalRetro,        setModalRetro]        = useState(null) // cuarto_frio row — registro retroactivo
   const [formRetro,         setFormRetro]         = useState({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
-  const [tab,               setTab]               = useState('planificacion')
+  // El operario arranca en la Jornada (Planificación es de solo lectura para él)
+  const [tab,               setTab]               = useState(personalData?.rol === 'OPERARIO' ? 'jornada' : 'planificacion')
   const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
   const [candidatas,        setCandidatas]        = useState([]) // null = migración 003 sin aplicar
 
@@ -513,6 +515,7 @@ export default function Tenjo() {
             <TabsTrigger value="candidatas">
               🐾 Candidatas{Array.isArray(candidatas) && candidatas.length > 0 ? ` (${candidatas.length})` : ''}
             </TabsTrigger>
+            <TabsTrigger value="control">📊 Control</TabsTrigger>
             <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>
           </TabsList>
 
@@ -544,6 +547,10 @@ export default function Tenjo() {
               personalData={personalData}
               onChanged={cargar}
             />
+          </TabsContent>
+
+          <TabsContent value="control">
+            <ControlTab />
           </TabsContent>
 
           <TabsContent value="operacion">
