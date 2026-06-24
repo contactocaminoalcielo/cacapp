@@ -64,6 +64,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [guardando,   setGuardando]  = useState(false)
   const [paso,        setPaso]       = useState(0)
   const [dir,         setDir]        = useState(1)
+  const [declinados,  setDeclinados] = useState(() => new Set()) // ids de recordatorios "no deseo"
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
@@ -74,7 +75,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
   const mascota      = servicio?.mascota || 'tu mascota'
-  const todoListo    = items.every(it => itemListo(it, fotos, textos))
+  // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
+  const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
+  function toggleDeclinado(id, v) {
+    setDeclinados(prev => { const n = new Set(prev); v ? n.add(id) : n.delete(id); return n })
+  }
 
   function ir(n) { setDir(n > paso ? 1 : -1); setPaso(n) }
   function siguiente() { if (paso < totalPasos - 1) ir(paso + 1) }
@@ -102,6 +107,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       // la UI de carga y el envío iría con sr_id indefinido).
       const it = (r.items || []).map(x => ({ ...x, id: x.sr_id, recordatorios: x.recordatorio }))
       setItems(it)
+      setDeclinados(new Set())
 
       const fi = {}
       it.forEach(item => {
@@ -159,6 +165,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
     try {
       const recordatorios = []
       for (const item of items) {
+        if (declinados.has(item.id)) continue   // declinado: no se suben fotos
         const files = (fotos[item.id] || []).filter(Boolean)
         const urls  = []
         for (const f of files) urls.push(await subirArchivo(item.id, f))
@@ -166,6 +173,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       }
       const payload = {
         recordatorios,
+        declinados: [...declinados],
         comentarios: comentarios.trim() || null,
         anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
@@ -239,12 +247,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   textosVals={textos[itemActual.id] || {}}
                   onFilesChange={f => setFotos(p => ({ ...p, [itemActual.id]: f }))}
                   onTextosChange={v => setTextos(p => ({ ...p, [itemActual.id]: v }))}
+                  declined={declinados.has(itemActual.id)}
+                  onToggleDeclined={v => toggleDeclinado(itemActual.id, v)}
                 />
               )}
               {esFinal && (
                 <PasoFinal
                   mascota={mascota}
-                  items={items} fotos={fotos} textos={textos}
+                  items={items} fotos={fotos} textos={textos} declinados={declinados}
                   catalogo={catalogo} interes={interes} setInteres={setInteres}
                   esCompostaje={esCompostajeIndividual}
                   anticipados={anticipados} setAnticipados={setAnticipados}
@@ -294,8 +304,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
   )
 }
 
-// ── PasoItem (sin opción de eliminar: el cliente no puede quitar recordatorios) ──
-function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosChange }) {
+// ── PasoItem ─────────────────────────────────────────────────────────────────
+function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosChange, declined, onToggleDeclined }) {
   const rec      = item.recordatorios
   const nombre   = rec?.nombre || 'Recordatorio'
   const maxFotos = (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
@@ -318,6 +328,32 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
     const arr = [...(textosVals[label] || Array(c?.cantidad || 1).fill(''))]
     arr[idx]  = val
     onTextosChange({ ...textosVals, [label]: arr })
+  }
+
+  // Recordatorio declinado: ocultamos la carga y ofrecemos reactivarlo.
+  if (declined) {
+    return (
+      <div className="space-y-7">
+        <div>
+          <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
+            Para los recuerdos de {mascota}
+          </p>
+          <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
+        </div>
+        <div className="bg-white rounded-3xl border-2 p-7 text-center space-y-4" style={{ borderColor: BORD }}>
+          <div className="text-5xl">🚫</div>
+          <p className="text-[17px] font-bold text-gray-800">No deseas este recordatorio</p>
+          <p className="text-[14px] text-gray-500 leading-relaxed">
+            No te pediremos fotos para este. Si cambias de opinión, puedes volver a activarlo.
+          </p>
+          <button onClick={() => onToggleDeclined(false)}
+            className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
+            style={{ borderColor: G, color: G, background: G_LITE }}>
+            Sí lo quiero
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -463,12 +499,17 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
           ))}
         </div>
       )}
+
+      <button onClick={() => onToggleDeclined(true)}
+        className="w-full text-center text-[14px] font-semibold py-3 text-gray-400 hover:text-gray-600 transition-colors">
+        No deseo este recordatorio
+      </button>
     </div>
   )
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
 
   return (
@@ -485,18 +526,21 @@ function PasoFinal({ mascota, items, fotos, textos, catalogo, interes, setIntere
             <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>Recordatorios</p>
           </div>
           {items.map((it, idx) => {
-            const rec    = it.recordatorios
-            const maxF   = rec?.max_fotos || 0
-            const nF     = (fotos[it.id] || []).filter(Boolean).length
-            const listo  = itemListo(it, fotos, textos)
+            const rec      = it.recordatorios
+            const maxF     = rec?.max_fotos || 0
+            const nF       = (fotos[it.id] || []).filter(Boolean).length
+            const declined = declinados.has(it.id)
+            const listo    = declined || itemListo(it, fotos, textos)
             return (
               <div key={it.id} className="flex items-center gap-4 px-5 py-4 border-t hover:bg-gray-50 transition-colors" style={{ borderColor: BORD }}>
-                <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: listo ? G : '#FEF3C7' }}>
-                  {listo ? <Check size={16} color="#fff" strokeWidth={3} /> : <span className="text-[11px] font-bold text-amber-600">!</span>}
+                <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: declined ? '#E5E7EB' : (listo ? G : '#FEF3C7') }}>
+                  {declined ? <X size={15} color="#6B7280" strokeWidth={3} /> : listo ? <Check size={16} color="#fff" strokeWidth={3} /> : <span className="text-[11px] font-bold text-amber-600">!</span>}
                 </div>
-                <span className={`flex-1 text-[15px] leading-tight ${listo ? 'text-gray-800 font-medium' : 'text-gray-600'}`}>
+                <span className={`flex-1 text-[15px] leading-tight ${declined ? 'text-gray-400' : (listo ? 'text-gray-800 font-medium' : 'text-gray-600')}`}>
                   {rec?.nombre}
-                  {maxF > 0 && (
+                  {declined ? (
+                    <span className="ml-2 text-[12px] font-semibold text-gray-400">No deseado</span>
+                  ) : maxF > 0 && (
                     <span className="ml-2 text-[12px] font-semibold" style={{ color: nF === maxF ? G : '#F59E0B' }}>{nF}/{maxF} foto{maxF > 1 ? 's' : ''}</span>
                   )}
                 </span>
