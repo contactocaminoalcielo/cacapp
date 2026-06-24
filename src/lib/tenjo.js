@@ -3,6 +3,8 @@
 // aquí (y a futuro en orbit-backend); la IA solo resume y redacta.
 // Tenjo LEE la custodia vía v_candidatos_tenjo; nunca administra neveras.
 import { db } from '@/lib/supabase'
+import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
+import { today } from '@/lib/utils'
 
 // ─── Configuración (defaults de respaldo; la fuente es config_operativa) ─────
 export const CONFIG_DEFAULTS = {
@@ -545,6 +547,76 @@ export function calcularListoProceso(item) {
   return { tipo, esCompostaje,
            fechaInicio: esCompostaje ? baseComp : fechaInicio,
            fechaProceso, cubiculo, fechaListo, diasRestantes, estado }
+}
+
+// Estados de servicio "anteriores a Tenjo" (permiten avanzar sin downgrade)
+const ANTES_PROCESO    = ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO']
+const ANTES_PRODUCCION = ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO', 'EN_PROCESO']
+// Items "vivos" antes de procesarse (se retiran al poner en orden una terminada)
+const ITEMS_PRE_PROCESO = ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA', 'EN_TRASLADO', 'RECIBIDA']
+
+/**
+ * Deja un servicio individual de Tenjo en estado coherente. Conecta el flujo de
+ * la Jornada (lotes) con la custodia (cuarto frío) y el estado del servicio.
+ * Todos los pasos son idempotentes y nunca hacen downgrade del servicio.
+ *
+ * @param {string} servicioId
+ * @param {object} opts
+ * @param {string}  opts.tipoProceso          'CREMACION_INDIVIDUAL' | 'COMPOSTAJE_INDIVIDUAL'
+ * @param {string}  opts.fechaProceso         fecha/hora de fin de proceso (cremación/ingreso). Default: ahora.
+ * @param {string?} opts.fechaCompostajeInicio fecha de ingreso al cubículo (compostaje)
+ * @param {string?} opts.personalId
+ * @param {string}  opts.motivo               texto para el log de salida
+ * @param {boolean} opts.retirarItems         retirar items pre-proceso del pool (limpieza de terminadas)
+ * @param {boolean} opts.marcarItemProcesado  fijar el item activo a PROCESADO (marcar como ya hecha)
+ */
+export async function reconciliarServicioTenjo(servicioId, {
+  tipoProceso,
+  fechaProceso = new Date().toISOString(),
+  fechaCompostajeInicio = null,
+  personalId = null,
+  motivo = 'Puesto en orden — proceso finalizado en Tenjo',
+  retirarItems = false,
+  marcarItemProcesado = false,
+} = {}) {
+  if (!servicioId) return
+
+  // 1. (opcional) marcar el item activo como PROCESADO antes de retirar/avanzar
+  if (marcarItemProcesado) {
+    await db.from('lotes_tenjo_items')
+      .update({ estado: 'PROCESADO', fecha_fin_proceso: fechaProceso, notas: 'Puesto en orden manualmente' })
+      .eq('servicio_id', servicioId)
+      .in('estado', ['RECIBIDA', 'EN_PROCESO', 'AUTORIZADA_SALIDA', 'EN_TRASLADO'])
+  }
+
+  // 2. salida física del cuarto frío (idempotente)
+  await registrarSalidaCuartoFrio(servicioId, { personalId, tipo: 'SALIDA_TENJO', motivo })
+
+  // 3. completar traslado activo (si lo hay)
+  await db.from('traslados_tenjo')
+    .update({ estado: 'COMPLETADO', fecha_completado: today() })
+    .eq('servicio_id', servicioId)
+    .in('estado', ['PROGRAMADO', 'EN_CAMINO'])
+
+  // 4. avanzar el servicio según el tiempo, sin downgrade
+  const calc = calcularListoProceso({
+    servicios: { planes: { tipo_proceso: tipoProceso } },
+    fecha_fin_proceso: fechaProceso,
+    fecha_compostaje_inicio: fechaCompostajeInicio,
+  })
+  if (calc.estado === 'LISTO') {
+    await db.from('servicios').update({ estado: 'EN_PRODUCCION' })
+      .eq('id', servicioId).in('estado', ANTES_PRODUCCION)
+  } else {
+    await db.from('servicios').update({ estado: 'EN_PROCESO' })
+      .eq('id', servicioId).in('estado', ANTES_PROCESO)
+  }
+
+  // 5. (opcional) retirar items pre-proceso huérfanos del pool
+  if (retirarItems) {
+    await db.from('lotes_tenjo_items').update({ estado: 'RETIRADO_DEL_LOTE' })
+      .eq('servicio_id', servicioId).in('estado', ITEMS_PRE_PROCESO)
+  }
 }
 
 // ─── Etiquetas y colores para la UI ──────────────────────────────────────────

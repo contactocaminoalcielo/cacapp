@@ -15,7 +15,7 @@ import { subirEvidencia } from '@/lib/evidencias'
 import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
-  ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS,
+  ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
 } from '@/lib/tenjo'
 import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
@@ -119,14 +119,24 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     if (!cubForm.cubiculo_codigo.trim()) {
       await showAlert('Indica el código del cubículo donde quedó la mascota.', { title: 'Cubículo requerido' }); return
     }
+    const inicioComp = cubForm.fecha_compostaje_inicio || today()
     await updateItem(item, {
       estado: 'PROCESADO',
       fecha_fin_proceso: ahoraISO(),
       cubiculo_codigo: cubForm.cubiculo_codigo.trim(),
-      fecha_compostaje_inicio: cubForm.fecha_compostaje_inicio || today(),
-    })
+      fecha_compostaje_inicio: inicioComp,
+    }, false)
+    // Conectar los flujos: salida del cuarto frío + traslado completado + avanzar servicio
+    try {
+      await reconciliarServicioTenjo(item.servicio_id, {
+        tipoProceso: item.servicios?.planes?.tipo_proceso,
+        fechaCompostajeInicio: inicioComp,
+        personalId: personalData?.id,
+      })
+    } catch (e) { console.error('[reconciliar compostaje]', e?.message) }
     setModalCubiculo(null)
     setCubForm({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
+    await cargar(); onChanged?.()
   }
 
   function abrirChecklist(item) {
@@ -255,7 +265,15 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 }
                 // Cremación (u otros): la finalización registra la fecha de cremación
                 if (!await confirm(`Se registrará la cremación de ${m?.nombre} con la fecha de hoy.`, { title: '¿Finalizar cremación?', confirmLabel: 'Finalizar' })) return
-                await updateItem(item, { estado: 'PROCESADO', fecha_fin_proceso: ahoraISO() })
+                await updateItem(item, { estado: 'PROCESADO', fecha_fin_proceso: ahoraISO() }, false)
+                // Conectar los flujos: salida del cuarto frío + traslado completado + avanzar servicio
+                try {
+                  await reconciliarServicioTenjo(item.servicio_id, {
+                    tipoProceso: plan?.tipo_proceso,
+                    personalId: personalData?.id,
+                  })
+                } catch (e) { console.error('[reconciliar cremación]', e?.message) }
+                await cargar(); onChanged?.()
               }}>
               <Square size={12} /> {esCompostaje ? 'Finalizar · cubículo' : 'Finalizar'}
             </Button>

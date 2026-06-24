@@ -550,7 +550,7 @@ export default function Tenjo() {
           </TabsContent>
 
           <TabsContent value="control">
-            <ControlTab />
+            <ControlTab canPlan={canPlan} personalData={personalData} />
           </TabsContent>
 
           <TabsContent value="operacion">
