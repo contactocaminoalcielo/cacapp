@@ -360,12 +360,19 @@ export default function Finanzas() {
     if (it.valor_a_cobrar == null) return 0
     return (Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0)
   }
-  // Lo que falta para completar = a recoger − recogido. NULL si no aplica.
+  // Diferencia con BANDA aceptable [neto … bruto]: el técnico puede recoger el neto
+  // (la comisión la maneja la veterinaria) o el bruto (recogió todo, incl. comisión)
+  // y en ambos casos está cuadrado. Solo es diferencia si recogió DE MENOS (< neto)
+  // o DE MÁS (> bruto). NULL si no aplica.
   function diferenciaItem(it) {
     if (it.es_cancelado || esFactMensual(it)) return null
-    const vr = valorARecoger(it)
-    if (vr == null) return null
-    return vr - (Number(it.total_cobrado) || 0)
+    const neto = valorARecoger(it)
+    if (neto == null) return null
+    const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
+    const recogido = Number(it.total_cobrado) || 0
+    if (recogido < neto)  return neto - recogido    // falta (+)
+    if (recogido > bruto) return bruto - recogido   // de más (−)
+    return 0
   }
   // ¿Falta plata del técnico sin resolver? (alerta visual). Fact. mensual no es
   // falta del técnico → se gestiona aparte en Conciliaciones.
@@ -1936,8 +1943,8 @@ function MascotaDetalleModal({ item, onClose }) {
 
   // Desglose de cobros: prioriza el snapshot del cuadre (item) y cae al servicio.
   const n = v => Number(v) || 0
+  const grossVal = item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total)
   const cob = {
-    plan:       item.valor_plan != null ? n(item.valor_plan) : n(svc?.valor_plan),
     adic:       item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
     transporte: item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
     descuento:  n(svc?.descuento_adicional),
@@ -1949,7 +1956,14 @@ function MascotaDetalleModal({ item, onClose }) {
     recogido:   n(item.total_cobrado),
     medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
   }
-  cob.diferencia = cob.neto - cob.recogido
+  // Valor del plan: snapshot; para históricos sin desglose lo deriva del bruto.
+  cob.plan = item.valor_plan != null ? n(item.valor_plan)
+           : svc?.valor_plan != null ? n(svc.valor_plan)
+           : Math.max(0, grossVal - cob.adic - cob.transporte)
+  // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
+  cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
+                 : cob.recogido > grossVal ? grossVal - cob.recogido
+                 : 0
 
   const Dato = ({ label, children }) => (
     <div className="flex justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
