@@ -8,8 +8,22 @@ import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
   Banknote, Building2, Receipt, User2, Tag,
-  Calendar, Lock, Download,
+  Calendar, Lock, Download, Eye, FileText, Phone,
+  CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare,
 } from 'lucide-react'
+
+// Estados de revisión por mascota (feature 8). NULL = sin revisar.
+const ESTADO_REV = {
+  VERIFICADO: { label: 'Verificado OK',     short: 'OK',       color: '#166534', bg: '#F0FDF4', border: '#86EFAC' },
+  CORRECTO:   { label: 'Recogió correcto',  short: 'Correcto', color: '#166534', bg: '#F0FDF4', border: '#86EFAC' },
+  PARCIAL:    { label: 'Recogió parcial',   short: 'Parcial',  color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
+  NO_RECOGIO: { label: 'No recogió',        short: 'No cobró', color: '#C03030', bg: '#FEE8E8', border: '#FCA5A5' },
+  EXCEDENTE:  { label: 'Recogió de más',    short: 'De más',   color: '#1E40AF', bg: '#EFF6FF', border: '#BFDBFE' },
+}
+const VIA_CONCIL = {
+  LLAMAR_COBRAR:      { label: 'Llamar a cobrar',      icon: Phone },
+  FACTURACION_MENSUAL:{ label: 'Facturación mensual',  icon: Building2 },
+}
 
 // ── Helpers de badge ─────────────────────────────────────────────────────────
 
@@ -78,6 +92,13 @@ export default function Finanzas() {
   const [cuadreError,     setCuadreError]     = useState('')
   const [cerrando,        setCerrando]        = useState(false)
   const [cuadrePdfGen,    setCuadrePdfGen]    = useState(false)
+  const [detalleSvc,      setDetalleSvc]      = useState(null)   // servicio_id → tarjeta de mascota
+  const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
+  const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
+
+  // ── State Conciliaciones (mascotas con plata faltante) ──────────────────────
+  const [conciliaciones, setConciliaciones] = useState(null)  // null = aún no cargado
+  const [concilLoading,  setConcilLoading]  = useState(false)
 
   // ── State "No cobrados" (pago pendiente / facturación mensual) ──────────────
   const [noCobrados,    setNoCobrados]    = useState(null)   // null = aún no cargado
@@ -263,7 +284,9 @@ export default function Finanzas() {
 
   async function cerrarCuadre() {
     if (!cuadreData) return
-    if (!await confirm('Una vez cerrado, el cuadre queda congelado y no se podrá editar. El técnico confirma el dinero a entregar.', { title: '¿Cerrar cuadre?', variant: 'warning', confirmLabel: 'Cerrar cuadre' })) return
+    // Doble verificación (feature 4): 1) advertencia de congelado, 2) confirmación del monto.
+    if (!await confirm('Una vez cerrado, el cuadre queda congelado y no se podrá editar. El técnico confirma el dinero a entregar.', { title: '¿Cerrar cuadre?', variant: 'warning', confirmLabel: 'Continuar' })) return
+    if (!await confirm(`Confirma que el dinero a entregar a gerencia es ${fmt(cuadreData.dinero_a_entregar)} y que el cuadre quedará inmutable. Esta acción no se puede deshacer.`, { title: 'Confirmación final', variant: 'warning', confirmLabel: 'Sí, cerrar definitivamente' })) return
     setCerrando(true)
     try {
       const firma = {
@@ -317,6 +340,101 @@ export default function Finanzas() {
       await showAlert(parsearErrorDB(err), { title: 'Error al marcar lejanía' })
     }
   }
+
+  // ── Diferencia y alerta por mascota (features 5, 7) ─────────────────────────
+  // Lo que falta para completar = a cobrar (bruto) − recogido. NULL si no hay dato.
+  function diferenciaItem(it) {
+    if (it.es_cancelado || it.valor_a_cobrar == null) return null
+    return (Number(it.valor_a_cobrar) || 0) - (Number(it.total_cobrado) || 0)
+  }
+  // ¿Falta plata sin resolver? (alerta visual + entra a Conciliaciones)
+  function faltaPlata(it) {
+    const d = diferenciaItem(it)
+    return d != null && d > 0
+      && !['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion)
+      && !it.conciliacion_resuelta
+  }
+  // Estado sugerido según la diferencia (feature 8 — el coordinador puede cambiarlo).
+  function estadoSugerido(it) {
+    const d = diferenciaItem(it)
+    if (d == null) return null
+    if (d > 0) return (Number(it.total_cobrado) || 0) > 0 ? 'PARCIAL' : 'NO_RECOGIO'
+    if (d < 0) return 'EXCEDENTE'
+    return 'CORRECTO'
+  }
+
+  // Guarda estado de revisión + observaciones (solo BORRADOR). Optimista.
+  async function guardarRevision(item, { estado, observaciones }) {
+    const nuevoEstado = estado !== undefined ? estado : item.estado_conciliacion
+    const nuevasObs   = observaciones !== undefined ? observaciones : item.observaciones
+    setCuadreItems(prev => prev.map(it => it.id === item.id
+      ? { ...it, estado_conciliacion: nuevoEstado, observaciones: nuevasObs } : it))
+    try {
+      const { error } = await db.rpc('set_cuadre_item_revision', {
+        p_item_id: item.id,
+        p_estado: nuevoEstado || null,
+        p_observaciones: nuevasObs || null,
+      })
+      if (error) throw error
+      // Refrescar la lista de Conciliaciones si está cargada (entra/sale según estado).
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, estado_conciliacion: nuevoEstado, observaciones: nuevasObs } : it)
+              .filter(it => ['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) && !it.conciliacion_resuelta)
+        : prev)
+    } catch (err) {
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...item } : it))
+      await showAlert(parsearErrorDB(err), { title: 'Error al guardar la revisión' })
+    }
+  }
+
+  // Gestión de conciliación: vía / resuelta / notas. Funciona aunque esté CERRADO.
+  // Actualiza tanto el cuadre abierto como la lista de Conciliaciones.
+  async function guardarConciliacion(item, { via, resuelta, notas }) {
+    try {
+      const { error } = await db.rpc('set_cuadre_item_conciliacion', {
+        p_item_id: item.id,
+        p_via: via !== undefined ? (via || null) : (item.conciliacion_via || null),
+        p_resuelta: resuelta !== undefined ? resuelta : null,
+        p_notas: notas !== undefined ? (notas || null) : null,
+      })
+      if (error) throw error
+      const patch = {}
+      if (via !== undefined)      patch.conciliacion_via = via || null
+      if (resuelta !== undefined) patch.conciliacion_resuelta = resuelta
+      if (notas !== undefined)    patch.observaciones = notas || null
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...patch } : it))
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, ...patch } : it)
+              .filter(it => !it.conciliacion_resuelta)
+        : prev)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al gestionar la conciliación' })
+    }
+  }
+
+  // ── Conciliaciones: items con plata faltante pendientes (de cualquier cuadre) ─
+  async function cargarConciliaciones() {
+    setConcilLoading(true)
+    try {
+      const { data } = await db
+        .from('cuadre_items')
+        .select(`*, cuadres_tecnico:cuadre_id ( id, estado, fecha_desde, fecha_hasta,
+          personal:tecnico_id ( nombre, apellido ) )`)
+        .eq('conciliacion_resuelta', false)
+        .in('estado_conciliacion', ['PARCIAL', 'NO_RECOGIO'])
+        .order('fecha', { ascending: false })
+      setConciliaciones(data || [])
+    } catch (err) {
+      console.error('[Finanzas] Error cargando conciliaciones:', err)
+      setConciliaciones([])
+    } finally {
+      setConcilLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'conciliaciones' && conciliaciones === null && !concilLoading) cargarConciliaciones()
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── "No cobrados": recibos del técnico sin cobro (pendiente / fact. mensual) ─
   async function cargarNoCobrados() {
@@ -681,6 +799,7 @@ export default function Finanzas() {
                   { key: 'nocobrados',  label: 'No cobrados' },
                   { key: 'historial',   label: 'Historial' },
                   { key: 'tecnicos',    label: 'Cuadre técnicos' },
+                  { key: 'conciliaciones', label: 'Conciliaciones' },
                 ].map(t => (
                   <button
                     key={t.key}
@@ -1257,34 +1376,72 @@ export default function Finanzas() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                          <table className="w-full min-w-[1180px]">
+                          <table className="w-full min-w-[1480px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía'].map(h => (
+                                {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
-                              {cuadreItems.map(it => (
-                                <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                              {cuadreItems.map(it => {
+                                const d = diferenciaItem(it)
+                                const alerta = faltaPlata(it)
+                                const sug = estadoSugerido(it)
+                                const er = it.estado_conciliacion ? ESTADO_REV[it.estado_conciliacion] : null
+                                return (
+                                <tr key={it.id} className={`text-[13px] border-b transition-colors ${alerta ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
+                                  style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alerta ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
-                                  <td className="px-3 py-2.5 font-semibold text-gray-900">
-                                    {it.mascota_nombre || '—'}
-                                    {it.es_cancelado && <span className="ml-1.5 text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 align-middle">CANCELADO</span>}
+                                  <td className="px-3 py-2.5">
+                                    <button onClick={() => it.servicio_id && setDetalleSvc(it.servicio_id)} disabled={!it.servicio_id}
+                                      className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
+                                      title="Ver tarjeta completa de la mascota">
+                                      {alerta && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
+                                      {it.mascota_nombre || '—'}
+                                    </button>
+                                    <div className="flex flex-wrap gap-1 mt-0.5">
+                                      {it.es_cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">CANCELADO</span>}
+                                      {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
+                                      {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
+                                    </div>
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">
+                                    {it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}
+                                    {Number(it.valor_adicionales) > 0 && <div className="text-[10px] font-medium text-gray-400">incl. adic. {fmt(it.valor_adicionales)}</div>}
+                                  </td>
                                   <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
                                     {it.total_cobrado > 0 ? fmt(it.total_cobrado)
                                       : (it.es_cancelado ? '—'
                                         : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
                                   </td>
+                                  <td className="px-3 py-2.5 tabular-nums">
+                                    {d == null ? <span className="text-gray-300">—</span>
+                                      : d > 0 ? <span className="font-bold text-[#DC2626]">{fmt(d)}</span>
+                                      : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
+                                      : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
+                                  </td>
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">{fmt(it.efectivo)}</td>
-                                  <td className="px-3 py-2.5 text-gray-500 tabular-nums">{it.digital > 0 ? fmt(it.digital) : '—'}</td>
+                                  <td className="px-3 py-2.5">
+                                    {it.digital > 0 ? (
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-gray-600 font-medium tabular-nums">{fmt(it.digital)}</span>
+                                        <div className="flex flex-wrap gap-1">
+                                          {(it.medios_pago || []).filter(m => String(m.metodo).toUpperCase() !== 'EFECTIVO' && Number(m.monto) > 0).map((m, i) => (
+                                            <button key={i} onClick={() => setComprobanteItem(it)} title="Ver comprobante de pago"
+                                              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#1E40AF] hover:bg-[#DBEAFE] inline-flex items-center gap-0.5 transition-colors">
+                                              <FileText size={9} /> {m.metodo}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : <span className="text-gray-400 tabular-nums">—</span>}
+                                  </td>
                                   <td className="px-3 py-2.5 tabular-nums">
                                     {it.transporte_sin_dato ? (
                                       <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md" title="Servicio sin transporte registrado (anterior a la mejora). Verificar manualmente.">sin dato ⚠</span>
@@ -1314,8 +1471,27 @@ export default function Finanzas() {
                                       <span className="text-[11px] text-gray-500">{it.es_lejania ? 'Sí' : '—'}</span>
                                     </label>
                                   </td>
+                                  {/* Acción: estado de revisión (sugerido) + nota (features 3, 8) */}
+                                  <td className="px-3 py-2.5">
+                                    {it.es_cancelado ? <span className="text-gray-300 text-[11px]">—</span> : (
+                                      <div className="flex flex-col gap-1 min-w-[150px]">
+                                        <select value={it.estado_conciliacion || ''} disabled={cuadreCerrado}
+                                          onChange={e => guardarRevision(it, { estado: e.target.value || null })}
+                                          className="text-[11px] rounded-lg border px-1.5 py-1 outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20 disabled:bg-gray-50"
+                                          style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                                          <option value="">{sug ? `Sugerido: ${ESTADO_REV[sug].short}` : 'Sin revisar'}</option>
+                                          {Object.entries(ESTADO_REV).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                        </select>
+                                        <button onClick={() => setObsItem(it)}
+                                          className={`text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors ${it.observaciones ? 'text-[#1A5CD8] bg-[#EFF6FF] hover:bg-[#DBEAFE]' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                                          title={it.observaciones || 'Agregar observación'}>
+                                          <MessageSquare size={10} /> {it.observaciones ? 'Ver nota' : 'Nota'}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
                                 </tr>
-                              ))}
+                              )})}
                             </tbody>
                           </table>
                         </div>
@@ -1331,6 +1507,15 @@ export default function Finanzas() {
                             <FilaTotal label="Comisión veterinarias" valor={cuadreItems.reduce((a, it) => a + (Number(it.comision) || 0), 0)} color="#d97706" />
                           )}
                           <FilaTotal label="Total recogido (cliente)" valor={cuadreData.total_cobrado} />
+                          {(() => {
+                            const falta = cuadreItems.reduce((a, it) => { const d = diferenciaItem(it); return a + (faltaPlata(it) && d > 0 ? d : 0) }, 0)
+                            return falta > 0 ? (
+                              <div className="flex items-center justify-between bg-amber-50 -mx-1 px-2 py-1 rounded-lg">
+                                <span className="text-[12px] font-semibold text-amber-700 inline-flex items-center gap-1"><AlertTriangle size={12} /> Falta por cobrar</span>
+                                <span className="tabular-nums text-[13px] font-extrabold text-amber-700">{fmt(falta)}</span>
+                              </div>
+                            ) : null
+                          })()}
                           <FilaTotal label="Efectivo recibido (técnico)" valor={cuadreData.efectivo_recibido} color="#16a34a" />
                           <FilaTotal label="Digital → directo a empresa" valor={cuadreData.digital_empresa} color="#6B7280" />
                           <div className="border-t my-1" style={{ borderColor: 'rgba(30,80,40,0.08)' }} />
@@ -1368,10 +1553,128 @@ export default function Finanzas() {
                 </div>
               )}
 
+              {/* ── Tab: Conciliaciones ──────────────────────────────────── */}
+              {tab === 'conciliaciones' && (
+                <div className="p-5 space-y-4">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <p className="text-[12px] text-gray-500 max-w-2xl">
+                      Mascotas marcadas con <strong>plata faltante</strong> en algún cuadre (parcial o no recogió).
+                      Aquí se gestiona el cobro: decidir si toca <strong>llamar a cobrar</strong> o si es una
+                      veterinaria de <strong>facturación mensual</strong>. Al marcar como resuelto, sale de la lista.
+                    </p>
+                    <button onClick={cargarConciliaciones} disabled={concilLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-60"
+                      style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                      <RefreshCw size={13} className={concilLoading ? 'animate-spin' : ''} /> Actualizar
+                    </button>
+                  </div>
+
+                  {concilLoading || conciliaciones === null ? (
+                    <div className="py-16 text-center text-gray-400 text-[13px]">Cargando conciliaciones…</div>
+                  ) : conciliaciones.length === 0 ? (
+                    <div className="py-16 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                      <CheckCircle2 size={32} className="mx-auto text-green-500 mb-2" />
+                      <p className="text-[13px] text-gray-500">No hay mascotas pendientes de conciliar. Todo al día.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap gap-3">
+                        <div className="px-4 py-2 rounded-xl bg-amber-50 border border-amber-100">
+                          <div className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide">Pendientes</div>
+                          <div className="text-[20px] font-extrabold text-amber-700">{conciliaciones.length}</div>
+                        </div>
+                        <div className="px-4 py-2 rounded-xl bg-red-50 border border-red-100">
+                          <div className="text-[11px] font-semibold text-red-700 uppercase tracking-wide">Total por cobrar</div>
+                          <div className="text-[20px] font-extrabold text-red-700 tabular-nums">
+                            {fmt(conciliaciones.reduce((a, it) => { const d = diferenciaItem(it); return a + (d > 0 ? d : 0) }, 0))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                        <table className="w-full min-w-[1080px]">
+                          <thead style={{ background: '#FAFAFA' }}>
+                            <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
+                              {['Fecha', 'Mascota', 'Técnico', 'Veterinaria', 'A cobrar', 'Recogido', 'Falta', 'Estado', 'Vía de cobro', 'Observación', ''].map(h => (
+                                <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {conciliaciones.map(it => {
+                              const d = diferenciaItem(it)
+                              const er = it.estado_conciliacion ? ESTADO_REV[it.estado_conciliacion] : null
+                              const tec = it.cuadres_tecnico?.personal
+                              return (
+                                <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
+                                  <td className="px-3 py-2.5">
+                                    <button onClick={() => it.servicio_id && setDetalleSvc(it.servicio_id)} disabled={!it.servicio_id}
+                                      className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left disabled:no-underline"
+                                      title="Ver tarjeta completa de la mascota">{it.mascota_nombre || '—'}</button>
+                                  </td>
+                                  <td className="px-3 py-2.5 text-gray-600 text-[12px]">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</td>
+                                  <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums text-gray-700">{fmt(it.total_cobrado)}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-bold text-[#DC2626]">{d > 0 ? fmt(d) : '—'}</td>
+                                  <td className="px-3 py-2.5">{er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}</td>
+                                  <td className="px-3 py-2.5">
+                                    <select value={it.conciliacion_via || ''} onChange={e => guardarConciliacion(it, { via: e.target.value || null })}
+                                      className="text-[11px] rounded-lg border px-1.5 py-1 outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20"
+                                      style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                                      <option value="">Definir…</option>
+                                      {Object.entries(VIA_CONCIL).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                    </select>
+                                  </td>
+                                  <td className="px-3 py-2.5">
+                                    <button onClick={() => setObsItem(it)}
+                                      className={`text-[11px] inline-flex items-center gap-1 px-2 py-0.5 rounded-md max-w-[180px] truncate transition-colors ${it.observaciones ? 'text-[#1A5CD8] bg-[#EFF6FF] hover:bg-[#DBEAFE]' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                                      title={it.observaciones || 'Agregar observación'}>
+                                      <MessageSquare size={11} /> {it.observaciones ? <span className="truncate">{it.observaciones}</span> : 'Nota'}
+                                    </button>
+                                  </td>
+                                  <td className="px-3 py-2.5">
+                                    <button onClick={() => guardarConciliacion(it, { resuelta: true })}
+                                      className="flex items-center gap-1 px-2.5 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap">
+                                      <Check size={12} /> Resuelto
+                                    </button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
             </div>
           </>
         )}
       </div>
+
+      {/* ── Modal tarjeta de mascota (detalle + evidencias + trazabilidad) ── */}
+      {detalleSvc && <MascotaDetalleModal servicioId={detalleSvc} onClose={() => setDetalleSvc(null)} />}
+
+      {/* ── Modal comprobante de pago digital ────────────────────────────── */}
+      {comprobanteItem && <ComprobanteModal item={comprobanteItem} onClose={() => setComprobanteItem(null)} />}
+
+      {/* ── Modal observaciones por mascota ──────────────────────────────── */}
+      {obsItem && (
+        <ObsModal
+          item={obsItem}
+          cerrado={obsItem.cuadre_id && cuadreData?.id === obsItem.cuadre_id ? cuadreCerrado : (obsItem.cuadres_tecnico?.estado === 'CERRADO')}
+          onClose={() => setObsItem(null)}
+          onSave={async (texto, cerrado) => {
+            if (cerrado) await guardarConciliacion(obsItem, { notas: texto })
+            else await guardarRevision(obsItem, { observaciones: texto })
+            setObsItem(null)
+          }}
+        />
+      )}
 
       {/* ── Modal Registrar Pago ────────────────────────────────────────── */}
       {pagoModal && (
@@ -1534,6 +1837,276 @@ function KpiCard({ icon, label, value, sub, color }) {
   )
 }
 
+// ── Modal: tarjeta completa de la mascota (detalle + evidencias + trazabilidad) ─
+// Muestra SOLO fotos de evidencia del servicio (recogida/pesaje/entrega/firma),
+// NUNCA imágenes de recordatorios. Sirve para identificar la trayectoria.
+function MascotaDetalleModal({ servicioId, onClose }) {
+  const [loading, setLoading]     = useState(true)
+  const [svc, setSvc]             = useState(null)
+  const [recogidas, setRecogidas] = useState([])
+  const [cuartoFrio, setCuartoFrio] = useState([])
+  const [entregas, setEntregas]   = useState([])
+  const [novedades, setNovedades] = useState([])
+  const [error, setError]         = useState('')
+
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        const [{ data: s, error: se }, rg, cf, en, nv] = await Promise.all([
+          db.from('servicios')
+            .select(`*, mascotas ( nombre, especies ( nombre ), clientes ( nombre, apellido, whatsapp ) ),
+              planes ( nombre ), aliados:aliado_origen_id ( nombre )`)
+            .eq('id', servicioId).single(),
+          db.from('recogidas').select('id, foto_recogida_url, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas').eq('servicio_id', servicioId),
+          db.from('cuarto_frio').select('nevera_codigo, posicion, peso_kg, foto_pesaje_url, created_at').eq('servicio_id', servicioId),
+          db.from('entregas').select('foto_entrega_url, foto_firma_url, created_at').eq('servicio_id', servicioId),
+          db.from('novedades_servicio')
+            .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por ( nombre, apellido )')
+            .eq('servicio_id', servicioId).order('created_at', { ascending: true }),
+        ])
+        if (se) throw se
+        if (!activo) return
+        setSvc(s); setRecogidas(rg.data || []); setCuartoFrio(cf.data || []); setEntregas(en.data || []); setNovedades(nv.data || [])
+      } catch (err) {
+        if (activo) setError(parsearErrorDB(err))
+      } finally {
+        if (activo) setLoading(false)
+      }
+    })()
+    return () => { activo = false }
+  }, [servicioId])
+
+  const m = svc?.mascotas || {}
+  const cli = m.clientes || {}
+  const evidencias = [
+    ...recogidas.map(r => ({ url: r.foto_recogida_url, etiqueta: 'Recogida' })),
+    ...cuartoFrio.map(c => ({ url: c.foto_pesaje_url, etiqueta: 'Pesaje · cuarto frío' })),
+    ...entregas.map(e => ({ url: e.foto_entrega_url, etiqueta: 'Entrega' })),
+    ...entregas.map(e => ({ url: e.foto_firma_url, etiqueta: 'Firma de entrega' })),
+  ].filter(x => x.url)
+  const peso = cuartoFrio[0]?.peso_kg
+  const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
+  const fmtD  = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+
+  const Dato = ({ label, children }) => (
+    <div className="flex justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+      <span className="text-[12px] text-gray-500">{label}</span>
+      <span className="text-[12px] font-semibold text-gray-800 text-right">{children}</span>
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl mb-10" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-white rounded-t-2xl z-10" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🐾</span>
+            <div>
+              <div className="text-[15px] font-bold text-gray-900">{m.nombre || 'Mascota'}</div>
+              <div className="text-[11px] text-gray-400">{m.especies?.nombre || ''}{svc?.codigo ? ` · ${svc.codigo}` : ''}</div>
+            </div>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+
+        {loading ? (
+          <div className="py-16 text-center text-gray-400 text-[13px]">Cargando trayectoria…</div>
+        ) : error ? (
+          <div className="p-5"><div className="flex items-center gap-2 bg-red-50 text-red-700 text-[12px] px-3 py-2 rounded-xl"><AlertCircle size={14} /> {error}</div></div>
+        ) : (
+          <div className="p-5 space-y-5">
+            {/* Estado / fechas */}
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[11px] font-bold px-2 py-1 rounded-full bg-gray-100 text-gray-700">{svc?.estado || '—'}</span>
+              {svc?.estado_pago && <BadgeEstadoPago estado={svc.estado_pago} />}
+              <span className="text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-500 inline-flex items-center gap-1"><Calendar size={11} /> Ingreso {fmtD(svc?.fecha_ingreso)}</span>
+              {svc?.ciudad_recogida && <span className="text-[11px] px-2 py-1 rounded-full bg-gray-50 text-gray-500 inline-flex items-center gap-1"><MapPin size={11} /> {svc.ciudad_recogida}</span>}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+              <div>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">Datos</p>
+                <Dato label="Cliente">{`${cli.nombre || ''} ${cli.apellido || ''}`.trim() || '—'}</Dato>
+                <Dato label="WhatsApp">{cli.whatsapp || '—'}</Dato>
+                <Dato label="Plan">{svc?.planes?.nombre || '—'}</Dato>
+                <Dato label="Veterinaria">{svc?.aliados?.nombre || '—'}</Dato>
+                {peso != null && <Dato label="Peso">{peso} kg</Dato>}
+                {(recogidas[0]?.contacto_nombre) && <Dato label="Contacto recogida">{recogidas[0].contacto_nombre}{recogidas[0].contacto_telefono ? ` · ${recogidas[0].contacto_telefono}` : ''}</Dato>}
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">Valores</p>
+                <Dato label="Total">{fmt(svc?.valor_total)}</Dato>
+                {svc?.valor_plan != null && <Dato label="Plan">{fmt(svc.valor_plan)}</Dato>}
+                {Number(svc?.valor_adicionales) > 0 && <Dato label="Adicionales">{fmt(svc.valor_adicionales)}</Dato>}
+                {Number(svc?.valor_transporte) > 0 && <Dato label="Transporte">{fmt(svc.valor_transporte)}</Dato>}
+                {Number(svc?.comision_aliado) > 0 && <Dato label="Comisión veterinaria">{fmt(svc.comision_aliado)}</Dato>}
+                <Dato label="Pagado">{fmt(svc?.valor_pagado)}</Dato>
+              </div>
+            </div>
+
+            {/* Evidencias (solo fotos del servicio, NO recordatorios) */}
+            <div>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 inline-flex items-center gap-1"><Eye size={12} /> Evidencias del servicio</p>
+              {evidencias.length === 0 ? (
+                <p className="text-[12px] text-gray-400">Sin fotos de evidencia registradas.</p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {evidencias.map((ev, i) => (
+                    <a key={i} href={ev.url} target="_blank" rel="noopener noreferrer"
+                      className="group relative rounded-xl overflow-hidden border block aspect-square" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                      <img src={ev.url} alt={ev.etiqueta} loading="lazy" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      <span className="absolute bottom-0 inset-x-0 text-[9px] font-semibold text-white bg-black/55 px-1.5 py-0.5">{ev.etiqueta}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Trazabilidad */}
+            <div>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-2 inline-flex items-center gap-1"><Clock size={12} /> Trazabilidad</p>
+              {novedades.length === 0 ? (
+                <p className="text-[12px] text-gray-400">Sin novedades registradas.</p>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {novedades.map(n => (
+                    <div key={n.id} className="flex gap-2.5 text-[12px]">
+                      <div className="flex flex-col items-center pt-1">
+                        <div className={`w-2 h-2 rounded-full ${n.tipo_novedad === 'PAGO_RECIBIDO' ? 'bg-green-500' : 'bg-[#1A5CD8]'}`} />
+                        <div className="flex-1 w-px bg-gray-200 mt-1" />
+                      </div>
+                      <div className="flex-1 pb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${n.tipo_novedad === 'PAGO_RECIBIDO' ? 'bg-green-100 text-green-700' : 'bg-blue-50 text-blue-700'}`}>{n.tipo_novedad}</span>
+                          <span className="text-[10px] text-gray-400">{fmtTS(n.created_at)}</span>
+                          {n.personal && <span className="text-[10px] text-gray-400">· {n.personal.nombre} {n.personal.apellido || ''}</span>}
+                        </div>
+                        <p className="text-gray-700 mt-0.5">{n.descripcion}{Number(n.valor_ajuste) ? ` (${fmt(n.valor_ajuste)})` : ''}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: comprobante de pago digital (recibo_comprobantes → URL firmada) ─────
+function ComprobanteModal({ item, onClose }) {
+  const [loading, setLoading] = useState(true)
+  const [imgs, setImgs]       = useState([])
+  const [error, setError]     = useState('')
+
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        if (!item.recibo_id) { if (activo) { setImgs([]); setLoading(false) } return }
+        const { data: comps, error: ce } = await db.from('recibo_comprobantes')
+          .select('id, bucket, storage_path, mime_type, estado').eq('recibo_id', item.recibo_id)
+        if (ce) throw ce
+        const out = []
+        for (const c of comps || []) {
+          const { data: signed } = await db.storage.from(c.bucket || 'evidencias').createSignedUrl(c.storage_path, 300)
+          if (signed?.signedUrl) out.push({ ...c, url: signed.signedUrl })
+        }
+        if (activo) setImgs(out)
+      } catch (err) {
+        if (activo) setError(parsearErrorDB(err))
+      } finally {
+        if (activo) setLoading(false)
+      }
+    })()
+    return () => { activo = false }
+  }, [item])
+
+  const digitales = (item.medios_pago || []).filter(mp => String(mp.metodo).toUpperCase() !== 'EFECTIVO' && Number(mp.monto) > 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mb-10" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <FileText size={16} className="text-[#1A5CD8]" />
+            <span className="text-[14px] font-bold text-gray-900">Comprobante de pago</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <span className="text-[12px] text-gray-500">{item.mascota_nombre || '—'}</span>
+            {digitales.map((mp, i) => (
+              <span key={i} className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1E40AF]">{mp.metodo} · {fmt(mp.monto)}</span>
+            ))}
+          </div>
+          {loading ? (
+            <div className="py-12 text-center text-gray-400 text-[13px]">Cargando comprobante…</div>
+          ) : error ? (
+            <div className="flex items-center gap-2 bg-red-50 text-red-700 text-[12px] px-3 py-2 rounded-xl"><AlertCircle size={14} /> {error}</div>
+          ) : imgs.length === 0 ? (
+            <div className="py-10 text-center">
+              <AlertTriangle size={26} className="mx-auto text-amber-400 mb-2" />
+              <p className="text-[13px] text-gray-500">No hay comprobante subido para este recibo.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {imgs.map(c => (
+                <div key={c.id}>
+                  <a href={c.url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <img src={c.url} alt="Comprobante" className="w-full object-contain max-h-[60vh] bg-gray-50" />
+                  </a>
+                  {c.estado && <span className="text-[10px] text-gray-400 mt-1 inline-block">Estado: {c.estado}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: observación por mascota (feature 3) ────────────────────────────────
+function ObsModal({ item, cerrado, onClose, onSave }) {
+  const [texto, setTexto]   = useState(item.observaciones || '')
+  const [saving, setSaving] = useState(false)
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <ClipboardList size={16} className="text-[#1A5CD8]" />
+            <span className="text-[14px] font-bold text-gray-900">Observación · {item.mascota_nombre || 'mascota'}</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-[12px] text-gray-500">Por qué no cuadró esta mascota o cualquier novedad del proceso. Queda registrada.</p>
+          <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={4} autoFocus
+            placeholder="Ej: el cliente quedó de pagar el lunes; la veterinaria factura mensual; faltó un adicional…"
+            className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] resize-none"
+            style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button onClick={async () => { setSaving(true); await onSave(texto.trim(), cerrado); setSaving(false) }} disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Sub-componente FilaTotal (resumen del cuadre) ────────────────────────────
 function FilaTotal({ label, valor, color = '#374151', bold = false }) {
   return (
@@ -1611,6 +2184,16 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   fila('Total a cobrar (servicios)', totalACobrar)
   if (totalComision > 0) fila('Comisión veterinarias', totalComision)
   fila('Total recogido (cliente)', c.total_cobrado)
+  const totalFalta = items.reduce((a, it) => {
+    if (it.es_cancelado || it.valor_a_cobrar == null) return a
+    const d = (Number(it.valor_a_cobrar) || 0) - (Number(it.total_cobrado) || 0)
+    const resuelto = ['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion) || it.conciliacion_resuelta
+    return a + (d > 0 && !resuelto ? d : 0)
+  }, 0)
+  if (totalFalta > 0) {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(180, 90, 0)
+    t('Falta por cobrar (conciliación)', W - M - 60, y); t(fmt(totalFalta), W - M, y, { align: 'right' }); y += 5.5
+  }
   fila('Efectivo recibido (técnico)', c.efectivo_recibido)
   fila('Digital directo a empresa', c.digital_empresa)
   fila('Transporte reconocido', c.total_transporte)
