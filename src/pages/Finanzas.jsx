@@ -350,19 +350,42 @@ export default function Finanzas() {
     if (it.valor_a_cobrar  != null) return Number(it.valor_a_cobrar)
     return null
   }
-  // Lo que falta para completar = a recoger − recogido. NULL si no hay dato.
+  // Veterinaria de facturación mensual: el técnico no recoge efectivo; el aliado
+  // nos debe el neto (bruto − comisión), que se cobra en la factura mensual.
+  function esFactMensual(it) {
+    return it.modalidad_comision === 'FACTURACION_MENSUAL'
+  }
+  // Lo que el aliado de facturación mensual nos debe = bruto − comisión (neto).
+  function pendienteAliado(it) {
+    if (it.valor_a_cobrar == null) return 0
+    return (Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0)
+  }
+  // Lo que falta para completar = a recoger − recogido. NULL si no aplica.
   function diferenciaItem(it) {
-    if (it.es_cancelado) return null
+    if (it.es_cancelado || esFactMensual(it)) return null
     const vr = valorARecoger(it)
     if (vr == null) return null
     return vr - (Number(it.total_cobrado) || 0)
   }
-  // ¿Falta plata sin resolver? (alerta visual + entra a Conciliaciones)
+  // ¿Falta plata del técnico sin resolver? (alerta visual). Fact. mensual no es
+  // falta del técnico → se gestiona aparte en Conciliaciones.
   function faltaPlata(it) {
+    if (esFactMensual(it)) return false
     const d = diferenciaItem(it)
     return d != null && d > 0
       && !['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion)
       && !it.conciliacion_resuelta
+  }
+  // ¿Debe estar en Conciliaciones? Parcial/no recogió, o facturación mensual.
+  function enConciliacion(it) {
+    return !it.conciliacion_resuelta
+      && (['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) || esFactMensual(it))
+  }
+  // Monto pendiente por cobrar de un item (técnico: diferencia; aliado: neto).
+  function montoPendiente(it) {
+    if (esFactMensual(it)) return pendienteAliado(it)
+    const d = diferenciaItem(it)
+    return d > 0 ? d : 0
   }
   // Estado sugerido según la diferencia (feature 8 — el coordinador puede cambiarlo).
   function estadoSugerido(it) {
@@ -389,7 +412,7 @@ export default function Finanzas() {
       // Refrescar la lista de Conciliaciones si está cargada (entra/sale según estado).
       setConciliaciones(prev => prev
         ? prev.map(it => it.id === item.id ? { ...it, estado_conciliacion: nuevoEstado, observaciones: nuevasObs } : it)
-              .filter(it => ['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) && !it.conciliacion_resuelta)
+              .filter(enConciliacion)
         : prev)
     } catch (err) {
       setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...item } : it))
@@ -431,7 +454,7 @@ export default function Finanzas() {
         .select(`*, cuadres_tecnico:cuadre_id ( id, estado, fecha_desde, fecha_hasta,
           personal:tecnico_id ( nombre, apellido ) )`)
         .eq('conciliacion_resuelta', false)
-        .in('estado_conciliacion', ['PARCIAL', 'NO_RECOGIO'])
+        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL')
         .order('fecha', { ascending: false })
       setConciliaciones(data || [])
     } catch (err) {
@@ -1413,6 +1436,7 @@ export default function Finanzas() {
                                     </button>
                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                       {it.es_cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">CANCELADO</span>}
+                                      {esFactMensual(it) && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>}
                                       {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                       {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
                                     </div>
@@ -1420,12 +1444,9 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
-                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">
-                                    {it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}
+                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900" title="Neto que paga el cliente (la comisión va en su propia columna)">
+                                    {valorARecoger(it) != null ? fmt(valorARecoger(it)) : '—'}
                                     {Number(it.valor_adicionales) > 0 && <div className="text-[10px] font-medium text-gray-400">incl. adic. {fmt(it.valor_adicionales)}</div>}
-                                    {!it.es_cancelado && valorARecoger(it) != null && it.valor_a_cobrar != null && valorARecoger(it) !== Number(it.valor_a_cobrar) && (
-                                      <div className="text-[10px] font-semibold text-[#0E7490]" title="Neto que recoge el técnico (sin la comisión descontada)">a recoger {fmt(valorARecoger(it))}</div>
-                                    )}
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
@@ -1434,7 +1455,9 @@ export default function Finanzas() {
                                         : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums">
-                                    {d == null ? <span className="text-gray-300">—</span>
+                                    {esFactMensual(it) ? (
+                                      <span className="font-semibold text-[#9A5500] text-[12px]" title="Facturación mensual: el aliado nos debe el neto (bruto − comisión). Se cobra en la factura mensual.">x cobrar al aliado {fmt(pendienteAliado(it))}</span>
+                                    ) : d == null ? <span className="text-gray-300">—</span>
                                       : d > 0 ? <span className="font-bold text-[#DC2626]">{fmt(d)}</span>
                                       : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
                                       : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
@@ -1515,7 +1538,7 @@ export default function Finanzas() {
                         {/* Desglose */}
                         <div className="bg-white border rounded-2xl p-5 space-y-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Resumen</p>
-                          <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)} />
+                          <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (valorARecoger(it) || 0)), 0)} />
                           {cuadreItems.some(it => Number(it.comision) > 0) && (
                             <FilaTotal label="Comisión veterinarias" valor={cuadreItems.reduce((a, it) => a + (Number(it.comision) || 0), 0)} color="#d97706" />
                           )}
@@ -1599,7 +1622,7 @@ export default function Finanzas() {
                         <div className="px-4 py-2 rounded-xl bg-red-50 border border-red-100">
                           <div className="text-[11px] font-semibold text-red-700 uppercase tracking-wide">Total por cobrar</div>
                           <div className="text-[20px] font-extrabold text-red-700 tabular-nums">
-                            {fmt(conciliaciones.reduce((a, it) => { const d = diferenciaItem(it); return a + (d > 0 ? d : 0) }, 0))}
+                            {fmt(conciliaciones.reduce((a, it) => a + montoPendiente(it), 0))}
                           </div>
                         </div>
                       </div>
@@ -1615,7 +1638,6 @@ export default function Finanzas() {
                           </thead>
                           <tbody>
                             {conciliaciones.map(it => {
-                              const d = diferenciaItem(it)
                               const er = it.estado_conciliacion ? ESTADO_REV[it.estado_conciliacion] : null
                               const tec = it.cuadres_tecnico?.personal
                               return (
@@ -1628,10 +1650,14 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</td>
                                   <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
-                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{valorARecoger(it) != null ? fmt(valorARecoger(it)) : '—'}</td>
                                   <td className="px-3 py-2.5 tabular-nums text-gray-700">{fmt(it.total_cobrado)}</td>
-                                  <td className="px-3 py-2.5 tabular-nums font-bold text-[#DC2626]">{d > 0 ? fmt(d) : '—'}</td>
-                                  <td className="px-3 py-2.5">{er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}</td>
+                                  <td className="px-3 py-2.5 tabular-nums font-bold text-[#DC2626]">{montoPendiente(it) > 0 ? fmt(montoPendiente(it)) : '—'}</td>
+                                  <td className="px-3 py-2.5">
+                                    {esFactMensual(it)
+                                      ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>
+                                      : er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
+                                  </td>
                                   <td className="px-3 py-2.5">
                                     <select value={it.conciliacion_via || ''} onChange={e => guardarConciliacion(it, { via: e.target.value || null })}
                                       className="text-[11px] rounded-lg border px-1.5 py-1 outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20"
@@ -2192,7 +2218,11 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     pdf.setTextColor(bold ? 20 : 80, bold ? 20 : 80, bold ? 20 : 80)
     t(label, W - M - 60, y); t(fmt(val), W - M, y, { align: 'right' }); y += bold ? 7 : 5.5
   }
-  const totalACobrar = items.reduce((a, it) => a + (it.es_cancelado ? 0 : (Number(it.valor_a_cobrar) || 0)), 0)
+  const totalACobrar = items.reduce((a, it) => {
+    if (it.es_cancelado) return a
+    const vr = it.valor_a_recoger != null ? Number(it.valor_a_recoger) : (Number(it.valor_a_cobrar) || 0)
+    return a + vr
+  }, 0)
   const totalComision = items.reduce((a, it) => a + (Number(it.comision) || 0), 0)
   fila('Total a cobrar (servicios)', totalACobrar)
   if (totalComision > 0) fila('Comisión veterinarias', totalComision)
