@@ -13,6 +13,15 @@ const BORD   = '#D8E5D8'
 
 const MIMES_OK = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
 
+// Límite de palabras para la frase/leyenda del cristal (evita leyendas larguísimas).
+const MAX_PALABRAS_FRASE = 30
+const esCampoFrase    = label => (label || '').toLowerCase().includes('frase')
+const contarPalabras  = s => (s || '').trim() ? s.trim().split(/\s+/).length : 0
+const limitarPalabras = (s, max) => {
+  const palabras = (s || '').split(/\s+/).filter(Boolean)
+  return palabras.length <= max ? s : palabras.slice(0, max).join(' ')
+}
+
 const slide = {
   enter:  d => ({ x: d > 0 ? '60%' : '-60%', opacity: 0 }),
   center: { x: 0, opacity: 1, transition: { type: 'spring', stiffness: 300, damping: 34 } },
@@ -479,25 +488,40 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
 
       {campos.length > 0 && (
         <div className="bg-white rounded-2xl border p-5 space-y-5" style={{ borderColor: BORD }}>
-          {campos.map(campo => (
+          {campos.map(campo => {
+            const limitaPalabras = esCampoFrase(campo.label)
+            return (
             <div key={campo.label}>
               <label className="text-[14px] font-bold text-gray-700 block mb-3">
                 {campo.label}
                 {campo.cantidad > 1 && <span className="text-[12px] text-gray-400 font-normal ml-1.5">({campo.cantidad} en total)</span>}
+                {limitaPalabras && <span className="text-[12px] text-gray-400 font-normal ml-1.5">(máx. {MAX_PALABRAS_FRASE} palabras)</span>}
               </label>
               <div className="space-y-3">
-                {Array.from({ length: campo.cantidad || 1 }).map((_, i) => (
-                  <input key={i} type="text" value={textosVals[campo.label]?.[i] || ''}
-                    onChange={e => setTexto(campo.label, i, e.target.value)}
-                    placeholder={campo.cantidad > 1 ? `${campo.label} ${i + 1}` : `Escribe aquí…`}
-                    className="w-full text-[16px] border-2 rounded-xl px-4 py-3.5 outline-none transition-colors"
-                    style={{ borderColor: textosVals[campo.label]?.[i]?.trim() ? G : BORD, background: '#FAFCFA' }}
-                    onFocus={e => e.target.style.borderColor = G}
-                    onBlur={e  => e.target.style.borderColor = textosVals[campo.label]?.[i]?.trim() ? G : BORD} />
-                ))}
+                {Array.from({ length: campo.cantidad || 1 }).map((_, i) => {
+                  const valor = textosVals[campo.label]?.[i] || ''
+                  return (
+                  <div key={i}>
+                    <input type="text" value={valor}
+                      onChange={e => setTexto(campo.label, i, limitaPalabras ? limitarPalabras(e.target.value, MAX_PALABRAS_FRASE) : e.target.value)}
+                      placeholder={campo.cantidad > 1 ? `${campo.label} ${i + 1}` : `Escribe aquí…`}
+                      className="w-full text-[16px] border-2 rounded-xl px-4 py-3.5 outline-none transition-colors"
+                      style={{ borderColor: valor.trim() ? G : BORD, background: '#FAFCFA' }}
+                      onFocus={e => e.target.style.borderColor = G}
+                      onBlur={e  => e.target.style.borderColor = valor.trim() ? G : BORD} />
+                    {limitaPalabras && (
+                      <p className="text-[12px] mt-1.5 text-right"
+                        style={{ color: contarPalabras(valor) >= MAX_PALABRAS_FRASE ? '#DC2626' : '#9CA3AF' }}>
+                        {contarPalabras(valor)} / {MAX_PALABRAS_FRASE} palabras
+                      </p>
+                    )}
+                  </div>
+                  )
+                })}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
