@@ -78,16 +78,24 @@ function itemsAServicios(items) {
 
 // ─── Generar reporte (PDF + marcar GENERADO en backend) ──────────────────────
 export async function generarReporte(reporte, coordinador) {
+  // Los nombres (mascota/propietario) de reportes_grupales_items son un SNAPSHOT;
+  // solo se refrescan al sincronizar. Sin esto, un cambio de nombre no se reflejaba
+  // en el PDF aun dándole "regenerar" (se construía del snapshot viejo). Por eso
+  // re-sincronizamos y re-leemos el reporte fresco antes de armar el PDF.
+  await sincronizar()
+  const frescos = await obtenerReportes()
+  const actual  = frescos.find(r => String(r.id) === String(reporte.id)) || reporte
+
   const lote = {
-    numero_lote:      reporte.lotes_grupales?.numero_lote,
-    tipo_proceso:     reporte.tipo_proceso,
-    fecha_completado: reporte.lotes_grupales?.fecha_completado,
-    fecha_envio:      reporte.lotes_grupales?.fecha_envio,
-    entidad_externa:  reporte.lotes_grupales?.entidad_externa,
-    duracion_proceso: reporte.lotes_grupales?.duracion_proceso,
+    numero_lote:      actual.lotes_grupales?.numero_lote,
+    tipo_proceso:     actual.tipo_proceso,
+    fecha_completado: actual.lotes_grupales?.fecha_completado,
+    fecha_envio:      actual.lotes_grupales?.fecha_envio,
+    entidad_externa:  actual.lotes_grupales?.entidad_externa,
+    duracion_proceso: actual.lotes_grupales?.duracion_proceso,
   }
-  const servicios = itemsAServicios(reporte.reportes_grupales_items)
-  const html = reporte.tipo_proceso === 'CREMACION_GRUPAL'
+  const servicios = itemsAServicios(actual.reportes_grupales_items)
+  const html = actual.tipo_proceso === 'CREMACION_GRUPAL'
     ? generarHTMLCremacionGrupal({ lote, servicios, coordinador })
     : generarHTMLCompostajeGrupal({ lote, servicios, coordinador })
 
