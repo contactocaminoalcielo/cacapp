@@ -1373,23 +1373,29 @@ const PAGO_COLOR = {
 
 const SELECT_HISTORIAL = `
   id, estado, fecha_ingreso, valor_total, valor_pagado, estado_pago,
-  canal_entrada, ciudad_recogida,
+  canal_entrada, ciudad_recogida, punto_recogida,
+  aliado_origen_id, comision_aliado, comision_descontada,
   mascotas:mascota_id(
     nombre, peso_kg, raza,
     especies(nombre),
     clientes:cliente_id(nombre, apellido, whatsapp, telefono, telefono2, email)
   ),
   planes:plan_id(nombre, codigo),
-  aliados:aliado_origen_id(nombre),
+  aliados:aliado_origen_id(nombre, modalidad_comision),
   tecnico:tecnico_id(nombre, apellido),
   registrador:registrado_por(nombre, apellido)
 `
 
-function TabHistorialServicios() {
+function TabHistorialServicios({ canEdit }) {
+  const { confirm, alert: showAlert } = useConfirm()
   const [data, setData]               = useState([])
   const [loading, setLoading]         = useState(true)
   const [total, setTotal]             = useState(0)
   const [exporting, setExporting]     = useState(false)
+  // edición de comisión: marcar "cobro en la veterinaria" (descontar comisión del recibo)
+  const [editServ, setEditServ]       = useState(null)   // servicio en edición
+  const [cobroVet, setCobroVet]       = useState(false)  // valor del interruptor
+  const [savingCom, setSavingCom]     = useState(false)
   // catálogos para dropdowns
   const [catPlanes,   setCatPlanes]   = useState([])
   const [catAliados,  setCatAliados]  = useState([])
@@ -1486,6 +1492,44 @@ function TabHistorialServicios() {
     a.href = url; a.download = `servicios_${new Date().toISOString().slice(0, 10)}.csv`
     a.click(); URL.revokeObjectURL(url)
     setExporting(false)
+  }
+
+  // Un servicio puede descontar comisión en el recibo solo si viene de un aliado con comisión registrada
+  const tieneComision = s => (s.comision_aliado || 0) > 0 && !!s.aliado_origen_id
+
+  function abrirEdicionComision(s) {
+    setEditServ(s)
+    setCobroVet(s.comision_descontada === true)
+  }
+
+  async function guardarComision() {
+    if (!editServ) return
+    const com         = editServ.comision_aliado || 0
+    const currentDesc = editServ.comision_descontada === true
+    if (cobroVet === currentDesc) { setEditServ(null); return }  // sin cambios
+
+    // Reconstruir el bruto y calcular el nuevo total según el destino del interruptor
+    const bruto      = currentDesc ? (editServ.valor_total || 0) + com : (editServ.valor_total || 0)
+    const nuevoTotal = cobroVet ? bruto - com : bruto
+    if (nuevoTotal < 0) {
+      await showAlert('La comisión es mayor que el valor del servicio. Revisa los montos antes de descontar.', { title: 'No se puede descontar', variant: 'warning' })
+      return
+    }
+    // Recalcular estado_pago para que quede consistente con el nuevo total
+    const pagado = editServ.valor_pagado || 0
+    const nuevoEstadoPago = nuevoTotal > 0 && pagado >= nuevoTotal ? 'COMPLETO'
+                          : pagado > 0 ? 'PARCIAL' : 'PENDIENTE'
+
+    setSavingCom(true)
+    const { error } = await db.from('servicios').update({
+      valor_total:         nuevoTotal,
+      comision_descontada: cobroVet,
+      estado_pago:         nuevoEstadoPago,
+    }).eq('id', editServ.id)
+    setSavingCom(false)
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+    setEditServ(null)
+    cargar(0)
   }
 
   const filtrados = busqueda.trim()
@@ -1599,6 +1643,7 @@ function TabHistorialServicios() {
                   <Th>Estado</Th>
                   <Th>Pago</Th>
                   <Th>Valor</Th>
+                  {canEdit && <Th>Comisión vet</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -1645,11 +1690,28 @@ function TabHistorialServicios() {
                         </span>
                       </Td>
                       <Td className="text-[12px] font-semibold text-ink whitespace-nowrap">{COP(s.valor_total)}</Td>
+                      {canEdit && (
+                        <Td className="whitespace-nowrap">
+                          {tieneComision(s) ? (
+                            <button
+                              onClick={() => abrirEdicionComision(s)}
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-colors"
+                              style={s.comision_descontada
+                                ? { background: '#E8F3EB', color: '#1D8A55', borderColor: '#BFE3CC' }
+                                : { background: '#FFF3DC', color: '#9A5500', borderColor: '#F3D9A6' }}
+                              title="Marcar si el cobro se hace en la veterinaria (descuenta la comisión del recibo)">
+                              {s.comision_descontada ? '✓ Descuenta' : 'Cobra completo'}
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-ink3">—</span>
+                          )}
+                        </Td>
+                      )}
                     </Tr>
                   )
                 })}
                 {filtrados.length === 0 && !loading && (
-                  <tr><td colSpan={12} className="text-center py-10 text-ink3 text-sm">Sin servicios para los filtros aplicados</td></tr>
+                  <tr><td colSpan={canEdit ? 13 : 12} className="text-center py-10 text-ink3 text-sm">Sin servicios para los filtros aplicados</td></tr>
                 )}
               </tbody>
             </Table>
@@ -1664,6 +1726,56 @@ function TabHistorialServicios() {
           )}
         </>
       )}
+
+      {editServ && (() => {
+        const com         = editServ.comision_aliado || 0
+        const currentDesc = editServ.comision_descontada === true
+        const bruto       = currentDesc ? (editServ.valor_total || 0) + com : (editServ.valor_total || 0)
+        const neto        = bruto - com
+        const totalPreview = cobroVet ? neto : bruto
+        const pagado      = editServ.valor_pagado || 0
+        return (
+          <Modal open onClose={() => setEditServ(null)} title="Comisión del aliado en el recibo" maxWidth="max-w-md"
+            footer={<><Button variant="secondary" onClick={() => setEditServ(null)}>Cancelar</Button><Button onClick={guardarComision} disabled={savingCom}>{savingCom ? 'Guardando...' : 'Guardar'}</Button></>}>
+            <div className="space-y-4">
+              <div className="text-[12px] text-ink2 leading-relaxed">
+                <div><strong>{editServ.mascotas?.nombre || '—'}</strong> · {editServ.aliados?.nombre || 'aliado'}</div>
+                <div className="text-ink3 text-[11px] mt-0.5">
+                  Modalidad: {(editServ.aliados?.modalidad_comision || '—').replace(/_/g, ' ').toLowerCase()} · Recogida: {(editServ.punto_recogida || '—').replace(/_/g, ' ').toLowerCase()}
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2.5 cursor-pointer rounded-lg border border-gray-200 p-3 hover:bg-gray-50 transition-colors">
+                <input type="checkbox" checked={cobroVet} onChange={e => setCobroVet(e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#1A5CD8]" />
+                <span className="text-[12px] text-ink2">
+                  <span className="font-semibold text-ink">El cobro se hace en la veterinaria</span>
+                  <span className="block text-ink3 text-[11px] mt-0.5">Descuenta la comisión del recibo (la vet recibe el neto). Si está desmarcado, se cobra el valor completo y la comisión se cuadra aparte.</span>
+                </span>
+              </label>
+
+              <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 space-y-1">
+                <div className="flex justify-between text-[12px]"><span className="text-amber-700">Valor bruto del servicio</span><span className="font-semibold text-ink">{COP(bruto)}</span></div>
+                <div className="flex justify-between text-[12px]"><span className="text-amber-700">Comisión aliado</span><span className="font-semibold text-red-600">{cobroVet ? `– ${COP(com)}` : COP(com)}</span></div>
+                <div className="flex justify-between text-[13px] border-t border-amber-200 pt-1.5 mt-1.5">
+                  <span className="font-bold text-amber-900">Total a cobrar en el recibo</span>
+                  <span className="font-extrabold text-amber-900">{COP(totalPreview)}</span>
+                </div>
+                <div className="text-[10px] text-amber-700 pt-0.5">
+                  {cobroVet
+                    ? 'El recibo de la veterinaria mostrará el neto (con la comisión descontada).'
+                    : 'El recibo mostrará el valor completo; la comisión se gestiona por separado con la veterinaria.'}
+                </div>
+              </div>
+
+              {pagado > 0 && (
+                <div className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  ⚠️ Este servicio ya tiene {COP(pagado)} pagados. Al cambiar el total revisa que el recibo y el pago sigan cuadrando.
+                </div>
+              )}
+            </div>
+          </Modal>
+        )
+      })()}
     </div>
   )
 }
@@ -1689,7 +1801,7 @@ export default function Gestion() {
             <TabsTrigger value="inventario">Inventario</TabsTrigger>
             <TabsTrigger value="planes">Planes</TabsTrigger>
           </TabsList>
-          <TabsContent value="historial"><TabHistorialServicios /></TabsContent>
+          <TabsContent value="historial"><TabHistorialServicios canEdit={canEdit} /></TabsContent>
           <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="mascotas"><TabMascotas isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
