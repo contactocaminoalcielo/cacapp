@@ -354,9 +354,12 @@ export default function Registro() {
     ? (vehiculoTipo === 'MOTO' ? (ciudadInfo.tarifa_moto || 0) : (ciudadInfo.tarifa_camioneta || 0))
     : 0
   const modalidadComision  = aliadoSeleccionado?.modalidad_comision
-  // La comisión siempre reduce el valor del servicio cuando hay aliado en clínica.
-  // La modalidad solo afecta CUÁNDO se paga: DESCUENTO_INMEDIATO cobra ya;
-  // FACTURACION_MENSUAL descuenta igual pero queda PENDIENTE (factura a fin de mes).
+  // El DESCUENTO EN EL RECIBO depende del punto de recogida:
+  //   • CLINICA_ALIADA: la vet maneja la plata → el recibo va neto (se descuenta la comisión).
+  //   • DOMICILIO: se cobra el VALOR COMPLETO al cliente y la comisión se cuadra
+  //     aparte con la veterinaria (NO se descuenta del recibo).
+  // La comisión se registra igual (comision_aliado) en ambos casos; lo que cambia es
+  // si se resta del total. La modalidad solo afecta CUÁNDO se paga.
   const comisionCalculada  = comisionPorcentaje > 0
     ? Math.round(valorBase * comisionPorcentaje / 100) : 0
   const aplicaDescuento    = !!aliadoSeleccionado &&
