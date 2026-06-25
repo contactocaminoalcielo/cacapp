@@ -92,7 +92,7 @@ export default function Finanzas() {
   const [cuadreError,     setCuadreError]     = useState('')
   const [cerrando,        setCerrando]        = useState(false)
   const [cuadrePdfGen,    setCuadrePdfGen]    = useState(false)
-  const [detalleSvc,      setDetalleSvc]      = useState(null)   // servicio_id → tarjeta de mascota
+  const [detalleItem,     setDetalleItem]     = useState(null)   // cuadre_item → tarjeta de mascota
   const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
   const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
 
@@ -1428,7 +1428,7 @@ export default function Finanzas() {
                                   style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alerta ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
-                                    <button onClick={() => it.servicio_id && setDetalleSvc(it.servicio_id)} disabled={!it.servicio_id}
+                                    <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
                                       className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
                                       title="Ver tarjeta completa de la mascota">
                                       {alerta && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
@@ -1644,7 +1644,7 @@ export default function Finanzas() {
                                 <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
-                                    <button onClick={() => it.servicio_id && setDetalleSvc(it.servicio_id)} disabled={!it.servicio_id}
+                                    <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
                                       className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left disabled:no-underline"
                                       title="Ver tarjeta completa de la mascota">{it.mascota_nombre || '—'}</button>
                                   </td>
@@ -1696,7 +1696,7 @@ export default function Finanzas() {
       </div>
 
       {/* ── Modal tarjeta de mascota (detalle + evidencias + trazabilidad) ── */}
-      {detalleSvc && <MascotaDetalleModal servicioId={detalleSvc} onClose={() => setDetalleSvc(null)} />}
+      {detalleItem && <MascotaDetalleModal item={detalleItem} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
       {comprobanteItem && <ComprobanteModal item={comprobanteItem} onClose={() => setComprobanteItem(null)} />}
@@ -1879,20 +1879,23 @@ function KpiCard({ icon, label, value, sub, color }) {
 // ── Modal: tarjeta completa de la mascota (detalle + evidencias + trazabilidad) ─
 // Muestra SOLO fotos de evidencia del servicio (recogida/pesaje/entrega/firma),
 // NUNCA imágenes de recordatorios. Sirve para identificar la trayectoria.
-function MascotaDetalleModal({ servicioId, onClose }) {
+function MascotaDetalleModal({ item, onClose }) {
+  const servicioId = item.servicio_id
   const [loading, setLoading]     = useState(true)
   const [svc, setSvc]             = useState(null)
   const [recogidas, setRecogidas] = useState([])
   const [cuartoFrio, setCuartoFrio] = useState([])
   const [entregas, setEntregas]   = useState([])
   const [novedades, setNovedades] = useState([])
+  const [adicionales, setAdicionales] = useState([])
   const [error, setError]         = useState('')
 
   useEffect(() => {
+    if (!servicioId) { setLoading(false); return }
     let activo = true
     ;(async () => {
       try {
-        const [{ data: s, error: se }, rg, cf, en, nv] = await Promise.all([
+        const [{ data: s, error: se }, rg, cf, en, nv, ad] = await Promise.all([
           db.from('servicios')
             .select(`*, mascotas ( nombre, especies ( nombre ), clientes ( nombre, apellido, whatsapp ) ),
               planes ( nombre ), aliados:aliado_origen_id ( nombre )`)
@@ -1903,10 +1906,13 @@ function MascotaDetalleModal({ servicioId, onClose }) {
           db.from('novedades_servicio')
             .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por ( nombre, apellido )')
             .eq('servicio_id', servicioId).order('created_at', { ascending: true }),
+          db.from('servicio_recordatorios')
+            .select('id, origen, recordatorios ( nombre, precio_base )')
+            .eq('servicio_id', servicioId).eq('origen', 'ADICIONAL'),
         ])
         if (se) throw se
         if (!activo) return
-        setSvc(s); setRecogidas(rg.data || []); setCuartoFrio(cf.data || []); setEntregas(en.data || []); setNovedades(nv.data || [])
+        setSvc(s); setRecogidas(rg.data || []); setCuartoFrio(cf.data || []); setEntregas(en.data || []); setNovedades(nv.data || []); setAdicionales(ad.data || [])
       } catch (err) {
         if (activo) setError(parsearErrorDB(err))
       } finally {
@@ -1927,6 +1933,23 @@ function MascotaDetalleModal({ servicioId, onClose }) {
   const peso = cuartoFrio[0]?.peso_kg
   const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
   const fmtD  = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+
+  // Desglose de cobros: prioriza el snapshot del cuadre (item) y cae al servicio.
+  const n = v => Number(v) || 0
+  const cob = {
+    plan:       item.valor_plan != null ? n(item.valor_plan) : n(svc?.valor_plan),
+    adic:       item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
+    transporte: item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
+    descuento:  n(svc?.descuento_adicional),
+    descMotivo: svc?.descuento_adicional_motivo || '',
+    comision:   item.comision != null ? n(item.comision) : n(svc?.comision_aliado),
+    vet:        item.veterinaria || svc?.aliados?.nombre || '—',
+    neto:       item.valor_a_recoger != null ? n(item.valor_a_recoger)
+                : item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total),
+    recogido:   n(item.total_cobrado),
+    medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
+  }
+  cob.diferencia = cob.neto - cob.recogido
 
   const Dato = ({ label, children }) => (
     <div className="flex justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
@@ -1975,13 +1998,47 @@ function MascotaDetalleModal({ servicioId, onClose }) {
                 {(recogidas[0]?.contacto_nombre) && <Dato label="Contacto recogida">{recogidas[0].contacto_nombre}{recogidas[0].contacto_telefono ? ` · ${recogidas[0].contacto_telefono}` : ''}</Dato>}
               </div>
               <div>
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">Valores</p>
-                <Dato label="Total">{fmt(svc?.valor_total)}</Dato>
-                {svc?.valor_plan != null && <Dato label="Plan">{fmt(svc.valor_plan)}</Dato>}
-                {Number(svc?.valor_adicionales) > 0 && <Dato label="Adicionales">{fmt(svc.valor_adicionales)}</Dato>}
-                {Number(svc?.valor_transporte) > 0 && <Dato label="Transporte">{fmt(svc.valor_transporte)}</Dato>}
-                {Number(svc?.comision_aliado) > 0 && <Dato label="Comisión veterinaria">{fmt(svc.comision_aliado)}</Dato>}
-                <Dato label="Pagado">{fmt(svc?.valor_pagado)}</Dato>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">Detalle de cobros</p>
+                <Dato label="Valor del plan">{fmt(cob.plan)}</Dato>
+                <Dato label="Adicionales">{fmt(cob.adic)}</Dato>
+                {adicionales.length > 0 && (
+                  <div className="pl-3 py-0.5 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                    {adicionales.map(a => (
+                      <div key={a.id} className="flex justify-between gap-3 text-[11px] text-gray-500">
+                        <span className="truncate">· {a.recordatorios?.nombre || 'Adicional'}</span>
+                        <span className="tabular-nums">{fmt(a.recordatorios?.precio_base)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Dato label="Transporte">{fmt(cob.transporte)}</Dato>
+                <Dato label="Descuento">{cob.descuento > 0 ? `- ${fmt(cob.descuento)}` : fmt(0)}</Dato>
+                {cob.descMotivo && (
+                  <div className="pl-3 py-0.5 text-[11px] text-orange-600 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>· Motivo: {cob.descMotivo}</div>
+                )}
+                <Dato label="Comisión veterinaria">{fmt(cob.comision)}</Dato>
+                <Dato label="Veterinaria">{cob.vet}</Dato>
+                <div className="flex justify-between gap-3 py-1.5 mt-1 border-t-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+                  <span className="text-[12px] font-bold text-gray-700">Total a recaudar</span>
+                  <span className="text-[13px] font-extrabold text-gray-900 tabular-nums">{fmt(cob.neto)}</span>
+                </div>
+                <Dato label="Valor recogido">{fmt(cob.recogido)}</Dato>
+                <div className="pl-3 py-0.5 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                  {cob.medios.length === 0 ? (
+                    <div className="text-[11px] text-gray-400">· Sin medios de pago registrados</div>
+                  ) : cob.medios.map((mp, i) => (
+                    <div key={i} className="flex justify-between gap-3 text-[11px] text-gray-500">
+                      <span>· {mp.metodo}</span>
+                      <span className="tabular-nums">{fmt(mp.monto)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between gap-3 py-1.5 mt-1 rounded-lg px-2" style={{ background: cob.diferencia > 0 ? '#FEF3C7' : cob.diferencia < 0 ? '#EFF6FF' : '#F0FDF4' }}>
+                  <span className="text-[12px] font-bold" style={{ color: cob.diferencia > 0 ? '#9A5500' : cob.diferencia < 0 ? '#1E40AF' : '#166534' }}>Diferencia</span>
+                  <span className="text-[13px] font-extrabold tabular-nums" style={{ color: cob.diferencia > 0 ? '#9A5500' : cob.diferencia < 0 ? '#1E40AF' : '#166534' }}>
+                    {cob.diferencia < 0 ? `+${fmt(-cob.diferencia)}` : fmt(cob.diferencia)}
+                  </span>
+                </div>
               </div>
             </div>
 
