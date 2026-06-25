@@ -86,6 +86,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const mascota      = servicio?.mascota || 'tu mascota'
   // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
   const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
+  // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
+  const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
   function toggleDeclinado(id, v) {
     setDeclinados(prev => { const n = new Set(prev); v ? n.add(id) : n.delete(id); return n })
   }
@@ -294,11 +296,18 @@ export default function FotosCliente({ codigo: codigoProp }) {
               </motion.button>
             </>
           ) : (
-            <motion.button onClick={siguiente} whileTap={{ scale: 0.98 }}
-              className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px]"
-              style={{ background: G }}>
-              {paso === items.length - 1 ? 'Revisar y enviar →' : 'Siguiente recordatorio →'}
-            </motion.button>
+            <>
+              {!itemActualListo && (
+                <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
+                  Sube la foto o marca "No deseo este recordatorio" para continuar.
+                </p>
+              )}
+              <motion.button onClick={siguiente} disabled={!itemActualListo} whileTap={{ scale: 0.98 }}
+                className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
+                style={{ background: G }}>
+                {paso === items.length - 1 ? 'Revisar y enviar →' : 'Siguiente recordatorio →'}
+              </motion.button>
+            </>
           )}
           {paso > 0 && (
             <button onClick={anterior}
