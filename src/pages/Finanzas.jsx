@@ -342,10 +342,20 @@ export default function Finanzas() {
   }
 
   // ── Diferencia y alerta por mascota (features 5, 7) ─────────────────────────
-  // Lo que falta para completar = a cobrar (bruto) − recogido. NULL si no hay dato.
+  // Valor a RECOGER = lo que el cliente paga (neto, servicios.valor_total). NO el
+  // bruto (valor_a_cobrar incluye la comisión descontada y no se recoge). Si el
+  // item es viejo (sin valor_a_recoger) se cae al valor_a_cobrar.
+  function valorARecoger(it) {
+    if (it.valor_a_recoger != null) return Number(it.valor_a_recoger)
+    if (it.valor_a_cobrar  != null) return Number(it.valor_a_cobrar)
+    return null
+  }
+  // Lo que falta para completar = a recoger − recogido. NULL si no hay dato.
   function diferenciaItem(it) {
-    if (it.es_cancelado || it.valor_a_cobrar == null) return null
-    return (Number(it.valor_a_cobrar) || 0) - (Number(it.total_cobrado) || 0)
+    if (it.es_cancelado) return null
+    const vr = valorARecoger(it)
+    if (vr == null) return null
+    return vr - (Number(it.total_cobrado) || 0)
   }
   // ¿Falta plata sin resolver? (alerta visual + entra a Conciliaciones)
   function faltaPlata(it) {
@@ -1413,6 +1423,9 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">
                                     {it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'}
                                     {Number(it.valor_adicionales) > 0 && <div className="text-[10px] font-medium text-gray-400">incl. adic. {fmt(it.valor_adicionales)}</div>}
+                                    {!it.es_cancelado && valorARecoger(it) != null && it.valor_a_cobrar != null && valorARecoger(it) !== Number(it.valor_a_cobrar) && (
+                                      <div className="text-[10px] font-semibold text-[#0E7490]" title="Neto que recoge el técnico (sin la comisión descontada)">a recoger {fmt(valorARecoger(it))}</div>
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
@@ -2185,8 +2198,11 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   if (totalComision > 0) fila('Comisión veterinarias', totalComision)
   fila('Total recogido (cliente)', c.total_cobrado)
   const totalFalta = items.reduce((a, it) => {
-    if (it.es_cancelado || it.valor_a_cobrar == null) return a
-    const d = (Number(it.valor_a_cobrar) || 0) - (Number(it.total_cobrado) || 0)
+    if (it.es_cancelado) return a
+    const vr = it.valor_a_recoger != null ? Number(it.valor_a_recoger)
+             : it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : null
+    if (vr == null) return a
+    const d = vr - (Number(it.total_cobrado) || 0)
     const resuelto = ['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion) || it.conciliacion_resuelta
     return a + (d > 0 && !resuelto ? d : 0)
   }, 0)
