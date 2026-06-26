@@ -241,6 +241,20 @@ function conTimeout(promise, msg) {
   ])
 }
 
+// La señal móvil falla y se recupera: reintentamos unas pocas veces con espera
+// creciente para que el técnico NO tenga que tocar 3 veces hasta que "quede".
+async function conReintentos(fn, intentos = 3) {
+  let ultimoErr
+  for (let i = 0; i < intentos; i++) {
+    try { return await fn() }
+    catch (e) {
+      ultimoErr = e
+      if (i < intentos - 1) await new Promise(r => setTimeout(r, 700 * (i + 1)))
+    }
+  }
+  throw ultimoErr
+}
+
 // Detector de reinicio por galería: Android puede matar la PWA mientras el
 // picker está abierto (falta de RAM del teléfono — ningún código JS lo evita).
 // Se marca antes de abrir el picker y se limpia cuando el archivo llega; si al
@@ -305,20 +319,29 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
     if (!recuperado) await stashPut(stashKey, file)
     setUploading(true); setErr('')
     try {
+      // Asegura un token vigente antes de subir: si expiró por inactividad,
+      // supabase lo refresca aquí y evita que la 1ª subida falle por token vencido.
+      await db.auth.getSession()
       // comprimir=false (cuarto frío): subir el original sin decodificar —
       // la rama createImageBitmap/canvas es la que falla desde galería Android
       const body = comprimir ? await compressImage(file) : file
-      const path = `${storagePath}/${Date.now()}.${comprimir ? 'jpg' : val.ext}`
-      const { data, error: upErr } = await conTimeout(
-        db.storage.from('evidencias').upload(path, body, { upsert: false, contentType: comprimir ? 'image/jpeg' : val.mime }),
-        'La subida tardó demasiado — revisa la señal y reintenta'
-      )
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
+      // Subida con reintentos: cada intento usa una ruta única (no choca si una
+      // subida previa quedó a medias) y un timeout para no colgarse.
+      const publicUrl = await conReintentos(async () => {
+        const path = `${storagePath}/${crypto.randomUUID()}.${comprimir ? 'jpg' : val.ext}`
+        const { data, error: upErr } = await conTimeout(
+          db.storage.from('evidencias').upload(path, body, { upsert: false, contentType: comprimir ? 'image/jpeg' : val.mime }),
+          'La subida tardó demasiado — revisa la señal y reintenta'
+        )
+        if (upErr) throw upErr
+        return db.storage.from('evidencias').getPublicUrl(data.path).data.publicUrl
+      })
       if (dbSave) {
-        const { error: dbErr } = await db.from(dbSave.table)
-          .update({ [dbSave.column]: publicUrl }).eq('id', dbSave.id)
-        if (dbErr) throw dbErr
+        await conReintentos(async () => {
+          const { error: dbErr } = await db.from(dbSave.table)
+            .update({ [dbSave.column]: publicUrl }).eq('id', dbSave.id)
+          if (dbErr) throw dbErr
+        })
       }
       onFotoUploaded(publicUrl)
       await stashDelete(stashKey)
