@@ -499,9 +499,9 @@ export default function Recibos() {
         </div>
 
         {/* Tabla */}
-        <TableWrap>
+        <TableWrap className="max-h-[68vh] overflow-y-auto">
           <Table>
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr>
                 <Th>Mascota / Cliente</Th>
                 <Th>Plan</Th>

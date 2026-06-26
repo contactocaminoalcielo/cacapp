@@ -1023,9 +1023,9 @@ export default function Finanzas() {
                       </p>
                     </div>
                   ) : (
-                    <div className="overflow-x-auto -mx-5 px-5">
+                    <div className="overflow-auto max-h-[68vh] -mx-5 px-5">
                       <table className="w-full min-w-[780px]">
-                        <thead>
+                        <thead className="sticky top-0 z-10 bg-white">
                           <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
                             {['Fecha', 'Mascota / Cliente', 'Veterinaria', 'Plan', 'Valor total', 'Pagado', 'Saldo', 'Estado', ''].map(h => (
                               <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
@@ -1228,9 +1228,9 @@ export default function Finanzas() {
                       <p className="text-[12px] text-gray-400 mt-1">Todo lo emitido por los técnicos fue cobrado o ya se completó.</p>
                     </div>
                   ) : (
-                    <div className="overflow-x-auto -mx-5 px-5">
+                    <div className="overflow-auto max-h-[68vh] -mx-5 px-5">
                       <table className="w-full min-w-[920px]">
-                        <thead>
+                        <thead className="sticky top-0 z-10 bg-white">
                           <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
                             {['Fecha', 'Mascota / Cliente', 'Plan', 'Técnico', 'Valor', 'Motivo', 'Novedad', ''].map(h => (
                               <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
@@ -1305,9 +1305,9 @@ export default function Finanzas() {
                       <p className="text-[14px] font-semibold text-gray-700">No hay servicios registrados</p>
                     </div>
                   ) : (
-                    <div className="overflow-x-auto -mx-5 px-5">
+                    <div className="overflow-auto max-h-[68vh] -mx-5 px-5">
                       <table className="w-full min-w-[1100px]">
-                        <thead>
+                        <thead className="sticky top-0 z-10 bg-white">
                           <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
                             {['Fecha', 'Mascota', 'Cliente', 'Canal', 'Plan', 'Técnico', 'Total', 'Pagado', 'Saldo', 'Estado pago', 'Medios de pago', ''].map(h => (
                               <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
