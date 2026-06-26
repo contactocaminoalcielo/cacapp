@@ -1485,9 +1485,9 @@ export default function Finanzas() {
                           <p className="text-[13px] text-gray-500">Sin recibos del técnico en este rango.</p>
                         </div>
                       ) : (
-                        <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                        <div className="overflow-auto max-h-[68vh] border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <table className="w-full min-w-[1480px]">
-                            <thead style={{ background: '#FAFAFA' }}>
+                            <thead className="sticky top-0 z-10" style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
                                 {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
                                   <th key={h}
