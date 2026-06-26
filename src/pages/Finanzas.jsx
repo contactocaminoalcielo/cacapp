@@ -371,64 +371,46 @@ export default function Finanzas() {
     if (it.valor_a_cobrar == null) return 0
     return (Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0)
   }
-  const brutoItem = it => (it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : valorARecoger(it))
-  // Falta del técnico: recogió MENOS del neto (debe cobrar al cliente).
-  function faltaCobrar(it) {
-    if (it.es_cancelado || esFactMensual(it)) return 0
-    const neto = valorARecoger(it); if (neto == null) return 0
-    const recogido = Number(it.total_cobrado) || 0
-    return recogido < neto ? neto - recogido : 0
-  }
-  // Comisión que el técnico recogió (recogió por encima del neto) y que se le debe
-  // PAGAR a la veterinaria. Caso típico: recogida a domicilio donde cobró el bruto.
-  function comisionPorPagar(it) {
-    if (it.es_cancelado || esFactMensual(it)) return 0
-    const neto = valorARecoger(it); if (neto == null) return 0
-    const com = Number(it.comision) || 0; if (com <= 0) return 0
-    const recogido = Number(it.total_cobrado) || 0
-    return Math.max(0, Math.min(recogido - neto, com))
-  }
-  // Recogió MÁS allá del bruto (sobrante real, debería devolverse).
-  function excesoReal(it) {
-    if (it.es_cancelado || esFactMensual(it)) return 0
-    const bruto = brutoItem(it); if (bruto == null) return 0
-    const recogido = Number(it.total_cobrado) || 0
-    return recogido > bruto ? recogido - bruto : 0
-  }
-  // Diferencia de caja del técnico para resumen/PDF: + falta, − exceso real, 0 ok.
+  // Diferencia con BANDA aceptable [neto … bruto]: el técnico puede recoger el neto
+  // (la comisión la maneja la veterinaria) o el bruto (recogió todo, incl. comisión)
+  // y en ambos casos está cuadrado. Solo es diferencia si recogió DE MENOS (< neto)
+  // o DE MÁS (> bruto). NULL si no aplica.
   function diferenciaItem(it) {
     if (it.es_cancelado || esFactMensual(it)) return null
-    const f = faltaCobrar(it), e = excesoReal(it)
-    return f > 0 ? f : e > 0 ? -e : 0
+    const neto = valorARecoger(it)
+    if (neto == null) return null
+    const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
+    const recogido = Number(it.total_cobrado) || 0
+    if (recogido < neto)  return neto - recogido    // falta (+)
+    if (recogido > bruto) return bruto - recogido   // de más (−)
+    return 0
   }
-  // ¿Falta plata del técnico sin resolver? (alerta visual de fila).
+  // ¿Falta plata del técnico sin resolver? (alerta visual). Fact. mensual no es
+  // falta del técnico → se gestiona aparte en Conciliaciones.
   function faltaPlata(it) {
-    return faltaCobrar(it) > 0
+    if (esFactMensual(it)) return false
+    const d = diferenciaItem(it)
+    return d != null && d > 0
       && !['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion)
       && !it.conciliacion_resuelta
   }
-  // ¿Debe estar en Conciliaciones? Parcial/no recogió, facturación mensual, o
-  // comisión que el técnico recogió y hay que pagarle a la veterinaria.
+  // ¿Debe estar en Conciliaciones? Parcial/no recogió, o facturación mensual.
   function enConciliacion(it) {
-    return !it.conciliacion_resuelta && (
-      ['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion)
-      || esFactMensual(it)
-      || comisionPorPagar(it) > 0
-    )
+    return !it.conciliacion_resuelta
+      && (['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) || esFactMensual(it))
   }
-  // Monto pendiente de un item: aliado fact. mensual → neto; falta → falta;
-  // si no, la comisión por pagar a la veterinaria.
+  // Monto pendiente por cobrar de un item (técnico: diferencia; aliado: neto).
   function montoPendiente(it) {
     if (esFactMensual(it)) return pendienteAliado(it)
-    const f = faltaCobrar(it)
-    return f > 0 ? f : comisionPorPagar(it)
+    const d = diferenciaItem(it)
+    return d > 0 ? d : 0
   }
-  // Estado de revisión sugerido del técnico (la comisión por pagar no lo cambia).
+  // Estado sugerido según la diferencia (feature 8 — el coordinador puede cambiarlo).
   function estadoSugerido(it) {
-    if (it.es_cancelado || esFactMensual(it)) return null
-    const recogido = Number(it.total_cobrado) || 0
-    if (faltaCobrar(it) > 0) return recogido > 0 ? 'PARCIAL' : 'NO_RECOGIO'
-    if (excesoReal(it) > 0) return 'EXCEDENTE'
+    const d = diferenciaItem(it)
+    if (d == null) return null
+    if (d > 0) return (Number(it.total_cobrado) || 0) > 0 ? 'PARCIAL' : 'NO_RECOGIO'
+    if (d < 0) return 'EXCEDENTE'
     return 'CORRECTO'
   }
 
@@ -490,10 +472,9 @@ export default function Finanzas() {
         .select(`*, cuadres_tecnico:cuadre_id ( id, estado, fecha_desde, fecha_hasta,
           personal:tecnico_id ( nombre, apellido ) )`)
         .eq('conciliacion_resuelta', false)
-        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL,comision.gt.0')
+        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL')
         .order('fecha', { ascending: false })
-      // El "comisión por pagar" es calculado (recogido > neto) → se filtra en cliente.
-      setConciliaciones((data || []).filter(enConciliacion))
+      setConciliaciones(data || [])
     } catch (err) {
       console.error('[Finanzas] Error cargando conciliaciones:', err)
       setConciliaciones([])
@@ -1510,20 +1491,18 @@ export default function Finanzas() {
                             <tbody>
                               {cuadreItems.map(it => {
                                 const d = diferenciaItem(it)
-                                const cxp = comisionPorPagar(it)
                                 const alerta = faltaPlata(it)
-                                const marca = alerta || (cxp > 0 && !it.conciliacion_resuelta)
                                 const sug = estadoSugerido(it)
                                 const er = it.estado_conciliacion ? ESTADO_REV[it.estado_conciliacion] : null
                                 return (
-                                <tr key={it.id} className={`text-[13px] border-b transition-colors ${marca ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
-                                  style={{ borderColor: 'rgba(30,80,40,0.06)', ...(marca ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
+                                <tr key={it.id} className={`text-[13px] border-b transition-colors ${alerta ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
+                                  style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alerta ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
                                     <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
                                       className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
                                       title="Ver tarjeta completa de la mascota">
-                                      {marca && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
+                                      {alerta && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
                                       {it.mascota_nombre || '—'}
                                     </button>
                                     <div className="flex flex-wrap gap-1 mt-0.5">
@@ -1550,9 +1529,8 @@ export default function Finanzas() {
                                     {esFactMensual(it) ? (
                                       <span className="font-semibold text-[#9A5500] text-[12px]" title="Facturación mensual: el aliado nos debe el neto (bruto − comisión). Se cobra en la factura mensual.">x cobrar al aliado {fmt(pendienteAliado(it))}</span>
                                     ) : d == null ? <span className="text-gray-300">—</span>
-                                      : d > 0 ? <span className="font-bold text-[#DC2626]" title="El técnico recogió menos del neto">{fmt(d)}</span>
-                                      : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió más allá del bruto">+{fmt(-d)}</span>
-                                      : cxp > 0 ? <span className="font-semibold text-[#9A5500] text-[12px]" title="El técnico recogió la comisión (recogida a domicilio). Hay que pagársela a la veterinaria.">comisión x pagar {fmt(cxp)}</span>
+                                      : d > 0 ? <span className="font-bold text-[#DC2626]">{fmt(d)}</span>
+                                      : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
                                       : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
                                   </td>
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">{fmt(it.efectivo)}</td>
@@ -1637,20 +1615,11 @@ export default function Finanzas() {
                           )}
                           <FilaTotal label="Total recogido (cliente)" valor={cuadreData.total_cobrado} />
                           {(() => {
-                            const falta = cuadreItems.reduce((a, it) => a + (faltaPlata(it) ? faltaCobrar(it) : 0), 0)
+                            const falta = cuadreItems.reduce((a, it) => { const d = diferenciaItem(it); return a + (faltaPlata(it) && d > 0 ? d : 0) }, 0)
                             return falta > 0 ? (
                               <div className="flex items-center justify-between bg-amber-50 -mx-1 px-2 py-1 rounded-lg">
                                 <span className="text-[12px] font-semibold text-amber-700 inline-flex items-center gap-1"><AlertTriangle size={12} /> Falta por cobrar</span>
                                 <span className="tabular-nums text-[13px] font-extrabold text-amber-700">{fmt(falta)}</span>
-                              </div>
-                            ) : null
-                          })()}
-                          {(() => {
-                            const comPag = cuadreItems.reduce((a, it) => a + comisionPorPagar(it), 0)
-                            return comPag > 0 ? (
-                              <div className="flex items-center justify-between bg-amber-50 -mx-1 px-2 py-1 rounded-lg">
-                                <span className="text-[12px] font-semibold text-[#9A5500] inline-flex items-center gap-1"><Building2 size={12} /> Comisión por pagar a veterinarias</span>
-                                <span className="tabular-nums text-[13px] font-extrabold text-[#9A5500]">{fmt(comPag)}</span>
                               </div>
                             ) : null
                           })()}
@@ -1758,9 +1727,7 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5">
                                     {esFactMensual(it)
                                       ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>
-                                      : comisionPorPagar(it) > 0
-                                        ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">COMISIÓN X PAGAR</span>
-                                        : er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
+                                      : er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <select value={it.conciliacion_via || ''} onChange={e => guardarConciliacion(it, { via: e.target.value || null })}
@@ -2077,12 +2044,10 @@ function MascotaDetalleModal({ item, onClose }) {
   cob.plan = item.valor_plan != null ? n(item.valor_plan)
            : svc?.valor_plan != null ? n(svc.valor_plan)
            : Math.max(0, grossVal - cob.adic - cob.transporte)
-  // Falta del técnico (recogió de menos), comisión que recogió y se debe pagar a la
-  // veterinaria (recogió por encima del neto), y exceso real (más allá del bruto).
-  cob.falta     = cob.recogido < cob.neto ? cob.neto - cob.recogido : 0
-  cob.comPagar  = cob.comision > 0 ? Math.max(0, Math.min(cob.recogido - cob.neto, cob.comision)) : 0
-  cob.exceso    = cob.recogido > grossVal ? cob.recogido - grossVal : 0
-  cob.diferencia = cob.falta > 0 ? cob.falta : cob.exceso > 0 ? -cob.exceso : 0
+  // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
+  cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
+                 : cob.recogido > grossVal ? grossVal - cob.recogido
+                 : 0
 
   const Dato = ({ label, children }) => (
     <div className="flex justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
@@ -2166,12 +2131,8 @@ function MascotaDetalleModal({ item, onClose }) {
                     </div>
                   ))}
                 </div>
-                <div className="flex justify-between gap-3 py-1 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
-                  <span className="text-[12px] text-gray-500">Comisión por pagar a la veterinaria</span>
-                  <span className={`text-[12px] font-semibold text-right tabular-nums ${cob.comPagar > 0 ? 'text-[#9A5500]' : 'text-gray-800'}`}>{fmt(cob.comPagar)}</span>
-                </div>
                 <div className="flex justify-between gap-3 py-1.5 mt-1 rounded-lg px-2" style={{ background: cob.diferencia > 0 ? '#FEF3C7' : cob.diferencia < 0 ? '#EFF6FF' : '#F0FDF4' }}>
-                  <span className="text-[12px] font-bold" style={{ color: cob.diferencia > 0 ? '#9A5500' : cob.diferencia < 0 ? '#1E40AF' : '#166534' }}>Diferencia (caja técnico)</span>
+                  <span className="text-[12px] font-bold" style={{ color: cob.diferencia > 0 ? '#9A5500' : cob.diferencia < 0 ? '#1E40AF' : '#166534' }}>Diferencia</span>
                   <span className="text-[13px] font-extrabold tabular-nums" style={{ color: cob.diferencia > 0 ? '#9A5500' : cob.diferencia < 0 ? '#1E40AF' : '#166534' }}>
                     {cob.diferencia < 0 ? `+${fmt(-cob.diferencia)}` : fmt(cob.diferencia)}
                   </span>
