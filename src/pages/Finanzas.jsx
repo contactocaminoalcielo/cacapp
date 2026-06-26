@@ -567,7 +567,12 @@ export default function Finanzas() {
     try {
       await generarCuadrePDF(cuadreData, cuadreItems, nombreTecnicoSel(cuadreData.tecnico_id))
     } catch (err) {
-      await showAlert('Error al generar el PDF: ' + (err.message || err), { title: 'Error' })
+      const msg = String(err?.message || err)
+      if (/dynamically imported module|Failed to fetch|Importing a module/i.test(msg)) {
+        await showAlert('La app se actualizó. Recarga la página (Ctrl+Shift+R) e intenta de nuevo.', { title: 'Actualiza la página' })
+      } else {
+        await showAlert('Error al generar el PDF: ' + msg, { title: 'Error' })
+      }
     } finally {
       setCuadrePdfGen(false)
     }
@@ -2326,59 +2331,95 @@ function FilaTotal({ label, valor, color = '#374151', bold = false }) {
 // ── PDF del cuadre (jsPDF directo — patrón del proyecto, NUNCA html2canvas) ──
 async function generarCuadrePDF(c, items, tecnicoNombre) {
   const { default: jsPDF } = await import('jspdf')
-  const pdf = new jsPDF('p', 'mm', 'a4')
-  const W = 210, M = 12, CW = W - M * 2
+  const pdf = new jsPDF('l', 'mm', 'a4')   // horizontal: caben todas las columnas
+  const W = 297, H = 210, M = 10, CW = W - M * 2
   const G = [31, 90, 50]
   const t = (text, x, y, opts = {}) => pdf.text(String(text ?? ''), x, y, opts)
   const fechaCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
+  const EST = { VERIFICADO: 'OK', CORRECTO: 'Correcto', PARCIAL: 'Parcial', NO_RECOGIO: 'No cobró', EXCEDENTE: 'De más' }
+  // Diferencia por fila (misma regla que la pantalla: banda neto..bruto; FM = a cobrar al aliado).
+  const difFila = it => {
+    if (it.es_cancelado) return '—'
+    if (it.modalidad_comision === 'FACTURACION_MENSUAL') return 'FM ' + fmt((Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0))
+    const neto = it.valor_a_recoger != null ? Number(it.valor_a_recoger) : it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : null
+    if (neto == null) return '—'
+    const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
+    const recog = Number(it.total_cobrado) || 0
+    if (recog < neto) return fmt(neto - recog)
+    if (recog > bruto) return '+' + fmt(recog - bruto)
+    return fmt(0)
+  }
+  const netoFila = it => it.valor_a_recoger != null ? fmt(it.valor_a_recoger) : it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'
 
   // Cabecera
-  pdf.setFillColor(...G); pdf.rect(0, 0, W, 26, 'F')
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.setTextColor(255, 255, 255)
-  t('Camino al Cielo', M, 11)
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(196, 168, 122)
-  t('CUADRE DE CUENTAS — TÉCNICO', M, 18)
+  pdf.setFillColor(...G); pdf.rect(0, 0, W, 22, 'F')
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.setTextColor(255, 255, 255)
+  t('Camino al Cielo', M, 10)
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(196, 168, 122)
+  t('CUADRE DE CUENTAS — TÉCNICO', M, 16.5)
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(220, 230, 222)
-  t(`${c.estado}${c.cerrado_en ? '  ·  Cerrado ' + new Date(c.cerrado_en).toLocaleDateString('es-CO') : ''}`, W - M, 18, { align: 'right' })
+  t(`${c.estado}${c.cerrado_en ? '  ·  Cerrado ' + new Date(c.cerrado_en).toLocaleDateString('es-CO') : ''}`, W - M, 16.5, { align: 'right' })
 
-  let y = 34
+  let y = 30
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(20, 20, 20)
   t(tecnicoNombre, M, y)
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(90, 90, 90)
   t(`Periodo: ${fechaCorta(c.fecha_desde)} a ${fechaCorta(c.fecha_hasta)}  ·  ${c.total_servicios} servicio(s)`, M, y + 5)
-  y += 12
+  y += 11
 
-  // Tabla
+  // Tabla — todas las columnas (anchos suman 277 = CW)
   const cols = [
-    ['Fecha', 15, 'l'], ['Mascota', 28, 'l'], ['Ciudad', 22, 'l'],
-    ['Cobrado', 24, 'r'], ['Efvo', 22, 'r'], ['Transp.', 20, 'r'], ['Pago', 20, 'r'], ['Recargo', 15, 'r'],
+    ['Fecha', 14, 'l'], ['Mascota', 24, 'l'], ['Ciudad', 15, 'l'], ['Veterinaria', 24, 'l'], ['Plan', 16, 'l'],
+    ['A cobrar', 17, 'r'], ['Comisión', 15, 'r'], ['Recogido', 17, 'r'], ['Diferencia', 17, 'r'],
+    ['Efectivo', 15, 'r'], ['Digital', 15, 'r'], ['Transp.', 14, 'r'], ['Pago', 13, 'r'], ['Recargo', 13, 'r'],
+    ['Lej.', 11, 'c'], ['Estado', 17, 'l'], ['Observación', 20, 'l'],
   ]
-  pdf.setFillColor(240, 243, 240); pdf.rect(M, y, CW, 7, 'F')
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60)
-  let x = M + 2
-  cols.forEach(([h, w, a]) => { t(h, a === 'r' ? x + w - 2 : x, y + 4.6, { align: a === 'r' ? 'right' : 'left' }); x += w })
-  y += 7
+  const drawHead = () => {
+    pdf.setFillColor(240, 243, 240); pdf.rect(M, y, CW, 6.5, 'F')
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.3); pdf.setTextColor(60, 60, 60)
+    let x = M + 1.5
+    cols.forEach(([h, w, a]) => {
+      const tx = a === 'r' ? x + w - 1.5 : a === 'c' ? x + w / 2 : x
+      t(h, tx, y + 4.3, { align: a === 'r' ? 'right' : a === 'c' ? 'center' : 'left' }); x += w
+    })
+    y += 6.5
+  }
+  drawHead()
 
-  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(40, 40, 40)
+  pdf.setFontSize(6); pdf.setTextColor(40, 40, 40)
   items.forEach(it => {
-    if (y > 250) { pdf.addPage(); y = 18 }
-    x = M + 2
+    if (y > H - 20) { pdf.addPage(); y = 14; drawHead(); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6); pdf.setTextColor(40, 40, 40) }
+    pdf.setFont('helvetica', 'normal')
+    let x = M + 1.5
     const vals = [
-      [fechaCorta(it.fecha), 'l'],
-      [(it.mascota_nombre || '—').slice(0, 15), 'l'],
-      [(it.ciudad || '—').slice(0, 12), 'l'],
-      [fmt(it.total_cobrado), 'r'],
-      [fmt(it.efectivo), 'r'],
-      [it.transporte_sin_dato ? 's/d' : fmt(it.transporte_reconocido), 'r'],
-      [fmt(it.pago_servicio), 'r'],
-      [fmt(it.recargo_aplicado), 'r'],
+      fechaCorta(it.fecha),
+      (it.mascota_nombre || '—').slice(0, 18),
+      (it.ciudad || '—').slice(0, 11),
+      (it.veterinaria || '—').slice(0, 18),
+      (it.plan_nombre || '—').slice(0, 12),
+      netoFila(it),
+      Number(it.comision) > 0 ? fmt(it.comision) : '—',
+      it.es_cancelado ? '—' : fmt(it.total_cobrado),
+      difFila(it),
+      fmt(it.efectivo),
+      Number(it.digital) > 0 ? fmt(it.digital) : '—',
+      it.transporte_sin_dato ? 's/d' : fmt(it.transporte_reconocido),
+      Number(it.pago_servicio) > 0 ? fmt(it.pago_servicio) : '—',
+      Number(it.recargo_aplicado) > 0 ? fmt(it.recargo_aplicado) : '—',
+      it.es_lejania ? 'Sí' : '—',
+      it.es_cancelado ? 'CANCELADO' : (EST[it.estado_conciliacion] || '—'),
+      (it.observaciones || '').slice(0, 24),
     ]
-    cols.forEach(([, w, a], i) => { t(vals[i][0], a === 'r' ? x + w - 2 : x, y + 4, { align: a === 'r' ? 'right' : 'left' }); x += w })
-    pdf.setDrawColor(225, 232, 226); pdf.setLineWidth(0.1); pdf.line(M, y + 5.5, W - M, y + 5.5)
-    y += 6
+    cols.forEach(([, w, a], i) => {
+      const tx = a === 'r' ? x + w - 1.5 : a === 'c' ? x + w / 2 : x
+      t(vals[i], tx, y + 3.6, { align: a === 'r' ? 'right' : a === 'c' ? 'center' : 'left' }); x += w
+    })
+    pdf.setDrawColor(225, 232, 226); pdf.setLineWidth(0.1); pdf.line(M, y + 4.8, W - M, y + 4.8)
+    y += 5.2
   })
 
   y += 4
+  if (y > H - 90) { pdf.addPage(); y = 16 }
   // Totales
   const fila = (label, val, bold) => {
     pdf.setFont('helvetica', bold ? 'bold' : 'normal'); pdf.setFontSize(bold ? 10 : 9)
@@ -2428,7 +2469,8 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   }
 
   // Firma
-  y = Math.max(y + 10, 250)
+  y += 12
+  if (y > H - 14) { pdf.addPage(); y = 24 }
   pdf.setDrawColor(120, 120, 120); pdf.setLineWidth(0.3)
   pdf.line(M, y, M + 70, y); pdf.line(W - M - 70, y, W - M, y)
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(90, 90, 90)
