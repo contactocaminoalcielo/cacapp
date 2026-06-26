@@ -9,7 +9,7 @@ import {
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
-  CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare,
+  CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
 } from 'lucide-react'
 
 // Estados de revisión por mascota (feature 8). NULL = sin revisar.
@@ -69,6 +69,8 @@ export default function Finanzas() {
 
   // ── State modal pago ────────────────────────────────────────────────────────
   const [pagoModal,    setPagoModal]    = useState(null)   // null | servicio
+  const [pagoComprobante, setPagoComprobante] = useState(null)   // File adjunto al registrar pago
+  const [comprobantesSet, setComprobantesSet] = useState(() => new Set()) // servicio_ids con comprobante
   const [valorAbono,   setValorAbono]   = useState('')
   const [metodoPago,   setMetodoPago]   = useState('EFECTIVO')
   const [pagoNotas,    setPagoNotas]    = useState('')
@@ -118,6 +120,15 @@ export default function Finanzas() {
       if (errSvcs) throw errSvcs
 
       const rows = svcs || []
+
+      // Servicios que ya tienen un comprobante de pago adjunto (para mostrar "ver comprobante")
+      const idsSvc = rows.map(s => s.id)
+      if (idsSvc.length) {
+        const { data: comps } = await db.from('recibo_comprobantes').select('servicio_id').in('servicio_id', idsSvc)
+        setComprobantesSet(new Set((comps || []).map(c => c.servicio_id)))
+      } else {
+        setComprobantesSet(new Set())
+      }
 
       // 2. Mascotas
       const mascotaIds = [...new Set(rows.map(s => s.mascota_id).filter(Boolean))]
@@ -710,6 +721,7 @@ export default function Finanzas() {
     setMetodoPago(svc.metodo_pago || 'EFECTIVO')
     setPagoNotas('')
     setPagoError('')
+    setPagoComprobante(null)
   }
 
   function cerrarPagoModal() {
@@ -719,6 +731,22 @@ export default function Finanzas() {
     setPagoNotas('')
     setPagoError('')
     setPagoSaving(false)
+    setPagoComprobante(null)
+  }
+
+  // Sube el comprobante del pago al bucket compartido `evidencias` y devuelve su ruta.
+  async function subirComprobantePago(servicioId, file) {
+    const tipo = (file.type || '').toLowerCase()
+    if (!(tipo.startsWith('image/') || tipo === 'application/pdf'))
+      throw new Error('El comprobante debe ser una imagen o un PDF.')
+    if (file.size > 8 * 1024 * 1024)
+      throw new Error('El comprobante supera 8 MB. Usa un archivo más liviano.')
+    const ext  = tipo === 'application/pdf' ? 'pdf' : (tipo.split('/')[1] || 'jpg')
+    const path = `pagos/${servicioId}/${crypto.randomUUID()}.${ext}`
+    const { error } = await db.storage.from('evidencias')
+      .upload(path, file, { upsert: false, contentType: file.type || undefined })
+    if (error) throw new Error('No se pudo subir el comprobante: ' + error.message)
+    return { bucket: 'evidencias', storage_path: path, mime_type: file.type || null }
   }
 
   // ── Modal pago — guardar ────────────────────────────────────────────────────
@@ -735,6 +763,12 @@ export default function Finanzas() {
     setPagoSaving(true)
     setPagoError('')
     try {
+      // 1. Subir el comprobante PRIMERO (si lo adjuntaron). Si falla, no tocamos el
+      //    pago: el usuario corrige y reintenta sin haber movido dinero.
+      let comprobante = null
+      if (pagoComprobante) comprobante = await subirComprobantePago(pagoModal.id, pagoComprobante)
+
+      // 2. Registrar el pago.
       const nuevo_pagado = (pagoModal.valor_pagado || 0) + abono
       const nuevo_estado = nuevo_pagado >= (pagoModal.valor_total || 0) ? 'COMPLETO' : 'PARCIAL'
       const { error } = await db
@@ -747,9 +781,27 @@ export default function Finanzas() {
         })
         .eq('id', pagoModal.id)
       if (error) throw error
+
+      // 3. Registrar el comprobante (no crítico: el pago ya quedó). Si falla, se
+      //    avisa pero NO se revierte el pago.
+      let avisoComprobante = null
+      if (comprobante) {
+        const { error: ce } = await db.from('recibo_comprobantes').insert({
+          servicio_id:  pagoModal.id,
+          bucket:       comprobante.bucket,
+          storage_path: comprobante.storage_path,
+          mime_type:    comprobante.mime_type,
+          estado:       'APROBADO',
+          uploaded_by:  personalData?.id || null,
+        })
+        if (ce) avisoComprobante = ce.message
+      }
+
       cerrarPagoModal()
       await cargar()
       if (noCobrados !== null) cargarNoCobrados()
+      if (avisoComprobante)
+        await showAlert('El pago se registró, pero el comprobante no se pudo guardar: ' + avisoComprobante + '\n\nVuelve a adjuntarlo desde el pago.', { title: 'Comprobante no guardado', variant: 'warning' })
     } catch (err) {
       setPagoError('Error al registrar el pago: ' + (err.message || err))
     } finally {
@@ -1023,12 +1075,24 @@ export default function Finanzas() {
                               <td className="py-3 pr-4 text-[#DC2626] font-bold tabular-nums">{fmt(s.saldo)}</td>
                               <td className="py-3 pr-4"><BadgeEstadoPago estado={s.estado_pago} /></td>
                               <td className="py-3">
-                                <button
-                                  onClick={() => abrirPagoModal(s)}
-                                  className="px-3 py-1.5 bg-[#1A5CD8] hover:bg-[#1550C0] text-white text-[11px] font-semibold rounded-xl transition-colors whitespace-nowrap"
-                                >
-                                  Registrar pago
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={() => abrirPagoModal(s)}
+                                    className="px-3 py-1.5 bg-[#1A5CD8] hover:bg-[#1550C0] text-white text-[11px] font-semibold rounded-xl transition-colors whitespace-nowrap"
+                                  >
+                                    Registrar pago
+                                  </button>
+                                  {comprobantesSet.has(s.id) && (
+                                    <button
+                                      onClick={() => setComprobanteItem({ servicio_id: s.id, mascota_nombre: nombreMascota(s) })}
+                                      title="Ver comprobante de pago"
+                                      className="w-7 h-7 flex items-center justify-center rounded-lg border text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
+                                      style={{ borderColor: 'rgba(30,80,40,0.15)' }}
+                                    >
+                                      <Paperclip size={13} />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -1862,6 +1926,26 @@ export default function Finanzas() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-[12px] font-semibold text-gray-700 mb-1">
+                    Comprobante de pago <span className="font-normal text-gray-400">(opcional)</span>
+                  </label>
+                  {pagoComprobante ? (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl border bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                      <FileText size={14} className="text-[#1A5CD8] flex-shrink-0" />
+                      <span className="text-[12px] text-gray-700 truncate flex-1">{pagoComprobante.name}</span>
+                      <button type="button" onClick={() => setPagoComprobante(null)} className="text-gray-400 hover:text-red-500" title="Quitar"><X size={14} /></button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed cursor-pointer text-[12px] font-semibold text-gray-500 hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.25)' }}>
+                      <Paperclip size={14} /> Adjuntar imagen o PDF
+                      <input type="file" accept="image/*,application/pdf" className="hidden"
+                        onChange={e => { setPagoComprobante(e.target.files?.[0] || null); setPagoError('') }} />
+                    </label>
+                  )}
+                  <p className="text-[11px] text-gray-400 mt-1">Imagen o PDF, máx. 8 MB.</p>
+                </div>
+
                 {pagoError && (
                   <div className="flex items-center gap-2 bg-red-50 text-red-700 text-[12px] font-medium px-3 py-2 rounded-xl border border-red-100">
                     <AlertCircle size={13} className="flex-shrink-0" />
@@ -2156,9 +2240,11 @@ function ComprobanteModal({ item, onClose }) {
     let activo = true
     ;(async () => {
       try {
-        if (!item.recibo_id) { if (activo) { setImgs([]); setLoading(false) } return }
-        const { data: comps, error: ce } = await db.from('recibo_comprobantes')
-          .select('id, bucket, storage_path, mime_type, estado').eq('recibo_id', item.recibo_id)
+        let query = db.from('recibo_comprobantes').select('id, bucket, storage_path, mime_type, estado')
+        if (item.recibo_id)        query = query.eq('recibo_id', item.recibo_id)
+        else if (item.servicio_id) query = query.eq('servicio_id', item.servicio_id)
+        else { if (activo) { setImgs([]); setLoading(false) } return }
+        const { data: comps, error: ce } = await query
         if (ce) throw ce
         const out = []
         for (const c of comps || []) {
@@ -2206,14 +2292,24 @@ function ComprobanteModal({ item, onClose }) {
             </div>
           ) : (
             <div className="space-y-3">
-              {imgs.map(c => (
-                <div key={c.id}>
-                  <a href={c.url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                    <img src={c.url} alt="Comprobante" className="w-full object-contain max-h-[60vh] bg-gray-50" />
-                  </a>
-                  {c.estado && <span className="text-[10px] text-gray-400 mt-1 inline-block">Estado: {c.estado}</span>}
-                </div>
-              ))}
+              {imgs.map(c => {
+                const esPdf = (c.mime_type || '').toLowerCase() === 'application/pdf' || /\.pdf($|\?)/i.test(c.storage_path || '')
+                return (
+                  <div key={c.id}>
+                    {esPdf ? (
+                      <a href={c.url} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-2 py-4 rounded-xl border text-[13px] font-semibold text-[#1A5CD8] hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                        <FileText size={16} /> Abrir comprobante (PDF)
+                      </a>
+                    ) : (
+                      <a href={c.url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                        <img src={c.url} alt="Comprobante" className="w-full object-contain max-h-[60vh] bg-gray-50" />
+                      </a>
+                    )}
+                    {c.estado && <span className="text-[10px] text-gray-400 mt-1 inline-block">Estado: {c.estado}</span>}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
