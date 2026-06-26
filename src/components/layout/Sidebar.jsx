@@ -73,10 +73,12 @@ function useIsDesktop() {
   return isDesktop
 }
 
-export default function Sidebar({ isOpen, onClose }) {
+export default function Sidebar({ isOpen, onClose, collapsed = false }) {
   const badges      = useBadges()
   const isDesktop   = useIsDesktop()
   const { personalData, logout } = useAuth()
+  // Visible si: en desktop no está colapsado; en móvil si está abierto.
+  const visible = isDesktop ? !collapsed : isOpen
 
   const rol        = personalData?.rol ?? 'Coordinador'
   const navGroups  = filterNavGroups(ALL_NAV_GROUPS, rol)
@@ -93,7 +95,7 @@ export default function Sidebar({ isOpen, onClose }) {
     <motion.nav
       className="fixed top-0 left-0 bottom-0 z-50 flex flex-col w-[240px]"
       initial={false}
-      animate={{ x: isDesktop || isOpen ? 0 : -240 }}
+      animate={{ x: visible ? 0 : -240 }}
       transition={SIDEBAR_SPRING}
       style={{ backgroundColor: BG }}
     >

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, User, PanelLeft, PanelLeftClose } from 'lucide-react'
 import Sidebar from './Sidebar'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -93,7 +93,19 @@ function ProfileMenu({ personalData, logout }) {
 
 export default function AppShell({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Colapsar el menú lateral en desktop (se recuerda entre sesiones).
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('orbit_sidebar_collapsed') === '1' } catch { return false }
+  })
   const { personalData, logout } = useAuth()
+
+  function toggleCollapsed() {
+    setCollapsed(c => {
+      const next = !c
+      try { localStorage.setItem('orbit_sidebar_collapsed', next ? '1' : '0') } catch (_) {}
+      return next
+    })
+  }
 
   return (
     <div className="flex min-h-screen bg-[#F8F9FA]">
@@ -112,10 +124,10 @@ export default function AppShell({ children }) {
         )}
       </AnimatePresence>
 
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={collapsed} />
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-screen lg:ml-[240px] overflow-x-hidden">
+      <div className={`flex-1 flex flex-col min-h-screen overflow-x-hidden transition-[margin] duration-300 ${collapsed ? 'lg:ml-0' : 'lg:ml-[240px]'}`}>
         {/* Topbar — siempre visible */}
         <div
           className="sticky top-0 z-50 flex items-center gap-3 bg-white px-4 h-14"
@@ -133,6 +145,17 @@ export default function AppShell({ children }) {
               <rect x="1" y="8.25" width="16" height="1.5" rx="0.75" fill="#374151"/>
               <rect x="1" y="13"   width="16" height="1.5" rx="0.75" fill="#374151"/>
             </svg>
+          </motion.button>
+
+          {/* Ocultar / mostrar menú — solo en desktop */}
+          <motion.button
+            whileTap={{ scale: 0.88 }}
+            className="hidden lg:flex w-8 h-8 items-center justify-center rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+            onClick={toggleCollapsed}
+            title={collapsed ? 'Mostrar menú' : 'Ocultar menú'}
+            aria-label={collapsed ? 'Mostrar menú' : 'Ocultar menú'}
+          >
+            {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
           </motion.button>
 
           {/* Título */}
