@@ -394,10 +394,11 @@ export default function Finanzas() {
       && !['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion)
       && !it.conciliacion_resuelta
   }
-  // ¿Debe estar en Conciliaciones? Parcial/no recogió, o facturación mensual.
+  // ¿Debe estar en Conciliaciones? Parcial/no recogió, facturación mensual, o
+  // sin recibo (el técnico recogió pero no cobró → hay que cobrarlo).
   function enConciliacion(it) {
     return !it.conciliacion_resuelta
-      && (['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) || esFactMensual(it))
+      && (['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) || esFactMensual(it) || it.sin_recibo)
   }
   // Monto pendiente por cobrar de un item (técnico: diferencia; aliado: neto).
   function montoPendiente(it) {
@@ -472,7 +473,7 @@ export default function Finanzas() {
         .select(`*, cuadres_tecnico:cuadre_id ( id, estado, fecha_desde, fecha_hasta,
           personal:tecnico_id ( nombre, apellido ) )`)
         .eq('conciliacion_resuelta', false)
-        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL')
+        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL,sin_recibo.eq.true')
         .order('fecha', { ascending: false })
       setConciliaciones(data || [])
     } catch (err) {
@@ -1512,6 +1513,7 @@ export default function Finanzas() {
                                     </button>
                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                       {it.es_cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">CANCELADO</span>}
+                                      {it.sin_recibo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-700" title="El técnico recogió este servicio pero no generó recibo (no cobró). Pendiente por cobrar.">SIN RECIBO</span>}
                                       {esFactMensual(it) && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>}
                                       {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                       {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
@@ -1732,7 +1734,9 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5">
                                     {esFactMensual(it)
                                       ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>
-                                      : er && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
+                                      : er
+                                        ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>
+                                        : it.sin_recibo && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">SIN RECIBO</span>}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <select value={it.conciliacion_via || ''} onChange={e => guardarConciliacion(it, { via: e.target.value || null })}
