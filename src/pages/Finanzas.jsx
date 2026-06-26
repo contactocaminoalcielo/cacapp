@@ -1490,7 +1490,13 @@ export default function Finanzas() {
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
                                 {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
-                                  <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
+                                  <th key={h}
+                                    title={h === 'Comisión' ? 'Solo informativo: ya está descontada del total a cobrar, no se suma'
+                                      : h === 'Total a cobrar' ? 'Neto que paga el cliente: transporte a municipios incluido y comisión descontada'
+                                      : undefined}
+                                    className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
+                                    {h === 'Comisión' ? 'Comisión (info)' : h}
+                                  </th>
                                 ))}
                               </tr>
                             </thead>
@@ -1616,9 +1622,13 @@ export default function Finanzas() {
                         {/* Desglose */}
                         <div className="bg-white border rounded-2xl p-5 space-y-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Resumen</p>
-                          <FilaTotal label="Total a cobrar (servicios)" valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (valorARecoger(it) || 0)), 0)} />
+                          <FilaTotal label="Total a cobrar (servicios)"
+                            hint="Neto: transporte a municipios incluido y comisión ya descontada"
+                            valor={cuadreItems.reduce((a, it) => a + (it.es_cancelado ? 0 : (valorARecoger(it) || 0)), 0)} />
                           {cuadreItems.some(it => Number(it.comision) > 0) && (
-                            <FilaTotal label="Comisión veterinarias" valor={cuadreItems.reduce((a, it) => a + (Number(it.comision) || 0), 0)} color="#d97706" />
+                            <FilaTotal label="Comisión veterinarias" info
+                              hint="Informativo · ya descontada del total a cobrar (no suma)"
+                              valor={cuadreItems.reduce((a, it) => a + (Number(it.comision) || 0), 0)} />
                           )}
                           <FilaTotal label="Total recogido (cliente)" valor={cuadreData.total_cobrado} />
                           {(() => {
@@ -2323,11 +2333,15 @@ function ObsModal({ item, cerrado, onClose, onSave }) {
 }
 
 // ── Sub-componente FilaTotal (resumen del cuadre) ────────────────────────────
-function FilaTotal({ label, valor, color = '#374151', bold = false }) {
+function FilaTotal({ label, valor, color = '#374151', bold = false, hint = null, info = false }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className={`text-[12px] ${bold ? 'font-bold text-gray-800' : 'text-gray-500'}`}>{label}</span>
-      <span className={`tabular-nums ${bold ? 'text-[14px] font-extrabold' : 'text-[13px] font-semibold'}`} style={{ color }}>{fmt(valor)}</span>
+    <div className={`flex items-start justify-between gap-3 ${info ? 'opacity-70' : ''}`}>
+      <span className={`text-[12px] ${bold ? 'font-bold text-gray-800' : 'text-gray-500'}`}>
+        {label}
+        {hint && <span className="block text-[10px] font-normal text-gray-400 italic leading-tight">{hint}</span>}
+      </span>
+      <span className={`tabular-nums whitespace-nowrap ${bold ? 'text-[14px] font-extrabold' : 'text-[13px] font-semibold'}`}
+        style={info ? { color: '#9CA3AF' } : { color }}>{info ? `(${fmt(valor)})` : fmt(valor)}</span>
     </div>
   )
 }
@@ -2436,8 +2450,8 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     return a + vr
   }, 0)
   const totalComision = items.reduce((a, it) => a + (Number(it.comision) || 0), 0)
-  fila('Total a cobrar (servicios)', totalACobrar)
-  if (totalComision > 0) fila('Comisión veterinarias', totalComision)
+  fila('Total a cobrar (neto, transp. incl.)', totalACobrar)
+  if (totalComision > 0) fila('Comision veterinarias (informativo)', totalComision)
   fila('Total recogido (cliente)', c.total_cobrado)
   const totalFalta = items.reduce((a, it) => {
     if (it.es_cancelado) return a
