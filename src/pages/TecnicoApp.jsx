@@ -1821,6 +1821,25 @@ export default function TecnicoApp() {
         hora_realizada:  now.toTimeString().slice(0, 5),
       }).eq('id', recogidaId)
     }
+
+    // Ítems que el técnico entrega/recoge en la recogida (huella mechón, cápsula,
+    // amuleto, evidencias…) pasan solos a EN_PROCESO: ya no exigen el paso de
+    // "iniciar" en Producción, solo el cierre. No bloquea la recogida si falla.
+    try {
+      const { data: itemsTec } = await db.from('servicio_recordatorios')
+        .select('id, estado, recordatorios(recolecta_tecnico)')
+        .eq('servicio_id', svc.id)
+        .neq('origen', 'REMOVIDO')
+      const idsTec = (itemsTec || [])
+        .filter(i => i.estado === 'PENDIENTE' && i.recordatorios?.recolecta_tecnico)
+        .map(i => i.id)
+      if (idsTec.length) {
+        await db.from('servicio_recordatorios')
+          .update({ estado: 'EN_PROCESO', fecha_inicio: new Date().toISOString().split('T')[0] })
+          .in('id', idsTec)
+      }
+    } catch (_) { /* no bloquea la recogida */ }
+
     setNotif('✅ Recogida completada. Genera el recibo para poder ingresar la mascota al cuarto frío.')
     setTimeout(() => setNotif(null), 8000)
     await cargar()

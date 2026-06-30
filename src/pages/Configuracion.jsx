@@ -1024,12 +1024,13 @@ function TabRecordatorios() {
       max_fotos: item.max_fotos ?? 1,
       campos_texto: item.campos_texto || [],
       maquina_id: item.maquina_id || '', tiempo_produccion_dias: item.tiempo_produccion_dias ?? 1,
+      recolecta_tecnico: !!item.recolecta_tecnico,
       activo: item.activo !== false,
     } : {
       nombre: '', descripcion: '', categoria: '', requiere_imagen: true,
       solo_nombre: false, precio_base: 0, max_fotos: 1,
       campos_texto: [],
-      maquina_id: '', tiempo_produccion_dias: 1, activo: true,
+      maquina_id: '', tiempo_produccion_dias: 1, recolecta_tecnico: false, activo: true,
     })
   }
 
@@ -1072,7 +1073,7 @@ function TabRecordatorios() {
       </div>
       {loading ? <div className="text-center py-10 text-gray-400">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Categoría</Th><Th>Máquina</Th><Th>Precio</Th><Th>Fotos</Th><Th>Req. img</Th><Th>Solo nombre</Th><Th>Estado</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Categoría</Th><Th>Máquina</Th><Th>Precio</Th><Th>Fotos</Th><Th>Req. img</Th><Th>Solo nombre</Th><Th>Técnico</Th><Th>Estado</Th><Th></Th></tr></thead>
           <tbody>
             {filtered.map(r => (
               <Tr key={r.id}>
@@ -1087,6 +1088,7 @@ function TabRecordatorios() {
                 </Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.requiere_imagen ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{r.requiere_imagen ? 'Sí' : 'No'}</span></Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.solo_nombre ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{r.solo_nombre ? 'Sí' : 'No'}</span></Td>
+                <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.recolecta_tecnico ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>{r.recolecta_tecnico ? 'Sí' : 'No'}</span></Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.activo !== false ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{r.activo !== false ? 'Activo' : 'Inactivo'}</span></Td>
                 <Td>
                   <div className="flex items-center gap-1">
@@ -1096,7 +1098,7 @@ function TabRecordatorios() {
                 </Td>
               </Tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={9} className="text-center py-10 text-gray-400 text-sm">Sin ítems</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10} className="text-center py-10 text-gray-400 text-sm">Sin ítems</td></tr>}
           </tbody>
         </Table></TableWrap>
       )}
@@ -1143,6 +1145,7 @@ function TabRecordatorios() {
             <div className="flex flex-wrap gap-5">
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.requiere_imagen} onChange={e => setForm(p => ({ ...p, requiere_imagen: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Requiere imagen</span></label>
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.solo_nombre} onChange={e => setForm(p => ({ ...p, solo_nombre: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Solo nombre</span></label>
+              <label className="flex items-center gap-2 cursor-pointer" title="El técnico lo entrega/recoge en la recogida. Al confirmar la recogida pasa solo a EN_PROCESO."><input type="checkbox" checked={!!form.recolecta_tecnico} onChange={e => setForm(p => ({ ...p, recolecta_tecnico: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Lo recolecta el técnico</span></label>
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
             </div>
 

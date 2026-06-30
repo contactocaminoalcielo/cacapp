@@ -539,7 +539,7 @@ export default function Produccion() {
           .select(`
             *,
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
-                            tiempo_produccion_dias, maquina_id,
+                            recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
             servicios ( id, fecha_imagenes_recibidas, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
@@ -576,7 +576,10 @@ export default function Produccion() {
       const estado = svc?.estado
       if (['LISTO', 'EN_ENTREGA', 'ENTREGADO', 'CANCELADO'].includes(estado)) continue
       const todosListos = items.every(i => i.estado === 'LISTO')
-      const algunoEnProceso = items.some(i => i.estado === 'EN_PROCESO')
+      // Los ítems que recolecta el técnico entran a EN_PROCESO ya en la recogida;
+      // NO deben adelantar el servicio a EN_PRODUCCION (eso lo dispara producción
+      // real). Solo cuentan los ítems no-técnico para el avance automático.
+      const algunoEnProceso = items.some(i => i.estado === 'EN_PROCESO' && !i.recordatorios?.recolecta_tecnico)
       if (todosListos) {
         fijarListo.push(svcId)
       } else if (algunoEnProceso && ['INGRESADO', 'EN_CUARTO_FRIO', 'EN_PROCESO'].includes(estado)) {
@@ -593,7 +596,7 @@ export default function Produccion() {
       .select(`
         *,
         recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
-                        tiempo_produccion_dias, maquina_id,
+                        recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
         servicios ( id, fecha_imagenes_recibidas, estado,
                     mascotas ( nombre, especie_id, especies ( nombre ) ),
