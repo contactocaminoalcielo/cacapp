@@ -874,6 +874,23 @@ export default function Registro() {
         }).eq('servicio_id', svcData[0].id)
       }
 
+      // Materializar los adicionales como ítems de producción (origen ADICIONAL)
+      // para que cuenten en el tablero y producción los fabrique. El cobro ya
+      // viaja en valor_adicionales/valor_total; aquí solo se crean los ítems.
+      // Misma convención que el modal del Kanban: precio_cobrado = subtotal.
+      if (adicionales.length > 0 && svcData?.[0]?.id) {
+        await db.from('servicio_recordatorios').insert(
+          adicionales.map(a => ({
+            servicio_id:     svcData[0].id,
+            recordatorio_id: a.id,
+            cantidad:        a.cantidad || 1,
+            origen:          'ADICIONAL',
+            estado:          'PENDIENTE',
+            precio_cobrado:  (a.precio_base || 0) * (a.cantidad || 1),
+          }))
+        )
+      }
+
       // Eutanasia combinada (Caso 2/3): entidad propia vinculada al servicio.
       // cobro_conjunto=true → su valor ya está sumado en valor_total, pero se
       // conserva aparte en `eutanasias.valor` para reportes/cuenta separada.

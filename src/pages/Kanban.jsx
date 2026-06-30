@@ -30,12 +30,6 @@ const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
 // leídas automáticamente (evita el backlog viejo que reaparecía y bloqueaba).
 const DIAS_EXPIRA_ALERTA = 2
 
-// Recordatorio genérico que el cliente elige (lo traen BASICO, ECO_GRUPAL y
-// cualquier otro plan al que se le asocie en Configuración). Se usa para avisar
-// al personal con un ícono en la tarjeta. El nombre debe coincidir con la fila
-// real en la tabla `recordatorios`.
-const RECORDATORIO_A_ELEGIR = 'Recordatorio adicional (a elegir)'
-
 // ── Motivos de cancelación de servicio ───────────────────────────────────────
 const MOTIVOS_CANCELACION = [
   'Cliente canceló',
@@ -208,8 +202,6 @@ export default function Kanban() {
   const [servicios, setServicios]         = useState([])
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState(null)
-  // Códigos de plan que incluyen el "recordatorio adicional a elegir" → ícono en la tarjeta
-  const [codigosConExtra, setCodigosConExtra] = useState(() => new Set())
 
   // ── UI ────────────────────────────────────────────────────────────────────
   const [vista, setVista]                 = useState('kanban')
@@ -640,13 +632,6 @@ export default function Kanban() {
       setEspeciesKanban(e.data || [])
       setAliados(a.data || [])
     })
-    // Qué planes traen el "recordatorio adicional a elegir" (para el ícono en la tarjeta)
-    db.from('plan_recordatorios')
-      .select('planes!inner(codigo), recordatorios!inner(nombre)')
-      .eq('recordatorios.nombre', RECORDATORIO_A_ELEGIR)
-      .then(({ data }) => {
-        setCodigosConExtra(new Set((data || []).map(r => r.planes?.codigo).filter(Boolean)))
-      })
     db.from('personal').select('id,nombre,apellido,rol_principal_id,whatsapp')
       .eq('activo', true).order('nombre')
       .then(({ data }) => {
@@ -719,25 +704,32 @@ export default function Kanban() {
 
       // v_kanban solo expone un número (cliente_wa); traemos los teléfonos
       // alternos del cliente (telefono / telefono2) para mostrarlos en la tarjeta.
+      // Además marcamos qué servicios tienen un adicional real (ítem origen
+      // ADICIONAL) para mostrar el ícono de alerta en la tarjeta.
       const ids = rows.map(s => s.servicio_id).filter(Boolean)
       if (ids.length) {
-        const { data: tels } = await db.from('servicios')
-          .select('id, mascotas(clientes(whatsapp, telefono, telefono2))')
-          .in('id', ids)
+        const [{ data: tels }, { data: adic }] = await Promise.all([
+          db.from('servicios')
+            .select('id, mascotas(clientes(whatsapp, telefono, telefono2))')
+            .in('id', ids),
+          db.from('servicio_recordatorios')
+            .select('servicio_id').eq('origen', 'ADICIONAL').in('servicio_id', ids),
+        ])
         const mapa = {}
         ;(tels || []).forEach(t => {
           const c = t.mascotas?.clientes
           if (c) mapa[t.id] = c
         })
+        const conAdicional = new Set((adic || []).map(a => a.servicio_id))
         rows = rows.map(s => {
           const c = mapa[s.servicio_id]
-          if (!c) return s
-          return {
+          const base = c ? {
             ...s,
             cliente_wa:        s.cliente_wa || c.whatsapp || null,
             cliente_telefono:  c.telefono  || null,
             cliente_telefono2: c.telefono2 || null,
-          }
+          } : s
+          return { ...base, tiene_adicional: conAdicional.has(s.servicio_id) }
         })
       }
 
@@ -1719,7 +1711,6 @@ export default function Kanban() {
                           const al  = alertLevel(s)
                           const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
                           const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
-                          const traeExtra = codigosConExtra.has(s.codigo_plan)
                           // Números registrados del cliente (WhatsApp + alternos), sin repetir
                           const telefonos = [...new Set(
                             [s.cliente_wa, s.cliente_telefono, s.cliente_telefono2]
@@ -1774,10 +1765,10 @@ export default function Kanban() {
                                   <Camera size={9} /> Imágenes listas
                                 </div>
                               )}
-                              {traeExtra && (
+                              {s.tiene_adicional && (
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-amber-100 text-amber-700"
-                                  title="Este plan incluye un recordatorio adicional que el cliente elige">
-                                  <Gift size={9} /> Trae recordatorio extra
+                                  title="Este servicio tiene un recordatorio adicional agregado">
+                                  <Gift size={9} /> Tiene adicional
                                 </div>
                               )}
                               {sinTecnico && (
