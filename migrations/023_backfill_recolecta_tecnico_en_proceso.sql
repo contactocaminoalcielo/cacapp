@@ -23,8 +23,7 @@
 BEGIN;
 
 UPDATE public.servicio_recordatorios sr
-   SET estado       = 'EN_PROCESO',
-       fecha_inicio = COALESCE(sr.fecha_inicio, (now() AT TIME ZONE 'America/Bogota')::date)
+   SET estado = 'EN_PROCESO'
   FROM public.recordatorios r,
        public.servicios s
  WHERE sr.recordatorio_id = r.id

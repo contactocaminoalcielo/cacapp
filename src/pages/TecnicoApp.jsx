@@ -1835,7 +1835,7 @@ export default function TecnicoApp() {
         .map(i => i.id)
       if (idsTec.length) {
         await db.from('servicio_recordatorios')
-          .update({ estado: 'EN_PROCESO', fecha_inicio: new Date().toISOString().split('T')[0] })
+          .update({ estado: 'EN_PROCESO' })
           .in('id', idsTec)
       }
     } catch (_) { /* no bloquea la recogida */ }
