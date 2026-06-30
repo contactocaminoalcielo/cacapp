@@ -460,6 +460,9 @@ function TabVeterinarias() {
 
   const vips    = data.filter(a => a.vip).length
   const activos = data.filter(a => a.activo !== false).length
+  // Onboarding al portal: cuántas vets activas ya tienen enlace de acceso (token)
+  const activasReales = data.filter(a => a.activo !== false && a.estado !== 'pendiente_validacion')
+  const conAcceso = activasReales.filter(a => a.token_acceso).length
 
   return (
     <div>
@@ -467,6 +470,7 @@ function TabVeterinarias() {
         <div className="text-[13px] text-gray-500">
           <span className="font-bold text-gray-900">{activos}</span> activos
           {vips > 0 && <span className="ml-2 text-amber-600 font-semibold">· {vips} VIP</span>}
+          <span className="ml-2 text-[#3D5A27] font-semibold">· {conAcceso}/{activasReales.length} con acceso al portal</span>
         </div>
       </div>
 
@@ -509,7 +513,7 @@ function TabVeterinarias() {
           <Table>
             <thead><tr>
               <Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th>
-              <Th>Ciudad</Th><Th>Horario</Th><Th>VIP</Th><Th>Comisión</Th><Th>Estado</Th><Th></Th>
+              <Th>Ciudad</Th><Th>Horario</Th><Th>VIP</Th><Th>Comisión</Th><Th>Estado</Th><Th>Portal</Th><Th></Th>
             </tr></thead>
             <tbody>
               {filtered.map(a => (
@@ -544,6 +548,17 @@ function TabVeterinarias() {
                     )}
                   </Td>
                   <Td>
+                    {a.estado === 'pendiente_validacion' ? (
+                      <span className="text-gray-300">—</span>
+                    ) : a.token_acceso ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#EAF3E2', color: '#3D5A27' }}>
+                        <KeyRound size={9} /> Con acceso
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Sin enlace</span>
+                    )}
+                  </Td>
+                  <Td>
                     <div className="flex items-center gap-1">
                       {a.estado !== 'pendiente_validacion' && a.activo !== false && (
                         <Button size="sm" variant="ghost" onClick={() => generarEnlaceAliado(a)} disabled={aprobando === a.id_aliado}
@@ -564,7 +579,7 @@ function TabVeterinarias() {
                 </Tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-10 text-gray-400 text-sm">Sin aliados registrados</td></tr>
+                <tr><td colSpan={10} className="text-center py-10 text-gray-400 text-sm">Sin aliados registrados</td></tr>
               )}
             </tbody>
           </Table>
