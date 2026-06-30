@@ -17,7 +17,7 @@ import {
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
-  Copy, Check, Phone,
+  Copy, Check, Phone, Gift,
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -29,6 +29,12 @@ const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
 // Las alertas de inicio de ruta / declinación de más de estos días se marcan
 // leídas automáticamente (evita el backlog viejo que reaparecía y bloqueaba).
 const DIAS_EXPIRA_ALERTA = 2
+
+// Recordatorio genérico que el cliente elige (lo traen BASICO, ECO_GRUPAL y
+// cualquier otro plan al que se le asocie en Configuración). Se usa para avisar
+// al personal con un ícono en la tarjeta. El nombre debe coincidir con la fila
+// real en la tabla `recordatorios`.
+const RECORDATORIO_A_ELEGIR = 'Recordatorio adicional (a elegir)'
 
 // ── Motivos de cancelación de servicio ───────────────────────────────────────
 const MOTIVOS_CANCELACION = [
@@ -202,6 +208,8 @@ export default function Kanban() {
   const [servicios, setServicios]         = useState([])
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState(null)
+  // Códigos de plan que incluyen el "recordatorio adicional a elegir" → ícono en la tarjeta
+  const [codigosConExtra, setCodigosConExtra] = useState(() => new Set())
 
   // ── UI ────────────────────────────────────────────────────────────────────
   const [vista, setVista]                 = useState('kanban')
@@ -632,6 +640,13 @@ export default function Kanban() {
       setEspeciesKanban(e.data || [])
       setAliados(a.data || [])
     })
+    // Qué planes traen el "recordatorio adicional a elegir" (para el ícono en la tarjeta)
+    db.from('plan_recordatorios')
+      .select('planes!inner(codigo), recordatorios!inner(nombre)')
+      .eq('recordatorios.nombre', RECORDATORIO_A_ELEGIR)
+      .then(({ data }) => {
+        setCodigosConExtra(new Set((data || []).map(r => r.planes?.codigo).filter(Boolean)))
+      })
     db.from('personal').select('id,nombre,apellido,rol_principal_id,whatsapp')
       .eq('activo', true).order('nombre')
       .then(({ data }) => {
@@ -1704,6 +1719,7 @@ export default function Kanban() {
                           const al  = alertLevel(s)
                           const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
                           const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
+                          const traeExtra = codigosConExtra.has(s.codigo_plan)
                           // Números registrados del cliente (WhatsApp + alternos), sin repetir
                           const telefonos = [...new Set(
                             [s.cliente_wa, s.cliente_telefono, s.cliente_telefono2]
@@ -1756,6 +1772,12 @@ export default function Kanban() {
                               {tieneImagenes && (
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
                                   <Camera size={9} /> Imágenes listas
+                                </div>
+                              )}
+                              {traeExtra && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-amber-100 text-amber-700"
+                                  title="Este plan incluye un recordatorio adicional que el cliente elige">
+                                  <Gift size={9} /> Trae recordatorio extra
                                 </div>
                               )}
                               {sinTecnico && (
