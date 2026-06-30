@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { LogOut, User, PanelLeft, PanelLeftClose } from 'lucide-react'
 import Sidebar from './Sidebar'
 import { useAuth } from '@/contexts/AuthContext'
+import NotificacionesAliados from '@/components/NotificacionesAliados'
 
 function ProfileMenu({ personalData, logout }) {
   const [open, setOpen] = useState(false)
@@ -166,6 +167,7 @@ export default function AppShell({ children }) {
           {/* Avatar / perfil — siempre visible */}
           {personalData && (
             <div className="flex items-center gap-2">
+              <NotificacionesAliados />
               <motion.button
                 whileTap={{ scale: 0.88 }}
                 onClick={logout}
