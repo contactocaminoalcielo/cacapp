@@ -14,6 +14,7 @@ import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
+import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 
@@ -1388,6 +1389,7 @@ const SELECT_HISTORIAL = `
 
 function TabHistorialServicios({ canEdit }) {
   const { confirm, alert: showAlert } = useConfirm()
+  const { personalData }              = useAuth()
   const [data, setData]               = useState([])
   const [loading, setLoading]         = useState(true)
   const [total, setTotal]             = useState(0)
@@ -1396,6 +1398,13 @@ function TabHistorialServicios({ canEdit }) {
   const [editServ, setEditServ]       = useState(null)   // servicio en edición
   const [cobroVet, setCobroVet]       = useState(false)  // valor del interruptor
   const [savingCom, setSavingCom]     = useState(false)
+  // quitar ítems / ajuste por adicional no tomado
+  const [itemsServ, setItemsServ]       = useState(null) // servicio cuyo modal de ítems está abierto
+  const [itemsList, setItemsList]       = useState([])
+  const [itemsLoading, setItemsLoading] = useState(false)
+  const [savingItemId, setSavingItemId] = useState(null) // id de la fila que se está quitando ('__manual' para el ajuste)
+  const [manualMonto, setManualMonto]   = useState('')
+  const [manualMotivo, setManualMotivo] = useState('')
   // catálogos para dropdowns
   const [catPlanes,   setCatPlanes]   = useState([])
   const [catAliados,  setCatAliados]  = useState([])
@@ -1530,6 +1539,61 @@ function TabHistorialServicios({ canEdit }) {
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     setEditServ(null)
     cargar(0)
+  }
+
+  // ── Quitar ítems / ajustar cobro por adicional no tomado ──────────────────
+  async function abrirItems(s) {
+    setItemsServ(s); setItemsLoading(true); setItemsList([]); setManualMonto(''); setManualMotivo('')
+    const { data: rows } = await db.from('servicio_recordatorios')
+      .select('*, recordatorios(nombre, precio_base)')
+      .eq('servicio_id', s.id).neq('origen', 'REMOVIDO')
+    setItemsList((rows || []).map(it => ({ ...it, _monto: String(precioSugeridoItem(it)), _motivo: '' })))
+    setItemsLoading(false)
+  }
+
+  function aplicarResultado(res) {
+    // Refrescar el servicio en el modal y en la tabla principal
+    setItemsServ(prev => prev ? { ...prev, valor_total: res.nuevoTotal, estado_pago: res.nuevoEstadoPago } : prev)
+    setData(prev => prev.map(s => s.id === itemsServ?.id
+      ? { ...s, valor_total: res.nuevoTotal, estado_pago: res.nuevoEstadoPago } : s))
+  }
+
+  async function quitarFila(it) {
+    if (!itemsServ) return
+    const monto = Math.max(0, parseFloat(it._monto) || 0)
+    const ok = await confirm(
+      `¿Quitar "${it.recordatorios?.nombre || 'ítem'}"${monto > 0 ? ` y descontar ${fmt(monto)}` : ''} del servicio?`,
+      { title: 'Quitar ítem', variant: 'warning', confirmLabel: 'Quitar', cancelLabel: 'Volver' })
+    if (!ok) return
+    setSavingItemId(it.id)
+    try {
+      const res = await quitarItemServicio({ servicio: itemsServ, item: it, monto: it._monto, motivo: it._motivo, personalId: personalData?.id || null })
+      setItemsList(prev => prev.filter(x => x.id !== it.id))
+      aplicarResultado(res)
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al quitar el ítem' })
+    } finally {
+      setSavingItemId(null)
+    }
+  }
+
+  async function ajusteManual() {
+    if (!itemsServ) return
+    const monto = Math.max(0, parseFloat(manualMonto) || 0)
+    if (monto <= 0) { await showAlert('Ingresa un monto mayor a 0 para el ajuste.', { title: 'Monto requerido', variant: 'warning' }); return }
+    const ok = await confirm(`¿Descontar ${fmt(monto)} por un adicional que el cliente no tomó?`,
+      { title: 'Ajustar cobro', variant: 'warning', confirmLabel: 'Descontar', cancelLabel: 'Volver' })
+    if (!ok) return
+    setSavingItemId('__manual')
+    try {
+      const res = await quitarItemServicio({ servicio: itemsServ, item: null, monto: manualMonto, motivo: manualMotivo, personalId: personalData?.id || null })
+      setManualMonto(''); setManualMotivo('')
+      aplicarResultado(res)
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al ajustar el cobro' })
+    } finally {
+      setSavingItemId(null)
+    }
   }
 
   const filtrados = busqueda.trim()
@@ -1692,19 +1756,25 @@ function TabHistorialServicios({ canEdit }) {
                       <Td className="text-[12px] font-semibold text-ink whitespace-nowrap">{COP(s.valor_total)}</Td>
                       {canEdit && (
                         <Td className="whitespace-nowrap">
-                          {tieneComision(s) ? (
+                          <div className="flex items-center gap-1.5">
+                            {tieneComision(s) ? (
+                              <button
+                                onClick={() => abrirEdicionComision(s)}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-colors"
+                                style={s.comision_descontada
+                                  ? { background: '#E8F3EB', color: '#1D8A55', borderColor: '#BFE3CC' }
+                                  : { background: '#FFF3DC', color: '#9A5500', borderColor: '#F3D9A6' }}
+                                title="Marcar si el cobro se hace en la veterinaria (descuenta la comisión del recibo)">
+                                {s.comision_descontada ? '✓ Descuenta' : 'Cobra completo'}
+                              </button>
+                            ) : null}
                             <button
-                              onClick={() => abrirEdicionComision(s)}
-                              className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-colors"
-                              style={s.comision_descontada
-                                ? { background: '#E8F3EB', color: '#1D8A55', borderColor: '#BFE3CC' }
-                                : { background: '#FFF3DC', color: '#9A5500', borderColor: '#F3D9A6' }}
-                              title="Marcar si el cobro se hace en la veterinaria (descuenta la comisión del recibo)">
-                              {s.comision_descontada ? '✓ Descuenta' : 'Cobra completo'}
+                              onClick={() => abrirItems(s)}
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-ink2 hover:bg-gray-50 transition-colors"
+                              title="Quitar ítems / ajustar cobro por adicional no tomado">
+                              Ítems
                             </button>
-                          ) : (
-                            <span className="text-[11px] text-ink3">—</span>
-                          )}
+                          </div>
                         </Td>
                       )}
                     </Tr>
@@ -1776,6 +1846,78 @@ function TabHistorialServicios({ canEdit }) {
           </Modal>
         )
       })()}
+
+      {itemsServ && (
+        <Modal open onClose={() => { if (!savingItemId) setItemsServ(null) }}
+          title="Ítems del servicio — quitar / ajustar cobro" maxWidth="max-w-lg"
+          footer={<Button variant="secondary" onClick={() => setItemsServ(null)} disabled={!!savingItemId}>Cerrar</Button>}>
+          <div className="space-y-4">
+            <div className="text-[12px] text-ink2">
+              <strong>{itemsServ.mascotas?.nombre || '—'}</strong>
+              <span className="text-ink3"> · Valor a cobrar actual: </span>
+              <strong className="text-ink">{fmt(itemsServ.valor_total || 0)}</strong>
+              <span className="text-ink3"> · {itemsServ.estado_pago || '—'}</span>
+            </div>
+
+            {(itemsServ.valor_pagado || 0) > 0 && (
+              <div className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                ⚠️ Ya tiene {fmt(itemsServ.valor_pagado)} pagados. Al bajar el total revisa que el recibo y el pago sigan cuadrando.
+              </div>
+            )}
+
+            <div>
+              <div className="text-[11px] font-bold text-ink3 uppercase tracking-wide mb-1.5">Ítems del servicio</div>
+              {itemsLoading
+                ? <p className="text-[12px] text-ink3 py-2">Cargando ítems…</p>
+                : itemsList.length === 0
+                  ? <p className="text-[12px] text-ink3 py-2">Este servicio no tiene ítems en lista. Usa el ajuste manual de abajo si el adicional se registró al inicio.</p>
+                  : (
+                    <div className="space-y-2">
+                      {itemsList.map(it => (
+                        <div key={it.id} className="flex items-center gap-2 rounded-lg border border-gray-200 px-2.5 py-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[12px] font-semibold text-ink truncate">{it.recordatorios?.nombre || 'Ítem'}</div>
+                            <div className="text-[10px] text-ink3">{(it.origen || '').toLowerCase()} · {(it.estado || '').replace(/_/g, ' ').toLowerCase()}</div>
+                          </div>
+                          <div className="relative w-28 shrink-0">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[12px]">$</span>
+                            <Input type="number" min={0} className="pl-6 text-[12px]"
+                              value={it._monto}
+                              onChange={e => setItemsList(prev => prev.map(x => x.id === it.id ? { ...x, _monto: e.target.value } : x))} />
+                          </div>
+                          <button onClick={() => quitarFila(it)} disabled={!!savingItemId}
+                            className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90 shrink-0"
+                            style={{ background: '#DC2626' }}>
+                            {savingItemId === it.id ? '…' : 'Quitar'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              <p className="text-[10px] text-ink3 mt-1.5">El monto se prellena con el precio del ítem y es editable. Pon 0 si no cambia el valor a cobrar.</p>
+            </div>
+
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+              <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wide">Ajuste manual (adicional no listado)</div>
+              <p className="text-[11px] text-amber-700">Para adicionales registrados al inicio que no figuran como ítem y el cliente no tomó.</p>
+              <div className="flex items-center gap-2">
+                <div className="relative w-32 shrink-0">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[12px]">$</span>
+                  <Input type="number" min={0} className="pl-6 text-[12px]" placeholder="Monto"
+                    value={manualMonto} onChange={e => setManualMonto(e.target.value)} />
+                </div>
+                <Input className="flex-1 text-[12px]" placeholder="Motivo (opcional)"
+                  value={manualMotivo} onChange={e => setManualMotivo(e.target.value)} />
+                <button onClick={ajusteManual} disabled={!!savingItemId}
+                  className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90 shrink-0"
+                  style={{ background: '#D97706' }}>
+                  {savingItemId === '__manual' ? '…' : 'Descontar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

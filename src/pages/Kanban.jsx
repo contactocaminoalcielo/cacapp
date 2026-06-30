@@ -10,6 +10,7 @@ import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, c
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
+import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
@@ -285,6 +286,11 @@ export default function Kanban() {
   const [addRecId,     setAddRecId]     = useState('')
   const [addRecQty,    setAddRecQty]    = useState(1)
   const [addingRec,    setAddingRec]    = useState(false)
+  // ── Quitar ítem / ajuste por adicional no tomado ──────────────────────────
+  const [itemAQuitar, setItemAQuitar] = useState(null)  // fila servicio_recordatorios, o {} para ajuste manual
+  const [quitarMonto, setQuitarMonto] = useState('')
+  const [quitarMotivo, setQuitarMotivo] = useState('')
+  const [quitando, setQuitando] = useState(false)
 
   async function cargarSolicitudes() {
     const { data } = await db.from('solicitudes_servicio')
@@ -776,7 +782,7 @@ export default function Kanban() {
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
         .eq('servicio_id', s.servicio_id).maybeSingle(),
       db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre)')
+        .select('*, recordatorios(nombre, precio_base)')
         .eq('servicio_id', s.servicio_id).neq('origen', 'REMOVIDO'),
       db.from('novedades_servicio')
         .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
@@ -932,7 +938,7 @@ export default function Kanban() {
 
       // Recargar recordatorios frescos
       const { data: recsNuevos } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre)')
+        .select('*, recordatorios(nombre, precio_base)')
         .eq('servicio_id', selected.servicio_id)
         .neq('origen', 'REMOVIDO')
       setRecordatorios(recsNuevos || [])
@@ -963,19 +969,27 @@ export default function Kanban() {
 
     setAddingRec(true)
     try {
-      // Insertar ítem adicional
+      // Insertar ítem adicional (guardamos el precio cobrado para que sea
+      // removible después con el monto correcto prellenado)
       const { error: recErr } = await db.from('servicio_recordatorios').insert({
         servicio_id:     selected.servicio_id,
         recordatorio_id: addRecId,
         origen:          'ADICIONAL',
         estado:          'PENDIENTE',
+        precio_cobrado:  subtotal,
       })
       if (recErr) throw recErr
 
-      // Actualizar valor_total del servicio
+      // Actualizar valor_total + desglose de adicionales del servicio.
+      // valor_adicionales solo se toca con su valor real en DB (no pisar con
+      // estado local que puede no traer la columna).
       const nuevoTotal = (selected.valor_total || 0) + subtotal
+      const { data: curSv } = await db.from('servicios')
+        .select('valor_adicionales').eq('id', selected.servicio_id).maybeSingle()
+      const updSv = { valor_total: nuevoTotal }
+      if (curSv?.valor_adicionales != null) updSv.valor_adicionales = curSv.valor_adicionales + subtotal
       const { error: svErr } = await db.from('servicios')
-        .update({ valor_total: nuevoTotal })
+        .update(updSv)
         .eq('id', selected.servicio_id)
       if (svErr) throw svErr
 
@@ -990,7 +1004,7 @@ export default function Kanban() {
 
       // Recargar ítems
       const { data: recsNuevos } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre)')
+        .select('*, recordatorios(nombre, precio_base)')
         .eq('servicio_id', selected.servicio_id)
         .neq('origen', 'REMOVIDO')
       setRecordatorios(recsNuevos || [])
@@ -1008,6 +1022,52 @@ export default function Kanban() {
       await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
     } finally {
       setAddingRec(false)
+    }
+  }
+
+  // Abrir el modal de "quitar ítem". `item` = fila servicio_recordatorios, o
+  // null para el modo "ajuste manual" (adicional registrado al inicio, sin fila).
+  function abrirQuitar(item) {
+    setItemAQuitar(item || { __manual: true })
+    setQuitarMonto(item ? String(precioSugeridoItem(item)) : '')
+    setQuitarMotivo('')
+  }
+
+  async function quitarItem() {
+    if (!selected || !itemAQuitar) return
+    const esManual = !!itemAQuitar.__manual
+    setQuitando(true)
+    try {
+      const res = await quitarItemServicio({
+        servicio: {
+          id:           selected.servicio_id,
+          valor_total:  selected.valor_total,
+          valor_pagado: selected.valor_pagado,
+        },
+        item:       esManual ? null : itemAQuitar,
+        monto:      quitarMonto,
+        motivo:     quitarMotivo,
+        personalId: personalData?.id || null,
+      })
+
+      // Recargar ítems (los REMOVIDO quedan filtrados)
+      const { data: recsNuevos } = await db.from('servicio_recordatorios')
+        .select('*, recordatorios(nombre, precio_base)')
+        .eq('servicio_id', selected.servicio_id)
+        .neq('origen', 'REMOVIDO')
+      setRecordatorios(recsNuevos || [])
+      if (res.novedad) setNovedades(prev => [...prev, res.novedad])
+
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id
+        ? { ...s, valor_total: res.nuevoTotal, saldo_pendiente: res.saldo, estado_pago: res.nuevoEstadoPago }
+        : s
+      ))
+      setSelected(prev => ({ ...prev, valor_total: res.nuevoTotal, saldo_pendiente: res.saldo, estado_pago: res.nuevoEstadoPago }))
+      setItemAQuitar(null); setQuitarMonto(''); setQuitarMotivo('')
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al quitar el ítem' })
+    } finally {
+      setQuitando(false)
     }
   }
 
@@ -1258,6 +1318,15 @@ export default function Kanban() {
     if (s.dias_para_vencer === 0) return 'hoy'
     if (s.dias_para_vencer <= 3) return 'pronto'
     return null
+  }
+
+  // Días transcurridos desde fecha_ingreso (columna DATE) hasta hoy. Usa parseDate
+  // —NUNCA new Date() crudo— para no correr un día en Colombia (UTC-5).
+  function diasDesdeIngreso(fechaStr) {
+    if (!fechaStr) return null
+    const f = parseDate(fechaStr), h = parseDate(hoyStr)
+    if (!f || !h) return null
+    return Math.round((h - f) / 86400000)
   }
 
   // ── Computed ──────────────────────────────────────────────────────────────
@@ -1611,7 +1680,10 @@ export default function Kanban() {
                       )}
 
                       {!esSolicitudes && (() => {
-                        const TIERS = [
+                        // Producción agrupa por urgencia (vencimiento del SLA);
+                        // Coordinación agrupa por fecha de ingreso (Hoy/Ayer/…) para
+                        // reducir scroll cuando se ve "Todo".
+                        const TIERS_URGENCIA = [
                           { key: 'vencido', label: 'Vencidos',    color: '#C03030', bg: '#FEE2E2', urgent: true,  test: s => s.dias_para_vencer != null && s.dias_para_vencer < 0 },
                           { key: 'hoy',    label: 'Vence hoy',   color: '#B45309', bg: '#FEF3C7', urgent: true,  test: s => s.dias_para_vencer === 0 },
                           { key: 'pronto', label: '≤ 3 días',    color: '#9A5500', bg: '#FFF3DC', urgent: true,  test: s => s.dias_para_vencer != null && s.dias_para_vencer >= 1 && s.dias_para_vencer <= 3 },
@@ -1619,6 +1691,14 @@ export default function Kanban() {
                           { key: 'normal', label: 'Sin urgencia', color: '#3B6FBF', bg: '#EEF3FB', urgent: false, test: s => s.dias_para_vencer != null && s.dias_para_vencer > 7 },
                           { key: 'sin_fecha', label: 'Sin fecha', color: '#9CA3AF', bg: '#F3F4F6', urgent: false, test: s => s.dias_para_vencer == null },
                         ]
+                        const TIERS_FECHA = [
+                          { key: 'hoy',     label: 'Hoy',          color: '#06B6D4', bg: '#CFFAFE', urgent: true,  test: s => { const d = diasDesdeIngreso(s.fecha_ingreso); return d != null && d <= 0 } },
+                          { key: 'ayer',    label: 'Ayer',         color: '#3B82F6', bg: '#DBEAFE', urgent: true,  test: s => diasDesdeIngreso(s.fecha_ingreso) === 1 },
+                          { key: 'semana',  label: 'Esta semana',  color: '#8B5CF6', bg: '#EDE9FE', urgent: false, test: s => { const d = diasDesdeIngreso(s.fecha_ingreso); return d != null && d >= 2 && d <= 6 } },
+                          { key: 'antiguos',label: 'Más antiguos', color: '#6B7280', bg: '#F3F4F6', urgent: false, test: s => { const d = diasDesdeIngreso(s.fecha_ingreso); return d != null && d >= 7 } },
+                          { key: 'sin_fecha', label: 'Sin fecha',  color: '#9CA3AF', bg: '#F3F4F6', urgent: false, test: s => diasDesdeIngreso(s.fecha_ingreso) == null },
+                        ]
+                        const TIERS = esVistaProd ? TIERS_URGENCIA : TIERS_FECHA
 
                         const renderCard = s => {
                           const al  = alertLevel(s)
@@ -2316,16 +2396,29 @@ export default function Kanban() {
                   Ítems del servicio ({recordatorios.filter(r => r.estado === 'LISTO' || r.estado === 'ENTREGADO').length}/{recordatorios.filter(r => r.estado !== 'NA' && r.origen !== 'REMOVIDO').length} listos)
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {recordatorios.map(r => (
-                    r.estado === 'NA'
-                      ? <span key={r.id} className="text-[11px] px-2.5 py-1.5 rounded-full line-through opacity-50"
+                  {recordatorios.map(r => {
+                    if (r.estado === 'NA')
+                      return (
+                        <span key={r.id} className="text-[11px] px-2.5 py-1.5 rounded-full line-through opacity-50"
                           style={{ background: '#F3F4F6', color: '#9CA3AF' }} title="Cliente no desea este recordatorio">
                           {r.recordatorios?.nombre || 'Ítem'} · No desea
                         </span>
-                      : <button key={r.id} className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition-all prod-pill-${r.estado}`} onClick={() => ciclarRecordatorio(r)}>
+                      )
+                    const puedeQuitar = (esAdmin || rol === 'COORDINADOR') && !['CANCELADO', 'ENTREGADO'].includes(selected.estado)
+                    return (
+                      <span key={r.id} className="inline-flex items-center gap-1">
+                        <button className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition-all prod-pill-${r.estado}`} onClick={() => ciclarRecordatorio(r)}>
                           {r.recordatorios?.nombre || 'Ítem'} · {r.estado.replace(/_/g, ' ')}
                         </button>
-                  ))}
+                        {puedeQuitar && (
+                          <button onClick={() => abrirQuitar(r)} title="Quitar este ítem (el cliente no lo tomó)"
+                            className="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                            <X size={11} />
+                          </button>
+                        )}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -2378,6 +2471,12 @@ export default function Kanban() {
                     </div>
                   )
                 })()}
+                <div className="pt-1 mt-1 border-t border-amber-200/70">
+                  <button onClick={() => abrirQuitar(null)}
+                    className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 underline-offset-2 hover:underline">
+                    ¿El cliente no tomó un adicional registrado al inicio? Quitar / ajustar cobro
+                  </button>
+                </div>
               </div>
             )}
 
@@ -2444,6 +2543,78 @@ export default function Kanban() {
       )}
 
       {/* ── Modal confirmación de cancelación ─────────────────────────────── */}
+      {itemAQuitar && selected && (() => {
+        const esManual = !!itemAQuitar.__manual
+        const nombre   = esManual ? 'Adicional no listado' : (itemAQuitar.recordatorios?.nombre || 'Ítem')
+        const monto    = Math.max(0, parseFloat(quitarMonto) || 0)
+        const pagado   = selected.valor_pagado || 0
+        const totalPrev = Math.max(0, (selected.valor_total || 0) - monto)
+        return (
+          <Modal open onClose={() => { if (!quitando) setItemAQuitar(null) }}
+            title={esManual ? 'Quitar adicional / ajustar cobro' : 'Quitar ítem del servicio'}
+            maxWidth="max-w-md"
+            footer={
+              <div className="flex gap-2 justify-end w-full">
+                <button onClick={() => setItemAQuitar(null)} disabled={quitando}
+                  className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button onClick={quitarItem} disabled={quitando}
+                  className="px-5 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+                  style={{ background: '#DC2626' }}>
+                  {quitando ? 'Quitando…' : 'Quitar y descontar'}
+                </button>
+              </div>
+            }>
+            <div className="space-y-4">
+              <p className="text-[12px] leading-relaxed text-gray-600">
+                {esManual
+                  ? <>Descuenta del valor a cobrar un adicional que se registró al inicio y el cliente <strong>no tomó</strong>. El ítem no figura en la lista, por eso ingresas el monto manualmente.</>
+                  : <>Se quitará <strong>{nombre}</strong> de <strong>{selected.mascota}</strong>. El ítem deja de producirse y se descuenta su valor de lo que el técnico debe cobrar.</>}
+              </p>
+
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide block mb-1.5">
+                  Monto a descontar
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[13px]">$</span>
+                  <Input type="number" min={0} className="pl-7 text-[13px]"
+                    value={quitarMonto} onChange={e => setQuitarMonto(e.target.value)}
+                    placeholder="0" />
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">Editable. Pon 0 si no cambia el valor a cobrar.</p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide block mb-1.5">
+                  Motivo (opcional)
+                </label>
+                <textarea value={quitarMotivo} onChange={e => setQuitarMotivo(e.target.value)}
+                  rows={2} placeholder="Ej: el cliente no quiso el cofre en la puerta…"
+                  className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none resize-none"
+                  style={{ borderColor: '#E5E7EB' }} />
+              </div>
+
+              <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 space-y-1">
+                <div className="flex justify-between text-[12px]"><span className="text-gray-500">Valor actual</span><span className="font-semibold text-gray-800">{fmt(selected.valor_total || 0)}</span></div>
+                <div className="flex justify-between text-[12px]"><span className="text-gray-500">Descuento</span><span className="font-semibold text-red-600">– {fmt(monto)}</span></div>
+                <div className="flex justify-between text-[13px] border-t border-gray-200 pt-1.5 mt-1.5">
+                  <span className="font-bold text-gray-800">Nuevo valor a cobrar</span>
+                  <span className="font-extrabold text-gray-900">{fmt(totalPrev)}</span>
+                </div>
+              </div>
+
+              {pagado > 0 && (
+                <div className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  ⚠️ Este servicio ya tiene {fmt(pagado)} pagados. Al bajar el total revisa que el recibo y el pago sigan cuadrando.
+                </div>
+              )}
+            </div>
+          </Modal>
+        )
+      })()}
+
       {modalCancelar && selected && (
         <Modal open={modalCancelar} onClose={() => { if (!cancelando) setModalCancelar(false) }}
           title="Cancelar servicio"
