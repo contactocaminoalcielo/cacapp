@@ -11,6 +11,7 @@ import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServ
 import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupales-ia.js'
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
+import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 
 const app = express()
 app.use(express.json())
@@ -131,6 +132,50 @@ app.post('/portal/imagenes/:codigo', async (req, res) => {
   } catch (e) {
     log('[portal/imagenes POST] ERROR', e.message)
     res.status(500).json({ ok: false, error: 'Error interno' })
+  }
+})
+
+// ── Portal de aliados (público; el token del enlace es el secreto, sin JWT) ──
+// Flujo A: el aliado validado confirma su vet y envía la solicitud de servicio.
+app.post('/portal/aliado/validar', async (req, res) => {
+  try {
+    const r = await validarTokenPortal({ token: req.body?.token })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[portal/aliado/validar] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'Error interno' })
+  }
+})
+
+app.post('/portal/aliado/solicitud', async (req, res) => {
+  try {
+    const r = await crearSolicitudAliado({ token: req.body?.token, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[portal/aliado/solicitud] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'Error interno' })
+  }
+})
+
+// Flujo B: una veterinaria NO aliada solicita afiliación (queda pendiente_validacion).
+app.post('/portal/aliado/afiliacion', async (req, res) => {
+  try {
+    const r = await registrarAfiliacion({ payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[portal/aliado/afiliacion] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'Error interno' })
+  }
+})
+
+// Coordinador/Admin aprueba una vet pendiente: genera token y devuelve el enlace.
+app.post('/aliados/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await aprobarAliado({ aliadoId: req.params.id, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[aliados/aprobar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 

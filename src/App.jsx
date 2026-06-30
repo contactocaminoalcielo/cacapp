@@ -12,6 +12,7 @@ const TecnicoApp       = lazy(() => import('@/pages/TecnicoApp'))
 const Login            = lazy(() => import('@/pages/Login'))
 const FotosCliente     = lazy(() => import('@/pages/FotosCliente'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
+const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
 
 const Dashboard          = lazy(() => import('@/pages/Dashboard'))
 const Kanban             = lazy(() => import('@/pages/Kanban'))
@@ -104,6 +105,17 @@ function InnerApp() {
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <SolicitudCliente />
+      </Suspense>
+    )
+  }
+
+  // /aliado        → portal de aliados (Flujo B: afiliación de vet nueva)
+  // /aliado?c=TOKEN → portal de aliados (Flujo A: aliado validado pide servicio)
+  if (location.pathname === '/aliado') {
+    const token = new URLSearchParams(location.search).get('c') || ''
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <SolicitudAliado token={token} />
       </Suspense>
     )
   }

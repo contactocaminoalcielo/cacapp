@@ -17,7 +17,7 @@ import {
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
-  Copy, Check, Phone, Gift,
+  Copy, Check, Phone, Gift, Stethoscope,
 } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -25,6 +25,7 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 // ── Enlace público del formulario de solicitud ────────────────────────────────
 const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
 const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
+const LINK_ALIADO    = `${APP_URL}/#/aliado`   // enlace genérico de afiliación (vet nueva)
 
 // Las alertas de inicio de ruta / declinación de más de estos días se marcan
 // leídas automáticamente (evita el backlog viejo que reaparecía y bloqueaba).
@@ -175,6 +176,38 @@ export default function Kanban() {
       await navigator.clipboard.writeText(LINK_SOLICITUD)
       setEnlaceCopiado(true)
       setTimeout(() => setEnlaceCopiado(false), 2000)
+    } catch {}
+  }
+
+  // ── Invitar veterinaria (enlace genérico de afiliación, wa.me) ───────────
+  const [modalAliado,    setModalAliado]    = useState(false)
+  const [aliadoNombre,   setAliadoNombre]   = useState('')
+  const [aliadoTelefono, setAliadoTelefono] = useState('')
+  const [aliadoCopiado,  setAliadoCopiado]  = useState(false)
+
+  function mensajeEnlaceAliado(nombre) {
+    const saludo = nombre.trim() ? `Hola ${nombre.trim()} 🌿` : 'Hola 🌿'
+    return `${saludo} Somos *Camino al Cielo*, servicios funerarios para mascotas.\n\n` +
+      `Queremos sumar a tu veterinaria como aliada para que solicites recolecciones ` +
+      `directamente, sin pasar por WhatsApp. Regístrate aquí y validamos tus datos:\n\n` +
+      `${LINK_ALIADO}\n\nCualquier duda, con gusto te ayudamos 💚`
+  }
+
+  async function enviarEnlaceAliado() {
+    if (!validarTelefonoEnlace(aliadoTelefono)) {
+      await showAlert('Ingresa un celular colombiano de 10 dígitos (3XX...) o internacional con +.', { title: 'Número inválido' })
+      return
+    }
+    window.open(waLink(aliadoTelefono, mensajeEnlaceAliado(aliadoNombre)), '_blank', 'noopener')
+    setModalAliado(false)
+    setAliadoNombre(''); setAliadoTelefono('')
+  }
+
+  async function copiarEnlaceAliado() {
+    try {
+      await navigator.clipboard.writeText(LINK_ALIADO)
+      setAliadoCopiado(true)
+      setTimeout(() => setAliadoCopiado(false), 2000)
     } catch {}
   }
 
@@ -1641,12 +1674,20 @@ export default function Kanban() {
                       {/* ── Columna SOLICITUDES ── */}
                       {esSolicitudes && (
                         <div className="space-y-2">
-                          <button
-                            onClick={() => setModalEnlace(true)}
-                            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border-2 border-dashed transition-all hover:opacity-80"
-                            style={{ borderColor: '#C4A87A', color: '#9A7B4F', background: '#FFFDF7' }}>
-                            <Send size={12} /> Enviar enlace a cliente
-                          </button>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setModalEnlace(true)}
+                              className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border-2 border-dashed transition-all hover:opacity-80"
+                              style={{ borderColor: '#C4A87A', color: '#9A7B4F', background: '#FFFDF7' }}>
+                              <Send size={12} /> Enlace a cliente
+                            </button>
+                            <button
+                              onClick={() => setModalAliado(true)}
+                              className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border-2 border-dashed transition-all hover:opacity-80"
+                              style={{ borderColor: '#9CC18B', color: '#3D5A27', background: '#F6FBF2' }}>
+                              <Stethoscope size={12} /> Invitar veterinaria
+                            </button>
+                          </div>
                           {solicitudes.length === 0 ? (
                             <div className="text-center py-8 text-[12px] text-gray-400">Sin solicitudes pendientes</div>
                           ) : solicitudes.map(s => {
@@ -1663,6 +1704,12 @@ export default function Kanban() {
                                     <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota_nombre}</div>
                                     <div className="text-[11px] text-gray-400 truncate">{s.cliente_nombre} {s.cliente_apellido || ''}</div>
                                   </div>
+                                  {s.origen === 'ALIADO' && (
+                                    <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold"
+                                      style={{ background: '#EAF3E2', color: '#3D5A27' }}>
+                                      <Stethoscope size={9} /> Aliado
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{planNombre}</div>
                                 <div className="flex items-center justify-between gap-2">
@@ -3051,6 +3098,58 @@ export default function Kanban() {
           <button type="button" onClick={copiarEnlaceSolicitud}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
             {enlaceCopiado ? <><Check size={12} className="text-green-600" /> Enlace copiado</> : <><Copy size={12} /> Copiar solo el enlace</>}
+          </button>
+        </div>
+      </Modal>
+
+      {/* ── Modal: invitar veterinaria (enlace genérico de afiliación) ──────── */}
+      <Modal open={modalAliado} onClose={() => setModalAliado(false)}
+        title="Invitar veterinaria como aliada"
+        maxWidth="max-w-md"
+        footer={
+          <div className="flex items-center justify-end w-full gap-2">
+            <button onClick={() => setModalAliado(false)}
+              className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all">
+              Cancelar
+            </button>
+            <button onClick={enviarEnlaceAliado}
+              className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg,#25D366,#128C7E)' }}>
+              <MessageCircle size={13} /> Abrir WhatsApp
+            </button>
+          </div>
+        }>
+        <div className="space-y-4">
+          <p className="text-[12px] text-gray-500 leading-relaxed">
+            Se abrirá WhatsApp con el mensaje listo. La veterinaria llena sus datos en el
+            formulario y queda <span className="font-semibold">pendiente de validación</span>:
+            la apruebas desde <span className="font-semibold">Configuración › Aliados</span> y ahí
+            se genera su enlace personal para solicitar servicios.
+          </p>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-600 mb-1">Nombre de la veterinaria <span className="font-normal text-gray-400">(opcional)</span></label>
+            <Input placeholder="Clínica Veterinaria…" value={aliadoNombre}
+              onChange={e => setAliadoNombre(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-600 mb-1">WhatsApp de la veterinaria *</label>
+            <Input placeholder="3001234567" inputMode="tel" maxLength={25} value={aliadoTelefono}
+              onChange={e => setAliadoTelefono(e.target.value)} />
+            <p className="text-[11px] text-gray-400 mt-1">Colombia: 3XX XXX XXXX · Internacional: +1 555 1234</p>
+          </div>
+
+          <div className="rounded-xl p-3.5" style={{ background: '#F0F7EB', border: '1px solid #D9E8CC' }}>
+            <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#3D5A27' }}>Vista previa del mensaje</p>
+            <p className="text-[12px] text-gray-700 whitespace-pre-line leading-relaxed">
+              {mensajeEnlaceAliado(aliadoNombre)}
+            </p>
+          </div>
+
+          <button type="button" onClick={copiarEnlaceAliado}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
+            {aliadoCopiado ? <><Check size={12} className="text-green-600" /> Enlace copiado</> : <><Copy size={12} /> Copiar solo el enlace</>}
           </button>
         </div>
       </Modal>

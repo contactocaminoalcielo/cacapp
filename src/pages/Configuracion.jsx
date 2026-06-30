@@ -9,8 +9,9 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
-import { fmt, parsearErrorDB } from '@/lib/utils'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays } from 'lucide-react'
+import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
+import { orbitApi } from '@/lib/orbitApi'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -346,8 +347,34 @@ function TabVeterinarias() {
   const [form, setForm]         = useState({})
   const [saving, setSaving]     = useState(false)
   const { q, setQ, filtered }   = useSearch(data, ['nombre', 'contacto_nombre', 'ciudad', 'identificacion_nit', 'whatsapp'])
+  const [aprobando, setAprobando] = useState(null)   // id_aliado en curso
+  const [aprobado, setAprobado]   = useState(null)   // { aliado, enlace } recién aprobado
+  const [copiado, setCopiado]     = useState(false)
 
   useEffect(() => { cargar() }, [])
+
+  // Aprueba una vet pendiente: el backend genera el token y devuelve el enlace.
+  async function aprobarAliado(a) {
+    if (!await confirm(`Se activará "${a.nombre}" y se generará su enlace de acceso para solicitar servicios.`, {
+      title: '¿Aprobar veterinaria?', confirmLabel: 'Aprobar', variant: 'success',
+    })) return
+    setAprobando(a.id_aliado)
+    try {
+      const r = await orbitApi(`/aliados/${a.id_aliado}/aprobar`, { method: 'POST' })
+      await cargar()
+      setAprobado({ aliado: a, enlace: r.enlace })
+    } catch (e) {
+      await showAlert(e.message || 'No se pudo aprobar. Verifica tu sesión e intenta de nuevo.', { title: 'Error al aprobar' })
+    } finally {
+      setAprobando(null)
+    }
+  }
+
+  function mensajeAccesoAliado(a, enlace) {
+    return `Hola ${a.contacto_nombre || a.nombre} 🌿 Tu veterinaria ya está activa como aliada de *Camino al Cielo*.\n\n` +
+      `Desde este enlace personal puedes solicitar recolecciones directamente:\n\n${enlace}\n\n` +
+      `Guárdalo, es exclusivo de tu veterinaria 💚`
+  }
 
   async function cargar() {
     setLoading(true)
@@ -426,6 +453,35 @@ function TabVeterinarias() {
         <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo aliado</Button>
       </div>
 
+      {/* Cola de aprobación — veterinarias que se auto-registraron por el portal */}
+      {data.some(a => a.estado === 'pendiente_validacion') && (
+        <div className="mb-4 rounded-2xl border-2 p-4" style={{ borderColor: '#FCD9A6', background: '#FFFBF3' }}>
+          <div className="flex items-center gap-2 mb-3">
+            <Stethoscope size={15} className="text-amber-600" />
+            <span className="text-[13px] font-bold text-amber-800">Veterinarias pendientes de validación</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+              {data.filter(a => a.estado === 'pendiente_validacion').length}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {data.filter(a => a.estado === 'pendiente_validacion').map(a => (
+              <div key={a.id_aliado} className="flex items-center gap-3 bg-white rounded-xl border border-amber-100 px-3.5 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold text-gray-900 truncate">{a.nombre}</div>
+                  <div className="text-[11px] text-gray-400 truncate">
+                    {[a.identificacion_nit && `NIT ${a.identificacion_nit}`, a.contacto_nombre, a.ciudad, a.whatsapp].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                  </div>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Revisar</Button>
+                <Button size="sm" onClick={() => aprobarAliado(a)} disabled={aprobando === a.id_aliado}>
+                  {aprobando === a.id_aliado ? 'Aprobando…' : <><CheckCircle size={13} /> Aprobar</>}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading ? <div className="text-center py-10 text-gray-400">Cargando...</div> : (
         <TableWrap>
           <Table>
@@ -457,9 +513,13 @@ function TabVeterinarias() {
                       : '—'}
                   </Td>
                   <Td>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${a.activo !== false ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {a.activo !== false ? 'Activo' : 'Inactivo'}
-                    </span>
+                    {a.estado === 'pendiente_validacion' ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Pendiente</span>
+                    ) : (
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${a.activo !== false ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {a.activo !== false ? 'Activo' : 'Inactivo'}
+                      </span>
+                    )}
                   </Td>
                   <Td>
                     <div className="flex items-center gap-1">
@@ -598,6 +658,44 @@ function TabVeterinarias() {
                 </div>
               </div>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Resultado de aprobación: enlace personal de la veterinaria */}
+      {aprobado && (
+        <Modal open={!!aprobado} onClose={() => { setAprobado(null); setCopiado(false) }}
+          title="Veterinaria aprobada" maxWidth="max-w-md"
+          footer={
+            <div className="flex items-center justify-end w-full gap-2">
+              <Button variant="secondary" onClick={() => { setAprobado(null); setCopiado(false) }}>Cerrar</Button>
+              <a href={waLink(aprobado.aliado.whatsapp, mensajeAccesoAliado(aprobado.aliado, aprobado.enlace))}
+                target="_blank" rel="noreferrer"
+                className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90 ${aprobado.aliado.whatsapp ? '' : 'pointer-events-none opacity-40'}`}
+                style={{ background: 'linear-gradient(135deg,#25D366,#128C7E)' }}>
+                <MessageCircle size={13} /> Enviar por WhatsApp
+              </a>
+            </div>
+          }>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-green-700">
+              <CheckCircle size={16} /> {aprobado.aliado.nombre} ya está activa
+            </div>
+            <p className="text-[12px] text-gray-500 leading-relaxed">
+              Este es su <span className="font-semibold">enlace personal</span> para solicitar servicios.
+              Es exclusivo de esta veterinaria — envíaselo por WhatsApp o cópialo.
+            </p>
+            <div className="rounded-xl p-3 bg-gray-50 border border-gray-200 break-all text-[12px] font-mono text-gray-700">
+              {aprobado.enlace}
+            </div>
+            <button type="button"
+              onClick={async () => { try { await navigator.clipboard.writeText(aprobado.enlace); setCopiado(true); setTimeout(() => setCopiado(false), 2000) } catch {} }}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
+              {copiado ? <><CheckCircle size={12} className="text-green-600" /> Enlace copiado</> : <><Copy size={12} /> Copiar enlace</>}
+            </button>
+            {!aprobado.aliado.whatsapp && (
+              <p className="text-[11px] text-amber-600">Esta veterinaria no tiene WhatsApp registrado; copia el enlace y envíaselo manualmente.</p>
+            )}
           </div>
         </Modal>
       )}
