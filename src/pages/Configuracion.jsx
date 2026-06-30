@@ -370,6 +370,28 @@ function TabVeterinarias() {
     }
   }
 
+  // Genera (o recupera) el enlace de acceso de una veterinaria YA activa.
+  // Reusa el mismo endpoint idempotente: si ya tiene token lo devuelve.
+  async function generarEnlaceAliado(a) {
+    const tiene = !!a.token_acceso
+    if (!await confirm(
+      tiene
+        ? `Se mostrará el enlace de acceso de "${a.nombre}" para reenviárselo.`
+        : `Se generará el enlace de acceso de "${a.nombre}" para que solicite servicios directamente.`,
+      { title: tiene ? 'Ver enlace de acceso' : 'Generar enlace de acceso', confirmLabel: tiene ? 'Ver enlace' : 'Generar', variant: 'success' }
+    )) return
+    setAprobando(a.id_aliado)
+    try {
+      const r = await orbitApi(`/aliados/${a.id_aliado}/aprobar`, { method: 'POST' })
+      await cargar()
+      setAprobado({ aliado: a, enlace: r.enlace })
+    } catch (e) {
+      await showAlert(e.message || 'No se pudo generar el enlace. Verifica tu sesión e intenta de nuevo.', { title: 'Error' })
+    } finally {
+      setAprobando(null)
+    }
+  }
+
   function mensajeAccesoAliado(a, enlace) {
     return `Hola ${a.contacto_nombre || a.nombre} 🌿 Tu veterinaria ya está activa como aliada de *Camino al Cielo*.\n\n` +
       `Desde este enlace personal puedes solicitar recolecciones directamente:\n\n${enlace}\n\n` +
@@ -523,6 +545,12 @@ function TabVeterinarias() {
                   </Td>
                   <Td>
                     <div className="flex items-center gap-1">
+                      {a.estado !== 'pendiente_validacion' && a.activo !== false && (
+                        <Button size="sm" variant="ghost" onClick={() => generarEnlaceAliado(a)} disabled={aprobando === a.id_aliado}
+                          title={a.token_acceso ? 'Ver / reenviar enlace de acceso' : 'Generar enlace de acceso al portal'}>
+                          <KeyRound size={13} /> {aprobando === a.id_aliado ? '…' : a.token_acceso ? 'Enlace' : 'Generar'}
+                        </Button>
+                      )}
                       <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Editar</Button>
                       <button
                         onClick={() => eliminar(a)}
@@ -665,7 +693,7 @@ function TabVeterinarias() {
       {/* Resultado de aprobación: enlace personal de la veterinaria */}
       {aprobado && (
         <Modal open={!!aprobado} onClose={() => { setAprobado(null); setCopiado(false) }}
-          title="Veterinaria aprobada" maxWidth="max-w-md"
+          title="Enlace de acceso de la veterinaria" maxWidth="max-w-md"
           footer={
             <div className="flex items-center justify-end w-full gap-2">
               <Button variant="secondary" onClick={() => { setAprobado(null); setCopiado(false) }}>Cerrar</Button>
@@ -679,7 +707,7 @@ function TabVeterinarias() {
           }>
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-[13px] font-semibold text-green-700">
-              <CheckCircle size={16} /> {aprobado.aliado.nombre} ya está activa
+              <CheckCircle size={16} /> {aprobado.aliado.nombre}
             </div>
             <p className="text-[12px] text-gray-500 leading-relaxed">
               Este es su <span className="font-semibold">enlace personal</span> para solicitar servicios.
