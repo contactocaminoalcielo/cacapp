@@ -111,6 +111,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       if (r.status === 404 || !r.ok) { setFase('no_encontrado'); return }
       setServicio(r.servicio)
       if (r.ya_recibido) { setFase('ya_procesado'); return }
+      if (r.fuera_de_ventana) { setFase('fuera_ventana'); return }
       setLimites({ max_mb: r.limites?.max_mb || 8, mimes: r.limites?.mimes || MIMES_OK })
 
       // El backend devuelve cada ítem como { sr_id, recordatorio }; el portal usa
@@ -194,6 +195,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       if (r.error === 'incompleto')
         throw new Error('Faltan imágenes o datos: ' + (r.faltantes || []).join(', '))
       if (r.error === 'ya_procesado') { setFase('ya_procesado'); return }
+      if (r.error === 'fuera_de_ventana') { setFase('fuera_ventana'); return }
       throw new Error(r.error || 'No se pudo guardar')
     } catch (e) {
       alert('Ocurrió un error. Intenta de nuevo.\n\n' + e.message)
@@ -216,6 +218,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
   if (fase === 'ya_procesado') return (
     <PantallaInfo emoji="✅" titulo="¡Ya recibimos todo!"
       texto={`Las fotos de ${mascota} ya están registradas. Nuestro equipo está trabajando con mucho cariño.`} />
+  )
+  if (fase === 'fuera_ventana') return (
+    <PantallaInfo emoji="💬" titulo="Escríbenos para tus fotos"
+      texto={`El servicio de ${mascota} ya avanzó de etapa. Para ayudarte con las fotos de sus recordatorios, por favor escríbenos por WhatsApp y con gusto lo resolvemos.`}
+      cta={{ label: 'Escribir por WhatsApp', fn: () => { window.location.href = 'https://wa.me/573159891247' } }} />
   )
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
 

@@ -7,7 +7,13 @@
 export const CONFIG_DEFAULTS_IMAGENES = {
   fecha_base:        'fecha_ingreso',
   planes_excluidos:  ['ANGEL', 'DESAMPARADO'],
+  // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).
   estados_elegibles: ['EN_CUARTO_FRIO'],
+  // Ventana en la que el PORTAL acepta cargas del cliente. Más amplia que la del
+  // job: si el servicio ya salió del cuarto frío (el técnico lo procesó antes de
+  // que el cliente subiera las fotos), el cliente todavía puede enviarlas hasta
+  // que se produzca/entregue. Evita el falso "ya recibimos todo".
+  estados_portal:    ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION'],
   linea_default:     '+573159891247',
   recuperar_vencidos: true,
   max_mb:            8,

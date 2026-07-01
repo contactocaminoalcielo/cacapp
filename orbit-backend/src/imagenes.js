@@ -198,8 +198,14 @@ export async function datosPortal({ codigo }) {
     if (!s) return { status: 404, body: { ok: false, error: 'no_encontrado' } }
 
     const config = await cargarConfigImagenes(client)
-    const elegibles = Array.isArray(config.estados_elegibles) ? config.estados_elegibles : ['EN_CUARTO_FRIO']
-    const yaRecibido = !!s.fecha_imagenes_recibidas || !elegibles.includes(s.estado)
+    const portalStates = Array.isArray(config.estados_portal) ? config.estados_portal : ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION']
+    // Distinguir dos situaciones que antes se confundían en un solo "ya_recibido":
+    //  - yaRecibido: el cliente SÍ envió (fecha_imagenes_recibidas) → "ya recibimos todo".
+    //  - fueraDeVentana: no envió, pero el servicio no está en la ventana del portal
+    //    (aún antes del cuarto frío, o ya producido/entregado) → mensaje honesto, no
+    //    el falso "gracias, ya recibimos".
+    const yaRecibido    = !!s.fecha_imagenes_recibidas
+    const fueraDeVentana = !yaRecibido && !portalStates.includes(s.estado)
 
     // solo_adicional según la solicitud activa (Ángel/Desamparado con adicional)
     const { rows: solRows } = await client.query(
@@ -210,11 +216,12 @@ export async function datosPortal({ codigo }) {
     )
     const soloAdicional = solRows[0]?.solo_adicional === true
 
-    const items = yaRecibido ? [] : await itemsPortal(client, s.id, soloAdicional)
+    const items = (yaRecibido || fueraDeVentana) ? [] : await itemsPortal(client, s.id, soloAdicional)
 
     return { status: 200, body: {
       ok: true,
       ya_recibido: yaRecibido,
+      fuera_de_ventana: fueraDeVentana,
       servicio: { id: s.id, mascota: s.mascota, especie: s.especie, plan: s.plan, tipo_proceso: s.tipo_proceso, estado: s.estado },
       items,
       limites: { max_mb: parseInt(config.max_mb) || 8, mimes: config.mimes_permitidos || [] },
@@ -255,10 +262,10 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     }
 
     const config = await cargarConfigImagenes(client)
-    const elegibles = Array.isArray(config.estados_elegibles) ? config.estados_elegibles : ['EN_CUARTO_FRIO']
-    if (!elegibles.includes(s.estado)) {
+    const portalStates = Array.isArray(config.estados_portal) ? config.estados_portal : ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION']
+    if (!portalStates.includes(s.estado)) {
       await client.query('ROLLBACK')
-      return { status: 409, body: { ok: false, error: 'ya_procesado' } }
+      return { status: 409, body: { ok: false, error: 'fuera_de_ventana' } }
     }
 
     const { rows: solRows } = await client.query(
