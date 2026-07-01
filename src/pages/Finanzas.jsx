@@ -12,13 +12,13 @@ import {
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
 } from 'lucide-react'
 
-// Estados de revisión por mascota (feature 8). NULL = sin revisar.
+// Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
+//  · VERIFICADO          → saldado, no se debe nada; ese dinero cuenta en Finanzas.
+//  · PENDIENTE_GESTIONAR → pago pendiente del cliente, comisión de veterinaria o
+//                          facturación mensual → pasa a Conciliaciones.
 const ESTADO_REV = {
-  VERIFICADO: { label: 'Verificado OK',     short: 'OK',       color: '#166534', bg: '#F0FDF4', border: '#86EFAC' },
-  CORRECTO:   { label: 'Recogió correcto',  short: 'Correcto', color: '#166534', bg: '#F0FDF4', border: '#86EFAC' },
-  PARCIAL:    { label: 'Recogió parcial',   short: 'Parcial',  color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
-  NO_RECOGIO: { label: 'No recogió',        short: 'No cobró', color: '#C03030', bg: '#FEE8E8', border: '#FCA5A5' },
-  EXCEDENTE:  { label: 'Recogió de más',    short: 'De más',   color: '#1E40AF', bg: '#EFF6FF', border: '#BFDBFE' },
+  VERIFICADO:          { label: 'Verificado OK',       short: 'OK',        color: '#166534', bg: '#F0FDF4', border: '#86EFAC' },
+  PENDIENTE_GESTIONAR: { label: 'Pendiente gestionar', short: 'Pendiente', color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
 }
 const VIA_CONCIL = {
   LLAMAR_COBRAR:      { label: 'Llamar a cobrar',      icon: Phone },
@@ -295,6 +295,23 @@ export default function Finanzas() {
 
   async function cerrarCuadre() {
     if (!cuadreData) return
+    // El cuadre SIEMPRE se puede cerrar (queda a saldo con el técnico). Un pago
+    // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago
+    // digital o cuando el técnico de verdad debe efectivo (recogió de menos sin
+    // justificar) — el coordinador puede cerrar de todas formas.
+    const faltanComprobante = cuadreItems.filter(it =>
+      !it.es_cancelado && Number(it.digital) > 0 && !comprobantesSet.has(it.servicio_id))
+    const debenTecnico = cuadreItems.filter(tecnicoDebe)
+    if (faltanComprobante.length || debenTecnico.length) {
+      const partes = []
+      if (faltanComprobante.length)
+        partes.push(`• ${faltanComprobante.length} pago(s) digital(es) SIN comprobante subido: ${faltanComprobante.map(it => it.mascota_nombre || '—').join(', ')}`)
+      if (debenTecnico.length) {
+        const monto = debenTecnico.reduce((a, it) => a + (diferenciaItem(it) || 0), 0)
+        partes.push(`• El técnico debe ${fmt(monto)} en efectivo (recogió de menos sin marcar "Pendiente gestionar"): ${debenTecnico.map(it => it.mascota_nombre || '—').join(', ')}`)
+      }
+      if (!await confirm(`Antes de cerrar, revisa:\n\n${partes.join('\n\n')}\n\nPuedes cerrar de todas formas, pero estos casos quedarán congelados así.`, { title: 'Hay pendientes por revisar', variant: 'warning', confirmLabel: 'Cerrar de todas formas' })) return
+    }
     // Doble verificación (feature 4): 1) advertencia de congelado, 2) confirmación del monto.
     if (!await confirm('Una vez cerrado, el cuadre queda congelado y no se podrá editar. El técnico confirma el dinero a entregar.', { title: '¿Cerrar cuadre?', variant: 'warning', confirmLabel: 'Continuar' })) return
     if (!await confirm(`Confirma que el dinero a entregar a gerencia es ${fmt(cuadreData.dinero_a_entregar)} y que el cuadre quedará inmutable. Esta acción no se puede deshacer.`, { title: 'Confirmación final', variant: 'warning', confirmLabel: 'Sí, cerrar definitivamente' })) return
@@ -385,20 +402,30 @@ export default function Finanzas() {
     if (recogido > bruto) return bruto - recogido   // de más (−)
     return 0
   }
-  // ¿Falta plata del técnico sin resolver? (alerta visual). Fact. mensual no es
-  // falta del técnico → se gestiona aparte en Conciliaciones.
+  // ¿Falta plata sin cerrar? (alerta visual ámbar). Cualquier faltante que no esté
+  // ya marcado como Verificado OK. Fact. mensual se gestiona aparte (no es del técnico).
   function faltaPlata(it) {
     if (esFactMensual(it)) return false
     const d = diferenciaItem(it)
     return d != null && d > 0
-      && !['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion)
+      && it.estado_conciliacion !== 'VERIFICADO'
       && !it.conciliacion_resuelta
   }
-  // ¿Debe estar en Conciliaciones? Parcial/no recogió, facturación mensual, o
+  // El técnico de VERDAD debe efectivo: recogió de menos y NO se justificó como
+  // "Pendiente gestionar" (cliente/veterinaria/facturación). Sin justificar = deuda
+  // del técnico → dispara la advertencia al cerrar el cuadre.
+  function tecnicoDebe(it) {
+    if (esFactMensual(it)) return false
+    const d = diferenciaItem(it)
+    return d != null && d > 0
+      && it.estado_conciliacion !== 'PENDIENTE_GESTIONAR'
+      && !it.conciliacion_resuelta
+  }
+  // ¿Debe estar en Conciliaciones? Pendiente gestionar, facturación mensual, o
   // sin recibo (el técnico recogió pero no cobró → hay que cobrarlo).
   function enConciliacion(it) {
     return !it.conciliacion_resuelta
-      && (['PARCIAL', 'NO_RECOGIO'].includes(it.estado_conciliacion) || esFactMensual(it) || it.sin_recibo)
+      && (it.estado_conciliacion === 'PENDIENTE_GESTIONAR' || esFactMensual(it) || it.sin_recibo)
   }
   // Monto pendiente por cobrar de un item (técnico: diferencia; aliado: neto).
   function montoPendiente(it) {
@@ -406,13 +433,13 @@ export default function Finanzas() {
     const d = diferenciaItem(it)
     return d > 0 ? d : 0
   }
-  // Estado sugerido según la diferencia (feature 8 — el coordinador puede cambiarlo).
+  // Estado sugerido (el coordinador puede cambiarlo). Recogió de menos o fact.
+  // mensual → pendiente gestionar; cuadrado o recogió de más → verificado OK.
   function estadoSugerido(it) {
+    if (esFactMensual(it)) return 'PENDIENTE_GESTIONAR'
     const d = diferenciaItem(it)
     if (d == null) return null
-    if (d > 0) return (Number(it.total_cobrado) || 0) > 0 ? 'PARCIAL' : 'NO_RECOGIO'
-    if (d < 0) return 'EXCEDENTE'
-    return 'CORRECTO'
+    return d > 0 ? 'PENDIENTE_GESTIONAR' : 'VERIFICADO'
   }
 
   // Guarda estado de revisión + observaciones (solo BORRADOR). Optimista.
@@ -473,7 +500,7 @@ export default function Finanzas() {
         .select(`*, cuadres_tecnico:cuadre_id ( id, estado, fecha_desde, fecha_hasta,
           personal:tecnico_id ( nombre, apellido ) )`)
         .eq('conciliacion_resuelta', false)
-        .or('estado_conciliacion.in.(PARCIAL,NO_RECOGIO),modalidad_comision.eq.FACTURACION_MENSUAL,sin_recibo.eq.true')
+        .or('estado_conciliacion.eq.PENDIENTE_GESTIONAR,modalidad_comision.eq.FACTURACION_MENSUAL,sin_recibo.eq.true')
         .order('fecha', { ascending: false })
       setConciliaciones(data || [])
     } catch (err) {
@@ -2220,9 +2247,14 @@ function ComprobanteModal({ item, onClose }) {
     let activo = true
     ;(async () => {
       try {
+        // Buscar SIEMPRE por servicio_id cuando exista: es la llave universal y
+        // siempre coincide. El recibo_id no sirve como filtro principal porque un
+        // servicio puede tener varios recibos_tecnico (recreado/reabierto) y el
+        // comprobante suele quedar bajo un recibo_id distinto al del item del cuadre
+        // → daba "no hay comprobante" aunque el técnico sí lo había subido.
         let query = db.from('recibo_comprobantes').select('id, bucket, storage_path, mime_type, estado')
-        if (item.recibo_id)        query = query.eq('recibo_id', item.recibo_id)
-        else if (item.servicio_id) query = query.eq('servicio_id', item.servicio_id)
+        if (item.servicio_id)      query = query.eq('servicio_id', item.servicio_id)
+        else if (item.recibo_id)   query = query.eq('recibo_id', item.recibo_id)
         else { if (activo) { setImgs([]); setLoading(false) } return }
         const { data: comps, error: ce } = await query
         if (ce) throw ce
@@ -2354,7 +2386,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   const G = [31, 90, 50]
   const t = (text, x, y, opts = {}) => pdf.text(String(text ?? ''), x, y, opts)
   const fechaCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
-  const EST = { VERIFICADO: 'OK', CORRECTO: 'Correcto', PARCIAL: 'Parcial', NO_RECOGIO: 'No cobró', EXCEDENTE: 'De más' }
+  const EST = { VERIFICADO: 'OK', PENDIENTE_GESTIONAR: 'Pendiente' }
   // Diferencia por fila (misma regla que la pantalla: banda neto..bruto; FM = a cobrar al aliado).
   const difFila = it => {
     if (it.es_cancelado) return '—'
@@ -2459,7 +2491,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
              : it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : null
     if (vr == null) return a
     const d = vr - (Number(it.total_cobrado) || 0)
-    const resuelto = ['VERIFICADO', 'CORRECTO'].includes(it.estado_conciliacion) || it.conciliacion_resuelta
+    const resuelto = it.estado_conciliacion === 'VERIFICADO' || it.conciliacion_resuelta
     return a + (d > 0 && !resuelto ? d : 0)
   }, 0)
   if (totalFalta > 0) {
