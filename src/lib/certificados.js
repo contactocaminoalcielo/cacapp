@@ -166,9 +166,15 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   const fechaCorta = fmtFechaCorta(fecha)
   const fechaLarga = fmtFechaLarga(fecha)
   const fechaEmision = fmtFechaLarga(today())  // el documento se elabora hoy
-  const empresa    = (lote.entidad_externa && lote.entidad_externa !== 'Entidad certificada Bogotá')
+  // Empresa que ejecuta la cremación. `entidad_externa` guarda un placeholder
+  // heredado ("Entidad certificada Bogotá"); se normaliza (sin tildes/mayúsculas)
+  // para detectarlo en cualquier variante y usar el nombre real de la planta.
+  const norm = s => (s || '').normalize('NFD')
+    .split('').filter(c => { const n = c.charCodeAt(0); return n < 0x300 || n > 0x36f }).join('')
+    .toLowerCase().trim()
+  const empresa    = (lote.entidad_externa && norm(lote.entidad_externa) !== 'entidad certificada bogota')
     ? lote.entidad_externa
-    : 'Ecologia y entorno S.A.S.'
+    : 'INDUSTRIA AMBIENTAL S.A.S/ECOLOGIA Y ENTORNO S.A.S ESP'
   const duracion   = lote.duracion_proceso || '6 horas y 18 minutos'
   const pesoTotal  = sumarPesos(servicios)
 
