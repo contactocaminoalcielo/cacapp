@@ -165,7 +165,13 @@ export default function FotosCliente({ codigo: codigoProp }) {
     const path = `${servicio.id}/${srId}/${crypto.randomUUID()}.${ext}`   // único → no sobrescribe
     const { error } = await db.storage.from('fotos-clientes')
       .upload(path, blob, { upsert: false, contentType: blob.type || mime })
-    if (error) throw new Error('No se pudo subir una imagen. Revisa tu conexión e intenta de nuevo.')
+    if (error) {
+      // El mensaje al cliente es genérico, pero dejamos el error real en consola:
+      // sin esto, un rechazo de RLS (p.ej. estado del servicio fuera de la ventana
+      // permitida en la política del bucket) es indistinguible de un fallo de red.
+      console.error('[FotosCliente] upload falló:', error?.message || error, { path, estado: servicio?.estado })
+      throw new Error('No se pudo subir una imagen. Revisa tu conexión e intenta de nuevo.')
+    }
     const { data: { publicUrl } } = db.storage.from('fotos-clientes').getPublicUrl(path)
     return publicUrl
   }
