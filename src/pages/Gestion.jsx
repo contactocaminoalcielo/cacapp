@@ -1398,6 +1398,11 @@ function TabHistorialServicios({ canEdit }) {
   const [editServ, setEditServ]       = useState(null)   // servicio en edición
   const [cobroVet, setCobroVet]       = useState(false)  // valor del interruptor
   const [savingCom, setSavingCom]     = useState(false)
+  // editar lugar de recogida (mantiene servicios + recogidas consistentes)
+  const [editRecog,   setEditRecog]   = useState(null)   // servicio cuya recogida se edita
+  const [recogForm,   setRecogForm]   = useState({ tipo_lugar: 'DOMICILIO', ciudad: '', direccion: '', barrio: '', aliado_id: '' })
+  const [recogCiudadOrig, setRecogCiudadOrig] = useState('')
+  const [savingRecog, setSavingRecog] = useState(false)
   // quitar ítems / ajuste por adicional no tomado
   const [itemsServ, setItemsServ]       = useState(null) // servicio cuyo modal de ítems está abierto
   const [itemsList, setItemsList]       = useState([])
@@ -1539,6 +1544,62 @@ function TabHistorialServicios({ canEdit }) {
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
     setEditServ(null)
     cargar(0)
+  }
+
+  // ── Editar lugar de recogida (servicios + recogidas consistentes) ─────────
+  // El lugar de recogida vive en dos tablas: `servicios` (lo que ve el cuadre y
+  // el historial) y `recogidas` (lo que ve el técnico en la app de campo). Se
+  // actualizan ambas juntas para no desincronizarlas. NO se toca la comisión
+  // del aliado (eso vive en aliado_origen_id/comision y se edita aparte).
+  async function abrirRecogida(s) {
+    setEditRecog(s)
+    const { data: rec } = await db.from('recogidas')
+      .select('tipo_lugar, ciudad, direccion_recogida, barrio, aliado_id')
+      .eq('servicio_id', s.id).maybeSingle()
+    const ciudad = rec?.ciudad || s.ciudad_recogida || ''
+    setRecogForm({
+      tipo_lugar: rec?.tipo_lugar || s.punto_recogida || 'DOMICILIO',
+      ciudad,
+      direccion:  rec?.direccion_recogida || '',
+      barrio:     rec?.barrio || '',
+      aliado_id:  rec?.aliado_id || s.aliado_origen_id || '',
+    })
+    setRecogCiudadOrig(ciudad)
+  }
+
+  async function guardarRecogida() {
+    if (!editRecog) return
+    const f = recogForm
+    if (!f.tipo_lugar) { await showAlert('Selecciona el tipo de lugar.', { title: 'Falta el tipo de lugar' }); return }
+    if (f.tipo_lugar === 'CLINICA_ALIADA' && !f.aliado_id) {
+      await showAlert('Selecciona la veterinaria aliada de la recogida.', { title: 'Falta la veterinaria' }); return
+    }
+    const ciudad    = f.ciudad.trim() || null
+    const direccion = f.direccion.trim() || null
+    const barrio    = f.barrio.trim() || null
+    const aliadoId  = f.tipo_lugar === 'CLINICA_ALIADA' ? (f.aliado_id || null) : null
+    setSavingRecog(true)
+    try {
+      const { error: eS } = await db.from('servicios').update({
+        punto_recogida:     f.tipo_lugar,
+        ciudad_recogida:    ciudad,
+        direccion_recogida: direccion,
+        barrio_recogida:    barrio,
+      }).eq('id', editRecog.id)
+      if (eS) throw eS
+      const { error: eR } = await db.from('recogidas').update({
+        tipo_lugar:         f.tipo_lugar,
+        ciudad,
+        direccion_recogida: direccion,
+        barrio,
+        aliado_id:          aliadoId,
+      }).eq('servicio_id', editRecog.id)
+      if (eR) throw eR
+      setEditRecog(null)
+      cargar(0)
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al guardar la recogida' })
+    } finally { setSavingRecog(false) }
   }
 
   // ── Quitar ítems / ajustar cobro por adicional no tomado ──────────────────
@@ -1774,6 +1835,12 @@ function TabHistorialServicios({ canEdit }) {
                               title="Quitar ítems / ajustar cobro por adicional no tomado">
                               Ítems
                             </button>
+                            <button
+                              onClick={() => abrirRecogida(s)}
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-ink2 hover:bg-gray-50 transition-colors"
+                              title="Cambiar el lugar de recogida (tipo, ciudad, dirección)">
+                              Recogida
+                            </button>
                           </div>
                         </Td>
                       )}
@@ -1842,6 +1909,68 @@ function TabHistorialServicios({ canEdit }) {
                   ⚠️ Este servicio ya tiene {COP(pagado)} pagados. Al cambiar el total revisa que el recibo y el pago sigan cuadrando.
                 </div>
               )}
+            </div>
+          </Modal>
+        )
+      })()}
+
+      {editRecog && (() => {
+        const cambioCiudad = (recogForm.ciudad || '').trim().toLowerCase() !== (recogCiudadOrig || '').trim().toLowerCase()
+        const yaRecogido   = !['INGRESADO', 'EN_RECOGIDA'].includes(editRecog.estado)
+        return (
+          <Modal open onClose={() => setEditRecog(null)} title="Cambiar lugar de recogida" maxWidth="max-w-md"
+            footer={<><Button variant="secondary" onClick={() => setEditRecog(null)}>Cancelar</Button><Button onClick={guardarRecogida} disabled={savingRecog}>{savingRecog ? 'Guardando…' : 'Guardar'}</Button></>}>
+            <div className="space-y-4">
+              <div className="text-[12px] text-ink2">
+                <strong>{editRecog.mascotas?.nombre || '—'}</strong> · {editRecog.planes?.nombre || '—'}
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Tipo de lugar</label>
+                <Select value={recogForm.tipo_lugar} onChange={e => setRecogForm(p => ({ ...p, tipo_lugar: e.target.value }))}>
+                  <option value="DOMICILIO">Domicilio</option>
+                  <option value="CLINICA_ALIADA">Clínica / Veterinaria aliada</option>
+                  <option value="OTRO">Otro</option>
+                </Select>
+              </div>
+
+              {recogForm.tipo_lugar === 'CLINICA_ALIADA' && (
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Veterinaria aliada</label>
+                  <Select value={recogForm.aliado_id} onChange={e => setRecogForm(p => ({ ...p, aliado_id: e.target.value }))}>
+                    <option value="">Selecciona la veterinaria…</option>
+                    {catAliados.map(a => <option key={a.id_aliado} value={a.id_aliado}>{a.nombre}</option>)}
+                  </Select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Ciudad / Municipio</label>
+                  <Input value={recogForm.ciudad} onChange={e => setRecogForm(p => ({ ...p, ciudad: e.target.value }))} placeholder="Ej: Bogotá" />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Barrio</label>
+                  <Input value={recogForm.barrio} onChange={e => setRecogForm(p => ({ ...p, barrio: e.target.value }))} />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Dirección</label>
+                <Input value={recogForm.direccion} onChange={e => setRecogForm(p => ({ ...p, direccion: e.target.value }))} />
+              </div>
+
+              {cambioCiudad && (
+                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  ⚠️ Cambiaste la ciudad/municipio. El <strong>recargo de transporte</strong> NO se recalcula solo — si cruzaste entre Bogotá y otro municipio, ajusta el valor del servicio aparte.
+                </div>
+              )}
+              {yaRecogido && (
+                <div className="text-[11px] text-ink3 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                  Este servicio ya está en <strong>{ESTADO_LABEL[editRecog.estado] || editRecog.estado}</strong>: la recogida física ya ocurrió; este cambio es solo corrección de datos.
+                </div>
+              )}
+              <p className="text-[10px] text-ink3">Actualiza el servicio y lo que ve el técnico en campo. La comisión del aliado no cambia aquí (usa el botón de comisión).</p>
             </div>
           </Modal>
         )
