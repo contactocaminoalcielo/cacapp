@@ -1523,8 +1523,7 @@ export default function TecnicoApp() {
     setQueryErr('')
     try {
       // ── 1. Servicios asignados (sin join cuarto_frio para evitar errores) ──
-      const { data: svcData, error: svcErr } = await db.from('servicios')
-        .select(`
+      const SELECT_SVC = `
           id, estado, estado_pago, metodo_pago, valor_total, valor_pagado,
           mascota_id, fecha_ingreso,
           direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
@@ -1536,13 +1535,39 @@ export default function TecnicoApp() {
           recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas, foto_recogida_url ),
           planes:plan_id ( nombre, codigo ),
           aliados:aliado_origen_id ( nombre, horario, telefono, whatsapp )
-        `)
+        `
+      const { data: svcData, error: svcErr } = await db.from('servicios')
+        .select(SELECT_SVC)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
         .order('fecha_ingreso', { ascending: false })
 
       if (svcErr) { setQueryErr(svcErr.message); return }
       const servicios = svcData || []
+
+      // ── 1b. Rezagados de cuarto frío: mascotas FÍSICAMENTE en la nevera sin
+      // registro (sin nevera_codigo) cuyo servicio ya avanzó de estado por otro
+      // flujo (lote grupal completado, fotos del cliente, avance manual). El
+      // estado del servicio NO indica que la mascota salió de la nevera: el gate
+      // físico es cuarto_frio.fecha_salida (mismo principio que v_candidatos_tenjo).
+      // Sin esto, el técnico no puede registrar nevera/evidencia de esas mascotas.
+      const { data: cfRezag } = await db.from('cuarto_frio')
+        .select('id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url')
+        .is('fecha_salida', null)
+        .is('nevera_codigo', null)
+      const idsRezag = (cfRezag || [])
+        .map(cf => cf.servicio_id)
+        .filter(id => !servicios.some(s => s.id === id))
+      let rezagados = []
+      if (idsRezag.length > 0) {
+        const { data: rezData } = await db.from('servicios')
+          .select(SELECT_SVC)
+          .eq('tecnico_id', tecnico.id)
+          .in('id', idsRezag)
+          .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
+        const cfBySvc = Object.fromEntries((cfRezag || []).map(cf => [cf.servicio_id, cf]))
+        rezagados = (rezData || []).map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
+      }
 
       // ── 2. Cuarto frío para servicios EN_CUARTO_FRIO (query separado) ──
       const idsCF = servicios.filter(s => s.estado === 'EN_CUARTO_FRIO').map(s => s.id)
@@ -1615,10 +1640,14 @@ export default function TecnicoApp() {
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       setNeverasActivas(codigosNeveras.length > 0 ? codigosNeveras : NEVERAS_DEFAULT)
 
-      // Pendientes de registro en C. Frío (seleccionaron nevera aún no)
-      const pendientesCFArr = serviciosConCF.filter(s =>
-        s.estado === 'EN_CUARTO_FRIO' && !s.cuarto_frio_data?.nevera_codigo
-      )
+      // Pendientes de registro en C. Frío (seleccionaron nevera aún no) +
+      // rezagados: en nevera sin registro aunque el servicio ya avanzó de estado.
+      const pendientesCFArr = [
+        ...serviciosConCF.filter(s =>
+          s.estado === 'EN_CUARTO_FRIO' && !s.cuarto_frio_data?.nevera_codigo
+        ),
+        ...rezagados,
+      ]
       // Gate por DB (NUNCA useState): la mascota no entra al cuarto frío sin
       // recibo generado. Basta con que exista la fila en recibos_tecnico — un
       // recibo en PAGO PENDIENTE también cuenta (el gate es "recibo generado",
