@@ -209,7 +209,8 @@ function CertificadoModal({ servicio, lote, onClose }) {
   ` : `
   <p class="process-text">
     El proceso de <strong>cremación grupal</strong> fue realizado de manera digna y respetuosa,
-    bajo estrictos estándares de manejo y disposición de mascotas, por empresa autorizada
+    bajo estrictos estándares de manejo y disposición de mascotas, por la empresa
+    <strong>INDUSTRIA AMBIENTAL S.A.S/ECOLOGIA Y ENTORNO S.A.S ESP</strong>, entidad autorizada
     en la ciudad de Bogotá. El proceso cumple con las disposiciones legales colombianas
     aplicables al manejo de animales de compañía fallecidos.
   </p>
