@@ -121,11 +121,22 @@ export default function Finanzas() {
 
       const rows = svcs || []
 
-      // Servicios que ya tienen un comprobante de pago adjunto (para mostrar "ver comprobante")
+      // Servicios que ya tienen un comprobante de pago adjunto (para mostrar "ver
+      // comprobante" y para el aviso al cerrar el cuadre). Se cuentan DOS fuentes:
+      // la tabla formal recibo_comprobantes Y el jsonb del recibo
+      // (recibos_tecnico.medios_pago[].comprobanteUrl), porque la fila formal a
+      // veces no se creó (inserción best-effort) y el técnico igual lo tiene.
       const idsSvc = rows.map(s => s.id)
       if (idsSvc.length) {
+        const setCmp = new Set()
         const { data: comps } = await db.from('recibo_comprobantes').select('servicio_id').in('servicio_id', idsSvc)
-        setComprobantesSet(new Set((comps || []).map(c => c.servicio_id)))
+        ;(comps || []).forEach(c => setCmp.add(c.servicio_id))
+        const { data: recs } = await db.from('recibos_tecnico').select('servicio_id, medios_pago').in('servicio_id', idsSvc)
+        ;(recs || []).forEach(r => {
+          const tiene = (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(mp => mp?.comprobanteUrl)
+          if (tiene) setCmp.add(r.servicio_id)
+        })
+        setComprobantesSet(setCmp)
       } else {
         setComprobantesSet(new Set())
       }
@@ -2259,9 +2270,38 @@ function ComprobanteModal({ item, onClose }) {
         const { data: comps, error: ce } = await query
         if (ce) throw ce
         const out = []
+        const rutasVistas = new Set()   // storage_path ya incluidos (para deduplicar)
         for (const c of comps || []) {
           const { data: signed } = await db.storage.from(c.bucket || 'evidencias').createSignedUrl(c.storage_path, 300)
-          if (signed?.signedUrl) out.push({ ...c, url: signed.signedUrl })
+          if (signed?.signedUrl) { out.push({ ...c, url: signed.signedUrl }); if (c.storage_path) rutasVistas.add(c.storage_path) }
+        }
+        // Respaldo: muchos comprobantes viven SOLO en el jsonb del recibo
+        // (recibos_tecnico.medios_pago[].comprobanteUrl) porque la inserción en
+        // recibo_comprobantes es best-effort y a veces falla en silencio. El
+        // técnico los ve desde ahí; Finanzas también debe. Son publicUrl del
+        // bucket `evidencias`, se muestran directo. Se deduplica por storage_path.
+        if (item.servicio_id) {
+          const { data: recs } = await db.from('recibos_tecnico')
+            .select('medios_pago').eq('servicio_id', item.servicio_id)
+          for (const r of recs || []) {
+            for (const mp of (Array.isArray(r.medios_pago) ? r.medios_pago : [])) {
+              const publicUrl = mp?.comprobanteUrl
+              if (!publicUrl) continue
+              const ruta = publicUrl.split('/evidencias/')[1]
+                ? decodeURIComponent(publicUrl.split('/evidencias/')[1])   // storage_path implícito
+                : null
+              if (ruta && rutasVistas.has(ruta)) continue
+              if (ruta) rutasVistas.add(ruta)
+              // Firmar la ruta (sirve con bucket público o privado); si no se pudo
+              // derivar la ruta, usar la publicUrl tal cual como último recurso.
+              let url = publicUrl
+              if (ruta) {
+                const { data: signed } = await db.storage.from('evidencias').createSignedUrl(ruta, 300)
+                if (signed?.signedUrl) url = signed.signedUrl
+              }
+              out.push({ id: publicUrl, url, storage_path: ruta || publicUrl, mime_type: mp.mime_type || null, estado: null })
+            }
+          }
         }
         if (activo) setImgs(out)
       } catch (err) {
