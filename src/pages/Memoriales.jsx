@@ -255,7 +255,7 @@ function EncuadreModal({ data, busy, onClose, onGenerar }) {
   )
 }
 
-function CandidatosList({ candidatos, busy, onGenerar }) {
+function CandidatosList({ candidatos, busy, onGenerar, onEncuadrar }) {
   if (!candidatos.length) return <Empty icon={Sparkles} texto="No hay servicios pendientes de memorial." />
   return (
     <div className="grid gap-3">
@@ -270,10 +270,15 @@ function CandidatosList({ candidatos, busy, onGenerar }) {
                 {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}
               </div>
             </div>
-            <Button onClick={() => onGenerar(c.servicio_id)} disabled={busy[c.servicio_id]}>
-              {busy[c.servicio_id] ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              Generar
-            </Button>
+            <div className="flex gap-2 shrink-0">
+              <Button variant="secondary" onClick={() => onEncuadrar(c)} disabled={busy[c.servicio_id] || !c.foto_url}>
+                <Crop size={16} /> Encuadrar
+              </Button>
+              <Button onClick={() => onGenerar(c.servicio_id)} disabled={busy[c.servicio_id]}>
+                {busy[c.servicio_id] ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                Generar
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ))}
@@ -281,7 +286,7 @@ function CandidatosList({ candidatos, busy, onGenerar }) {
   )
 }
 
-function GeneradosList({ memoriales, busy, videoUrl, instagram, setInstagram, onAprobar, onDescartar, onRegenerar, onPublicar }) {
+function GeneradosList({ memoriales, busy, videoUrl, instagram, setInstagram, onAprobar, onDescartar, onRegenerar, onEncuadrar, onPublicar }) {
   if (!memoriales.length) return <Empty icon={Film} texto="Aún no se ha generado ningún memorial." />
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -335,6 +340,9 @@ function GeneradosList({ memoriales, busy, videoUrl, instagram, setInstagram, on
                       <CheckCircle2 size={15} /> Aprobar
                     </Button>
                   )}
+                  <Button variant="secondary" size="sm" onClick={() => onEncuadrar(m)} disabled={busy[m.servicio_id] || !m.foto_url}>
+                    <Crop size={15} /> Encuadrar
+                  </Button>
                   <Button variant="secondary" size="sm" onClick={() => onRegenerar(m.servicio_id)} disabled={busy[m.servicio_id]}>
                     <RefreshCw size={15} /> Regenerar
                   </Button>
