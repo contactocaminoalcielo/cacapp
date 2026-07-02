@@ -81,7 +81,7 @@ export async function listarCandidatos() {
     const cfg = await cargarConfig(client)
     const excl = Array.isArray(cfg.planes_excluidos) ? cfg.planes_excluidos : []
     const { rows } = await client.query(
-      `SELECT s.id AS servicio_id, s.codigo AS servicio_codigo,
+      `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
               m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario
@@ -108,7 +108,7 @@ export async function listarMemoriales() {
     `SELECT mem.id, mem.servicio_id, mem.estado, mem.mascota_nombre, mem.fecha_texto,
             mem.formato, mem.archivo_path, mem.error, mem.instagram_url, mem.intentos,
             mem.generado_en, mem.aprobado_en, mem.publicado_en, mem.updated_at,
-            s.codigo AS servicio_codigo, p.codigo AS plan_codigo, p.nombre AS plan_nombre
+            p.codigo AS plan_codigo, p.nombre AS plan_nombre
      FROM public.memoriales mem
      JOIN public.servicios s ON s.id = mem.servicio_id
      LEFT JOIN public.planes p ON p.id = s.plan_id
