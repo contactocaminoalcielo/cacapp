@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/dialog'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram,
-  Loader2, AlertTriangle, X,
+  Loader2, AlertTriangle, X, Crop, Link2,
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
@@ -30,6 +31,7 @@ export default function Memoriales() {
   const [busy, setBusy] = useState({})           // id/servicio → true mientras hace una acción
   const [msg, setMsg] = useState(null)            // {tipo:'ok'|'err', texto}
   const [instagram, setInstagram] = useState({})  // memorialId → url en edición
+  const [encuadre, setEncuadre] = useState(null)  // {servicioId, fotoUrl, mascota, ajuste} → modal
   const pollRef = useRef(null)
 
   const flash = (tipo, texto) => { setMsg({ tipo, texto }); setTimeout(() => setMsg(null), 4000) }
@@ -59,15 +61,26 @@ export default function Memoriales() {
 
   const setBusyKey = (k, v) => setBusy(b => ({ ...b, [k]: v }))
 
-  const generar = async (servicioId) => {
+  const generar = async (servicioId, ajuste) => {
     setBusyKey(servicioId, true)
     try {
-      await orbitApi('/memoriales/generar', { method: 'POST', body: { servicio_id: servicioId, formato } })
+      await orbitApi('/memoriales/generar', { method: 'POST', body: { servicio_id: servicioId, formato, ajuste } })
       flash('ok', 'Generando el memorial… tarda unos segundos.')
+      setEncuadre(null)
       setTab('generados')
       await cargar()
     } catch (e) { flash('err', e.message) }
     finally { setBusyKey(servicioId, false) }
+  }
+
+  const copiarEnlaces = async () => {
+    const pub = memoriales.filter(m => m.estado === 'PUBLICADO' && m.instagram_url)
+    if (!pub.length) return flash('err', 'No hay memoriales publicados con enlace.')
+    const texto = pub.map(m => `${m.mascota_nombre}: ${m.instagram_url}`).join('\n')
+    try {
+      await navigator.clipboard.writeText(texto)
+      flash('ok', `${pub.length} enlace${pub.length > 1 ? 's' : ''} copiado${pub.length > 1 ? 's' : ''} al portapapeles.`)
+    } catch { flash('err', 'No se pudo copiar al portapapeles.') }
   }
 
   const accion = async (id, path, body) => {
@@ -123,6 +136,11 @@ export default function Memoriales() {
                 </button>
               ))}
             </div>
+            {tab === 'generados' && (
+              <Button variant="secondary" size="sm" onClick={copiarEnlaces}>
+                <Link2 size={14} /> Copiar enlaces
+              </Button>
+            )}
           </div>
         </div>
 
@@ -131,7 +149,8 @@ export default function Memoriales() {
             <Loader2 className="animate-spin" size={18} /> Cargando…
           </div>
         ) : tab === 'candidatos' ? (
-          <CandidatosList candidatos={candidatos} busy={busy} onGenerar={generar} />
+          <CandidatosList candidatos={candidatos} busy={busy} onGenerar={generar}
+            onEncuadrar={(c) => setEncuadre({ servicioId: c.servicio_id, fotoUrl: c.foto_url, mascota: c.mascota, ajuste: null })} />
         ) : (
           <GeneradosList
             memoriales={memoriales} busy={busy} videoUrl={videoUrl}
@@ -139,11 +158,100 @@ export default function Memoriales() {
             onAprobar={(id) => accion(id, 'aprobar')}
             onDescartar={(id) => accion(id, 'descartar')}
             onRegenerar={(servicioId) => generar(servicioId)}
+            onEncuadrar={(m) => setEncuadre({ servicioId: m.servicio_id, fotoUrl: m.foto_url, mascota: m.mascota_nombre, ajuste: m.ajuste_foto })}
             onPublicar={publicar}
           />
         )}
       </div>
+
+      <EncuadreModal
+        data={encuadre}
+        busy={encuadre ? busy[encuadre.servicioId] : false}
+        onClose={() => setEncuadre(null)}
+        onGenerar={(ajuste) => generar(encuadre.servicioId, ajuste)}
+      />
     </>
+  )
+}
+
+// ── Modal de encuadre: vista previa del arco + zoom y posición de la foto ──
+function EncuadreModal({ data, busy, onClose, onGenerar }) {
+  const [zoom, setZoom] = useState(1)
+  const [posX, setPosX] = useState(50)
+  const [posY, setPosY] = useState(50)
+
+  useEffect(() => {
+    if (data) {
+      setZoom(data.ajuste?.zoom || 1)
+      setPosX(data.ajuste?.posX ?? 50)
+      setPosY(data.ajuste?.posY ?? 50)
+    }
+  }, [data])
+
+  if (!data) return null
+  const sinFoto = !data.fotoUrl
+
+  return (
+    <Modal open={!!data} onClose={onClose} title={`Encuadrar foto — ${data.mascota || ''}`} maxWidth="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => onGenerar({ zoom, posX, posY })} disabled={busy || sinFoto}>
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+            Generar con este encuadre
+          </Button>
+        </>
+      }>
+      {sinFoto ? (
+        <div className="text-sm text-gray-500 py-6 text-center">Este servicio no tiene foto disponible.</div>
+      ) : (
+        <div className="space-y-4">
+          {/* Vista previa con la misma máscara de arco del video */}
+          <div className="flex justify-center">
+            <div className="p-[4px] rounded-[148px_148px_25px_25px]"
+              style={{ background: 'linear-gradient(160deg,#D8C39B,#C4A87A 55%,#A98B58)' }}>
+              <div className="w-[262px] h-[293px] overflow-hidden bg-[#22331f]"
+                style={{ borderRadius: '145px 145px 21px 21px' }}>
+                <img
+                  src={data.fotoUrl} alt=""
+                  className="w-full h-full"
+                  style={{
+                    objectFit: 'cover',
+                    objectPosition: `${posX}% ${posY}%`,
+                    transform: `scale(${1.1 * zoom})`,
+                    transformOrigin: `${posX}% ${posY}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-400 text-center -mt-1">
+            Vista aproximada — en el video la foto hace un zoom suave adicional.
+          </p>
+
+          {[
+            ['Acercar / alejar', zoom, setZoom, 1, 2.5, 0.05],
+            ['Posición horizontal', posX, setPosX, 0, 100, 1],
+            ['Posición vertical', posY, setPosY, 0, 100, 1],
+          ].map(([label, val, setter, min, max, step]) => (
+            <div key={label}>
+              <div className="flex justify-between text-[12px] font-medium text-gray-600 mb-1">
+                <span>{label}</span>
+                <span className="text-gray-400">{label.startsWith('Acercar') ? `${val.toFixed(2)}×` : `${Math.round(val)}%`}</span>
+              </div>
+              <input type="range" min={min} max={max} step={step} value={val}
+                onChange={e => setter(parseFloat(e.target.value))}
+                className="w-full accent-[#3D5A27]" />
+            </div>
+          ))}
+
+          <button onClick={() => { setZoom(1); setPosX(50); setPosY(50) }}
+            className="text-[12px] text-gray-400 hover:text-gray-600 underline">
+            Restablecer encuadre
+          </button>
+        </div>
+      )}
+    </Modal>
   )
 }
 

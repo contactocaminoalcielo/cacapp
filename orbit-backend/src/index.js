@@ -325,7 +325,7 @@ app.get('/memoriales', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_
 
 app.post('/memoriales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
-    const r = await generarMemorial({ servicioId: req.body.servicio_id, personalId: req.personal.id, formato: req.body.formato })
+    const r = await generarMemorial({ servicioId: req.body.servicio_id, personalId: req.personal.id, formato: req.body.formato, ajuste: req.body.ajuste })
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[memoriales/generar] ERROR', e.message)

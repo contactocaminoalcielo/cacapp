@@ -38,6 +38,20 @@ async function cargarConfig(client) {
   return cfg
 }
 
+// Encuadre de la foto {zoom, posX, posY} — validado a rangos seguros.
+function normalizarAjuste(a) {
+  if (!a || typeof a !== 'object') return null
+  const num = (v, d, min, max) => {
+    const n = parseFloat(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d
+  }
+  return {
+    zoom: num(a.zoom, 1, 1, 3),
+    posX: num(a.posX, 50, 0, 100),
+    posY: num(a.posY, 50, 0, 100),
+  }
+}
+
 // Foto representativa del servicio = primera imagen que envió el cliente.
 async function fotoDelServicio(client, servicioId) {
   const { rows } = await client.query(
@@ -84,12 +98,22 @@ export async function listarCandidatos() {
       `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
               m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
-              TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario
+              TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
+              f.foto_url
        FROM public.servicios s
        JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
        LEFT JOIN public.planes p    ON p.id = s.plan_id
        LEFT JOIN public.memoriales mem ON mem.servicio_id = s.id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND (sr.imagen_cliente_url IS NOT NULL
+                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+         ORDER BY sr.created_at ASC
+         LIMIT 1
+       ) f ON true
        WHERE s.fecha_imagenes_recibidas IS NOT NULL
          AND s.estado <> 'CANCELADO'
          AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
@@ -107,11 +131,22 @@ export async function listarMemoriales() {
   const { rows } = await pool.query(
     `SELECT mem.id, mem.servicio_id, mem.estado, mem.mascota_nombre, mem.fecha_texto,
             mem.formato, mem.archivo_path, mem.error, mem.instagram_url, mem.intentos,
+            mem.ajuste_foto,
             mem.generado_en, mem.aprobado_en, mem.publicado_en, mem.updated_at,
-            p.codigo AS plan_codigo, p.nombre AS plan_nombre
+            p.codigo AS plan_codigo, p.nombre AS plan_nombre,
+            f.foto_url
      FROM public.memoriales mem
      JOIN public.servicios s ON s.id = mem.servicio_id
      LEFT JOIN public.planes p ON p.id = s.plan_id
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
+       FROM public.servicio_recordatorios sr
+       WHERE sr.servicio_id = mem.servicio_id
+         AND (sr.imagen_cliente_url IS NOT NULL
+              OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+       ORDER BY sr.created_at ASC
+       LIMIT 1
+     ) f ON true
      ORDER BY mem.updated_at DESC
      LIMIT 300`
   )
@@ -121,8 +156,9 @@ export async function listarMemoriales() {
 // ── Generar (render async en segundo plano) ──
 const FORMATOS = ['1080x1350', '1080x1920']
 
-export async function generarMemorial({ servicioId, personalId, formato: formatoReq }) {
+export async function generarMemorial({ servicioId, personalId, formato: formatoReq, ajuste }) {
   const actor = uuidOrNull(personalId)
+  const ajusteNorm = normalizarAjuste(ajuste)   // null si no se envió → conserva el guardado
   const client = await pool.connect()
   let memorialId = null, payload = null
   try {
@@ -158,22 +194,24 @@ export async function generarMemorial({ servicioId, personalId, formato: formato
 
     const { rows: up } = await client.query(
       `INSERT INTO public.memoriales
-         (servicio_id, estado, mascota_nombre, fecha_texto, formato, intentos, generado_por, generado_en, error)
-       VALUES ($1, 'GENERANDO', $2, $3, $4, 1, $5, NULL, NULL)
+         (servicio_id, estado, mascota_nombre, fecha_texto, formato, ajuste_foto, intentos, generado_por, generado_en, error)
+       VALUES ($1, 'GENERANDO', $2, $3, $4, $6::jsonb, 1, $5, NULL, NULL)
        ON CONFLICT (servicio_id) DO UPDATE SET
          estado = 'GENERANDO',
          mascota_nombre = EXCLUDED.mascota_nombre,
          fecha_texto = EXCLUDED.fecha_texto,
          formato = EXCLUDED.formato,
+         ajuste_foto = COALESCE($6::jsonb, public.memoriales.ajuste_foto),
          intentos = public.memoriales.intentos + 1,
          generado_por = EXCLUDED.generado_por,
          error = NULL,
          updated_at = now()
-       RETURNING id`,
-      [servicioId, svc.mascota, svc.fecha_texto, formato, actor]
+       RETURNING id, ajuste_foto`,
+      [servicioId, svc.mascota, svc.fecha_texto, formato, actor, ajusteNorm ? JSON.stringify(ajusteNorm) : null]
     )
     memorialId = up[0].id
-    payload = { name: svc.mascota, date: svc.fecha_texto, photo: foto, frase, compositionId }
+    const ajusteEfectivo = up[0].ajuste_foto || {}
+    payload = { name: svc.mascota, date: svc.fecha_texto, photo: foto, frase, compositionId, ...ajusteEfectivo }
     await client.query('COMMIT')
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

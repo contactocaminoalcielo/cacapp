@@ -152,7 +152,11 @@ export const Memorial: React.FC<{
   date: string;
   photo: string;
   frase?: string;
-}> = ({ name, date, photo, frase = "Siempre en nuestro corazón" }) => {
+  // Encuadre de la foto (elegido en ORBIT): zoom 1-3, posX/posY 0-100 (%).
+  zoom?: number;
+  posX?: number;
+  posY?: number;
+}> = ({ name, date, photo, frase = "Siempre en nuestro corazón", zoom = 1, posX = 50, posY = 50 }) => {
   useFonts();
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -306,7 +310,9 @@ export const Memorial: React.FC<{
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                transform: `scale(${kb}) translateY(${kbY}px)`,
+                objectPosition: `${posX}% ${posY}%`,
+                transform: `scale(${kb * zoom}) translateY(${kbY}px)`,
+                transformOrigin: `${posX}% ${posY}%`,
               }}
             />
             {/* Viñeta interna sutil */}

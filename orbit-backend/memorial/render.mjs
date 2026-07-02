@@ -24,11 +24,18 @@ async function main() {
     publicDir: path.join(__dirname, 'public'),
   })
 
+  const num = (v, d, min, max) => {
+    const n = parseFloat(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d
+  }
   const inputProps = {
     name,
     date: date || '',
     photo,
     frase: frase || 'Siempre en nuestro corazón',
+    zoom: num(payload.zoom, 1, 1, 3),
+    posX: num(payload.posX, 50, 0, 100),
+    posY: num(payload.posY, 50, 0, 100),
   }
 
   const composition = await selectComposition({ serveUrl, id: compositionId, inputProps })
