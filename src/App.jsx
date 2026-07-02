@@ -32,6 +32,7 @@ const Recibos            = lazy(() => import('@/pages/Recibos'))
 const Finanzas           = lazy(() => import('@/pages/Finanzas'))
 const Certificados       = lazy(() => import('@/pages/Certificados'))
 const Eutanasias         = lazy(() => import('@/pages/Eutanasias'))
+const Memoriales         = lazy(() => import('@/pages/Memoriales'))
 
 function FullScreenLoader() {
   return (
@@ -88,6 +89,7 @@ function AppRoutes({ rol }) {
             {routes.has('/finanzas')       && <Route path="/finanzas"       element={<Finanzas />} />}
             {routes.has('/certificados')   && <Route path="/certificados"   element={<Certificados />} />}
             {routes.has('/eutanasias')     && <Route path="/eutanasias"     element={<Eutanasias />} />}
+            {routes.has('/memoriales')     && <Route path="/memoriales"     element={<Memoriales />} />}
             <Route path="*" element={<Navigate to={redirectTo} replace />} />
           </Routes>
         </Suspense>

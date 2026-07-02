@@ -8,11 +8,18 @@ services:
     env_file: .env
     environment:
       - TZ=America/Bogota
+      - MEMORIAL_DATA_DIR=/data/memoriales
     ports:
       - "127.0.0.1:8787:8787"
+    volumes:
+      # Videos de memoriales — persisten entre reinicios/rebuilds del contenedor.
+      - memorial_data:/data/memoriales
     networks:
       - supabase_default
 
 networks:
   supabase_default:
     external: true
+
+volumes:
+  memorial_data:

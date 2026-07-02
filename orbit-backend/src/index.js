@@ -12,6 +12,7 @@ import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupal
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
+import { listarCandidatos, listarMemoriales, generarMemorial, aprobarMemorial, publicarMemorial, descartarMemorial, servirArchivo } from './memorial.js'
 
 const app = express()
 app.use(express.json())
@@ -300,6 +301,75 @@ app.post('/tenjo/lotes/:id/cerrar', requireAuth, requireRol('COORDINADOR', 'ADMI
   } catch (e) {
     log('[cerrar] ERROR', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ── API Memoriales (video animado por servicio; render Remotion self-host) ──
+app.get('/memoriales/candidatos', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json(await listarCandidatos())
+  } catch (e) {
+    log('[memoriales/candidatos] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/memoriales', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json(await listarMemoriales())
+  } catch (e) {
+    log('[memoriales] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/memoriales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await generarMemorial({ servicioId: req.body.servicio_id, personalId: req.personal.id, formato: req.body.formato })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[memoriales/generar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/memoriales/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await aprobarMemorial({ id: req.params.id, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[memoriales/aprobar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/memoriales/:id/publicar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await publicarMemorial({ id: req.params.id, personalId: req.personal.id, instagramUrl: req.body.instagram_url })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[memoriales/publicar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/memoriales/:id/descartar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await descartarMemorial({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[memoriales/descartar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Archivo del memorial — enlace firmado (sin JWT) para <video> y descarga.
+app.get('/memoriales/:id/archivo', async (req, res) => {
+  try {
+    await servirArchivo(req, res)
+  } catch (e) {
+    log('[memoriales/archivo] ERROR', e.message)
+    if (!res.headersSent) res.status(500).end('Error interno')
   }
 })
 

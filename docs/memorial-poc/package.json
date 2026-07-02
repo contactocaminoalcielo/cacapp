@@ -1,0 +1,16 @@
+{
+  "name": "memorial-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.ts Memorial out/memorial.mp4",
+    "still": "remotion still src/index.ts Memorial out/still.png --frame=200",
+    "studio": "remotion studio src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "remotion": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

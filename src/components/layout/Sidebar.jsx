@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
-  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse,
+  Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -38,6 +38,7 @@ const ALL_NAV_GROUPS = [
     items: [
       { path: '/gestion',      label: 'Gestión',         icon: Users },
       { path: '/nps',          label: 'NPS & Postventa',  icon: Star,  badge: 'nps' },
+      { path: '/memoriales',   label: 'Memoriales',       icon: Film },
       { path: '/presequiales', label: 'Presequiales',     icon: Heart },
     ],
   },
