@@ -741,13 +741,20 @@ export default function Kanban() {
       // ADICIONAL) para mostrar el ícono de alerta en la tarjeta.
       const ids = rows.map(s => s.servicio_id).filter(Boolean)
       if (ids.length) {
-        const [{ data: tels }, { data: adic }] = await Promise.all([
-          db.from('servicios')
+        // PostgREST filtra por URL: con cientos de servicios, `.in('id', ids)` de
+        // una sola vez supera el límite de nginx (414 Request-URI Too Large) y la
+        // consulta falla en silencio (se pierden teléfonos alternos, badge de
+        // adicional y peso). Se trocea en lotes de 80 ids (~3K chars por URL).
+        const lotes = Array.from({ length: Math.ceil(ids.length / 80) }, (_, i) => ids.slice(i * 80, i * 80 + 80))
+        const [telsParts, adicParts] = await Promise.all([
+          Promise.all(lotes.map(l => db.from('servicios')
             .select('id, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
-            .in('id', ids),
-          db.from('servicio_recordatorios')
-            .select('servicio_id').eq('origen', 'ADICIONAL').in('servicio_id', ids),
+            .in('id', l))),
+          Promise.all(lotes.map(l => db.from('servicio_recordatorios')
+            .select('servicio_id').eq('origen', 'ADICIONAL').in('servicio_id', l))),
         ])
+        const tels = telsParts.flatMap(r => r.data || [])
+        const adic = adicParts.flatMap(r => r.data || [])
         const mapa = {}
         const pesos = {}
         ;(tels || []).forEach(t => {
