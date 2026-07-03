@@ -743,15 +743,17 @@ export default function Kanban() {
       if (ids.length) {
         const [{ data: tels }, { data: adic }] = await Promise.all([
           db.from('servicios')
-            .select('id, mascotas(clientes(whatsapp, telefono, telefono2))')
+            .select('id, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .in('id', ids),
           db.from('servicio_recordatorios')
             .select('servicio_id').eq('origen', 'ADICIONAL').in('servicio_id', ids),
         ])
         const mapa = {}
+        const pesos = {}
         ;(tels || []).forEach(t => {
           const c = t.mascotas?.clientes
           if (c) mapa[t.id] = c
+          pesos[t.id] = t.mascotas?.peso_kg ?? null
         })
         const conAdicional = new Set((adic || []).map(a => a.servicio_id))
         rows = rows.map(s => {
@@ -762,7 +764,7 @@ export default function Kanban() {
             cliente_telefono:  c.telefono  || null,
             cliente_telefono2: c.telefono2 || null,
           } : s
-          return { ...base, tiene_adicional: conAdicional.has(s.servicio_id) }
+          return { ...base, mascota_peso_kg: pesos[s.servicio_id] ?? null, tiene_adicional: conAdicional.has(s.servicio_id) }
         })
       }
 
@@ -1782,6 +1784,12 @@ export default function Kanban() {
                               </div>
                               <div className="flex items-center justify-between gap-2 mb-2">
                                 <div className="text-[11px] text-gray-500 font-medium truncate flex-1">{s.plan}</div>
+                                {parseFloat(s.mascota_peso_kg) > 0 && (
+                                  <div className="flex items-center gap-1 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
+                                    style={{ background: '#F1F5F9', color: '#64748B' }}>
+                                    ⚖️ {parseFloat(s.mascota_peso_kg)} kg
+                                  </div>
+                                )}
                                 {s.fecha_ingreso && (
                                   <div className="flex items-center gap-1 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
                                     style={{ background: '#F1F5F9', color: '#64748B' }}>
