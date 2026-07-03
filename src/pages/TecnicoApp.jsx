@@ -3807,9 +3807,23 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           registrado_por: tecnico?.id || null,
         })
       } else if (!pagoRegistrado && totalMedios > 0) {
-        // Solo registrar el pago UNA VEZ — los recibos adicionales son solo documentos
-        const nuevoPagado = (svcData.valor_pagado || 0) + totalMedios
+        // Conteo único (migración 027): si otro recibo del servicio ya sumó a
+        // valor_pagado (regeneración o doble documento CLIENTE+VET del mismo
+        // cobro), ese aporte se resta primero — el mismo cobro no se suma dos
+        // veces. Best-effort: si la columna pago_aplicado aún no existe en DB
+        // (despliegue gradual), prevAplicado queda 0 y se comporta como antes.
+        const { data: prevRecs } = await db.from('recibos_tecnico')
+          .select('id, pago_aplicado')
+          .eq('servicio_id', servicioSel.id)
+          .neq('id', data.id)
+          .gt('pago_aplicado', 0)
+        const prevAplicado = (prevRecs || []).reduce((a, r) => a + (parseFloat(r.pago_aplicado) || 0), 0)
+        const nuevoPagado = Math.max((svcData.valor_pagado || 0) - prevAplicado, 0) + totalMedios
         const nuevoEstado = nuevoPagado >= (svcData.valor_total || 0) ? 'COMPLETO' : 'PARCIAL'
+        if (prevRecs?.length) {
+          await db.from('recibos_tecnico').update({ pago_aplicado: 0 }).in('id', prevRecs.map(r => r.id))
+        }
+        await db.from('recibos_tecnico').update({ pago_aplicado: totalMedios }).eq('id', data.id)
         await db.from('servicios').update({
           valor_pagado: nuevoPagado,
           estado_pago:  nuevoEstado,

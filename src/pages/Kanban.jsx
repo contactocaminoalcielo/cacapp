@@ -546,8 +546,8 @@ export default function Kanban() {
 
       // 3. Crear servicio (el trigger de DB crea recogida, entrega y cuarto_frio)
       const precioCalculado = await calcularPrecioPara(convForm.plan_id, pesoKg, convForm.especie_id)
-      const valorTotal = parseFloat(convForm.valor_total) || precioCalculado || 0
-      if (valorTotal <= 0) {
+      const valorBruto = parseFloat(convForm.valor_total) || precioCalculado || 0
+      if (valorBruto <= 0) {
         await showAlert('No se pudo calcular el valor del plan. Ingresa el valor total antes de aceptar.', { title: 'Precio requerido' })
         return
       }
@@ -555,6 +555,18 @@ export default function Kanban() {
       const esVeterinaria = convForm.tipo_recogida === 'veterinaria'
       const puntoRecogida = esVeterinaria ? 'CLINICA_ALIADA' : 'DOMICILIO'
       const aliadoActual = aliadoPorId(selSolicitud.aliado_id)
+      const esPortalAliado = selSolicitud.origen === 'ALIADO' && !!selSolicitud.aliado_id
+      const modalidadComision = aliadoActual?.modalidad_comision || aliadoSolData?.modalidad_comision || ''
+      const comisionActual = Math.max(0, Number(comisionSol) || 0)
+      // Descuento solo si la recogida es EN la clínica: ahí la vet cobra al
+      // cliente y retiene su comisión (el técnico recoge el neto). A domicilio
+      // el cliente paga el valor completo y la comisión queda PENDIENTE
+      // (pestaña Comisiones) — comision_descontada=true la daría por saldada.
+      const descuentaComision = esPortalAliado
+        && esVeterinaria
+        && ['DESCUENTO_INMEDIATO', 'FACTURACION_MENSUAL'].includes(modalidadComision)
+        && comisionActual > 0
+      const valorTotal = Math.max(0, valorBruto - (descuentaComision ? comisionActual : 0))
       const clienteCompleto = `${convForm.cliente_nombre} ${convForm.cliente_apellido || ''}`.trim()
       const direccionRecogida = esVeterinaria
         ? (aliadoActual?.direccion || convForm.direccion || null)
@@ -588,6 +600,10 @@ export default function Kanban() {
         estado:                'INGRESADO',
         fecha_ingreso:         today(),
         tipo_acompanamiento:   esIndividual ? convForm.tipo_acompanamiento : 'EVIDENCIA',
+        // ALIADO siempre que haya vet asociada (portal O solicitud pública con
+        // vet): la pestaña Comisiones y el KPI de Finanzas filtran por
+        // canal_entrada='ALIADO' — si esto fuera DIRECTO, la comisión asignada
+        // abajo desaparecería del seguimiento.
         canal_entrada:         selSolicitud.aliado_id ? 'ALIADO' : 'DIRECTO',
         registrado_por:        personalData?.id || null,
         aliado_origen_id:      selSolicitud.aliado_id || null,
@@ -602,12 +618,12 @@ export default function Kanban() {
         barrio_recogida:       barrioRecogida,
         indicaciones_recogida: notasRecogida,
         tipo_cliente:          'NORMAL',
-        comision_aliado:       comisionSol || 0,
-        comision_descontada:   false,  // Solicitudes públicas: cliente paga completo siempre
+        comision_aliado:       comisionActual,
+        comision_descontada:   descuentaComision,
         notas:                 notasServicio,
         // Desglose congelado (migración 010). El flujo público NO cobra transporte
         // ni adicionales: el valor es solo el plan → transporte = 0 (no "sin dato").
-        valor_plan:            valorTotal,
+        valor_plan:            valorBruto,
         valor_adicionales:     0,
         valor_transporte:      0,
         recargo_nocturno:      0,
@@ -659,7 +675,7 @@ export default function Kanban() {
     Promise.all([
       db.from('planes').select('id,nombre,codigo,tipo_proceso').order('nombre'),
       db.from('especies').select('id,nombre').order('nombre'),
-      db.from('aliados').select('id_aliado,nombre,direccion,ciudad,localidad,barrio,contacto_nombre,whatsapp,telefono').eq('activo', true).order('nombre'),
+      db.from('aliados').select('id_aliado,nombre,direccion,ciudad,localidad,barrio,contacto_nombre,whatsapp,telefono,vip,modalidad_comision').eq('activo', true).order('nombre'),
     ]).then(([p, e, a]) => {
       setPlanesKanban(p.data || [])
       setEspeciesKanban(e.data || [])
@@ -2930,7 +2946,9 @@ export default function Kanban() {
                             Comision aliado{comisionSolPct > 0 ? ` (${comisionSolPct}% calculado automaticamente)` : ''}
                           </p>
                           <p className="text-[10px] text-amber-600 mt-0.5">
-                            El cliente paga el valor completo. Esta comision se registra para {aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : aliadoSolData?.modalidad_comision === 'CREDITO_ACUMULADO' ? 'credito acumulado' : 'seguimiento'} al aliado.
+                            {selSolicitud?.origen === 'ALIADO' && cf.tipo_recogida === 'veterinaria' && ['DESCUENTO_INMEDIATO','FACTURACION_MENSUAL'].includes(aliadoSolData?.modalidad_comision)
+                              ? `La comision se DESCUENTA del total del servicio (queda el neto a cobrar). Modalidad: ${aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : 'descuento inmediato'}.`
+                              : `El cliente paga el valor completo. Esta comision se registra para ${aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : aliadoSolData?.modalidad_comision === 'CREDITO_ACUMULADO' ? 'credito acumulado' : 'seguimiento'} al aliado.`}
                           </p>
                         </div>
                         <input type="number" min="0"

@@ -537,10 +537,23 @@ export default function Finanzas() {
             aliados:aliado_origen_id ( nombre, modalidad_comision ),
             planes:plan_id ( nombre ) ),
           personal:tecnico_id ( nombre, apellido )`)
-        .order('fecha_emision', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(800)
 
-      const clasificados = (recibos || []).map(r => {
+      // Conteo único por servicio (regla migración 027): un servicio puede tener
+      // varios recibos (regenerado, o doble documento CLIENTE+VET del mismo
+      // cobro) — cuenta el más reciente CON dinero; si ninguno cobró, el más
+      // reciente. Sin esto, los recibos viejos en $0 salen como filas fantasma.
+      const porServicio = {}
+      for (const r of (recibos || [])) {
+        const prev = porServicio[r.servicio_id]
+        if (!prev) { porServicio[r.servicio_id] = r; continue }
+        if ((prev.valor_cobrado || 0) === 0 && (r.valor_cobrado || 0) > 0) porServicio[r.servicio_id] = r
+      }
+      const unicos = Object.values(porServicio)
+        .sort((a, b) => (b.fecha_emision || '').localeCompare(a.fecha_emision || ''))
+
+      const clasificados = unicos.map(r => {
         const svc = r.servicios || {}
         const modalidad = svc.aliados?.modalidad_comision || null
         const pagoPend  = String(r.datos_form?.pago_pendiente) === 'true'
