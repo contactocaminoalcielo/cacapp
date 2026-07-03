@@ -285,6 +285,7 @@ export default function Kanban() {
   const [comisionSol,     setComisionSol]     = useState(0)    // monto editable ($)
   const [comisionSolPct,  setComisionSolPct]  = useState(0)    // porcentaje calculado
   const [aliadoSolData,   setAliadoSolData]   = useState(null) // datos del aliado de la solicitud
+  const [pagoEnVet,       setPagoEnVet]       = useState(false) // recogida a domicilio pero el cliente paga en la veterinaria
 
   async function calcularComisionPct(aliadoId, esVip, planId, tipoProceso) {
     if (!aliadoId || !planId) return 0
@@ -405,7 +406,7 @@ export default function Kanban() {
 
     // Consultar datos completos del aliado si el cliente seleccionó una vet registrada
     let aliado = null
-    setComisionSol(0); setComisionSolPct(0); setAliadoSolData(null)
+    setComisionSol(0); setComisionSolPct(0); setAliadoSolData(null); setPagoEnVet(false)
     if (s.aliado_id) {
       const { data } = await db.from('aliados')
         .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision')
@@ -558,12 +559,14 @@ export default function Kanban() {
       const esPortalAliado = selSolicitud.origen === 'ALIADO' && !!selSolicitud.aliado_id
       const modalidadComision = aliadoActual?.modalidad_comision || aliadoSolData?.modalidad_comision || ''
       const comisionActual = Math.max(0, Number(comisionSol) || 0)
-      // Descuento solo si la recogida es EN la clínica: ahí la vet cobra al
-      // cliente y retiene su comisión (el técnico recoge el neto). A domicilio
-      // el cliente paga el valor completo y la comisión queda PENDIENTE
-      // (pestaña Comisiones) — comision_descontada=true la daría por saldada.
+      // Descuento cuando el PAGO pasa por la veterinaria: recogida en la
+      // clínica, o recogida a domicilio con el check "paga en la veterinaria"
+      // (la vet cobra al cliente y retiene su comisión; el técnico recoge el
+      // neto). Si el cliente paga directo, paga el valor completo y la comisión
+      // queda PENDIENTE (pestaña Comisiones) — descontada=true la daría por
+      // saldada sin que la vet la reciba.
       const descuentaComision = esPortalAliado
-        && esVeterinaria
+        && (esVeterinaria || pagoEnVet)
         && ['DESCUENTO_INMEDIATO', 'FACTURACION_MENSUAL'].includes(modalidadComision)
         && comisionActual > 0
       const valorTotal = Math.max(0, valorBruto - (descuentaComision ? comisionActual : 0))
@@ -2946,7 +2949,7 @@ export default function Kanban() {
                             Comision aliado{comisionSolPct > 0 ? ` (${comisionSolPct}% calculado automaticamente)` : ''}
                           </p>
                           <p className="text-[10px] text-amber-600 mt-0.5">
-                            {selSolicitud?.origen === 'ALIADO' && cf.tipo_recogida === 'veterinaria' && ['DESCUENTO_INMEDIATO','FACTURACION_MENSUAL'].includes(aliadoSolData?.modalidad_comision)
+                            {selSolicitud?.origen === 'ALIADO' && (cf.tipo_recogida === 'veterinaria' || pagoEnVet) && ['DESCUENTO_INMEDIATO','FACTURACION_MENSUAL'].includes(aliadoSolData?.modalidad_comision)
                               ? `La comision se DESCUENTA del total del servicio (queda el neto a cobrar). Modalidad: ${aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : 'descuento inmediato'}.`
                               : `El cliente paga el valor completo. Esta comision se registra para ${aliadoSolData?.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' : aliadoSolData?.modalidad_comision === 'CREDITO_ACUMULADO' ? 'credito acumulado' : 'seguimiento'} al aliado.`}
                           </p>
@@ -2961,6 +2964,19 @@ export default function Kanban() {
                         <p className="text-[10px] text-amber-700">
                           Neto para Camino al Cielo: <strong>{fmt(parseFloat(cf.valor_total) - comisionSol)}</strong> de <strong>{fmt(parseFloat(cf.valor_total))}</strong> cobrados al cliente
                         </p>
+                      )}
+                      {/* Recogida a domicilio pero el cobro pasa por la vet: el pago
+                          define el descuento de la comisión, no el punto de recogida */}
+                      {selSolicitud?.origen === 'ALIADO' && cf.tipo_recogida !== 'veterinaria'
+                        && ['DESCUENTO_INMEDIATO','FACTURACION_MENSUAL'].includes(aliadoSolData?.modalidad_comision) && (
+                        <label className="flex items-start gap-2 pt-1 cursor-pointer select-none" style={{ borderTop: '1px dashed #FDE68A' }}>
+                          <input type="checkbox" className="mt-0.5 accent-amber-600" checked={pagoEnVet}
+                            onChange={e => setPagoEnVet(e.target.checked)} />
+                          <span className="text-[10px] text-amber-800">
+                            <strong>El cliente paga en la veterinaria</strong> aunque la recogida sea a domicilio
+                            (la vet retiene su comision y el servicio queda en NETO)
+                          </span>
+                        </label>
                       )}
                     </div>
                   </div>
