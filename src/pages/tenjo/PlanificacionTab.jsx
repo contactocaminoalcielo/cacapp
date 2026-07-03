@@ -117,7 +117,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     const m  = item.servicios?.mascotas
     const cl = m?.clientes
     const rec = Array.isArray(item.servicios?.recogidas) ? item.servicios.recogidas[0] : item.servicios?.recogidas
-    const presencial = varianteProceso(item.servicios?.planes?.codigo, item.servicios?.tipo_acompanamiento) === 'EXCLUSIVO_PRESENCIAL'
+    const codigoPlan = item.servicios?.planes?.codigo
+    const presencial = varianteProceso(codigoPlan, item.servicios?.tipo_acompanamiento) === 'EXCLUSIVO_PRESENCIAL'
+    // Obs para el grupo Tenjo: solo la instrucción de huella en Compets con
+    // recordatorios; en el resto queda vacía para que el coordinador la llene.
+    const huella3d = codigoPlan?.startsWith('COMPETS') && codigoPlan !== 'COMPETS_SIN_REC'
     return {
       emoji:        petEmoji(m?.especies?.nombre),
       nombre:       m?.nombre || '—',
@@ -130,7 +134,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
       hora:         item.checklist?.fecha_hora_acordada || null,
       wa:           cl?.whatsapp,
       contacto:     cl?.whatsapp || rec?.contacto_telefono || porServicio[item.servicio_id]?.cliente_whatsapp || null,
-      observaciones: item.servicios?.notas || rec?.notas || null,
+      observaciones: huella3d ? 'TOMAR HUELLA 3D' : null,
     }
   }
 

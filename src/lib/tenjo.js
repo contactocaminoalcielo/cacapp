@@ -484,13 +484,13 @@ export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
     const datos = []
     if (m.cliente) datos.push(`Cliente: ${m.cliente}`)
     if (m.peso)    datos.push(`${m.peso} kg`)
-    if (m.presencial) datos.push(m.hora ? `🕐 Presencial ${m.hora}` : `🕐 Presencial`)
+    if (m.presencial) datos.push(`🕐 Presencial`)
     const proceso = [m.plan, m.tipoProceso].filter(Boolean).join(' · ')
     return `${m.emoji || '🐾'} *${m.nombre}*${m.especie ? ` (${m.especie})` : ''}`
       + (proceso ? `\n   ${proceso}` : '')
       + (datos.length ? `\n   ${datos.join(' · ')}` : '')
       + (m.contacto ? `\n   📞 Contacto: ${m.contacto}` : '')
-      + (m.observaciones ? `\n   📝 Obs: ${m.observaciones}` : '')
+      + `\n   📝 Obs: ${m.observaciones || ''}`
   })
   return `🐾 *Procesos individuales — ${fechaLarga || 'próxima jornada'}*\n`
     + `${mascotas.length} mascotica${mascotas.length !== 1 ? 's' : ''} a proceso:\n\n`
