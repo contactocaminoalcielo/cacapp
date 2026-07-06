@@ -6,6 +6,7 @@ import { Modal } from '@/components/ui/dialog'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
+import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { petEmoji, parsearErrorDB } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck } from 'lucide-react'
@@ -509,6 +510,95 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
   )
 }
 
+// ── VISTA TABLA ───────────────────────────────────────────────────────────────
+function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, onClickItem }) {
+  const filtrados = recordatorios.filter(r => {
+    if (r.estado === 'NA') return false
+    if (filtroPersona && r.asignado_a !== filtroPersona) return false
+    if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
+    if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
+    if (filtroEstado === 'en_proceso') return r.estado === 'EN_PROCESO'
+    if (filtroEstado === 'listos')     return r.estado === 'LISTO'
+    return true
+  })
+
+  const sorted = [...filtrados].sort((a, b) =>
+    (a.servicios?.mascotas?.nombre || '').localeCompare(b.servicios?.mascotas?.nombre || '', 'es') ||
+    (a.recordatorios?.nombre || '').localeCompare(b.recordatorios?.nombre || '', 'es')
+  )
+
+  return (
+    <div className="bg-surface border rounded-2xl shadow-sm overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+      <TableWrap>
+        <Table>
+          <thead>
+            <tr>
+              <Th>Mascota</Th>
+              <Th>Plan</Th>
+              <Th>Recordatorio</Th>
+              <Th>Estado</Th>
+              <Th>Asignado</Th>
+              <Th>Máquina</Th>
+              <Th>Fotos</Th>
+              <Th>Notas</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr>
+                <Td colSpan={8} className="text-center py-12 text-ink3">Sin ítems para este filtro</Td>
+              </tr>
+            )}
+            {sorted.map(r => {
+              const rec      = r.recordatorios
+              const mascota  = r.servicios?.mascotas
+              const col      = ESTADO_COLOR[r.estado] || ESTADO_COLOR.PENDIENTE
+              const asig     = personal.find(p => p.id === r.asignado_a)
+              const maq      = maquinas.find(m => m.id === r.maquina_id) || maquinas.find(m => m.id === rec?.maquina_id)
+              const fotosOk  = !!r.servicios?.fecha_imagenes_recibidas
+              const soloN    = rec?.solo_nombre
+              const reqImg   = rec?.requiere_imagen && !soloN
+              const bloqueado = reqImg && !fotosOk && r.estado === 'PENDIENTE'
+              return (
+                <Tr key={r.id} onClick={() => onClickItem(r)}>
+                  <Td className="font-semibold whitespace-nowrap">
+                    {petEmoji(mascota?.especies?.nombre)} {mascota?.nombre || 'Sin nombre'}
+                  </Td>
+                  <Td className="whitespace-nowrap">{r.servicios?.planes?.nombre || '—'}</Td>
+                  <Td className="whitespace-nowrap font-semibold">{rec?.nombre || 'Ítem'}</Td>
+                  <Td>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                      style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}` }}>
+                      {ESTADO_LABEL[r.estado]}
+                    </span>
+                  </Td>
+                  <Td className="whitespace-nowrap">{asig ? `${asig.nombre} ${asig.apellido || ''}`.trim() : '—'}</Td>
+                  <Td className="whitespace-nowrap">{maq?.nombre || '—'}</Td>
+                  <Td className="whitespace-nowrap">
+                    {!reqImg
+                      ? <span className="text-[11px] text-ink3">No requiere</span>
+                      : bloqueado
+                        ? <span className="inline-flex items-center gap-1 text-[11px] font-bold" style={{ color: '#92400E' }}><Lock size={10} /> Bloqueado</span>
+                        : fotosOk
+                          ? <span className="inline-flex items-center gap-1 text-[11px] font-bold" style={{ color: '#065F46' }}><CheckCircle2 size={10} /> OK</span>
+                          : <span className="inline-flex items-center gap-1 text-[11px] font-bold" style={{ color: '#713F12' }}><Clock size={10} /> Sin fotos</span>}
+                  </Td>
+                  <Td className="max-w-[16rem] truncate text-ink3" title={r.notas || ''}>{r.notas || ''}</Td>
+                </Tr>
+              )
+            })}
+          </tbody>
+        </Table>
+      </TableWrap>
+      {sorted.length > 0 && (
+        <div className="px-4 py-2.5 text-[11px] font-semibold text-ink3 border-t" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          {sorted.length} ítem{sorted.length !== 1 ? 's' : ''} · {new Set(sorted.map(r => r.servicio_id)).size} mascota{new Set(sorted.map(r => r.servicio_id)).size !== 1 ? 's' : ''}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── MÓDULO PRINCIPAL ──────────────────────────────────────────────────────────
 export default function Produccion() {
   const { alert: showAlert } = useConfirm()
@@ -627,9 +717,11 @@ export default function Produccion() {
 
   const VISTAS = [
     { key: 'servicio', label: 'Por servicio' },
+    { key: 'tabla',    label: 'Tabla'        },
     { key: 'maquina',  label: 'Por máquina'  },
     { key: 'persona',  label: 'Por persona'  },
   ]
+  const vistaConFiltros = vista === 'servicio' || vista === 'tabla'
 
   // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
   const recOpciones = [...new Map(
@@ -689,8 +781,8 @@ export default function Produccion() {
             ))}
           </div>
 
-          {/* Filtros solo en vista servicio */}
-          {vista === 'servicio' && (
+          {/* Filtros en vistas por servicio y tabla */}
+          {vistaConFiltros && (
             <>
               <Select value={filtroPersona} onChange={e => setFiltroPersona(e.target.value)} className="w-44">
                 <option value="">Todos los operarios</option>
@@ -725,7 +817,7 @@ export default function Produccion() {
         </div>
 
         {/* Resumen del recordatorio filtrado (¿cuántos altares faltan y de qué mascotas?) */}
-        {vista === 'servicio' && recSelResumen && (
+        {vistaConFiltros && recSelResumen && (
           <div className="flex flex-wrap items-center gap-2 mb-4 px-4 py-2.5 rounded-xl border text-[12px]"
             style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
             <Package size={13} style={{ color: '#1A5CD8' }} />
@@ -746,6 +838,13 @@ export default function Produccion() {
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
+          />
+        )}
+        {vista === 'tabla' && (
+          <VistaTabla
+            recordatorios={recordatorios} personal={personal} maquinas={maquinas}
+            filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
+            onClickItem={setModalItem}
           />
         )}
         {vista === 'maquina' && (

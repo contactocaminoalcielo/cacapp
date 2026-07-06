@@ -303,6 +303,7 @@ export default function Kanban() {
   const [filtroPlanes, setFiltroPlanes]   = useState([])   // multi-selección; vacío = todos
   const [fechaDesde, setFechaDesde]       = useState('')   // rango por fecha_ingreso (YYYY-MM-DD)
   const [fechaHasta, setFechaHasta]       = useState('')
+  const [filtroRec, setFiltroRec]         = useState('')   // id de recordatorio (solo tablero producción)
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
   const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
@@ -827,15 +828,16 @@ export default function Kanban() {
         // consulta falla en silencio (se pierden teléfonos alternos, badge de
         // adicional y peso). Se trocea en lotes de 80 ids (~3K chars por URL).
         const lotes = Array.from({ length: Math.ceil(ids.length / 80) }, (_, i) => ids.slice(i * 80, i * 80 + 80))
-        const [telsParts, adicParts] = await Promise.all([
+        const [telsParts, itemsParts] = await Promise.all([
           Promise.all(lotes.map(l => db.from('servicios')
             .select('id, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .in('id', l))),
           Promise.all(lotes.map(l => db.from('servicio_recordatorios')
-            .select('servicio_id').eq('origen', 'ADICIONAL').in('servicio_id', l))),
+            .select('servicio_id, recordatorio_id, estado, origen')
+            .neq('origen', 'REMOVIDO').in('servicio_id', l))),
         ])
-        const tels = telsParts.flatMap(r => r.data || [])
-        const adic = adicParts.flatMap(r => r.data || [])
+        const tels  = telsParts.flatMap(r => r.data || [])
+        const items = itemsParts.flatMap(r => r.data || [])
         const mapa = {}
         const pesos = {}
         ;(tels || []).forEach(t => {
@@ -843,7 +845,14 @@ export default function Kanban() {
           if (c) mapa[t.id] = c
           pesos[t.id] = t.mascotas?.peso_kg ?? null
         })
-        const conAdicional = new Set((adic || []).map(a => a.servicio_id))
+        const conAdicional = new Set(items.filter(i => i.origen === 'ADICIONAL').map(i => i.servicio_id))
+        // Ítems de recordatorio por servicio (sin NA) — alimenta el filtro por recordatorio
+        const itemsPorSvc = {}
+        items.forEach(i => {
+          if (i.estado === 'NA') return
+          if (!itemsPorSvc[i.servicio_id]) itemsPorSvc[i.servicio_id] = []
+          itemsPorSvc[i.servicio_id].push(i)
+        })
         rows = rows.map(s => {
           const c = mapa[s.servicio_id]
           const base = c ? {
@@ -852,7 +861,12 @@ export default function Kanban() {
             cliente_telefono:  c.telefono  || null,
             cliente_telefono2: c.telefono2 || null,
           } : s
-          return { ...base, mascota_peso_kg: pesos[s.servicio_id] ?? null, tiene_adicional: conAdicional.has(s.servicio_id) }
+          return {
+            ...base,
+            mascota_peso_kg: pesos[s.servicio_id] ?? null,
+            tiene_adicional: conAdicional.has(s.servicio_id),
+            items_rec:       itemsPorSvc[s.servicio_id] || [],
+          }
         })
       }
 
@@ -1462,6 +1476,10 @@ export default function Kanban() {
   // ── Computed ──────────────────────────────────────────────────────────────
   const planesUnicos = [...new Set(servicios.map(s => s.plan).filter(Boolean))].sort()
 
+  // Recordatorios presentes en los servicios cargados (nombres desde recListOpts)
+  const recIdsEnTablero = new Set(servicios.flatMap(s => (s.items_rec || []).map(i => String(i.recordatorio_id))))
+  const recOpcionesKanban = recListOpts.filter(r => recIdsEnTablero.has(String(r.id)))
+
   // ── Valores derivados del modal de solicitud (evita IIFE en JSX) ─────────
   const SOL_LABL = 'block text-[11px] font-bold text-gray-500 mb-1'
   const SOL_INP  = 'w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10 transition-all bg-white'
@@ -1477,6 +1495,9 @@ export default function Kanban() {
     if (fechaHasta && (!s.fecha_ingreso || s.fecha_ingreso > fechaHasta)) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
     if (filtroPlanes.length && !filtroPlanes.includes(s.plan)) return false
+    // Filtro por recordatorio: solo aplica en el tablero de producción
+    if (esVistaProd && filtroRec &&
+        !(s.items_rec || []).some(i => String(i.recordatorio_id) === String(filtroRec))) return false
     if (busqueda.trim()) {
       const q = busqueda.trim().toLowerCase()
       const qDigits = q.replace(/\D/g, '')
@@ -1719,6 +1740,14 @@ export default function Kanban() {
               </button>
             )}
           </div>
+
+          {/* Filtro por recordatorio (solo tablero producción) */}
+          {esVistaProd && recOpcionesKanban.length > 0 && (
+            <Select value={filtroRec} onChange={e => setFiltroRec(e.target.value)} className="h-9 text-[12px] w-48">
+              <option value="">Todos los recordatorios</option>
+              {recOpcionesKanban.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+            </Select>
+          )}
 
           {vista === 'tabla' && (
             <div className="flex flex-wrap gap-0.5 bg-gray-100 rounded-lg p-0.5">
