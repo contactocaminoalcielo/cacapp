@@ -2711,6 +2711,20 @@ function BitacoraTab({ tecnico }) {
                     </tr>
                   ))}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2" style={{ borderColor: '#E5E7EB', background: '#F9FAFB' }}>
+                    <td colSpan={4} className="px-2.5 py-2.5 text-[11px] font-bold text-gray-700 uppercase whitespace-nowrap">
+                      Total · {todas.length} servicio{todas.length !== 1 ? 's' : ''}
+                    </td>
+                    <td className="px-2.5 py-2.5 text-[13px] font-extrabold tabular-nums text-gray-900 whitespace-nowrap">{fmt(totMes.cobrado)}</td>
+                    <td className="px-2.5 py-2.5 text-[10px] text-gray-500 whitespace-nowrap">
+                      Efectivo {fmt(totMes.efectivo)}<br />Digital {fmt(totMes.cobrado - totMes.efectivo)}
+                    </td>
+                    <td className="px-2.5 py-2.5 text-[13px] font-extrabold tabular-nums text-[#16a34a] whitespace-nowrap">
+                      {totMes.ganado > 0 ? `+${fmt(totMes.ganado)}` : '—'}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
