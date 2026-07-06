@@ -8,7 +8,7 @@ import {
   Truck, Package, RefreshCw, CreditCard, Camera, Check,
   AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
   FileText, ChevronDown, ChevronUp, History, Download, Pen,
-  Plus, Trash2, Upload as UploadIcon, Receipt, Wallet,
+  Plus, Trash2, Upload as UploadIcon, Receipt, Wallet, Search,
 } from 'lucide-react'
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
@@ -3108,6 +3108,7 @@ function ComprobanteTab({ tecnico, onCount }) {
   const [items, setItems]       = useState([])
   const [cargando, setCargando] = useState(true)
   const [listErr, setListErr]   = useState('')
+  const [busqueda, setBusqueda] = useState('')
 
   const cargar = useCallback(async () => {
     if (!tecnico?.id) return
@@ -3226,8 +3227,29 @@ function ComprobanteTab({ tecnico, onCount }) {
     await cargar()
   }
 
-  const pendientes = items.filter(i => i.estado === 'PENDIENTE')
-  const subidos    = items.filter(i => i.estado === 'SUBIDO')
+  const normalizarBusqueda = v => String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  const termino = normalizarBusqueda(busqueda.trim())
+  const itemsFiltrados = termino
+    ? items.filter(item => {
+        const mascota = item.mascota || {}
+        const cliente = mascota.clientes || {}
+        const texto = [
+          mascota.nombre,
+          cliente.nombre,
+          cliente.apellido,
+          item.numero,
+          item.plan,
+          ...(item.metodos || []),
+        ].join(' ')
+        return normalizarBusqueda(texto).includes(termino)
+      })
+    : items
+  const hayBusqueda = termino.length > 0
+  const pendientes = itemsFiltrados.filter(i => i.estado === 'PENDIENTE')
+  const subidos    = itemsFiltrados.filter(i => i.estado === 'SUBIDO')
 
   return (
     <div>
@@ -3254,6 +3276,29 @@ function ComprobanteTab({ tecnico, onCount }) {
         </div>
       )}
 
+      {items.length > 0 && (
+        <div className="relative mb-3">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-orange-400 pointer-events-none" />
+          <input
+            type="search"
+            value={busqueda}
+            onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar mascota, cliente o recibo"
+            aria-label="Buscar mascota en comprobantes"
+            className="w-full h-11 rounded-xl border bg-white pl-9 pr-10 text-[16px] sm:text-[13px] font-semibold text-gray-800 outline-none focus:ring-2 focus:ring-orange-200 placeholder:text-gray-400"
+            style={{ borderColor: '#FED7AA', boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}
+          />
+          {busqueda && (
+            <button type="button" onClick={() => setBusqueda('')}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 active:scale-95"
+              style={{ background: '#F3F4F6' }}>
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
+
       {cargando && items.length === 0 ? (
         <div className="flex justify-center py-10"><div className="spinner" /></div>
       ) : items.length === 0 ? (
@@ -3261,65 +3306,81 @@ function ComprobanteTab({ tecnico, onCount }) {
           sub="Cuando registres un pago por transferencia, Nequi, Daviplata o tarjeta, aparecerá aquí para subir el comprobante." />
       ) : (
         <>
-          {pendientes.length === 0 && (
-            <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-3" style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
-              <CheckCircle size={15} style={{ color: '#16A34A' }} />
-              <span className="text-[12px] font-bold text-green-800">Al día — todos los comprobantes subidos</span>
+          {itemsFiltrados.length === 0 ? (
+            <div className="rounded-2xl border border-dashed px-4 py-8 text-center" style={{ borderColor: '#FED7AA', background: '#FFFBF7' }}>
+              <Search size={22} className="mx-auto mb-2 text-orange-300" />
+              <div className="text-[13px] font-bold text-gray-800">Sin resultados</div>
+              <div className="text-[11px] text-gray-500 mt-1">Prueba con nombre de mascota, cliente o recibo.</div>
             </div>
-          )}
-
-          {pendientes.map(item => (
-            <div key={item.reciboId} className="bg-white rounded-2xl p-4 border mb-2 shadow-sm" style={{ borderColor: '#FED7AA' }}>
-              <div className="flex items-center gap-3">
-                <span style={{ fontSize: 26 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-gray-900 leading-tight">{item.mascota?.nombre || '—'}</div>
-                  <div className="text-[11px] text-gray-500 truncate">
-                    {item.plan ? `${item.plan} · ` : ''}{item.mascota?.clientes?.nombre} {item.mascota?.clientes?.apellido}
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FFEDD5', color: '#9A3412' }}>
-                      {item.metodos.join(', ')} · {fmt(item.monto)}
-                    </span>
-                    <span className="text-[10px] text-gray-400">No. {item.numero}</span>
-                  </div>
+          ) : (
+            <>
+              {pendientes.length === 0 && (
+                <div className="flex items-center gap-2 px-4 py-3 rounded-2xl mb-3" style={{ background: '#D1FAE5', border: '1.5px solid #86EFAC' }}>
+                  <CheckCircle size={15} style={{ color: '#16A34A' }} />
+                  <span className="text-[12px] font-bold text-green-800">Al día - todos los comprobantes subidos</span>
                 </div>
-              </div>
-              <ComprobanteUploader
-                servicioId={item.svcId}
-                stashId={item.reciboId}
-                onSubido={(url, path, val) => persistir(item, url, path, val)}
-              />
-            </div>
-          ))}
+              )}
 
-          {subidos.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
-              {subidos.map(item => (
-                <div key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
-                  className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
+              {hayBusqueda && (
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
+                  {itemsFiltrados.length} resultado{itemsFiltrados.length !== 1 ? 's' : ''}
+                </div>
+              )}
+
+              {pendientes.map(item => (
+                <div key={item.reciboId} className="bg-white rounded-2xl p-4 border mb-2 shadow-sm" style={{ borderColor: '#FED7AA' }}>
                   <div className="flex items-center gap-3">
-                    <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                    <span style={{ fontSize: 26 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '-'}</div>
-                      <div className="text-[10px] text-gray-400">No. {item.numero}</div>
-                      <div className="text-[10px] text-gray-500 truncate">{item.metodos.join(', ')} - {fmt(item.monto)}</div>
+                      <div className="font-bold text-gray-900 leading-tight">{item.mascota?.nombre || '-'}</div>
+                      <div className="text-[11px] text-gray-500 truncate">
+                        {item.plan ? `${item.plan} - ` : ''}{item.mascota?.clientes?.nombre} {item.mascota?.clientes?.apellido}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FFEDD5', color: '#9A3412' }}>
+                          {item.metodos.join(', ')} - {fmt(item.monto)}
+                        </span>
+                        <span className="text-[10px] text-gray-400">No. {item.numero}</span>
+                      </div>
                     </div>
-                    <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
-                      <Check size={12} /> Subido
-                    </span>
                   </div>
                   <ComprobanteUploader
                     servicioId={item.svcId}
-                    stashId={`${item.reciboId}_reemplazo`}
-                    actualUrl={item.yaUrl}
-                    reemplazo
-                    onSubido={(url, path, val) => persistir(item, url, path, val, { reemplazar: true })}
+                    stashId={item.reciboId}
+                    onSubido={(url, path, val) => persistir(item, url, path, val)}
                   />
                 </div>
               ))}
-            </div>
+
+              {subidos.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
+                  {subidos.map(item => (
+                    <div key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
+                      className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '-'}</div>
+                          <div className="text-[10px] text-gray-400">No. {item.numero}</div>
+                          <div className="text-[10px] text-gray-500 truncate">{item.metodos.join(', ')} - {fmt(item.monto)}</div>
+                        </div>
+                        <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
+                          <Check size={12} /> Subido
+                        </span>
+                      </div>
+                      <ComprobanteUploader
+                        servicioId={item.svcId}
+                        stashId={`${item.reciboId}_reemplazo`}
+                        actualUrl={item.yaUrl}
+                        reemplazo
+                        onSubido={(url, path, val) => persistir(item, url, path, val, { reemplazar: true })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </>
       )}
