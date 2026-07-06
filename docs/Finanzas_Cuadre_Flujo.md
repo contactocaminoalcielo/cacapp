@@ -1,7 +1,7 @@
 # Finanzas · Cuadre con técnicos — Flujo del proceso
 
 > Referencia del módulo **Finanzas › Cuadre** (`src/pages/Finanzas.jsx`).
-> Última actualización: 2026-07-01.
+> Última actualización: 2026-07-06.
 
 El cuadre sirve para **quedar a saldo con el técnico**: cuánto efectivo recogió,
 cuánto se le reconoce (transporte, recargos, pagos) y cuánto entrega a gerencia.
@@ -53,6 +53,8 @@ flowchart TD
     N --> P
     O --> P[Cuadre CERRADO congelado]
     P --> Q[Dinero a entregar =<br/>efectivo − reconocido − ajuste]
+    Q --> R([Técnico entrega el efectivo<br/>→ 'Confirmar dinero recibido'])
+    R --> S[Registro: quién recibió,<br/>cuándo, monto, notas]
 ```
 
 ### Versión ASCII
@@ -107,6 +109,9 @@ GENERAR CUADRE (técnico + rango)
            ▼
    Dinero a entregar = efectivo − reconocido − ajuste
    (reconocido = transporte + recargos + pago servicio + cancelados)
+           ▼
+   Técnico entrega el efectivo → "Confirmar dinero recibido"
+   (queda: quién recibió, cuándo, monto, notas — una sola vez)
 ```
 
 ---
@@ -178,6 +183,30 @@ El modal del cuadre busca el comprobante por **`servicio_id`** (no por `recibo_i
 porque un servicio puede tener varios recibos y el comprobante suele quedar bajo otro recibo.
 Así aparecen todos los que subió el técnico.
 
+### H. Confirmación de entrega del dinero (migración 029)
+Cerrar el cuadre y **recibir el efectivo** son dos momentos distintos. Cuando el
+técnico entrega la plata, gerencia pulsa **"Confirmar dinero recibido"** en el
+cuadre cerrado (tarjeta azul): queda registrado **quién recibió, cuándo, el monto
+y notas** (`cuadres_tecnico.entrega_*`, RPC `confirmar_entrega_cuadre`). Es de
+una sola vez y solo aplica a cuadres CERRADOS. Si el monto difiere del cuadre,
+la nota es obligatoria. El historial marca los cerrados **"Pendiente de entrega"**
+hasta que se confirme.
+
+### I. Historial de cuadres
+Cuando no hay un cuadre cargado, la pestaña muestra **"Cuadres anteriores"**
+(últimos 30, borradores y cerrados). Desde ahí se **abre** cualquier cuadre:
+un CERRADO queda de solo lectura (sirve para re-descargar el PDF, ver firma y
+entrega) y un BORRADOR se puede seguir editando/regenerando.
+
+### J. Ayudas para gerencia
+- **Rango sugerido**: al elegir técnico se precarga *desde = día siguiente al
+  último cuadre CERRADO de ese técnico* y *hasta = hoy* (editable).
+- **Aviso de saldo a favor**: si el técnico quedó con saldo a favor en cuadres
+  cerrados anteriores, un banner ámbar lo muestra al generar. **No se arrastra
+  automático** (decisión 2026-07-06): se compensa a mano con el Ajuste manual (+).
+- **Guía en la UI**: botón *"¿Cómo funciona?"* con el flujo en 4 pasos
+  (`GuiaCuadreModal` — mantener sincronizado con este documento).
+
 ---
 
 ## 3. Notas técnicas
@@ -191,6 +220,10 @@ Así aparecen todos los que subió el técnico.
   (`DISTINCT ON`). Las marcas manuales del borrador (lejanía, obs, estado,
   conciliación) se preservan por **servicio** al regenerar.
 - El cierre (`cerrar_cuadre` RPC) **no** valida estados: el freno es solo el aviso en la UI.
+- **Entrega del dinero** (migración `029_cuadre_entrega_dinero.sql`): columnas
+  `entrega_confirmada_en/por`, `entrega_monto`, `entrega_notas` en `cuadres_tecnico`
+  + RPC `confirmar_entrega_cuadre` (solo CERRADO, una sola vez).
 - Helpers relevantes en `Finanzas.jsx`: `diferenciaItem`, `valorARecoger`, `esFactMensual`,
-  `estadoSugerido`, `faltaPlata`, `tecnicoDebe`, `enConciliacion`, `cerrarCuadre`.
+  `estadoSugerido`, `faltaPlata`, `tecnicoDebe`, `enConciliacion`, `cerrarCuadre`,
+  `abrirCuadre`, `cargarHistorial`, `confirmarEntrega`, `seleccionarTecnico`.
 ```

@@ -1,15 +1,16 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
-import { fmt, parsearErrorDB } from '@/lib/utils'
+import { fmt, parsearErrorDB, parseDate } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
+  HelpCircle,
 } from 'lucide-react'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -97,6 +98,12 @@ export default function Finanzas() {
   const [detalleItem,     setDetalleItem]     = useState(null)   // cuadre_item → tarjeta de mascota
   const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
   const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
+  const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
+  const [histLoading,     setHistLoading]     = useState(false)
+  const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
+  const [entregaModal,    setEntregaModal]    = useState(false)  // modal "confirmar dinero recibido"
+  const [entregaPorNombre, setEntregaPorNombre] = useState(null) // nombre de quien recibió el dinero
+  const [guiaOpen,        setGuiaOpen]        = useState(false)  // modal "¿cómo funciona?"
 
   // ── State Conciliaciones (mascotas con plata faltante) ──────────────────────
   const [conciliaciones, setConciliaciones] = useState(null)  // null = aún no cargado
@@ -268,7 +275,135 @@ export default function Finanzas() {
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
-    return t ? `${t.nombre} ${t.apellido || ''}`.trim() : '—'
+    if (t) return `${t.nombre} ${t.apellido || ''}`.trim()
+    // Técnico inactivo (no está en el selector): usar el join del cuadre abierto
+    // desde el historial, para que cabecera y PDF no salgan sin nombre.
+    const p = cuadreData?.tecnico_id === id ? cuadreData?.personal : null
+    return p ? `${p.nombre} ${p.apellido || ''}`.trim() : '—'
+  }
+
+  // ── Historial de cuadres (borradores + cerrados) ────────────────────────────
+  async function cargarHistorial() {
+    setHistLoading(true)
+    try {
+      const { data } = await db
+        .from('cuadres_tecnico')
+        .select('*, personal:tecnico_id ( nombre, apellido )')
+        .order('created_at', { ascending: false })
+        .limit(30)
+      setHistorialCuadres(data || [])
+    } catch (err) {
+      console.error('[Finanzas] Error cargando historial de cuadres:', err)
+      setHistorialCuadres([])
+    } finally {
+      setHistLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'tecnicos' && historialCuadres === null && !histLoading) cargarHistorial()
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Abre un cuadre del historial en la vista normal: carga cabecera + items en
+  // los mismos estados que generarCuadre, así el PDF, el read-only de CERRADO y
+  // el "Actualizar cuadre" de BORRADOR funcionan sin código aparte.
+  async function abrirCuadre(hdr) {
+    setCuadreLoading(true); setCuadreError('')
+    try {
+      const { data: items, error } = await db
+        .from('cuadre_items').select('*').eq('cuadre_id', hdr.id).order('fecha').order('hora')
+      if (error) throw error
+      setCuadreTec(hdr.tecnico_id)
+      setCuadreDesde(hdr.fecha_desde)
+      setCuadreHasta(hdr.fecha_hasta)
+      setCuadreAjustes(Number(hdr.ajustes_manuales) ? String(hdr.ajustes_manuales) : '')
+      setCuadreAjusteMot(hdr.ajustes_motivo || '')
+      setCuadreData(hdr); setCuadreItems(items || [])
+      cargarSaldosAFavor(hdr)
+      cargarEntregaNombre(hdr)
+    } catch (err) {
+      setCuadreError(parsearErrorDB(err))
+    } finally {
+      setCuadreLoading(false)
+    }
+  }
+
+  // ── Aviso de saldo a favor (solo informativo, decisión David 2026-07-06) ────
+  // Cuadres CERRADOS anteriores del técnico que quedaron con la empresa
+  // debiéndole. No se arrastra automático: gerencia decide si compensarlo con
+  // el Ajuste manual (+).
+  async function cargarSaldosAFavor(hdr) {
+    try {
+      const { data } = await db
+        .from('cuadres_tecnico')
+        .select('id, fecha_desde, fecha_hasta, saldo_a_favor_tecnico')
+        .eq('tecnico_id', hdr.tecnico_id)
+        .eq('estado', 'CERRADO')
+        .gt('saldo_a_favor_tecnico', 0)
+        .neq('id', hdr.id)
+        .order('fecha_hasta', { ascending: false })
+      setSaldosAFavor(data || [])
+    } catch {
+      setSaldosAFavor([])
+    }
+  }
+
+  // ── Confirmación de entrega del dinero (cuadres CERRADOS) ───────────────────
+  async function cargarEntregaNombre(hdr) {
+    if (!hdr.entrega_confirmada_por) { setEntregaPorNombre(null); return }
+    const { data } = await db.from('personal').select('nombre, apellido')
+      .eq('id', hdr.entrega_confirmada_por).single()
+    setEntregaPorNombre(data ? `${data.nombre} ${data.apellido || ''}`.trim() : null)
+  }
+
+  async function confirmarEntrega(monto, notas) {
+    try {
+      const { error } = await db.rpc('confirmar_entrega_cuadre', {
+        p_cuadre_id: cuadreData.id,
+        p_actor_id:  personalData?.id || null,
+        p_monto:     monto,
+        p_notas:     notas || null,
+      })
+      if (error) throw error
+      const patch = {
+        entrega_confirmada_en:  new Date().toISOString(),
+        entrega_confirmada_por: personalData?.id || null,
+        entrega_monto:          monto,
+        entrega_notas:          notas || null,
+      }
+      setCuadreData(prev => prev ? { ...prev, ...patch } : prev)
+      setEntregaPorNombre(personalData ? `${personalData.nombre || ''} ${personalData.apellido || ''}`.trim() : null)
+      setHistorialCuadres(prev => prev ? prev.map(c => c.id === cuadreData.id ? { ...c, ...patch } : c) : prev)
+      setEntregaModal(false)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al confirmar la entrega' })
+    }
+  }
+
+  // ── Rango sugerido al elegir técnico ────────────────────────────────────────
+  // desde = día siguiente al último cuadre CERRADO del técnico, hasta = hoy.
+  // Fechas DATE con componentes locales (nunca toISOString: corre un día en UTC-5).
+  const fmtISOLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const tecSelRef = useRef('')   // último técnico elegido (evita que una respuesta vieja pise las fechas)
+
+  async function seleccionarTecnico(id) {
+    setCuadreTec(id)
+    tecSelRef.current = id
+    if (!id || cuadreData) return
+    const hoy = fmtISOLocal(new Date())
+    setCuadreHasta(hoy)
+    const { data } = await db
+      .from('cuadres_tecnico')
+      .select('fecha_hasta').eq('tecnico_id', id).eq('estado', 'CERRADO')
+      .order('fecha_hasta', { ascending: false }).limit(1)
+    if (tecSelRef.current !== id) return   // el usuario ya cambió de técnico
+    const ult = data?.[0]?.fecha_hasta
+    if (ult) {
+      const d = parseDate(ult)
+      d.setDate(d.getDate() + 1)
+      const desde = fmtISOLocal(d)
+      setCuadreDesde(desde <= hoy ? desde : hoy)
+    }
   }
 
   async function generarCuadre() {
@@ -297,6 +432,8 @@ export default function Finanzas() {
         db.from('cuadre_items').select('*').eq('cuadre_id', cid).order('fecha').order('hora'),
       ])
       setCuadreData(hdr); setCuadreItems(items || [])
+      setEntregaPorNombre(null)
+      cargarSaldosAFavor(hdr)
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
     } finally {
@@ -351,6 +488,8 @@ export default function Finanzas() {
   function limpiarCuadre() {
     setCuadreData(null); setCuadreItems([]); setCuadreError('')
     setCuadreAjustes(''); setCuadreAjusteMot('')
+    setSaldosAFavor([]); setEntregaPorNombre(null)
+    cargarHistorial()   // refleja el cuadre recién generado/cerrado en la lista
   }
 
   // Marca/desmarca lejanía manual en una fila del cuadre (solo BORRADOR).
@@ -1423,18 +1562,25 @@ export default function Finanzas() {
               {/* ── Tab: Cuadre técnicos ─────────────────────────────── */}
               {tab === 'tecnicos' && (
                 <div className="p-5 space-y-5">
-                  <p className="text-[12px] text-gray-500">
-                    Cuadre de cuentas por técnico y rango de fechas. Solo el <strong>efectivo</strong> cuenta como
-                    recibido por el técnico (lo digital entra directo a la empresa). El dinero a entregar a gerencia
-                    es: efectivo − reconocimientos (transporte + recargos) − ajustes.
-                  </p>
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <p className="text-[12px] text-gray-500 max-w-2xl">
+                      Cuadre de cuentas por técnico y rango de fechas. Solo el <strong>efectivo</strong> cuenta como
+                      recibido por el técnico (lo digital entra directo a la empresa). El dinero a entregar a gerencia
+                      es: efectivo − reconocimientos (transporte + recargos) − ajustes.
+                    </p>
+                    <button onClick={() => setGuiaOpen(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors whitespace-nowrap"
+                      style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                      <HelpCircle size={13} /> ¿Cómo funciona?
+                    </button>
+                  </div>
 
                   {/* Formulario */}
                   <div className="bg-white border rounded-2xl p-4" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <div>
                         <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-1">Técnico</label>
-                        <select value={cuadreTec} onChange={e => setCuadreTec(e.target.value)} disabled={cuadreCerrado}
+                        <select value={cuadreTec} onChange={e => seleccionarTecnico(e.target.value)} disabled={cuadreCerrado}
                           className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] disabled:bg-gray-50"
                           style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
                           <option value="">Selecciona…</option>
@@ -1485,6 +1631,72 @@ export default function Finanzas() {
                     )}
                   </div>
 
+                  {/* ── Historial: cuadres anteriores (borradores + cerrados) ── */}
+                  {!cuadreData && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Cuadres anteriores</p>
+                        <button onClick={cargarHistorial} disabled={histLoading}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors disabled:opacity-60">
+                          <RefreshCw size={11} className={histLoading ? 'animate-spin' : ''} /> Actualizar
+                        </button>
+                      </div>
+                      {historialCuadres === null || histLoading ? (
+                        <div className="py-10 text-center text-gray-400 text-[13px]">Cargando cuadres…</div>
+                      ) : historialCuadres.length === 0 ? (
+                        <div className="py-10 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <div className="text-3xl mb-2">🧾</div>
+                          <p className="text-[13px] text-gray-500">Todavía no hay cuadres. Genera el primero arriba.</p>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <table className="w-full min-w-[860px]">
+                            <thead style={{ background: '#FAFAFA' }}>
+                              <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
+                                {['Técnico', 'Rango', 'Estado', 'Servicios', 'A entregar', 'Entrega del dinero', ''].map(h => (
+                                  <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {historialCuadres.map(c => {
+                                const cerrado = c.estado === 'CERRADO'
+                                return (
+                                  <tr key={c.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                                    <td className="px-3 py-2.5 font-semibold text-gray-900">
+                                      {c.personal ? `${c.personal.nombre} ${c.personal.apellido || ''}`.trim() : '—'}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{fmtFecha(c.fecha_desde)} → {fmtFecha(c.fecha_hasta)}</td>
+                                    <td className="px-3 py-2.5">
+                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${cerrado ? 'bg-gray-200 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {cerrado ? 'CERRADO' : 'BORRADOR'}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-gray-600">{c.total_servicios}</td>
+                                    <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{fmt(c.dinero_a_entregar)}</td>
+                                    <td className="px-3 py-2.5">
+                                      {!cerrado ? <span className="text-gray-300">—</span>
+                                        : c.entrega_confirmada_en
+                                          ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700 inline-flex items-center gap-1"><Check size={10} /> Recibido {fmt(c.entrega_monto)}</span>
+                                          : <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title="El técnico aún no ha entregado el efectivo (o falta confirmarlo aquí)">Pendiente de entrega</span>}
+                                    </td>
+                                    <td className="px-3 py-2.5">
+                                      <button onClick={() => abrirCuadre(c)} disabled={cuadreLoading}
+                                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60 whitespace-nowrap"
+                                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                                        <Eye size={12} /> Abrir
+                                      </button>
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Resultado */}
                   {cuadreData && (
                     <div className="space-y-4">
@@ -1528,6 +1740,20 @@ export default function Finanzas() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Aviso: saldo a favor del técnico en cuadres cerrados anteriores */}
+                      {!cuadreCerrado && saldosAFavor.length > 0 && (
+                        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-[12px] px-3 py-2.5 rounded-xl">
+                          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                          <div>
+                            <strong>Este técnico quedó con saldo a favor en cuadres anteriores: {fmt(saldosAFavor.reduce((a, c) => a + (Number(c.saldo_a_favor_tecnico) || 0), 0))}.</strong>
+                            <span className="block text-[11px] mt-0.5">
+                              {saldosAFavor.map(c => `${fmtFecha(c.fecha_desde)} → ${fmtFecha(c.fecha_hasta)}: ${fmt(c.saldo_a_favor_tecnico)}`).join(' · ')}.
+                              {' '}Si quieres compensarlo en este cuadre, ponlo en <strong>Ajuste manual (+)</strong> con su motivo y vuelve a generar.
+                            </span>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Tabla detalle */}
                       {cuadreItems.length === 0 ? (
@@ -1717,8 +1943,27 @@ export default function Finanzas() {
                             </div>
                           )}
                           {cuadreCerrado && (
-                            <div className="mt-3 flex items-center gap-1.5 text-[11px] text-white/70">
-                              <Lock size={12} /> Cerrado y firmado {cuadreData.cerrado_en ? `· ${new Date(cuadreData.cerrado_en).toLocaleDateString('es-CO')}` : ''}
+                            <div className="mt-3 space-y-2">
+                              <div className="flex items-center gap-1.5 text-[11px] text-white/70">
+                                <Lock size={12} /> Cerrado y firmado {cuadreData.cerrado_en ? `· ${new Date(cuadreData.cerrado_en).toLocaleDateString('es-CO')}` : ''}
+                              </div>
+                              {cuadreData.entrega_confirmada_en ? (
+                                <div className="px-3 py-2 rounded-xl bg-white/15 border border-white/20">
+                                  <span className="text-[12px] font-bold text-white inline-flex items-center gap-1">
+                                    <CheckCircle2 size={13} /> Dinero recibido · {fmt(cuadreData.entrega_monto)}
+                                  </span>
+                                  <div className="text-[11px] text-white/70 mt-0.5">
+                                    {entregaPorNombre ? `Recibió ${entregaPorNombre} · ` : ''}
+                                    {new Date(cuadreData.entrega_confirmada_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                    {cuadreData.entrega_notas ? ` · ${cuadreData.entrega_notas}` : ''}
+                                  </div>
+                                </div>
+                              ) : (
+                                <button onClick={() => setEntregaModal(true)}
+                                  className="flex items-center gap-1.5 px-3 py-2 bg-white text-[#1A5CD8] hover:bg-white/90 rounded-xl text-[12px] font-bold transition-colors">
+                                  <Banknote size={14} /> Confirmar dinero recibido
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1841,6 +2086,19 @@ export default function Finanzas() {
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
       {comprobanteItem && <ComprobanteModal item={comprobanteItem} onClose={() => setComprobanteItem(null)} />}
+
+      {/* ── Modal confirmar entrega del dinero (cuadre cerrado) ──────────── */}
+      {entregaModal && cuadreData && (
+        <EntregaModal
+          cuadre={cuadreData}
+          tecnicoNombre={nombreTecnicoSel(cuadreData.tecnico_id)}
+          onClose={() => setEntregaModal(false)}
+          onConfirm={confirmarEntrega}
+        />
+      )}
+
+      {/* ── Modal guía del cuadre (¿cómo funciona?) ──────────────────────── */}
+      {guiaOpen && <GuiaCuadreModal onClose={() => setGuiaOpen(false)} />}
 
       {/* ── Modal observaciones por mascota ──────────────────────────────── */}
       {obsItem && (
@@ -2410,6 +2668,120 @@ function ObsModal({ item, cerrado, onClose, onSave }) {
               className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
               {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: confirmar entrega del dinero a gerencia (cuadre CERRADO) ──────────
+// Registra quién recibió el efectivo, cuándo, el monto y notas. Es de una sola
+// vez (la RPC confirmar_entrega_cuadre falla si ya está confirmada).
+function EntregaModal({ cuadre, tecnicoNombre, onClose, onConfirm }) {
+  const [monto, setMonto]   = useState(String(cuadre.dinero_a_entregar ?? ''))
+  const [notas, setNotas]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const montoNum = parseFloat(monto)
+  const esperado = Number(cuadre.dinero_a_entregar) || 0
+  const difiere  = !isNaN(montoNum) && montoNum !== esperado
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <Banknote size={16} className="text-[#16a34a]" />
+            <span className="text-[14px] font-bold text-gray-900">Confirmar dinero recibido</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-[12px] text-gray-500">
+            Registra que <strong>{tecnicoNombre}</strong> entregó el efectivo de este cuadre.
+            Queda guardado quién lo recibió, cuándo y el monto. <strong>No se puede deshacer.</strong>
+          </p>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Monto recibido</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-gray-400 font-semibold select-none">$</span>
+              <input type="number" min={0} step={1000} value={monto} autoFocus
+                onChange={e => setMonto(e.target.value)}
+                className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8]"
+                style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">Según el cuadre: {fmt(esperado)}</p>
+            {difiere && (
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded-lg mt-1">
+                <AlertTriangle size={12} /> El monto no coincide con el cuadre. Explica la diferencia en las notas.
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Notas <span className="font-normal text-gray-400">(opcional)</span></label>
+            <textarea rows={2} value={notas} onChange={e => setNotas(e.target.value)}
+              placeholder="Ej: entregó en la oficina; faltó $10.000 que trae mañana…"
+              className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] resize-none"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} disabled={saving}
+              className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50 disabled:opacity-60" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button disabled={saving || isNaN(montoNum) || montoNum < 0 || (difiere && !notas.trim())}
+              onClick={async () => { setSaving(true); await onConfirm(montoNum, notas.trim()); setSaving(false) }}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#16a34a] hover:bg-[#15803d] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Confirmar recibido
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: guía del cuadre para gerencia (¿cómo funciona?) ───────────────────
+// Resumen operable de docs/Finanzas_Cuadre_Flujo.md — mantener sincronizados.
+function GuiaCuadreModal({ onClose }) {
+  const Paso = ({ n, titulo, children }) => (
+    <div className="flex gap-3">
+      <div className="w-6 h-6 rounded-full bg-[#1A5CD8] text-white text-[12px] font-bold flex items-center justify-center flex-shrink-0">{n}</div>
+      <div className="flex-1">
+        <p className="text-[13px] font-bold text-gray-900">{titulo}</p>
+        <div className="text-[12px] text-gray-600 mt-0.5 space-y-1">{children}</div>
+      </div>
+    </div>
+  )
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl mb-10" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-white rounded-t-2xl z-10" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <HelpCircle size={16} className="text-[#1A5CD8]" />
+            <span className="text-[14px] font-bold text-gray-900">Cómo hacer el cuadre con un técnico</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-5">
+          <Paso n={1} titulo="Generar el cuadre">
+            <p>Elige el técnico (el rango se sugiere solo: desde el día siguiente al último cuadre cerrado, hasta hoy) y pulsa <strong>Generar cuadre</strong>. Entran todos los servicios que el técnico recogió en el rango: con recibo, <strong>SIN RECIBO</strong> (recogió pero no cobró) y cancelados.</p>
+            <p>Mientras esté en <strong>BORRADOR</strong> puedes regenerarlo las veces que quieras (cambiar rango, ajuste, lejanía…); no se pierde nada.</p>
+          </Paso>
+          <Paso n={2} titulo="Revisar fila por fila">
+            <p>· <strong>Diferencia</strong>: compara lo recogido contra el valor del servicio. Si recogió entre el neto (lo que paga el cliente) y el bruto (neto + comisión de la veterinaria) está <strong>cuadrado ($0)</strong> — la comisión descontada no es plata que falte.</p>
+            <p>· Filas <span className="font-bold text-amber-700">ámbar</span> = falta plata. Elige en <strong>Acción</strong>: <strong>Verificado OK</strong> (saldado, no se debe nada) o <strong>Pendiente gestionar</strong> (el cliente/veterinaria debe → pasa a la pestaña <strong>Conciliaciones</strong> para cobrarlo después).</p>
+            <p>· <strong>FACT. MENSUAL</strong>: la veterinaria paga por factura a fin de mes; el técnico no recoge esa plata. <strong>SIN RECIBO</strong>: hay que cobrar ese servicio; va solo a Conciliaciones.</p>
+            <p>· Marca <strong>Lejanía</strong> si la recogida fue lejos (reconocimiento extra al técnico). Solo <strong>efectivo</strong> cuenta como plata en manos del técnico; lo digital ya entró a la empresa.</p>
+          </Paso>
+          <Paso n={3} titulo="Cerrar el cuadre">
+            <p>El botón <strong>Cerrar</strong> congela el cuadre (no se puede editar más). El sistema avisa si falta un comprobante de pago digital o si el técnico debe efectivo sin justificar — puedes cerrar de todas formas, pero revisa primero.</p>
+            <p><strong>Dinero a entregar a gerencia</strong> = efectivo recogido − reconocido al técnico (transporte + recargos + pago por servicio + cancelados) − ajuste manual. Si da negativo, la empresa le queda debiendo al técnico (saldo a favor: se avisa en el siguiente cuadre).</p>
+          </Paso>
+          <Paso n={4} titulo="Confirmar la entrega del dinero">
+            <p>Cuando el técnico entregue el efectivo, pulsa <strong>Confirmar dinero recibido</strong> en el cuadre cerrado. Queda registrado quién recibió, cuándo y el monto. En <strong>Cuadres anteriores</strong> se ve cuáles siguen pendientes de entrega.</p>
+          </Paso>
+          <div className="bg-gray-50 rounded-xl p-3 text-[11px] text-gray-500 border" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+            💡 Un pago pendiente del cliente <strong>no bloquea</strong> el cierre: se marca <em>Pendiente gestionar</em> y el cobro se sigue en <strong>Conciliaciones</strong>, incluso con el cuadre ya cerrado. El PDF del cuadre se puede volver a descargar abriendo el cuadre desde <strong>Cuadres anteriores</strong>.
           </div>
         </div>
       </div>
