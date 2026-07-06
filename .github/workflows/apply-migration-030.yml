@@ -36,3 +36,33 @@ jobs:
             set -e
             cd /opt/supabase/docker
             docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-030/030_cuadre_editar_valor_recogido.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname = 'set_cuadre_item_valor_recogido'
+              ) THEN
+                RAISE EXCEPTION 'La RPC public.set_cuadre_item_valor_recogido no quedo creada';
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'cuadre_items'
+                  AND column_name = 'valor_recogido_original'
+              ) THEN
+                RAISE EXCEPTION 'La columna valor_recogido_original no quedo creada';
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 030 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar el servicio rest; la migracion ya envio NOTIFY pgrst."
