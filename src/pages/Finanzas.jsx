@@ -63,6 +63,7 @@ export default function Finanzas() {
   // ── State principal ─────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true)
   const [resumenServicios, setResumenServicios] = useState([]) // filas livianas para KPIs
+  const [resumenLoading, setResumenLoading] = useState(false)
   const [servicios, setServicios] = useState([])   // cartera enriquecida (carga inicial)
   const [comisionesServicios, setComisionesServicios] = useState(null) // null = sin cargar
   const [comisionesLoading, setComisionesLoading] = useState(false)
@@ -201,32 +202,43 @@ export default function Finanzas() {
     return { enriched, comprobantes }
   }
 
-  // Carga inicial: KPIs livianos + cartera enriquecida. Comisiones e historial se
-  // cargan solo cuando se abre cada pestana.
+  async function cargarResumenFinanzas() {
+    setResumenLoading(true)
+    try {
+      const { data, error } = await db.from('servicios')
+        .select(RESUMEN_SELECT)
+        .not('estado', 'eq', 'CANCELADO')
+      if (error) throw error
+      setResumenServicios(data || [])
+    } catch (err) {
+      console.error('[Finanzas] Error cargando resumen financiero:', err)
+    } finally {
+      setResumenLoading(false)
+    }
+  }
+
+  // Carga inicial: la cartera aparece primero; KPIs, comisiones e historial se
+  // actualizan despues para no bloquear la entrada al modulo.
   async function cargar() {
     setLoading(true)
+    setResumenLoading(true)
     try {
-      const [resumenRes, carteraRes] = await Promise.all([
-        db.from('servicios')
-          .select(RESUMEN_SELECT)
-          .not('estado', 'eq', 'CANCELADO'),
-        db.from('servicios')
-          .select(SERVICIO_SELECT)
-          .not('estado', 'eq', 'CANCELADO')
-          .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
-          .order('fecha_ingreso', { ascending: false }),
-      ])
-      if (resumenRes.error) throw resumenRes.error
-      if (carteraRes.error) throw carteraRes.error
+      const { data, error } = await db.from('servicios')
+        .select(SERVICIO_SELECT)
+        .not('estado', 'eq', 'CANCELADO')
+        .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
+        .order('fecha_ingreso', { ascending: false })
+      if (error) throw error
 
-      const { enriched, comprobantes } = await enriquecerServicios(carteraRes.data || [], { incluirComprobantes: true })
-      setResumenServicios(resumenRes.data || [])
+      const { enriched, comprobantes } = await enriquecerServicios(data || [], { incluirComprobantes: true })
       setServicios(enriched.filter(s => s.saldo > 0 && s.estado_pago !== 'COMPLETO' && s.estado_pago !== 'CORTESIA'))
       setComprobantesSet(comprobantes)
+      setLoading(false)
+      void cargarResumenFinanzas()
     } catch (err) {
       console.error('[Finanzas] Error cargando datos:', err)
-    } finally {
       setLoading(false)
+      setResumenLoading(false)
     }
   }
 
@@ -989,6 +1001,8 @@ export default function Finanzas() {
     return { totalFacturado, totalRecaudado, porCobrar, comisionesAliado, aliadosConComision, descuentosAdicionales }
   }, [resumenServicios])
 
+  const resumenPendiente = resumenLoading && resumenServicios.length === 0
+
   const carteraSvcs = useMemo(() => {
     return servicios.filter(s =>
       s.saldo > 0 &&
@@ -1247,34 +1261,36 @@ export default function Finanzas() {
               <KpiCard
                 icon={<DollarSign size={18} className="text-[#1A5CD8]" />}
                 label="Total facturado"
-                value={fmt(kpis.totalFacturado)}
-                sub={`${resumenServicios.length} servicio${resumenServicios.length !== 1 ? 's' : ''}`}
+                value={resumenPendiente ? '...' : fmt(kpis.totalFacturado)}
+                sub={resumenPendiente ? 'Actualizando resumen' : `${resumenServicios.length} servicio${resumenServicios.length !== 1 ? 's' : ''}`}
                 color="#1A5CD8"
               />
               <KpiCard
                 icon={<TrendingUp size={18} className="text-[#16a34a]" />}
                 label="Recaudado"
-                value={fmt(kpis.totalRecaudado)}
-                sub={kpis.totalFacturado > 0
-                  ? `${Math.round((kpis.totalRecaudado / kpis.totalFacturado) * 100)}% del total`
-                  : '—'}
+                value={resumenPendiente ? '...' : fmt(kpis.totalRecaudado)}
+                sub={resumenPendiente
+                  ? 'Actualizando resumen'
+                  : kpis.totalFacturado > 0
+                    ? `${Math.round((kpis.totalRecaudado / kpis.totalFacturado) * 100)}% del total`
+                    : '—'}
                 color="#16a34a"
               />
               <KpiCard
                 icon={<AlertCircle size={18} className="text-[#DC2626]" />}
                 label="Por cobrar"
-                value={fmt(kpis.porCobrar)}
+                value={resumenPendiente ? '...' : fmt(kpis.porCobrar)}
                 sub={`${carteraSvcs.length} saldo${carteraSvcs.length !== 1 ? 's' : ''} pendiente${carteraSvcs.length !== 1 ? 's' : ''}`}
                 color="#DC2626"
               />
               <KpiCard
                 icon={<Receipt size={18} className="text-[#d97706]" />}
                 label="Comisiones aliados"
-                value={fmt(kpis.comisionesAliado)}
-                sub="Pendientes de descontar"
+                value={resumenPendiente ? '...' : fmt(kpis.comisionesAliado)}
+                sub={resumenPendiente ? 'Actualizando resumen' : 'Pendientes de descontar'}
                 color="#d97706"
               />
-              {kpis.descuentosAdicionales > 0 && (
+              {!resumenPendiente && kpis.descuentosAdicionales > 0 && (
                 <KpiCard
                   icon={<Tag size={18} className="text-[#ea580c]" />}
                   label="Descuentos adicionales"
@@ -1313,7 +1329,7 @@ export default function Finanzas() {
                         {carteraSvcs.length}
                       </span>
                     )}
-                    {t.key === 'comisiones' && kpis.comisionesAliado > 0 && (
+                    {t.key === 'comisiones' && !resumenPendiente && kpis.comisionesAliado > 0 && (
                       <span className="ml-1.5 text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
                         {comisionesServicios ? comisionesPorAliado.length : kpis.aliadosConComision}
                       </span>
