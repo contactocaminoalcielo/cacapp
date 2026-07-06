@@ -450,19 +450,24 @@ export default function Finanzas() {
   async function cerrarCuadre() {
     if (!cuadreData) return
     // El cuadre SIEMPRE se puede cerrar (queda a saldo con el técnico). Un pago
-    // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago
-    // digital o cuando el técnico de verdad debe efectivo (recogió de menos sin
-    // justificar) — el coordinador puede cerrar de todas formas.
+    // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago,
+    // cuando el técnico recogió de menos o cuando cobró de más sobre el valor
+    // a recoger sin revisar; el coordinador puede cerrar de todas formas.
     const faltanComprobante = cuadreItems.filter(it =>
       !it.es_cancelado && Number(it.digital) > 0 && !comprobantesSet.has(it.servicio_id))
     const debenTecnico = cuadreItems.filter(tecnicoDebe)
-    if (faltanComprobante.length || debenTecnico.length) {
+    const cobrosDeMas = cuadreItems.filter(cobroDeMasSinRevisar)
+    if (faltanComprobante.length || debenTecnico.length || cobrosDeMas.length) {
       const partes = []
       if (faltanComprobante.length)
         partes.push(`• ${faltanComprobante.length} pago(s) digital(es) SIN comprobante subido: ${faltanComprobante.map(it => it.mascota_nombre || '—').join(', ')}`)
       if (debenTecnico.length) {
         const monto = debenTecnico.reduce((a, it) => a + (diferenciaItem(it) || 0), 0)
         partes.push(`• El técnico debe ${fmt(monto)} en efectivo (recogió de menos y la fila sigue SIN REVISAR): ${debenTecnico.map(it => it.mascota_nombre || '—').join(', ')}`)
+      }
+      if (cobrosDeMas.length) {
+        const monto = cobrosDeMas.reduce((a, it) => a + excesoValorARecoger(it), 0)
+        partes.push(`• Hay ${fmt(monto)} cobrados de más sobre el valor a recoger (fila SIN REVISAR): ${cobrosDeMas.map(it => it.mascota_nombre || '—').join(', ')}`)
       }
       if (!await confirm(`Antes de cerrar, revisa:\n\n${partes.join('\n\n')}\n\nPuedes cerrar de todas formas, pero estos casos quedarán congelados así.`, { title: 'Hay pendientes por revisar', variant: 'warning', confirmLabel: 'Cerrar de todas formas' })) return
     }
@@ -567,6 +572,20 @@ export default function Finanzas() {
     if (recogido > bruto) return bruto - recogido   // de más (−)
     return 0
   }
+  // Cobro por encima del valor a recoger visible para gerencia. Aunque la
+  // comision explique parte del valor, debe quedar como pendiente de gestion.
+  function excesoValorARecoger(it) {
+    if (it.es_cancelado || esFactMensual(it)) return 0
+    const neto = valorARecoger(it)
+    if (neto == null) return 0
+    const recogido = Number(it.total_cobrado) || 0
+    return recogido > neto ? recogido - neto : 0
+  }
+  function cobroDeMasSinRevisar(it) {
+    return excesoValorARecoger(it) > 0
+      && !it.estado_conciliacion
+      && !it.conciliacion_resuelta
+  }
   // ¿Falta plata sin cerrar? (alerta visual ámbar). Cualquier faltante que no esté
   // ya marcado como Verificado OK. Fact. mensual se gestiona aparte (no es del técnico).
   function faltaPlata(it) {
@@ -598,13 +617,14 @@ export default function Finanzas() {
     const d = diferenciaItem(it)
     return d > 0 ? d : 0
   }
-  // Estado sugerido (el coordinador puede cambiarlo). Recogió de menos o fact.
-  // mensual → pendiente gestionar; cuadrado o recogió de más → verificado OK.
+  // Estado sugerido (el coordinador puede cambiarlo). Facturacion mensual,
+  // faltante o cobro de más sobre el valor a recoger -> pendiente gestionar.
+  // Solo queda OK cuando el recogido coincide con lo esperado.
   function estadoSugerido(it) {
     if (esFactMensual(it)) return 'PENDIENTE_GESTIONAR'
     const d = diferenciaItem(it)
     if (d == null) return null
-    return d > 0 ? 'PENDIENTE_GESTIONAR' : 'VERIFICADO'
+    return d > 0 || excesoValorARecoger(it) > 0 ? 'PENDIENTE_GESTIONAR' : 'VERIFICADO'
   }
   // Explicación en lenguaje claro de POR QUÉ una fila requiere atención (guía
   // para gerencia). Solo reglas sobre datos que ya existen — null si la fila
@@ -622,8 +642,11 @@ export default function Finanzas() {
     if (d == null) return null
     const neto = valorARecoger(it)
     const recogido = Number(it.total_cobrado) || 0
+    const exceso = excesoValorARecoger(it)
     if (d > 0)
       return `Recogió ${fmt(recogido)} de ${fmt(neto)} — faltan ${fmt(d)}. Si el cliente o la veterinaria quedó debiendo, márcala "Pendiente gestionar"; si ya se saldó por otro lado, "Verificado OK".`
+    if (exceso > 0)
+      return `Recogió ${fmt(recogido)}, ${fmt(exceso)} por encima del valor a recoger (${fmt(neto)}). Márcala "Pendiente gestionar" para revisar si fue comisión cobrada, devolución o ajuste.`
     if (d < 0)
       return `Recogió ${fmt(recogido)}, ${fmt(-d)} por encima del valor con comisión incluida — revisa el comprobante o el valor del servicio.`
     return null
@@ -1951,17 +1974,19 @@ export default function Finanzas() {
                               {cuadreItems.map(it => {
                                 const d = diferenciaItem(it)
                                 const alerta = faltaPlata(it)
+                                const exceso = excesoValorARecoger(it)
+                                const alertaGestion = alerta || cobroDeMasSinRevisar(it)
                                 const sug = estadoSugerido(it)
                                 const er = it.estado_conciliacion ? ESTADO_REV[it.estado_conciliacion] : null
                                 return (
-                                <tr key={it.id} className={`text-[13px] border-b transition-colors ${alerta ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
-                                  style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alerta ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
+                                <tr key={it.id} className={`text-[13px] border-b transition-colors ${alertaGestion ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
+                                  style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alertaGestion ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
                                     <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
                                       className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
                                       title="Ver tarjeta completa de la mascota">
-                                      {alerta && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
+                                      {alertaGestion && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
                                       {it.mascota_nombre || '—'}
                                     </button>
                                     <div className="flex flex-wrap gap-1 mt-0.5">
@@ -2007,6 +2032,7 @@ export default function Finanzas() {
                                     {esFactMensual(it) ? (
                                       <span className="font-semibold text-[#9A5500] text-[12px]" title="Facturación mensual: el aliado nos debe el neto (bruto − comisión). Se cobra en la factura mensual.">x cobrar al aliado {fmt(pendienteAliado(it))}</span>
                                     ) : d == null ? <span className="text-gray-300">—</span>
+                                      : exceso > 0 ? <span className="font-semibold text-[#1E40AF]" title="Cobro por encima del valor a recoger">+{fmt(exceso)}</span>
                                       : d > 0 ? <span className="font-bold text-[#DC2626]">{fmt(d)}</span>
                                       : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
                                       : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
@@ -3125,8 +3151,8 @@ function GuiaCuadreModal({ onClose }) {
           </Paso>
           <Paso n={2} titulo="Revisar fila por fila">
             <p>· Cada mascota con algo por resolver trae su <strong>explicación en palabras</strong> debajo del nombre (por qué falta plata, qué hacer). Y el botón <strong>✨ Analizar con IA</strong> te da una guía del cuadre completo leyendo las notas del técnico — solo sugiere, tú confirmas.</p>
-            <p>· <strong>Diferencia</strong>: compara lo recogido contra el valor del servicio. Si recogió entre el neto (lo que paga el cliente) y el bruto (neto + comisión de la veterinaria) está <strong>cuadrado ($0)</strong> — la comisión descontada no es plata que falte.</p>
-            <p>· Filas <span className="font-bold text-amber-700">ámbar</span> = falta plata. Elige en <strong>Acción</strong>: <strong>Verificado OK</strong> (saldado, no se debe nada) o <strong>Pendiente gestionar</strong> (el cliente/veterinaria debe → pasa a la pestaña <strong>Conciliaciones</strong> para cobrarlo después).</p>
+            <p>· <strong>Diferencia</strong>: compara lo recogido contra el valor a recoger. Si aparece un <strong>+</strong>, se cobró por encima de ese valor y la columna <strong>Acción</strong> sugerirá <strong>Pendiente gestionar</strong>.</p>
+            <p>· Filas <span className="font-bold text-amber-700">ámbar</span> = falta plata o hay cobro por encima del valor a recoger. Elige en <strong>Acción</strong>: <strong>Verificado OK</strong> (saldado, no se debe nada) o <strong>Pendiente gestionar</strong> (queda para revisar/cobrar después en <strong>Conciliaciones</strong>).</p>
             <p>· <strong>FACT. MENSUAL</strong>: la veterinaria paga por factura a fin de mes; el técnico no recoge esa plata. <strong>SIN RECIBO</strong>: hay que cobrar ese servicio; va solo a Conciliaciones.</p>
             <p>· Marca <strong>Lejanía</strong> si la recogida fue lejos (reconocimiento extra al técnico). Solo <strong>efectivo</strong> cuenta como plata en manos del técnico; lo digital ya entró a la empresa.</p>
           </Paso>
