@@ -2973,19 +2973,23 @@ const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA
 
 // Cargador inline de un comprobante — copia las mecánicas probadas de FotoEvidencia
 // (stash antes de subir, original sin comprimir, sin decodificar, reset de inputs).
-function ComprobanteUploader({ servicioId, onSubido }) {
+function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo = false, stashId = '' }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
   const [okUrl, setOkUrl]         = useState('')
+  const [cambiando, setCambiando] = useState(!actualUrl)
   const galeriaRef                = useRef()
   const cameraRef                 = useRef()
-  const stashKey                  = `comprobante_${servicioId}`
+  const stashKey                  = `comprobante_${servicioId}_${stashId || 'nuevo'}`
 
   // Recovery: si la app se reinició a mitad de subida, reanudar al montar
   useEffect(() => {
     ;(async () => {
       const p = await stashGetByPrefix(stashKey)
-      if (p.length > 0 && p[0].blob) subir(p[0].blob, { recuperado: true })
+      if (p.length > 0 && p[0].blob) {
+        setCambiando(true)
+        subir(p[0].blob, { recuperado: true })
+      }
     })()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -3010,9 +3014,10 @@ function ComprobanteUploader({ servicioId, onSubido }) {
       )
       if (upErr) throw upErr
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
-      await onSubido(publicUrl, data.path, val)   // persistencia (recibo_comprobantes + jsonb)
+      await onSubido(publicUrl, data.path, { ...val, size: file.size || null })   // persistencia (recibo_comprobantes + jsonb)
       await stashDelete(stashKey)
       setOkUrl(publicUrl)
+      setCambiando(false)
     } catch (e) {
       setErr(String(e.message || e).slice(0, 120))
     } finally {
@@ -3037,29 +3042,57 @@ function ComprobanteUploader({ servicioId, onSubido }) {
         <a href={okUrl} target="_blank" rel="noreferrer"
           className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-3 py-3">
           <Check size={16} style={{ color: '#059669' }} className="flex-shrink-0" />
-          <span className="text-[12px] font-bold text-green-700">Comprobante subido · toca para ver</span>
+          <span className="text-[12px] font-bold text-green-700">{reemplazo ? 'Comprobante cambiado' : 'Comprobante subido'} - toca para ver</span>
         </a>
       ) : uploading ? (
         <div className="flex items-center gap-3 rounded-xl px-3 py-3" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
           <div className="spinner flex-shrink-0" style={{ width: 18, height: 18 }} />
           <span className="text-[12px] font-bold text-blue-800">Subiendo comprobante…</span>
         </div>
+      ) : actualUrl && !cambiando ? (
+        <div className="rounded-xl border border-green-100 bg-green-50 p-3">
+          <div className="flex items-center gap-2">
+            <a href={actualUrl} target="_blank" rel="noreferrer"
+              className="flex-1 min-w-0 flex items-center gap-2 text-[12px] font-bold text-green-700">
+              <Check size={14} className="flex-shrink-0" />
+              <span className="truncate">Comprobante actual</span>
+            </a>
+            <button type="button" onClick={() => { setErr(''); setCambiando(true) }}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold active:scale-98"
+              style={{ background: '#FFFFFF', color: '#EA580C', border: '1px solid #FED7AA' }}>
+              <RefreshCw size={12} /> Cambiar
+            </button>
+          </div>
+        </div>
       ) : (
         <>
+          {reemplazo && actualUrl && (
+            <div className="flex items-start gap-2 mb-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: '#FFF7ED', color: '#9A3412' }}>
+              <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+              <span>El nuevo archivo reemplazara el comprobante anterior para revision.</span>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => { marcarPickerAbierto(); galeriaRef.current?.click() }}
+            <button type="button" onClick={() => { marcarPickerAbierto(); galeriaRef.current?.click() }}
               className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 active:scale-98"
               style={{ borderColor: '#FDBA74', background: '#FFF7ED' }}>
               <UploadIcon size={18} style={{ color: '#EA580C' }} />
               <span className="text-[12px] font-semibold" style={{ color: '#9A3412' }}>Galería / PDF</span>
             </button>
-            <button onClick={() => { marcarPickerAbierto(); cameraRef.current?.click() }}
+            <button type="button" onClick={() => { marcarPickerAbierto(); cameraRef.current?.click() }}
               className="py-4 rounded-xl border-2 border-dashed flex flex-col items-center gap-1 active:scale-98"
               style={{ borderColor: '#E5E7EB', background: '#FAFAFA' }}>
               <Camera size={18} className="text-gray-400" />
               <span className="text-[12px] font-semibold text-gray-600">Cámara</span>
             </button>
           </div>
+          {actualUrl && (
+            <button type="button" onClick={() => { setErr(''); setCambiando(false); limpiar() }}
+              className="w-full mt-2 rounded-lg px-3 py-2 text-[11px] font-bold text-gray-500"
+              style={{ background: '#F3F4F6' }}>
+              Cancelar cambio
+            </button>
+          )}
           {err && (
             <div className="flex items-center gap-2 mt-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
               <AlertCircle size={12} /> {err}
@@ -3115,7 +3148,7 @@ function ComprobanteTab({ tecnico, onCount }) {
           numero:   r.numero_recibo,
           mascota:  svc?.mascotas,
           plan:     svc?.planes?.nombre || '',
-          metodos:  pendientes.map(m => m.metodo),
+          metodos:  pendientes.length > 0 ? pendientes.map(m => m.metodo) : digital.map(m => m.metodo),
           monto:    digital.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
           estado:   pendientes.length > 0 ? 'PENDIENTE' : 'SUBIDO',
           yaUrl,
@@ -3131,19 +3164,24 @@ function ComprobanteTab({ tecnico, onCount }) {
   useEffect(() => { cargar() }, [cargar])
 
   // Persistencia tras subir: jsonb (compat) + tabla formal recibo_comprobantes + novedad
-  async function persistir(item, publicUrl, storagePath, val) {
-    // 1. Compat: marcar el primer medio digital sin comprobante en el jsonb
+  async function persistir(item, publicUrl, storagePath, val, { reemplazar = false } = {}) {
+    // 1. Compat: actualizar el medio digital en el jsonb.
     let idx = -1
     try {
       const { data: row } = await db.from('recibos_tecnico').select('medios_pago').eq('id', item.reciboId).single()
       const arr = Array.isArray(row?.medios_pago) ? [...row.medios_pago] : []
-      idx = arr.findIndex(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
+      const esDigital = m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0
+      idx = reemplazar
+        ? arr.findIndex(m => esDigital(m) && m.comprobanteUrl)
+        : arr.findIndex(m => esDigital(m) && !m.comprobanteUrl)
+      if (idx < 0 && reemplazar) idx = arr.findIndex(esDigital)
       if (idx >= 0) {
         arr[idx] = { ...arr[idx], comprobanteUrl: publicUrl }
         await db.from('recibos_tecnico').update({ medios_pago: arr }).eq('id', item.reciboId)
       }
     } catch (_) {}
-    // 2. Fuente formal (asociación por medio_pago_id; best-effort si la tabla existe)
+
+    // 2. Fuente formal (asociacion por medio_pago_id; best-effort si la tabla existe).
     try {
       let medioPagoId = null
       const { data: rows } = await db.from('recibo_medios_pago')
@@ -3153,6 +3191,16 @@ function ComprobanteTab({ tecnico, onCount }) {
         medioPagoId = (idx >= 0 && rows[idx]?.id) ||
           rows.find(r => METODOS_CON_COMPROBANTE.includes(r.metodo))?.id || null
       }
+      if (reemplazar) {
+        const marcarReemplazado = () => db.from('recibo_comprobantes')
+          .update({ estado: 'RECHAZADO', error: 'Reemplazado por el tecnico' })
+          .in('estado', ['PENDIENTE', 'SUBIDO', 'PENDIENTE_REVISION', 'APROBADO'])
+        if (medioPagoId) await marcarReemplazado().eq('medio_pago_id', medioPagoId)
+        await marcarReemplazado()
+          .eq('recibo_id', item.reciboId)
+          .eq('servicio_id', item.svcId)
+          .is('medio_pago_id', null)
+      }
       await db.from('recibo_comprobantes').insert({
         recibo_id:     item.reciboId,
         medio_pago_id: medioPagoId,
@@ -3160,16 +3208,18 @@ function ComprobanteTab({ tecnico, onCount }) {
         bucket:        'evidencias',
         storage_path:  storagePath,
         mime_type:     val.mime,
+        size_bytes:    val.size || null,
         estado:        'PENDIENTE_REVISION',
         uploaded_by:   tecnico?.id || null,
       })
     } catch (_) {}
-    // 3. Rastro para el coordinador
+
+    // 3. Rastro para el coordinador.
     try {
       await db.from('novedades_servicio').insert({
         servicio_id:    item.svcId,
         tipo_novedad:   'NOTA',
-        descripcion:    `Comprobante de pago subido (recibo ${item.numero}). Pendiente de revisión.`,
+        descripcion:    `Comprobante de pago ${reemplazar ? 'reemplazado' : 'subido'} (recibo ${item.numero}). Pendiente de revision.`,
         registrado_por: tecnico?.id || null,
       })
     } catch (_) {}
@@ -3237,6 +3287,7 @@ function ComprobanteTab({ tecnico, onCount }) {
               </div>
               <ComprobanteUploader
                 servicioId={item.svcId}
+                stashId={item.reciboId}
                 onSubido={(url, path, val) => persistir(item, url, path, val)}
               />
             </div>
@@ -3246,17 +3297,27 @@ function ComprobanteTab({ tecnico, onCount }) {
             <div className="mt-4">
               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
               {subidos.map(item => (
-                <a key={item.reciboId} href={item.yaUrl || undefined} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-3 bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
-                  <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '—'}</div>
-                    <div className="text-[10px] text-gray-400">No. {item.numero}</div>
+                <div key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
+                  className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '-'}</div>
+                      <div className="text-[10px] text-gray-400">No. {item.numero}</div>
+                      <div className="text-[10px] text-gray-500 truncate">{item.metodos.join(', ')} - {fmt(item.monto)}</div>
+                    </div>
+                    <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
+                      <Check size={12} /> Subido
+                    </span>
                   </div>
-                  <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
-                    <Check size={12} /> Subido
-                  </span>
-                </a>
+                  <ComprobanteUploader
+                    servicioId={item.svcId}
+                    stashId={`${item.reciboId}_reemplazo`}
+                    actualUrl={item.yaUrl}
+                    reemplazo
+                    onSubido={(url, path, val) => persistir(item, url, path, val, { reemplazar: true })}
+                  />
+                </div>
               ))}
             </div>
           )}
