@@ -3,6 +3,7 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
+import { orbitApi } from '@/lib/orbitApi'
 import { fmt, parsearErrorDB, parseDate } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
@@ -10,7 +11,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle,
+  HelpCircle, Sparkles,
 } from 'lucide-react'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -104,6 +105,8 @@ export default function Finanzas() {
   const [entregaModal,    setEntregaModal]    = useState(false)  // modal "confirmar dinero recibido"
   const [entregaPorNombre, setEntregaPorNombre] = useState(null) // nombre de quien recibió el dinero
   const [guiaOpen,        setGuiaOpen]        = useState(false)  // modal "¿cómo funciona?"
+  const [iaAnalisis,      setIaAnalisis]      = useState(null)   // texto del asistente IA del cuadre
+  const [iaLoading,       setIaLoading]       = useState(false)
 
   // ── State Conciliaciones (mascotas con plata faltante) ──────────────────────
   const [conciliaciones, setConciliaciones] = useState(null)  // null = aún no cargado
@@ -319,6 +322,7 @@ export default function Finanzas() {
       setCuadreAjustes(Number(hdr.ajustes_manuales) ? String(hdr.ajustes_manuales) : '')
       setCuadreAjusteMot(hdr.ajustes_motivo || '')
       setCuadreData(hdr); setCuadreItems(items || [])
+      setIaAnalisis(null)
       cargarSaldosAFavor(hdr)
       cargarEntregaNombre(hdr)
     } catch (err) {
@@ -432,7 +436,7 @@ export default function Finanzas() {
         db.from('cuadre_items').select('*').eq('cuadre_id', cid).order('fecha').order('hora'),
       ])
       setCuadreData(hdr); setCuadreItems(items || [])
-      setEntregaPorNombre(null)
+      setEntregaPorNombre(null); setIaAnalisis(null)
       cargarSaldosAFavor(hdr)
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
@@ -489,6 +493,7 @@ export default function Finanzas() {
     setCuadreData(null); setCuadreItems([]); setCuadreError('')
     setCuadreAjustes(''); setCuadreAjusteMot('')
     setSaldosAFavor([]); setEntregaPorNombre(null)
+    setIaAnalisis(null)
     cargarHistorial()   // refleja el cuadre recién generado/cerrado en la lista
   }
 
@@ -590,6 +595,28 @@ export default function Finanzas() {
     const d = diferenciaItem(it)
     if (d == null) return null
     return d > 0 ? 'PENDIENTE_GESTIONAR' : 'VERIFICADO'
+  }
+  // Explicación en lenguaje claro de POR QUÉ una fila requiere atención (guía
+  // para gerencia). Solo reglas sobre datos que ya existen — null si la fila
+  // está cuadrada y no hay nada que explicar (sin ruido).
+  function explicacionItem(it) {
+    if (it.es_cancelado)
+      return `Servicio cancelado: se le reconoce ${fmt(it.pago_servicio || 0)} al técnico por el viaje; no hay cobro al cliente.`
+    if (it.conciliacion_resuelta)
+      return 'Pendiente ya resuelto: el cobro se gestionó.'
+    if (it.sin_recibo)
+      return `El técnico recogió pero no generó recibo (no cobró). Falta cobrar ${fmt(montoPendiente(it))} ${esFactMensual(it) ? 'a la veterinaria (facturación mensual)' : 'al cliente'} — se sigue en Conciliaciones.`
+    if (esFactMensual(it))
+      return `Veterinaria de facturación mensual: el técnico no recoge esta plata; el aliado nos debe ${fmt(pendienteAliado(it))} con la factura del mes.`
+    const d = diferenciaItem(it)
+    if (d == null) return null
+    const neto = valorARecoger(it)
+    const recogido = Number(it.total_cobrado) || 0
+    if (d > 0)
+      return `Recogió ${fmt(recogido)} de ${fmt(neto)} — faltan ${fmt(d)}. Si el cliente o la veterinaria quedó debiendo, márcala "Pendiente gestionar"; si ya se saldó por otro lado, "Verificado OK".`
+    if (d < 0)
+      return `Recogió ${fmt(recogido)}, ${fmt(-d)} por encima del valor con comisión incluida — revisa el comprobante o el valor del servicio.`
+    return null
   }
 
   // Guarda estado de revisión + observaciones (solo BORRADOR). Optimista.
@@ -751,6 +778,21 @@ export default function Finanzas() {
   useEffect(() => {
     if (tab === 'nocobrados' && noCobrados === null && !noCobLoading) cargarNoCobrados()
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Asistente IA del cuadre: pide al backend la guía del cuadre abierto.
+  // La IA solo explica y sugiere; los estados los confirma la persona.
+  async function analizarConIA() {
+    if (!cuadreData) return
+    setIaLoading(true)
+    try {
+      const r = await orbitApi('/cuadres/ia/analizar', { method: 'POST', body: { cuadre_id: cuadreData.id } })
+      setIaAnalisis(r.analisis || '')
+    } catch (e) {
+      await showAlert(e.message, { title: 'Error del asistente IA' })
+    } finally {
+      setIaLoading(false)
+    }
+  }
 
   async function descargarCuadrePDF() {
     if (!cuadreData) return
@@ -1722,6 +1764,12 @@ export default function Finanzas() {
                           {cuadreCerrado ? <span className="flex items-center gap-1"><Lock size={11} /> CERRADO</span> : 'BORRADOR'}
                         </span>
                         <div className="flex items-center gap-2 ml-auto">
+                          <button onClick={analizarConIA} disabled={iaLoading}
+                            title="El asistente revisa el cuadre, lee las notas del técnico y te dice qué requiere atención. Solo sugiere: tú confirmas."
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-violet-700 hover:bg-violet-50 transition-colors disabled:opacity-60"
+                            style={{ borderColor: '#C4B5FD' }}>
+                            <Sparkles size={13} className={iaLoading ? 'animate-pulse' : ''} /> {iaLoading ? 'Analizando…' : 'Analizar con IA'}
+                          </button>
                           <button onClick={descargarCuadrePDF} disabled={cuadrePdfGen}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60"
                             style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
@@ -1740,6 +1788,24 @@ export default function Finanzas() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Panel del asistente IA (guía del cuadre; solo sugiere) */}
+                      {iaAnalisis !== null && (
+                        <div className="rounded-xl border p-4" style={{ background: '#F5F3FF', borderColor: '#C4B5FD' }}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <Sparkles size={15} className="text-violet-600 flex-shrink-0" />
+                              <span className="text-[12px] font-semibold text-violet-800">Asistente ORBIT — guía del cuadre</span>
+                            </div>
+                            <button onClick={() => setIaAnalisis(null)}
+                              className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-violet-100 text-violet-400 flex-shrink-0">
+                              <X size={13} />
+                            </button>
+                          </div>
+                          <p className="text-[13px] text-gray-800 whitespace-pre-wrap leading-relaxed mt-2">{iaAnalisis}</p>
+                          <p className="text-[10px] text-violet-500 mt-2">La IA solo sugiere: confirma cada estado tú mismo en la columna Acción.</p>
+                        </div>
+                      )}
 
                       {/* Aviso: saldo a favor del técnico en cuadres cerrados anteriores */}
                       {!cuadreCerrado && saldosAFavor.length > 0 && (
@@ -1801,6 +1867,10 @@ export default function Finanzas() {
                                       {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                       {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
                                     </div>
+                                    {(() => {
+                                      const exp = explicacionItem(it)
+                                      return exp ? <p className="text-[10px] text-gray-500 leading-snug mt-1 max-w-[260px]">{exp}</p> : null
+                                    })()}
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
                                   <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
@@ -2031,6 +2101,10 @@ export default function Finanzas() {
                                     <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
                                       className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left disabled:no-underline"
                                       title="Ver tarjeta completa de la mascota">{it.mascota_nombre || '—'}</button>
+                                    {(() => {
+                                      const exp = explicacionItem(it)
+                                      return exp ? <p className="text-[10px] text-gray-500 leading-snug mt-1 max-w-[260px]">{exp}</p> : null
+                                    })()}
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600 text-[12px]">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</td>
                                   <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
@@ -2082,7 +2156,7 @@ export default function Finanzas() {
       </div>
 
       {/* ── Modal tarjeta de mascota (detalle + evidencias + trazabilidad) ── */}
-      {detalleItem && <MascotaDetalleModal item={detalleItem} onClose={() => setDetalleItem(null)} />}
+      {detalleItem && <MascotaDetalleModal item={detalleItem} explicacion={explicacionItem(detalleItem)} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
       {comprobanteItem && <ComprobanteModal item={comprobanteItem} onClose={() => setComprobanteItem(null)} />}
@@ -2298,7 +2372,7 @@ function KpiCard({ icon, label, value, sub, color }) {
 // ── Modal: tarjeta completa de la mascota (detalle + evidencias + trazabilidad) ─
 // Muestra SOLO fotos de evidencia del servicio (recogida/pesaje/entrega/firma),
 // NUNCA imágenes de recordatorios. Sirve para identificar la trayectoria.
-function MascotaDetalleModal({ item, onClose }) {
+function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   const servicioId = item.servicio_id
   const [loading, setLoading]     = useState(true)
   const [svc, setSvc]             = useState(null)
@@ -2465,6 +2539,9 @@ function MascotaDetalleModal({ item, onClose }) {
                     {cob.diferencia < 0 ? `+${fmt(-cob.diferencia)}` : fmt(cob.diferencia)}
                   </span>
                 </div>
+                {explicacion && (
+                  <p className="text-[11px] text-gray-500 leading-snug mt-1.5 px-0.5">{explicacion}</p>
+                )}
               </div>
             </div>
 
@@ -2768,6 +2845,7 @@ function GuiaCuadreModal({ onClose }) {
             <p>Mientras esté en <strong>BORRADOR</strong> puedes regenerarlo las veces que quieras (cambiar rango, ajuste, lejanía…); no se pierde nada.</p>
           </Paso>
           <Paso n={2} titulo="Revisar fila por fila">
+            <p>· Cada mascota con algo por resolver trae su <strong>explicación en palabras</strong> debajo del nombre (por qué falta plata, qué hacer). Y el botón <strong>✨ Analizar con IA</strong> te da una guía del cuadre completo leyendo las notas del técnico — solo sugiere, tú confirmas.</p>
             <p>· <strong>Diferencia</strong>: compara lo recogido contra el valor del servicio. Si recogió entre el neto (lo que paga el cliente) y el bruto (neto + comisión de la veterinaria) está <strong>cuadrado ($0)</strong> — la comisión descontada no es plata que falte.</p>
             <p>· Filas <span className="font-bold text-amber-700">ámbar</span> = falta plata. Elige en <strong>Acción</strong>: <strong>Verificado OK</strong> (saldado, no se debe nada) o <strong>Pendiente gestionar</strong> (el cliente/veterinaria debe → pasa a la pestaña <strong>Conciliaciones</strong> para cobrarlo después).</p>
             <p>· <strong>FACT. MENSUAL</strong>: la veterinaria paga por factura a fin de mes; el técnico no recoge esa plata. <strong>SIN RECIBO</strong>: hay que cobrar ese servicio; va solo a Conciliaciones.</p>

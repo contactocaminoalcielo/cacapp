@@ -13,6 +13,7 @@ import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import { listarCandidatos, listarMemoriales, generarMemorial, aprobarMemorial, publicarMemorial, descartarMemorial, servirArchivo } from './memorial.js'
+import { analizarCuadre } from './cuadres-ia.js'
 
 const app = express()
 app.use(express.json())
@@ -259,6 +260,17 @@ app.post('/grupales/ia/control', requireAuth, async (_req, res) => {
     res.json(await alertaVencimientos())
   } catch (e) {
     log('[grupales/ia/control] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Asistente IA del cuadre de técnicos (Finanzas; solo sugiere, no escribe) ──
+app.post('/cuadres/ia/analizar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await analizarCuadre({ cuadreId: req.body?.cuadre_id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[cuadres/ia/analizar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

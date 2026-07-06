@@ -199,6 +199,16 @@ un CERRADO queda de solo lectura (sirve para re-descargar el PDF, ver firma y
 entrega) y un BORRADOR se puede seguir editando/regenerando.
 
 ### J. Ayudas para gerencia
+- **Explicación por fila** (reglas, sin IA): toda mascota con algo por resolver muestra
+  debajo del nombre por qué (faltan $X de $Y, sin recibo, facturación mensual, cancelado,
+  recogió de más) y qué hacer. Helper `explicacionItem` en `Finanzas.jsx` — reutiliza
+  `diferenciaItem`/`montoPendiente`; se muestra en el cuadre, en Conciliaciones y en la
+  tarjeta de la mascota. Fila cuadrada = sin texto.
+- **Análisis IA del cuadre**: botón *"✨ Analizar con IA"* → `POST /cuadres/ia/analizar`
+  (orbit-backend, `src/cuadres-ia.js`, Claude server-side). Lee filas + notas del servicio +
+  novedades + comprobantes y redacta: veredicto, casos que requieren atención priorizados
+  (citando las notas del técnico) y señales raras. **Solo sugiere — nunca escribe estados
+  ni montos**; es efímero (no se guarda). Requiere rol COORDINADOR/ADMIN.
 - **Rango sugerido**: al elegir técnico se precarga *desde = día siguiente al
   último cuadre CERRADO de ese técnico* y *hasta = hoy* (editable).
 - **Aviso de saldo a favor**: si el técnico quedó con saldo a favor en cuadres
