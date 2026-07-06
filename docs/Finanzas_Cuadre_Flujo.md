@@ -218,6 +218,29 @@ entrega) y un BORRADOR se puede seguir editando/regenerando.
 - **Guía en la UI**: botón *"¿Cómo funciona?"* con el flujo en 4 pasos
   (`GuiaCuadreModal` — mantener sincronizado con este documento).
 
+### K. Confirmación del técnico (bilateral, migración 032)
+El técnico ve su cuadre **en BORRADOR** desde TecnicoApp (Mis pagos › Cuadres):
+recogido, ganado, efectivo a entregar y detalle por mascota. Lo **confirma**
+("✓ Estoy de acuerdo") o deja una **observación** → RPC `confirmar_cuadre_por_tecnico`
+(valida que sea SU cuadre y que siga BORRADOR; guarda `tecnico_confirmado_en`,
+`tecnico_observacion` y `tecnico_confirmado_monto` = snapshot de `dinero_a_entregar`).
+
+En Finanzas, el chip junto al estado dice: **✓ Técnico confirmó** (monto coincide),
+**⚠ Confirmó otra versión** (el cuadre se regeneró/editó después — el snapshot no
+coincide) o **Sin confirmar**. La observación del técnico se muestra en un banner.
+Al cerrar sin confirmación vigente aparece la opción explícita
+**"Cerrar SIN confirmación del técnico"** (avisa fuerte, no bloquea — decisión David
+2026-07-06); el resultado queda en `firma.confirmacion_tecnico`
+(`CONFIRMADO` | `SIN_CONFIRMACION` | `CONFIRMACION_DESACTUALIZADA`).
+
+### L. Bitácora del técnico (TecnicoApp)
+Mis pagos › **Bitácora**: la planilla de papel del técnico, automática y de solo
+lectura — día a día del mes: hora, mascota, ciudad, cuánto cobró y por qué medio,
+chip "NO COBRADO", y lo que le reconoce el cuadre cuando ya existe la fila.
+Fuentes: `servicios`/`recogidas` del técnico + `recibos_tecnico` (conteo único,
+regla 027) + `cuadre_items`; consultas en lotes de ≤80 ids (regla 414).
+No captura nada nuevo: reemplaza la planilla mostrándole al técnico sus propios datos.
+
 ---
 
 ## 3. Notas técnicas

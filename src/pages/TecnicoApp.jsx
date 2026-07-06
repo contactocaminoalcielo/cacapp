@@ -2298,12 +2298,33 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
 
 // ─── MIS CUADRES (técnico ve sus pagos de cuadres CERRADOS) ────────────
 function MisCuadresTab({ tecnico }) {
+  const [vista, setVista] = useState('bitacora')   // 'bitacora' | 'cuadres'
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-gray-100">
+        {[['bitacora', '📒 Bitácora'], ['cuadres', '💵 Cuadres']].map(([k, l]) => (
+          <button key={k} onClick={() => setVista(k)}
+            className={`py-2 rounded-xl text-[13px] font-bold transition-all ${vista === k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {vista === 'bitacora' ? <BitacoraTab tecnico={tecnico} /> : <CuadresList tecnico={tecnico} />}
+    </div>
+  )
+}
+
+// ─── MIS CUADRES (cerrados + borradores en revisión con confirmación) ───────
+function CuadresList({ tecnico }) {
   const [cuadres, setCuadres]   = useState([])
   const [loading, setLoading]   = useState(true)
   const [expandido, setExpandido] = useState(null)
   const [items, setItems]       = useState({})
+  const [confirmando, setConfirmando] = useState(null)  // cuadre_id en proceso
+  const [obsAbierta, setObsAbierta]   = useState(null)  // cuadre_id con textarea abierta
+  const [obsTexto, setObsTexto]       = useState('')
 
-  useEffect(() => { cargar() }, [tecnico?.id])
+  useEffect(() => { cargar() }, [tecnico?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function cargar() {
     if (!tecnico?.id) { setLoading(false); return }
@@ -2311,7 +2332,6 @@ function MisCuadresTab({ tecnico }) {
     const { data } = await db.from('cuadres_tecnico')
       .select('*')
       .eq('tecnico_id', tecnico.id)
-      .eq('estado', 'CERRADO')
       .order('fecha_hasta', { ascending: false })
     setCuadres(data || [])
     setLoading(false)
@@ -2326,27 +2346,61 @@ function MisCuadresTab({ tecnico }) {
     }
   }
 
-  const totalGanado = cuadres.reduce((a, c) => a + (Number(c.total_reconocido) || 0), 0)
-  const fechaCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+  // Confirmación del borrador: guarda quién/cuándo + snapshot del monto. Si el
+  // coordinador regenera y el monto cambia, la confirmación queda desactualizada.
+  async function confirmar(c, observacion) {
+    setConfirmando(c.id)
+    try {
+      const { data, error } = await db.rpc('confirmar_cuadre_por_tecnico', {
+        p_cuadre_id:   c.id,
+        p_tecnico_id:  tecnico.id,
+        p_observacion: observacion || null,
+      })
+      if (error) throw error
+      setCuadres(prev => prev.map(x => x.id === c.id ? {
+        ...x,
+        tecnico_confirmado_en:    data.tecnico_confirmado_en,
+        tecnico_confirmado_monto: data.tecnico_confirmado_monto,
+        tecnico_observacion:      data.tecnico_observacion,
+      } : x))
+      setObsAbierta(null); setObsTexto('')
+    } catch (e) {
+      alert('Error al confirmar: ' + (e.message || e))
+    } finally {
+      setConfirmando(null)
+    }
+  }
+
+  const cerrados    = cuadres.filter(c => c.estado === 'CERRADO')
+  const totalGanado = cerrados.reduce((a, c) => a + (Number(c.total_reconocido) || 0), 0)
+  const fechaCorta  = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
+  const fechaHora   = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
 
   if (loading) return <div className="text-center py-16 text-gray-400 text-sm">Cargando…</div>
-  if (!cuadres.length) return <EmptyState icon="💵" texto="Aún no tienes cuadres" sub="Cuando el coordinador cierre un cuadre de cuentas, aquí verás cuánto ganaste." />
+  if (!cuadres.length) return <EmptyState icon="💵" texto="Aún no tienes cuadres" sub="Cuando el coordinador arme tu cuadre de cuentas, aquí lo revisas y confirmas." />
 
   return (
     <div className="space-y-3">
       <div className="rounded-2xl p-4 text-white" style={{ background: 'linear-gradient(135deg,#15803d,#16a34a)' }}>
         <div className="text-[11px] font-semibold text-white/70 uppercase tracking-wide">Total ganado (cuadres cerrados)</div>
         <div className="text-[28px] font-extrabold tabular-nums leading-tight mt-0.5">{fmt(totalGanado)}</div>
-        <div className="text-[11px] text-white/60">{cuadres.length} cuadre{cuadres.length !== 1 ? 's' : ''}</div>
+        <div className="text-[11px] text-white/60">{cerrados.length} cuadre{cerrados.length !== 1 ? 's' : ''} cerrado{cerrados.length !== 1 ? 's' : ''}</div>
       </div>
 
       {cuadres.map(c => {
-        const abierto = expandido === c.id
+        const abierto  = expandido === c.id
+        const borrador = c.estado === 'BORRADOR'
+        const confirmado     = !!c.tecnico_confirmado_en
+        const desactualizada = confirmado && Number(c.tecnico_confirmado_monto) !== Number(c.dinero_a_entregar)
+        const confirmVigente = confirmado && !desactualizada
         return (
-          <div key={c.id} className="rounded-2xl border bg-white overflow-hidden" style={{ borderColor: '#E5E7EB' }}>
+          <div key={c.id} className="rounded-2xl border bg-white overflow-hidden" style={{ borderColor: borrador ? '#FCD34D' : '#E5E7EB' }}>
             <button onClick={() => toggle(c)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
               <div className="flex-1">
-                <div className="font-bold text-gray-900 text-[13px]">{fechaCorta(c.fecha_desde)} → {fechaCorta(c.fecha_hasta)}</div>
+                <div className="font-bold text-gray-900 text-[13px] flex items-center gap-1.5 flex-wrap">
+                  {fechaCorta(c.fecha_desde)} → {fechaCorta(c.fecha_hasta)}
+                  {borrador && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">EN REVISIÓN</span>}
+                </div>
                 <div className="text-[11px] text-gray-400">{c.total_servicios} servicio{c.total_servicios !== 1 ? 's' : ''}</div>
               </div>
               <div className="text-right">
@@ -2355,8 +2409,20 @@ function MisCuadresTab({ tecnico }) {
               </div>
               {abierto ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
             </button>
+
             {abierto && (
               <div className="border-t px-4 py-3" style={{ borderColor: '#F3F4F6' }}>
+                {borrador && (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-2 pb-2 border-b" style={{ borderColor: '#F3F4F6' }}>
+                    <MiLinea label="Recogido (clientes)" val={c.total_cobrado} />
+                    <MiLinea label="Digital → empresa" val={c.digital_empresa} />
+                    <MiLinea label="Efectivo en tu poder" val={c.efectivo_recibido} />
+                    <div className="flex justify-between text-[12px]">
+                      <span className="font-bold text-gray-700">Efectivo a entregar</span>
+                      <span className="font-extrabold text-gray-900 tabular-nums">{fmt(c.dinero_a_entregar)}</span>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-3">
                   <MiLinea label="Transporte" val={c.total_transporte} />
                   <MiLinea label="Pago servicios" val={c.total_pago_servicio} />
@@ -2371,6 +2437,7 @@ function MisCuadresTab({ tecnico }) {
                         <span className="text-gray-600">
                           {it.mascota_nombre || '—'}
                           {it.es_cancelado && <span className="ml-1 text-[9px] font-bold text-red-500">CANC</span>}
+                          {it.sin_recibo && <span className="ml-1 text-[9px] font-bold text-rose-500">SIN RECIBO</span>}
                         </span>
                         <span className="font-semibold tabular-nums text-gray-800">{fmt(ganado)}</span>
                       </div>
@@ -2379,9 +2446,267 @@ function MisCuadresTab({ tecnico }) {
                 </div>
               </div>
             )}
+
+            {/* Confirmación del técnico (solo borradores) */}
+            {borrador && (
+              <div className="border-t px-4 py-3 space-y-2" style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+                {confirmVigente ? (
+                  <div className="text-[12px] text-green-700 font-semibold flex items-start gap-1.5">
+                    <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
+                    <span>
+                      Confirmaste este cuadre el {fechaHora(c.tecnico_confirmado_en)}.
+                      {c.tecnico_observacion && <span className="block font-normal text-gray-600 mt-0.5">Tu observación: “{c.tecnico_observacion}”</span>}
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-[12px] text-amber-800">
+                      {desactualizada
+                        ? 'El cuadre cambió después de tu confirmación — revísalo y confirma de nuevo.'
+                        : 'Revisa tu cuadre y confírmalo antes de que el coordinador lo cierre.'}
+                    </p>
+                    {obsAbierta === c.id ? (
+                      <div className="space-y-2">
+                        <textarea rows={3} value={obsTexto} onChange={e => setObsTexto(e.target.value)} autoFocus
+                          placeholder="Ej: la recogida de LUNA fue en Chía, falta el transporte…"
+                          className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none resize-none bg-white"
+                          style={{ borderColor: '#FCD34D' }} />
+                        <div className="flex gap-2">
+                          <button onClick={() => confirmar(c, obsTexto.trim())} disabled={confirmando === c.id || !obsTexto.trim()}
+                            className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-white transition-all active:scale-95 disabled:opacity-60"
+                            style={{ background: '#D97706' }}>
+                            {confirmando === c.id ? 'Enviando…' : 'Enviar observación'}
+                          </button>
+                          <button onClick={() => { setObsAbierta(null); setObsTexto('') }}
+                            className="px-4 py-2.5 rounded-xl text-[13px] font-semibold text-gray-500 bg-white border" style={{ borderColor: '#E5E7EB' }}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={() => confirmar(c, null)} disabled={confirmando === c.id}
+                          className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-white transition-all active:scale-95 disabled:opacity-60"
+                          style={{ background: '#16a34a' }}>
+                          {confirmando === c.id ? 'Confirmando…' : '✓ Estoy de acuerdo'}
+                        </button>
+                        <button onClick={() => setObsAbierta(c.id)} disabled={confirmando === c.id}
+                          className="flex-1 py-2.5 rounded-xl text-[13px] font-semibold text-amber-700 bg-white border transition-all active:scale-95"
+                          style={{ borderColor: '#FCD34D' }}>
+                          Tengo una observación
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ─── MI BITÁCORA — la planilla del técnico, automática (solo lectura) ────────
+// Igual a la planilla de papel: día a día qué recogió, a qué hora, cuánto
+// cobró y por qué medio, qué quedó sin cobrar y qué le reconoce el cuadre.
+function BitacoraTab({ tecnico }) {
+  const hoyMes = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+  const [mes, setMes]   = useState(hoyMes)
+  const [dias, setDias] = useState(null)   // null = cargando; [] = sin datos
+  const [error, setError] = useState('')
+  const cargaRef = useRef(0)               // descarta respuestas de un mes ya abandonado
+
+  useEffect(() => { cargar() }, [tecnico?.id, mes]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // PostgREST revienta con cientos de ids en la URL (414) → lotes de 80.
+  async function enLotes(ids, fetchLote) {
+    const out = []
+    for (let i = 0; i < ids.length; i += 80) {
+      const r = await fetchLote(ids.slice(i, i + 80))
+      out.push(...(r || []))
+    }
+    return out
+  }
+
+  async function cargar() {
+    if (!tecnico?.id) { setDias([]); return }
+    const miCarga = ++cargaRef.current
+    setDias(null); setError('')
+    try {
+      const [y, m] = mes.split('-').map(Number)
+      const desde = `${mes}-01`
+      const hasta = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+
+      // 1. Servicios del técnico en el mes (por servicio o por recogida suya)
+      const [{ data: porServicio }, { data: porRecogida }] = await Promise.all([
+        db.from('servicios').select('id').eq('tecnico_id', tecnico.id).gte('fecha_ingreso', desde).lte('fecha_ingreso', hasta),
+        db.from('recogidas').select('servicio_id').eq('tecnico_id', tecnico.id).gte('fecha_programada', desde).lte('fecha_programada', hasta),
+      ])
+      const ids = [...new Set([...(porServicio || []).map(s => s.id), ...(porRecogida || []).map(r => r.servicio_id)])].filter(Boolean)
+      if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
+      if (!ids.length) { setDias([]); return }
+
+      // 2. Detalle de servicios + recibos + reconocimientos del cuadre
+      const sinError = r => { if (r.error) throw r.error; return r.data }
+      const [svcs, recibos, cItems] = await Promise.all([
+        enLotes(ids, lote => db.from('servicios')
+          .select('id, fecha_ingreso, ciudad_recogida, estado, estado_pago, mascotas(nombre), planes(nombre)')
+          .in('id', lote).then(sinError)),
+        enLotes(ids, lote => db.from('recibos_tecnico')
+          .select('servicio_id, fecha_emision, hora_emision, valor_cobrado, medios_pago, created_at')
+          .in('servicio_id', lote).then(sinError)),
+        enLotes(ids, lote => db.from('cuadre_items')
+          .select('servicio_id, transporte_reconocido, recargo_aplicado, pago_servicio, sin_recibo, es_cancelado')
+          .in('servicio_id', lote).then(sinError)),
+      ])
+      if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
+
+      // Conteo único por servicio (regla del cuadre): el recibo más reciente
+      // CON dinero; si ninguno cobró, el más reciente.
+      const reciboMap = {}
+      const ordenados = [...(recibos || [])].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+      for (const r of ordenados) {
+        const prev = reciboMap[r.servicio_id]
+        if (!prev) { reciboMap[r.servicio_id] = r; continue }
+        if ((prev.valor_cobrado || 0) === 0 && (r.valor_cobrado || 0) > 0) reciboMap[r.servicio_id] = r
+      }
+      // Reconocimiento por servicio: preferir la fila con recibo (no sin_recibo)
+      const ganadoMap = {}
+      for (const it of (cItems || [])) {
+        if (!ganadoMap[it.servicio_id] || (ganadoMap[it.servicio_id].sin_recibo && !it.sin_recibo)) ganadoMap[it.servicio_id] = it
+      }
+
+      // 3. Armar filas y agrupar por día (fecha del cobro; si no cobró, la del ingreso)
+      const filas = (svcs || []).map(s => {
+        const rec = reciboMap[s.id] || null
+        const gi  = ganadoMap[s.id] || null
+        const medios = Array.isArray(rec?.medios_pago) ? rec.medios_pago : []
+        const efectivo = medios.filter(mp => String(mp.metodo).toUpperCase() === 'EFECTIVO').reduce((a, mp) => a + (Number(mp.monto) || 0), 0)
+        return {
+          servicioId: s.id,
+          dia:      rec?.fecha_emision || s.fecha_ingreso,
+          hora:     rec?.hora_emision ? String(rec.hora_emision).slice(0, 5) : null,
+          mascota:  s.mascotas?.nombre || '—',
+          ciudad:   s.ciudad_recogida || null,
+          plan:     s.planes?.nombre || null,
+          cancelado: s.estado === 'CANCELADO',
+          cobrado:  Number(rec?.valor_cobrado) || 0,
+          efectivo,
+          medios,
+          ganado:   gi ? (Number(gi.transporte_reconocido) || 0) + (Number(gi.recargo_aplicado) || 0) + (Number(gi.pago_servicio) || 0) : null,
+        }
+      })
+      const porDia = {}
+      for (const f of filas) {
+        if (!porDia[f.dia]) porDia[f.dia] = []
+        porDia[f.dia].push(f)
+      }
+      const listaDias = Object.keys(porDia).sort().reverse().map(d => ({
+        dia: d,
+        filas: porDia[d].sort((a, b) => (a.hora || '99').localeCompare(b.hora || '99')),
+      }))
+      setDias(listaDias)
+    } catch (e) {
+      if (miCarga !== cargaRef.current) return
+      setError(e.message || 'Error cargando la bitácora')
+      setDias([])
+    }
+  }
+
+  function moverMes(delta) {
+    const [y, m] = mes.split('-').map(Number)
+    const d = new Date(y, m - 1 + delta, 1)
+    setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  }
+
+  const [yy, mm] = mes.split('-').map(Number)
+  const nombreMes = new Date(yy, mm - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' })
+  const fechaDia = d => new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'short' })
+  const todas = (dias || []).flatMap(d => d.filas)
+  const totMes = {
+    cobrado:  todas.reduce((a, f) => a + f.cobrado, 0),
+    efectivo: todas.reduce((a, f) => a + f.efectivo, 0),
+    ganado:   todas.reduce((a, f) => a + (f.ganado || 0), 0),
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Selector de mes */}
+      <div className="flex items-center justify-between bg-white rounded-2xl border px-2 py-1.5" style={{ borderColor: '#E5E7EB' }}>
+        <button onClick={() => moverMes(-1)} className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95" style={{ background: '#F3F4F6' }}>‹</button>
+        <span className="text-[13px] font-bold text-gray-800 capitalize">{nombreMes}</span>
+        <button onClick={() => moverMes(1)} disabled={mes >= hoyMes()}
+          className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95 disabled:opacity-30" style={{ background: '#F3F4F6' }}>›</button>
+      </div>
+
+      {dias === null ? (
+        <div className="text-center py-16 text-gray-400 text-sm">Cargando bitácora…</div>
+      ) : error ? (
+        <div className="text-center py-10 text-red-500 text-sm px-4">{error}</div>
+      ) : !dias.length ? (
+        <EmptyState icon="📒" texto="Sin servicios este mes" sub="Aquí verás día a día lo que recoges, lo que cobras y lo que te reconoce el cuadre — como tu planilla, pero automática." />
+      ) : (
+        <>
+          {/* Totales del mes */}
+          <div className="rounded-2xl p-4 text-white" style={{ background: 'linear-gradient(135deg,#0B1D4F,#1A5CD8)' }}>
+            <div className="text-[11px] font-semibold text-white/70 uppercase tracking-wide">Recogido en {nombreMes}</div>
+            <div className="text-[26px] font-extrabold tabular-nums leading-tight mt-0.5">{fmt(totMes.cobrado)}</div>
+            <div className="text-[11px] text-white/70 mt-1">
+              Efectivo {fmt(totMes.efectivo)} · Digital {fmt(totMes.cobrado - totMes.efectivo)}
+              {totMes.ganado > 0 && <> · Reconocido a ti {fmt(totMes.ganado)}</>}
+            </div>
+            <div className="text-[10px] text-white/50 mt-0.5">{todas.length} servicio{todas.length !== 1 ? 's' : ''}</div>
+          </div>
+
+          {/* Día a día */}
+          {dias.map(({ dia, filas }) => {
+            const totDia = filas.reduce((a, f) => a + f.cobrado, 0)
+            return (
+              <div key={dia} className="rounded-2xl border bg-white overflow-hidden" style={{ borderColor: '#E5E7EB' }}>
+                <div className="px-4 py-2 flex items-center justify-between" style={{ background: '#F9FAFB' }}>
+                  <span className="text-[12px] font-bold text-gray-700 capitalize">{fechaDia(dia)}</span>
+                  <span className="text-[12px] font-extrabold tabular-nums text-gray-800">{fmt(totDia)}</span>
+                </div>
+                <div className="divide-y" style={{ borderColor: '#F3F4F6' }}>
+                  {filas.map(f => (
+                    <div key={f.servicioId} className="px-4 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {f.hora && <span className="text-[11px] font-mono text-gray-400 flex-shrink-0">{f.hora}</span>}
+                          <span className="text-[13px] font-bold text-gray-900 truncate">{f.mascota}</span>
+                          {f.cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 flex-shrink-0">CANC</span>}
+                        </div>
+                        <span className={`text-[13px] font-extrabold tabular-nums flex-shrink-0 ${f.cobrado > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
+                          {f.cobrado > 0 ? fmt(f.cobrado) : '—'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-0.5">
+                        <span className="text-[11px] text-gray-400 truncate">
+                          {[f.ciudad, f.plan].filter(Boolean).join(' · ') || '—'}
+                        </span>
+                        <span className="flex items-center gap-1 flex-shrink-0">
+                          {f.cobrado > 0
+                            ? f.medios.filter(mp => Number(mp.monto) > 0).map((mp, i) => (
+                                <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${String(mp.metodo).toUpperCase() === 'EFECTIVO' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                                  {mp.metodo}
+                                </span>
+                              ))
+                            : !f.cancelado && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">NO COBRADO</span>}
+                          {f.ganado != null && f.ganado > 0 && (
+                            <span className="text-[10px] font-bold text-[#16a34a] tabular-nums" title="Lo que te reconoce el cuadre">+{fmt(f.ganado)}</span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
     </div>
   )
 }

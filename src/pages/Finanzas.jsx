@@ -329,6 +329,38 @@ export default function Finanzas() {
     return p ? `${p.nombre} ${p.apellido || ''}`.trim() : '—'
   }
 
+  // ── Confirmación del técnico sobre el cuadre (migración 032) ────────────────
+  // El snapshot del monto detecta si el cuadre cambió (regenerado o editado)
+  // después de que el técnico confirmó → la confirmación queda desactualizada.
+  function confirmacionTecnico(c) {
+    if (!c?.tecnico_confirmado_en) return 'SIN_CONFIRMACION'
+    return Number(c.tecnico_confirmado_monto) === Number(c.dinero_a_entregar)
+      ? 'CONFIRMADO' : 'CONFIRMACION_DESACTUALIZADA'
+  }
+  function ChipConfirmacionTec({ cuadre }) {
+    const conf = confirmacionTecnico(cuadre)
+    if (conf === 'CONFIRMADO')
+      return (
+        <span title={`Confirmado el ${new Date(cuadre.tecnico_confirmado_en).toLocaleString('es-CO')}${cuadre.tecnico_observacion ? ` · Observación: ${cuadre.tecnico_observacion}` : ''}`}
+          className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700 inline-flex items-center gap-1 whitespace-nowrap">
+          <Check size={10} /> Técnico confirmó
+        </span>
+      )
+    if (conf === 'CONFIRMACION_DESACTUALIZADA')
+      return (
+        <span title="El técnico confirmó cuando los montos eran otros (el cuadre se regeneró o editó después). Pídele que lo revise de nuevo en su app."
+          className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">
+          ⚠ Confirmó otra versión
+        </span>
+      )
+    return (
+      <span title="El técnico aún no confirma este cuadre desde su app (Mis pagos › Cuadres)"
+        className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 whitespace-nowrap">
+        Sin confirmar
+      </span>
+    )
+  }
+
   // ── Historial de cuadres (borradores + cerrados) ────────────────────────────
   async function cargarHistorial() {
     setHistLoading(true)
@@ -491,6 +523,18 @@ export default function Finanzas() {
 
   async function cerrarCuadre() {
     if (!cuadreData) return
+    // Confirmación bilateral (decisión David 2026-07-06): lo esperado es que el
+    // técnico confirme el borrador desde su app ANTES del cierre. Si no lo ha
+    // hecho (o confirmó otra versión), se ofrece la salida explícita
+    // "Cerrar SIN confirmación del técnico" — avisa fuerte, no bloquea.
+    const confTec = confirmacionTecnico(cuadreData)
+    if (confTec !== 'CONFIRMADO') {
+      const detalle = confTec === 'SIN_CONFIRMACION'
+        ? `${nombreTecnicoSel(cuadreData.tecnico_id)} aún no ha confirmado este cuadre desde su app (Mis pagos › Cuadres).`
+        : `${nombreTecnicoSel(cuadreData.tecnico_id)} confirmó una versión anterior: los montos cambiaron después de su confirmación.`
+      if (!await confirm(`${detalle}\n\nLo recomendado es pedirle que lo revise y confirme antes de cerrar — así el cuadre queda acordado por las dos partes.`,
+        { title: 'El técnico no ha confirmado este cuadre', variant: 'warning', confirmLabel: 'Cerrar SIN confirmación del técnico' })) return
+    }
     // El cuadre SIEMPRE se puede cerrar (queda a saldo con el técnico). Un pago
     // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago,
     // cuando el técnico recogió de menos o cuando cobró de más sobre el valor
@@ -531,6 +575,9 @@ export default function Finanzas() {
         tecnico:        nombreTecnicoSel(cuadreData.tecnico_id),
         confirmado_en:  new Date().toISOString(),
         cerrado_por:    personalData ? `${personalData.nombre || ''} ${personalData.apellido || ''}`.trim() : null,
+        // Trazabilidad de la confirmación bilateral al momento del cierre.
+        confirmacion_tecnico: confirmacionTecnico(cuadreData),
+        tecnico_confirmado_en: cuadreData.tecnico_confirmado_en || null,
       }
       const { error } = await db.rpc('cerrar_cuadre', {
         p_cuadre_id: cuadreData.id,
@@ -1891,10 +1938,10 @@ export default function Finanzas() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                          <table className="w-full min-w-[860px]">
+                          <table className="w-full min-w-[1000px]">
                             <thead style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Técnico', 'Rango', 'Estado', 'Servicios', 'A entregar', 'Entrega del dinero', ''].map(h => (
+                                {['Técnico', 'Rango', 'Estado', 'Confirmación téc.', 'Servicios', 'A entregar', 'Entrega del dinero', ''].map(h => (
                                   <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
                                 ))}
                               </tr>
@@ -1913,6 +1960,7 @@ export default function Finanzas() {
                                         {cerrado ? 'CERRADO' : 'BORRADOR'}
                                       </span>
                                     </td>
+                                    <td className="px-3 py-2.5"><ChipConfirmacionTec cuadre={c} /></td>
                                     <td className="px-3 py-2.5 text-gray-600">{c.total_servicios}</td>
                                     <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900">{fmt(c.dinero_a_entregar)}</td>
                                     <td className="px-3 py-2.5">
@@ -1962,6 +2010,7 @@ export default function Finanzas() {
                         <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${cuadreCerrado ? 'bg-gray-200 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>
                           {cuadreCerrado ? <span className="flex items-center gap-1"><Lock size={11} /> CERRADO</span> : 'BORRADOR'}
                         </span>
+                        <ChipConfirmacionTec cuadre={cuadreData} />
                         <div className="flex items-center gap-2 ml-auto">
                           <button onClick={analizarConIA} disabled={iaLoading}
                             title="El asistente revisa el cuadre, lee las notas del técnico y te dice qué requiere atención. Solo sugiere: tú confirmas."
@@ -2003,6 +2052,17 @@ export default function Finanzas() {
                           </div>
                           <p className="text-[13px] text-gray-800 whitespace-pre-wrap leading-relaxed mt-2">{iaAnalisis}</p>
                           <p className="text-[10px] text-violet-500 mt-2">La IA solo sugiere: confirma cada estado tú mismo en la columna Acción.</p>
+                        </div>
+                      )}
+
+                      {/* Observación del técnico al confirmar (visible para el coordinador) */}
+                      {cuadreData.tecnico_observacion && (
+                        <div className="flex items-start gap-2 bg-[#EEF2FF] border text-[#3730A3] text-[12px] px-3 py-2.5 rounded-xl" style={{ borderColor: '#C7D2FE' }}>
+                          <MessageSquare size={14} className="flex-shrink-0 mt-0.5" />
+                          <div>
+                            <strong>Observación de {nombreTecnicoSel(cuadreData.tecnico_id)} al confirmar:</strong>
+                            <span className="block mt-0.5">“{cuadreData.tecnico_observacion}”</span>
+                          </div>
                         </div>
                       )}
 
@@ -3229,7 +3289,8 @@ function GuiaCuadreModal({ onClose }) {
             <p>· Marca <strong>Lejanía</strong> si la recogida fue lejos (reconocimiento extra al técnico). Solo <strong>efectivo</strong> cuenta como plata en manos del técnico; lo digital ya entró a la empresa.</p>
           </Paso>
           <Paso n={3} titulo="Cerrar el cuadre">
-            <p>El botón <strong>Cerrar</strong> congela el cuadre (no se puede editar más). El sistema avisa si falta un comprobante de pago digital o si el técnico debe efectivo sin justificar — puedes cerrar de todas formas, pero revisa primero.</p>
+            <p>· Antes de cerrar, el <strong>técnico confirma el cuadre desde su app</strong> (Mis pagos › Cuadres): el chip junto al estado te dice si ya confirmó, si confirmó otra versión (los montos cambiaron después) o si sigue sin confirmar. Si no ha confirmado, puedes cerrar igual con la opción <strong>"Cerrar SIN confirmación del técnico"</strong> — pero lo ideal es el acuerdo de las dos partes.</p>
+            <p>· El botón <strong>Cerrar</strong> congela el cuadre (no se puede editar más). El sistema avisa si falta un comprobante de pago digital o si el técnico debe efectivo sin justificar — puedes cerrar de todas formas, pero revisa primero.</p>
             <p><strong>Dinero a entregar a gerencia</strong> = efectivo recogido − reconocido al técnico (transporte + recargos + pago por servicio + cancelados) − ajuste manual. Si da negativo, la empresa le queda debiendo al técnico (saldo a favor: se avisa en el siguiente cuadre).</p>
           </Paso>
           <Paso n={4} titulo="Confirmar la entrega del dinero">
