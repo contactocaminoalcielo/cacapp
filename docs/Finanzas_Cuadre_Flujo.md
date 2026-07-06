@@ -94,8 +94,8 @@ GENERAR CUADRE (técnico + rango)
      │                       │
  ¿Falta comprobante digital  │
   O el técnico debe efectivo │
- (falta y NO es pendiente    │
-  gestionar)?                │
+ (falta y la fila sigue      │
+  SIN REVISAR)?              │
      │            │          │
     SÍ           NO          │
      │            │          │
@@ -166,10 +166,11 @@ Ahí se define la **vía de cobro** (*Llamar a cobrar* / *Facturación mensual*)
 El cuadre **siempre se puede cerrar**. Al cerrar solo hay un **aviso** (con botón
 *"Cerrar de todas formas"*, nunca bloqueo total) en dos casos:
 1. **Falta comprobante** de un pago digital (`digital > 0` y ese servicio no tiene ningún comprobante subido).
-2. **El técnico de verdad debe efectivo**: recogió de menos (diferencia > 0) y **NO** está marcado como *Pendiente gestionar*.
+2. **El técnico de verdad debe efectivo**: recogió de menos (diferencia > 0) y la fila sigue **Sin revisar**.
 
-> Si el faltante ya se justificó como *Pendiente gestionar* (cliente / veterinaria), no molesta al cerrar.
-> Si quedó sin justificar (o "Sin revisar" con faltante), sí avisa: ahí el técnico se estaría quedando con la plata.
+> Un faltante ya decidido no molesta al cerrar: *Pendiente gestionar* (el cliente/vet debe → Conciliaciones)
+> y *Verificado OK* (ya se saldó) son decisiones conscientes del coordinador.
+> Solo avisa el faltante **sin revisar**: ahí el técnico se estaría quedando con la plata sin que nadie lo decidiera.
 
 ### F. Dinero a entregar a gerencia
 ```

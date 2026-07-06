@@ -460,7 +460,7 @@ export default function Finanzas() {
         partes.push(`• ${faltanComprobante.length} pago(s) digital(es) SIN comprobante subido: ${faltanComprobante.map(it => it.mascota_nombre || '—').join(', ')}`)
       if (debenTecnico.length) {
         const monto = debenTecnico.reduce((a, it) => a + (diferenciaItem(it) || 0), 0)
-        partes.push(`• El técnico debe ${fmt(monto)} en efectivo (recogió de menos sin marcar "Pendiente gestionar"): ${debenTecnico.map(it => it.mascota_nombre || '—').join(', ')}`)
+        partes.push(`• El técnico debe ${fmt(monto)} en efectivo (recogió de menos y la fila sigue SIN REVISAR): ${debenTecnico.map(it => it.mascota_nombre || '—').join(', ')}`)
       }
       if (!await confirm(`Antes de cerrar, revisa:\n\n${partes.join('\n\n')}\n\nPuedes cerrar de todas formas, pero estos casos quedarán congelados así.`, { title: 'Hay pendientes por revisar', variant: 'warning', confirmLabel: 'Cerrar de todas formas' })) return
     }
@@ -566,14 +566,14 @@ export default function Finanzas() {
       && it.estado_conciliacion !== 'VERIFICADO'
       && !it.conciliacion_resuelta
   }
-  // El técnico de VERDAD debe efectivo: recogió de menos y NO se justificó como
-  // "Pendiente gestionar" (cliente/veterinaria/facturación). Sin justificar = deuda
-  // del técnico → dispara la advertencia al cerrar el cuadre.
+  // El técnico de VERDAD debe efectivo: recogió de menos y la fila está SIN
+  // REVISAR. "Verificado OK" (saldado) y "Pendiente gestionar" (el cliente/vet
+  // debe) son decisiones conscientes del coordinador → no avisan al cerrar.
   function tecnicoDebe(it) {
     if (esFactMensual(it)) return false
     const d = diferenciaItem(it)
     return d != null && d > 0
-      && it.estado_conciliacion !== 'PENDIENTE_GESTIONAR'
+      && !it.estado_conciliacion
       && !it.conciliacion_resuelta
   }
   // ¿Debe estar en Conciliaciones? Pendiente gestionar, facturación mensual, o
