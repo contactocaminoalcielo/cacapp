@@ -1,0 +1,68 @@
+name: Aplicar migracion 031 recargo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-migration-031.yml"
+      - "migrations/031_cuadre_editar_recargo_manual.sql"
+
+jobs:
+  apply-migration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar migracion al VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "migrations/031_cuadre_editar_recargo_manual.sql"
+          target:   "/tmp/orbit-migration-031"
+          strip_components: 1
+          rm:       true
+
+      - name: Ejecutar migracion en Contabo
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/supabase/docker
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-031/031_cuadre_editar_recargo_manual.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname = 'set_cuadre_item_recargo_manual'
+              ) THEN
+                RAISE EXCEPTION 'La RPC public.set_cuadre_item_recargo_manual no quedo creada';
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'cuadre_items'
+                  AND column_name = 'recargo_manual_original'
+              ) THEN
+                RAISE EXCEPTION 'La columna recargo_manual_original no quedo creada';
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 031 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar el servicio rest; la migracion ya envio NOTIFY pgrst."

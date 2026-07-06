@@ -100,6 +100,7 @@ export default function Finanzas() {
   const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
   const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
   const [valorRecogidoItem, setValorRecogidoItem] = useState(null) // cuadre_item → editar valor recogido
+  const [recargoManualItem, setRecargoManualItem] = useState(null) // cuadre_item → editar recargo
   const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
   const [histLoading,     setHistLoading]     = useState(false)
   const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
@@ -509,8 +510,16 @@ export default function Finanzas() {
         p_actor_id: personalData?.id || null,
       })
       if (error) throw error
-      // Refrescar fila (recargo recalculado) + cabecera (totales)
-      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, es_lejania: aplica, recargo_aplicado: data.recargo_aplicado } : it))
+      // Refrescar fila (recargo recalculado) + cabecera (totales). La lejania vuelve al calculo automatico.
+      const itemPatch = {
+        es_lejania: aplica,
+        recargo_aplicado: data.recargo_aplicado,
+        recargo_manual_original: data.recargo_manual_original ?? null,
+        recargo_manual_editado_en: data.recargo_manual_editado_en ?? null,
+        recargo_manual_editado_por: null,
+        recargo_manual_motivo: data.recargo_manual_motivo ?? null,
+      }
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it))
       setCuadreData(prev => prev ? {
         ...prev,
         total_recargos:        data.total_recargos,
@@ -698,6 +707,46 @@ export default function Finanzas() {
     }
   }
 
+
+  // Correccion manual del recargo por fila (solo ADMIN, solo BORRADOR).
+  async function guardarRecargoManual(item, { recargo, motivo }) {
+    const recargoNum = Number(recargo)
+    if (!Number.isFinite(recargoNum) || recargoNum < 0) {
+      await showAlert('El recargo debe ser mayor o igual a cero.', { title: 'Valor inválido' })
+      return false
+    }
+    try {
+      const { data, error } = await db.rpc('set_cuadre_item_recargo_manual', {
+        p_item_id:          item.id,
+        p_recargo_aplicado: recargoNum,
+        p_actor_id:         personalData?.id || null,
+        p_motivo:           motivo || null,
+      })
+      if (error) throw error
+      const itemPatch = {
+        recargo_aplicado: data.recargo_aplicado,
+        recargo_manual_original: data.recargo_manual_original,
+        recargo_manual_editado_en: data.recargo_manual_editado_en,
+        recargo_manual_editado_por: personalData?.id || null,
+        recargo_manual_motivo: data.recargo_manual_motivo,
+      }
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it))
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it).filter(enConciliacion)
+        : prev)
+      setCuadreData(prev => prev ? {
+        ...prev,
+        total_recargos: data.total_recargos,
+        total_reconocido: data.total_reconocido,
+        dinero_a_entregar: data.dinero_a_entregar,
+        saldo_a_favor_tecnico: data.saldo_a_favor_tecnico,
+      } : prev)
+      return true
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al ajustar recargo' })
+      return false
+    }
+  }
   // Gestión de conciliación: vía / resuelta / notas. Funciona aunque esté CERRADO.
   // Actualiza tanto el cuadre abierto como la lista de Conciliaciones.
   async function guardarConciliacion(item, { via, resuelta, notas }) {
@@ -1987,17 +2036,31 @@ export default function Finanzas() {
                                     {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : '—'}
                                   </td>
                                   <td className="px-3 py-2.5">
-                                    {it.recargo_aplicado > 0 ? (
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="font-semibold text-[#d97706] tabular-nums">{fmt(it.recargo_aplicado)}</span>
-                                        <div className="flex gap-1">
-                                          {it.es_festivo  && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">FEST</span>}
-                                          {it.es_dominical && !it.es_festivo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-600">DOM</span>}
-                                          {it.es_nocturno && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-600">NOC</span>}
-                                          {it.es_lejania && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-600">LEJ</span>}
+                                    <div className="flex items-start gap-1.5">
+                                      {it.recargo_aplicado > 0 ? (
+                                        <div className="flex flex-col gap-0.5">
+                                          <span className="font-semibold text-[#d97706] tabular-nums">{fmt(it.recargo_aplicado)}</span>
+                                          <div className="flex gap-1">
+                                            {it.es_festivo  && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">FEST</span>}
+                                            {it.es_dominical && !it.es_festivo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-orange-100 text-orange-600">DOM</span>}
+                                            {it.es_nocturno && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-600">NOC</span>}
+                                            {it.es_lejania && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-600">LEJ</span>}
+                                          </div>
                                         </div>
+                                      ) : <span className="text-gray-400 tabular-nums">—</span>}
+                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && (
+                                        <button type="button" onClick={() => setRecargoManualItem(it)}
+                                          className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:text-[#d97706] hover:bg-amber-50 transition-colors"
+                                          title="Modificar recargo">
+                                          <Pencil size={11} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    {it.recargo_manual_editado_en && (
+                                      <div className="text-[9px] font-bold text-[#d97706] mt-0.5">
+                                        editado{it.recargo_manual_original != null ? ` - original ${fmt(it.recargo_manual_original)}` : ''}
                                       </div>
-                                    ) : '—'}
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <label className={`flex items-center gap-1.5 ${cuadreCerrado ? 'cursor-default' : 'cursor-pointer'}`} title="Marcar lejanía (recargo manual al técnico)">
@@ -2252,6 +2315,17 @@ export default function Finanzas() {
           onSave={async ({ total, motivo }) => {
             const ok = await guardarValorRecogido(valorRecogidoItem, { total, motivo })
             if (ok) setValorRecogidoItem(null)
+          }}
+        />
+      )}
+
+      {recargoManualItem && (
+        <RecargoManualModal
+          item={recargoManualItem}
+          onClose={() => setRecargoManualItem(null)}
+          onSave={async ({ recargo, motivo }) => {
+            const ok = await guardarRecargoManual(recargoManualItem, { recargo, motivo })
+            if (ok) setRecargoManualItem(null)
           }}
         />
       )}
@@ -2794,6 +2868,66 @@ function ComprobanteModal({ item, onClose }) {
               })}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: editar recargo en cuadre (solo ADMIN) ──────────────────────────
+function RecargoManualModal({ item, onClose, onSave }) {
+  const [valor, setValor]   = useState(String(item.recargo_aplicado ?? 0))
+  const [motivo, setMotivo] = useState(item.recargo_manual_motivo || '')
+  const [saving, setSaving] = useState(false)
+  const actual = Number(item.recargo_aplicado) || 0
+  const nuevo  = Number(valor)
+  const invalido = !Number.isFinite(nuevo) || nuevo < 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <Pencil size={16} className="text-[#d97706]" />
+            <span className="text-[14px] font-bold text-gray-900">Modificar recargo</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="text-[13px] font-bold text-gray-900">{item.mascota_nombre || 'Mascota'}</div>
+            <div className="text-[11px] text-gray-500">Actual: {fmt(actual)}</div>
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Nuevo valor de recargo</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-gray-400 font-semibold select-none">$</span>
+              <input type="number" min={0} step={1000} value={valor} autoFocus
+                onChange={e => setValor(e.target.value)}
+                className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#d97706]/20 focus:border-[#d97706]"
+                style={{ borderColor: invalido ? '#FCA5A5' : 'rgba(30,80,40,0.2)' }} />
+            </div>
+            {invalido ? (
+              <p className="text-[11px] text-red-600 mt-1">Debe ser mayor o igual a cero.</p>
+            ) : (
+              <p className="text-[11px] text-gray-500 mt-1">Este valor reemplaza el recargo final reconocido al tecnico.</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Motivo</label>
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
+              placeholder="Ej: ajuste autorizado por gerencia"
+              className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#d97706]/20 focus:border-[#d97706] resize-none"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button onClick={async () => { setSaving(true); await onSave({ recargo: nuevo, motivo: motivo.trim() }); setSaving(false) }} disabled={saving || invalido}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#d97706] hover:bg-[#b45309] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
+            </button>
+          </div>
         </div>
       </div>
     </div>
