@@ -237,12 +237,14 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, onClickItem, onPrepararEntrega }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
-    // Servicios en LISTO siempre visibles en cualquier filtro (botón de entrega)
-    if (r.servicios?.estado === 'LISTO') return true
+    if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
+    // Servicios en LISTO siempre visibles en cualquier filtro (botón de entrega).
+    // Con filtro por recordatorio NO aplica: ahí se cuenta exactamente qué falta.
+    if (!filtroRec && r.servicios?.estado === 'LISTO') return true
     if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
     if (filtroEstado === 'en_proceso') return r.estado === 'EN_PROCESO'
     if (filtroEstado === 'listos')     return r.estado === 'LISTO'
@@ -518,6 +520,7 @@ export default function Produccion() {
   const [vista,         setVista]         = useState('servicio')
   const [filtroEstado,  setFiltroEstado]  = useState('pendientes')
   const [filtroPersona, setFiltroPersona] = useState('')
+  const [filtroRec,     setFiltroRec]     = useState('')   // id de recordatorio; '' = todos
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
 
@@ -628,6 +631,25 @@ export default function Produccion() {
     { key: 'persona',  label: 'Por persona'  },
   ]
 
+  // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
+  const recOpciones = [...new Map(
+    recordatorios
+      .filter(r => r.recordatorios && r.estado !== 'NA')
+      .map(r => [r.recordatorios.id, r.recordatorios.nombre])
+  ).entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
+
+  // Resumen del recordatorio filtrado: cuántos hay por estado y en cuántas mascotas
+  const itemsRecSel = filtroRec
+    ? recordatorios.filter(r => String(r.recordatorio_id) === String(filtroRec) && r.estado !== 'NA')
+    : []
+  const recSelResumen = filtroRec ? {
+    nombre:     recOpciones.find(([id]) => String(id) === String(filtroRec))?.[1] || 'Recordatorio',
+    pendientes: itemsRecSel.filter(r => r.estado === 'PENDIENTE').length,
+    enProceso:  itemsRecSel.filter(r => r.estado === 'EN_PROCESO').length,
+    listos:     itemsRecSel.filter(r => r.estado === 'LISTO').length,
+    mascotas:   new Set(itemsRecSel.map(r => r.servicio_id)).size,
+  } : null
+
   if (loading) return (
     <div className="flex items-center justify-center h-64 gap-3">
       <div className="spinner" /><span className="text-sm text-ink3">Cargando producción…</span>
@@ -674,6 +696,10 @@ export default function Produccion() {
                 <option value="">Todos los operarios</option>
                 {personal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
               </Select>
+              <Select value={filtroRec} onChange={e => setFiltroRec(e.target.value)} className="w-48">
+                <option value="">Todos los recordatorios</option>
+                {recOpciones.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+              </Select>
               <div className="flex gap-1 bg-surface2 rounded-[10px] p-1 border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                 {[
                   { key: 'pendientes', label: 'Pendientes' },
@@ -698,11 +724,26 @@ export default function Produccion() {
           </div>
         </div>
 
+        {/* Resumen del recordatorio filtrado (¿cuántos altares faltan y de qué mascotas?) */}
+        {vista === 'servicio' && recSelResumen && (
+          <div className="flex flex-wrap items-center gap-2 mb-4 px-4 py-2.5 rounded-xl border text-[12px]"
+            style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
+            <Package size={13} style={{ color: '#1A5CD8' }} />
+            <span className="font-bold text-ink">{recSelResumen.nombre}:</span>
+            <span className="font-bold" style={{ color: '#C03030' }}>{recSelResumen.pendientes} pendiente{recSelResumen.pendientes !== 1 ? 's' : ''}</span>
+            <span className="text-ink3">·</span>
+            <span className="font-bold" style={{ color: '#1E40AF' }}>{recSelResumen.enProceso} en proceso</span>
+            <span className="text-ink3">·</span>
+            <span className="font-bold" style={{ color: '#065F46' }}>{recSelResumen.listos} listo{recSelResumen.listos !== 1 ? 's' : ''}</span>
+            <span className="text-ink3">— en {recSelResumen.mascotas} mascota{recSelResumen.mascotas !== 1 ? 's' : ''}</span>
+          </div>
+        )}
+
         {/* Contenido según vista */}
         {vista === 'servicio' && (
           <VistaPorServicio
             recordatorios={recordatorios} personal={personal} maquinas={maquinas}
-            filtroEstado={filtroEstado} filtroPersona={filtroPersona}
+            filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
           />

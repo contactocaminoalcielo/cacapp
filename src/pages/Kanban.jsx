@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { EstadoBadge } from '@/components/ui/badge'
@@ -61,6 +61,66 @@ const COL_STYLE = {
   LISTO:          { bar: '#10B981', dot: '#D1FAE5' },
   EN_ENTREGA:     { bar: '#6366F1', dot: '#E0E7FF' },
   ENTREGADO:      { bar: '#6B7280', dot: '#F3F4F6' },
+}
+
+// ── Dropdown de planes con selección múltiple ────────────────────────────────
+function MultiSelectPlanes({ opciones, seleccion, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const fn = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', fn)
+    return () => document.removeEventListener('mousedown', fn)
+  }, [open])
+
+  const toggle = p => onChange(seleccion.includes(p) ? seleccion.filter(x => x !== p) : [...seleccion, p])
+  const label = seleccion.length === 0
+    ? 'Todos los planes'
+    : seleccion.length === 1 ? seleccion[0] : `${seleccion.length} planes`
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-semibold border transition-all max-w-[13rem] ${seleccion.length ? 'bg-blue-50 border-[#1A5CD8]/40 text-[#1A5CD8]' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+      >
+        <span className="truncate">{label}</span>
+        {seleccion.length > 0 ? (
+          <span
+            role="button"
+            title="Limpiar planes"
+            onClick={e => { e.stopPropagation(); onChange([]); setOpen(false) }}
+            className="flex-shrink-0 text-[#1A5CD8]/60 hover:text-[#1A5CD8]"
+          >
+            <X size={12} />
+          </span>
+        ) : (
+          <ChevronDown size={12} className="flex-shrink-0 text-gray-400" />
+        )}
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-60 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-xl p-1.5">
+          {opciones.map(p => {
+            const activo = seleccion.includes(p)
+            return (
+              <button
+                key={p}
+                onClick={() => toggle(p)}
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-[12px] transition-colors ${activo ? 'bg-blue-50 text-[#1A5CD8] font-semibold' : 'text-gray-700 hover:bg-gray-50'}`}
+              >
+                <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${activo ? 'bg-[#1A5CD8] border-[#1A5CD8]' : 'border-gray-300 bg-white'}`}>
+                  {activo && <Check size={10} className="text-white" />}
+                </span>
+                <span className="truncate">{p}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SortIcon({ field, sortField, sortDir }) {
@@ -240,7 +300,9 @@ export default function Kanban() {
   const [vista, setVista]                 = useState('kanban')
   const [busqueda, setBusqueda]           = useState('')
   const [filtroEstado, setFiltroEstado]   = useState('todos')
-  const [filtroPlan, setFiltroPlan]       = useState('todos')
+  const [filtroPlanes, setFiltroPlanes]   = useState([])   // multi-selección; vacío = todos
+  const [fechaDesde, setFechaDesde]       = useState('')   // rango por fecha_ingreso (YYYY-MM-DD)
+  const [fechaHasta, setFechaHasta]       = useState('')
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
   const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
@@ -1408,12 +1470,21 @@ export default function Kanban() {
     if (!COLUMNAS.includes(s.estado)) return false
     // "Solo hoy": muestra únicamente lo que ingresó hoy. Las solicitudes pendientes
     // (columna SOLICITUDES) no se ven afectadas porque viven en otro arreglo.
-    if (soloHoy && s.fecha_ingreso !== hoyStr) return false
+    // Un rango de fechas explícito reemplaza al toggle "Solo hoy"
+    const hayRangoFechas = !!(fechaDesde || fechaHasta)
+    if (soloHoy && !hayRangoFechas && s.fecha_ingreso !== hoyStr) return false
+    if (fechaDesde && (!s.fecha_ingreso || s.fecha_ingreso < fechaDesde)) return false
+    if (fechaHasta && (!s.fecha_ingreso || s.fecha_ingreso > fechaHasta)) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
-    if (filtroPlan   !== 'todos' && s.plan    !== filtroPlan)   return false
+    if (filtroPlanes.length && !filtroPlanes.includes(s.plan)) return false
     if (busqueda.trim()) {
       const q = busqueda.trim().toLowerCase()
-      return [s.mascota, s.cliente, s.plan, s.especie].some(v => v?.toLowerCase().includes(q))
+      const qDigits = q.replace(/\D/g, '')
+      const enTexto = [s.mascota, s.cliente, s.plan, s.especie].some(v => v?.toLowerCase().includes(q))
+      const enTelefono = qDigits.length >= 4 &&
+        [s.cliente_wa, s.cliente_telefono, s.cliente_telefono2]
+          .some(t => t && String(t).replace(/\D/g, '').includes(qDigits))
+      return enTexto || enTelefono
     }
     return true
   })
@@ -1622,7 +1693,7 @@ export default function Kanban() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-56">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <Input className="pl-8 pr-7 h-9 text-[13px]" placeholder="Buscar mascota, cliente, plan…" value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+            <Input className="pl-8 pr-7 h-9 text-[13px]" placeholder="Buscar mascota, cliente, teléfono…" value={busqueda} onChange={e => setBusqueda(e.target.value)} />
             {busqueda && (
               <button className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" onClick={() => setBusqueda('')}>
                 <X size={12} />
@@ -1631,11 +1702,23 @@ export default function Kanban() {
           </div>
 
           {planesUnicos.length > 1 && (
-            <Select value={filtroPlan} onChange={e => setFiltroPlan(e.target.value)} className="h-9 text-[12px] w-44">
-              <option value="todos">Todos los planes</option>
-              {planesUnicos.map(p => <option key={p} value={p}>{p}</option>)}
-            </Select>
+            <MultiSelectPlanes opciones={planesUnicos} seleccion={filtroPlanes} onChange={setFiltroPlanes} />
           )}
+
+          {/* Rango por fecha de ingreso — al fijarlo se apaga "Solo hoy" */}
+          <div className="flex items-center gap-1">
+            <Input type="date" className="h-9 w-[8.6rem] text-[12px]" title="Ingresó desde" value={fechaDesde}
+              onChange={e => { setFechaDesde(e.target.value); if (e.target.value) setSoloHoy(false) }} />
+            <span className="text-gray-300 text-[11px] font-bold">–</span>
+            <Input type="date" className="h-9 w-[8.6rem] text-[12px]" title="Ingresó hasta" value={fechaHasta}
+              onChange={e => { setFechaHasta(e.target.value); if (e.target.value) setSoloHoy(false) }} />
+            {(fechaDesde || fechaHasta) && (
+              <button className="text-gray-400 hover:text-gray-600 p-1" title="Limpiar fechas"
+                onClick={() => { setFechaDesde(''); setFechaHasta('') }}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
 
           {vista === 'tabla' && (
             <div className="flex flex-wrap gap-0.5 bg-gray-100 rounded-lg p-0.5">
@@ -1652,7 +1735,11 @@ export default function Kanban() {
           )}
 
           <button
-            onClick={() => setSoloHoy(v => !v)}
+            onClick={() => {
+              const next = !soloHoy
+              setSoloHoy(next)
+              if (next) { setFechaDesde(''); setFechaHasta('') }
+            }}
             title={soloHoy ? 'Mostrando solo la operación de hoy — clic para ver todo' : 'Mostrando todo — clic para ver solo hoy'}
             className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloHoy ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
             style={soloHoy ? { background: '#06B6D4' } : {}}
