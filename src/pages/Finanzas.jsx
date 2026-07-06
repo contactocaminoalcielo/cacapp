@@ -11,7 +11,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle, Sparkles,
+  HelpCircle, Sparkles, Pencil,
 } from 'lucide-react'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -99,6 +99,7 @@ export default function Finanzas() {
   const [detalleItem,     setDetalleItem]     = useState(null)   // cuadre_item → tarjeta de mascota
   const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
   const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
+  const [valorRecogidoItem, setValorRecogidoItem] = useState(null) // cuadre_item → editar valor recogido
   const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
   const [histLoading,     setHistLoading]     = useState(false)
   const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
@@ -640,6 +641,60 @@ export default function Finanzas() {
     } catch (err) {
       setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...item } : it))
       await showAlert(parsearErrorDB(err), { title: 'Error al guardar la revisión' })
+    }
+  }
+
+
+  // Correccion manual del valor recogido por fila (solo ADMIN, solo BORRADOR).
+  async function guardarValorRecogido(item, { total, motivo }) {
+    const totalNum = Number(total)
+    const digital = Number(item.digital) || 0
+    if (!Number.isFinite(totalNum) || totalNum < 0) {
+      await showAlert('El valor recogido debe ser mayor o igual a cero.', { title: 'Valor inválido' })
+      return false
+    }
+    if (totalNum < digital) {
+      await showAlert(`El valor recogido no puede ser menor al valor digital registrado (${fmt(digital)}).`, { title: 'Valor inválido' })
+      return false
+    }
+    try {
+      const { data, error } = await db.rpc('set_cuadre_item_valor_recogido', {
+        p_item_id:        item.id,
+        p_total_cobrado:  totalNum,
+        p_actor_id:       personalData?.id || null,
+        p_motivo:         motivo || null,
+      })
+      if (error) throw error
+      const itemPatch = {
+        total_cobrado: data.total_cobrado,
+        efectivo: data.efectivo,
+        digital: data.digital,
+        valor_recogido_original: data.valor_recogido_original,
+        valor_recogido_editado_en: data.valor_recogido_editado_en,
+        valor_recogido_editado_por: personalData?.id || null,
+        valor_recogido_motivo: data.valor_recogido_motivo,
+      }
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it))
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it).filter(enConciliacion)
+        : prev)
+      setCuadreData(prev => prev ? {
+        ...prev,
+        total_cobrado: data.total_cobrado_cuadre,
+        efectivo_recibido: data.efectivo_recibido,
+        digital_empresa: data.digital_empresa,
+        total_transporte: data.total_transporte,
+        total_recargos: data.total_recargos,
+        total_pago_servicio: data.total_pago_servicio,
+        total_cancelados: data.total_cancelados,
+        total_reconocido: data.total_reconocido,
+        dinero_a_entregar: data.dinero_a_entregar,
+        saldo_a_favor_tecnico: data.saldo_a_favor_tecnico,
+      } : prev)
+      return true
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al ajustar valor recogido' })
+      return false
     }
   }
 
@@ -1881,9 +1936,23 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
-                                    {it.total_cobrado > 0 ? fmt(it.total_cobrado)
-                                      : (it.es_cancelado ? '—'
-                                        : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
+                                    <div className="flex items-center gap-1.5">
+                                      {it.total_cobrado > 0 ? fmt(it.total_cobrado)
+                                        : (it.es_cancelado ? '—'
+                                          : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
+                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && (
+                                        <button type="button" onClick={() => setValorRecogidoItem(it)}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
+                                          title="Modificar valor recogido">
+                                          <Pencil size={11} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    {it.valor_recogido_editado_en && (
+                                      <div className="text-[9px] font-bold text-[#1A5CD8] mt-0.5">
+                                        editado{it.valor_recogido_original != null ? ` · original ${fmt(it.valor_recogido_original)}` : ''}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums">
                                     {esFactMensual(it) ? (
@@ -2175,6 +2244,19 @@ export default function Finanzas() {
       {guiaOpen && <GuiaCuadreModal onClose={() => setGuiaOpen(false)} />}
 
       {/* ── Modal observaciones por mascota ──────────────────────────────── */}
+      {/* ── Modal editar valor recogido por admin ────────────────────────── */}
+      {valorRecogidoItem && (
+        <ValorRecogidoModal
+          item={valorRecogidoItem}
+          onClose={() => setValorRecogidoItem(null)}
+          onSave={async ({ total, motivo }) => {
+            const ok = await guardarValorRecogido(valorRecogidoItem, { total, motivo })
+            if (ok) setValorRecogidoItem(null)
+          }}
+        />
+      )}
+
+
       {obsItem && (
         <ObsModal
           item={obsItem}
@@ -2717,6 +2799,69 @@ function ComprobanteModal({ item, onClose }) {
     </div>
   )
 }
+
+// ── Modal: editar valor recogido en cuadre (solo ADMIN) ───────────────────
+function ValorRecogidoModal({ item, onClose, onSave }) {
+  const [valor, setValor]   = useState(String(item.total_cobrado ?? 0))
+  const [motivo, setMotivo] = useState(item.valor_recogido_motivo || '')
+  const [saving, setSaving] = useState(false)
+  const digital = Number(item.digital) || 0
+  const actual  = Number(item.total_cobrado) || 0
+  const nuevo   = Number(valor)
+  const invalido = !Number.isFinite(nuevo) || nuevo < 0 || nuevo < digital
+  const nuevoEfectivo = Number.isFinite(nuevo) ? Math.max(0, nuevo - digital) : 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <Pencil size={16} className="text-[#1A5CD8]" />
+            <span className="text-[14px] font-bold text-gray-900">Modificar valor recogido</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="text-[13px] font-bold text-gray-900">{item.mascota_nombre || 'Mascota'}</div>
+            <div className="text-[11px] text-gray-500">Actual: {fmt(actual)} · Digital fijo: {fmt(digital)}</div>
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Nuevo valor recogido</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-gray-400 font-semibold select-none">$</span>
+              <input type="number" min={digital} step={1000} value={valor} autoFocus
+                onChange={e => setValor(e.target.value)}
+                className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8]"
+                style={{ borderColor: invalido ? '#FCA5A5' : 'rgba(30,80,40,0.2)' }} />
+            </div>
+            {invalido ? (
+              <p className="text-[11px] text-red-600 mt-1">Debe ser mayor o igual a {fmt(digital)} porque ese valor digital ya está registrado.</p>
+            ) : (
+              <p className="text-[11px] text-gray-500 mt-1">Efectivo recalculado: <strong>{fmt(nuevoEfectivo)}</strong></p>
+            )}
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Motivo</label>
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
+              placeholder="Ej: el técnico cargó el valor errado en el recibo"
+              className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] resize-none"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button onClick={async () => { setSaving(true); await onSave({ total: nuevo, motivo: motivo.trim() }); setSaving(false) }} disabled={saving || invalido}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 // ── Modal: observación por mascota (feature 3) ────────────────────────────────
 function ObsModal({ item, cerrado, onClose, onSave }) {
