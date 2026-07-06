@@ -1673,7 +1673,8 @@ export default function TecnicoApp() {
       // ── 6. Badge de comprobantes pendientes (recibos con pago digital sin comprobante) ──
       try {
         const { data: recs } = await db.from('recibos_tecnico')
-          .select('medios_pago').eq('tecnico_id', tecnico.id).limit(300)
+          .select('medios_pago').eq('tecnico_id', tecnico.id)
+          .order('created_at', { ascending: false }).limit(300)
         const n = (recs || []).filter(r =>
           Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
             METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
@@ -3508,35 +3509,40 @@ function ComprobanteTab({ tecnico, onCount }) {
     if (!tecnico?.id) return
     setCargando(true); setListErr('')
     try {
-      const { data: svcs, error } = await db.from('servicios')
-        .select(`
-          id, estado,
-          mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
-          planes:plan_id ( nombre )
-        `)
+      // Los recibos son la fuente: partir de la lista de servicios (que crece sin
+      // tope) con .limit() y sin .order() dejaba los servicios nuevos por fuera
+      // cuando el técnico pasaba de 80 acumulados, y la pestaña decía "Al día".
+      const { data: recs, error } = await db.from('recibos_tecnico')
+        .select('id, servicio_id, numero_recibo, medios_pago, created_at')
         .eq('tecnico_id', tecnico.id)
-        .in('estado', ESTADOS_RECOGIDO)
-        .limit(80)
+        .order('created_at', { ascending: false })
+        .limit(200)
       if (error) throw error
-      const ids = (svcs || []).map(s => s.id)
-      const svcById = Object.fromEntries((svcs || []).map(s => [s.id, s]))
-      let recibos = []
-      if (ids.length) {
-        const { data: recs } = await db.from('recibos_tecnico')
-          .select('id, servicio_id, numero_recibo, medios_pago, created_at')
-          .in('servicio_id', ids)
-          .order('created_at', { ascending: true })
-        recibos = recs || []
-      }
       // Un item por recibo que tenga al menos un medio DIGITAL con monto > 0
+      const recibos = (recs || []).filter(r =>
+        Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
+          METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0))
+      // Mascota/plan de esos servicios, en lotes (cientos de ids en .in() dan 414)
+      const ids = [...new Set(recibos.map(r => r.servicio_id).filter(Boolean))]
+      const svcById = {}
+      for (let i = 0; i < ids.length; i += 80) {
+        const { data: svcs } = await db.from('servicios')
+          .select(`
+            id, estado,
+            mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
+            planes:plan_id ( nombre )
+          `)
+          .in('id', ids.slice(i, i + 80))
+        for (const s of (svcs || [])) svcById[s.id] = s
+      }
       const lista = []
       for (const r of recibos) {
         const medios  = Array.isArray(r.medios_pago) ? r.medios_pago : []
         const digital = medios.filter(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
-        if (digital.length === 0) continue
         const pendientes = digital.filter(m => !m.comprobanteUrl)
         const yaUrl      = digital.find(m => m.comprobanteUrl)?.comprobanteUrl || ''
         const svc        = svcById[r.servicio_id]
+        if (svc?.estado === 'CANCELADO') continue
         lista.push({
           reciboId: r.id,
           svcId:    r.servicio_id,
