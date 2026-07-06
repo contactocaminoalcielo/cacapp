@@ -62,7 +62,13 @@ export default function Finanzas() {
   const { personalData } = useAuth()
   // ── State principal ─────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true)
-  const [servicios, setServicios] = useState([])   // array enriquecido
+  const [resumenServicios, setResumenServicios] = useState([]) // filas livianas para KPIs
+  const [servicios, setServicios] = useState([])   // cartera enriquecida (carga inicial)
+  const [comisionesServicios, setComisionesServicios] = useState(null) // null = sin cargar
+  const [comisionesLoading, setComisionesLoading] = useState(false)
+  const [historialServicios, setHistorialServicios] = useState(null) // null = sin cargar
+  const [historialServiciosLoading, setHistorialServiciosLoading] = useState(false)
+  const [historialHasMore, setHistorialHasMore] = useState(false)
   const [tab,       setTab]       = useState('cartera') // 'cartera' | 'comisiones' | 'historial'
 
   // ── State filtro cartera ────────────────────────────────────────────────────
@@ -118,144 +124,105 @@ export default function Finanzas() {
   const [noCobrados,    setNoCobrados]    = useState(null)   // null = aún no cargado
   const [noCobLoading,  setNoCobLoading]  = useState(false)
 
-  // ── Carga de datos ──────────────────────────────────────────────────────────
+  // Selects separados para que la entrada al modulo no arrastre datos pesados.
+  const SERVICIO_SELECT = 'id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, descuento_adicional, descuento_adicional_motivo, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id'
+  const RESUMEN_SELECT  = 'id, valor_total, valor_pagado, estado_pago, canal_entrada, comision_aliado, comision_descontada, descuento_adicional, aliado_origen_id'
+  const HISTORIAL_PAGE_SIZE = 100
+
+  async function enriquecerServicios(rows, { incluirComprobantes = false, incluirRecibos = false } = {}) {
+    const base = rows || []
+    const idsSvc = base.map(s => s.id).filter(Boolean)
+    const mascotaIds = [...new Set(base.map(s => s.mascota_id).filter(Boolean))]
+    const aliadoIds = [...new Set(base.map(s => s.aliado_origen_id).filter(Boolean))]
+    const planIds = [...new Set(base.map(s => s.plan_id).filter(Boolean))]
+    const tecnicoIds = [...new Set(base.map(s => s.tecnico_id).filter(Boolean))]
+    const empty = { data: [] }
+
+    const [mascotasRes, aliadosRes, planesRes, personalRes, recibosRes, compsRes, recsComprobanteRes] = await Promise.all([
+      mascotaIds.length
+        ? db.from('mascotas').select('id_mascota, nombre, cliente_id').in('id_mascota', mascotaIds)
+        : Promise.resolve(empty),
+      aliadoIds.length
+        ? db.from('aliados').select('id_aliado, nombre, modalidad_comision, saldo_comision').in('id_aliado', aliadoIds)
+        : Promise.resolve(empty),
+      planIds.length
+        ? db.from('planes').select('id, nombre, codigo').in('id', planIds)
+        : Promise.resolve(empty),
+      tecnicoIds.length
+        ? db.from('personal').select('id, nombre, apellido').in('id', tecnicoIds)
+        : Promise.resolve(empty),
+      incluirRecibos && idsSvc.length
+        ? db.from('recibos_tecnico')
+            .select('id, servicio_id, tipo, fecha_emision, hora_emision, valor_cobrado, medios_pago, numero_recibo')
+            .in('servicio_id', idsSvc)
+            .eq('tipo', 'CLIENTE')
+            .order('created_at', { ascending: false })
+        : Promise.resolve(empty),
+      incluirComprobantes && idsSvc.length
+        ? db.from('recibo_comprobantes').select('servicio_id').in('servicio_id', idsSvc)
+        : Promise.resolve(empty),
+      incluirComprobantes && idsSvc.length
+        ? db.from('recibos_tecnico').select('servicio_id, medios_pago').in('servicio_id', idsSvc)
+        : Promise.resolve(empty),
+    ])
+
+    const mascotaMap = Object.fromEntries((mascotasRes.data || []).map(m => [m.id_mascota, m]))
+    const clienteIds = [...new Set(Object.values(mascotaMap).map(m => m.cliente_id).filter(Boolean))]
+    let clienteMap = {}
+    if (clienteIds.length) {
+      const { data: clientes } = await db.from('clientes').select('id_cliente, nombre, apellido, whatsapp').in('id_cliente', clienteIds)
+      clienteMap = Object.fromEntries((clientes || []).map(c => [c.id_cliente, c]))
+    }
+
+    const aliadoMap = Object.fromEntries((aliadosRes.data || []).map(a => [a.id_aliado, a]))
+    const planMap = Object.fromEntries((planesRes.data || []).map(p => [p.id, p]))
+    const tecnicoMap = Object.fromEntries((personalRes.data || []).map(p => [p.id, p]))
+    const reciboMap = {}
+    ;(recibosRes.data || []).forEach(r => { if (!reciboMap[r.servicio_id]) reciboMap[r.servicio_id] = r })
+
+    const comprobantes = new Set()
+    ;(compsRes.data || []).forEach(c => comprobantes.add(c.servicio_id))
+    ;(recsComprobanteRes.data || []).forEach(r => {
+      const tiene = (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(mp => mp?.comprobanteUrl)
+      if (tiene) comprobantes.add(r.servicio_id)
+    })
+
+    const enriched = base.map(s => {
+      const mascota = mascotaMap[s.mascota_id] || null
+      const cliente = mascota ? (clienteMap[mascota.cliente_id] || null) : null
+      const aliado  = s.aliado_origen_id ? (aliadoMap[s.aliado_origen_id] || null) : null
+      const plan    = s.plan_id ? (planMap[s.plan_id] || null) : null
+      const tecnico = s.tecnico_id ? (tecnicoMap[s.tecnico_id] || null) : null
+      const recibo  = reciboMap[s.id] || null
+      const saldo   = Math.max(0, (s.valor_total || 0) - (s.valor_pagado || 0))
+      return { ...s, mascota, cliente, aliado, plan, tecnico, recibo, saldo }
+    })
+
+    return { enriched, comprobantes }
+  }
+
+  // Carga inicial: KPIs livianos + cartera enriquecida. Comisiones e historial se
+  // cargan solo cuando se abre cada pestana.
   async function cargar() {
     setLoading(true)
     try {
-      // 1. Servicios activos (sin cancelados)
-      const { data: svcs, error: errSvcs } = await db
-        .from('servicios')
-        .select('id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, descuento_adicional, descuento_adicional_motivo, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id')
-        .not('estado', 'eq', 'CANCELADO')
-        .order('fecha_ingreso', { ascending: false })
+      const [resumenRes, carteraRes] = await Promise.all([
+        db.from('servicios')
+          .select(RESUMEN_SELECT)
+          .not('estado', 'eq', 'CANCELADO'),
+        db.from('servicios')
+          .select(SERVICIO_SELECT)
+          .not('estado', 'eq', 'CANCELADO')
+          .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
+          .order('fecha_ingreso', { ascending: false }),
+      ])
+      if (resumenRes.error) throw resumenRes.error
+      if (carteraRes.error) throw carteraRes.error
 
-      if (errSvcs) throw errSvcs
-
-      const rows = svcs || []
-
-      // Servicios que ya tienen un comprobante de pago adjunto (para mostrar "ver
-      // comprobante" y para el aviso al cerrar el cuadre). Se cuentan DOS fuentes:
-      // la tabla formal recibo_comprobantes Y el jsonb del recibo
-      // (recibos_tecnico.medios_pago[].comprobanteUrl), porque la fila formal a
-      // veces no se creó (inserción best-effort) y el técnico igual lo tiene.
-      const idsSvc = rows.map(s => s.id)
-      if (idsSvc.length) {
-        const setCmp = new Set()
-        const { data: comps } = await db.from('recibo_comprobantes').select('servicio_id').in('servicio_id', idsSvc)
-        ;(comps || []).forEach(c => setCmp.add(c.servicio_id))
-        const { data: recs } = await db.from('recibos_tecnico').select('servicio_id, medios_pago').in('servicio_id', idsSvc)
-        ;(recs || []).forEach(r => {
-          const tiene = (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(mp => mp?.comprobanteUrl)
-          if (tiene) setCmp.add(r.servicio_id)
-        })
-        setComprobantesSet(setCmp)
-      } else {
-        setComprobantesSet(new Set())
-      }
-
-      // 2. Mascotas
-      const mascotaIds = [...new Set(rows.map(s => s.mascota_id).filter(Boolean))]
-      let mascotaMap = {}
-      if (mascotaIds.length) {
-        const { data: mascotas } = await db
-          .from('mascotas')
-          .select('id_mascota, nombre, cliente_id')
-          .in('id_mascota', mascotaIds)
-        if (mascotas) {
-          mascotaMap = Object.fromEntries(mascotas.map(m => [m.id_mascota, m]))
-        }
-      }
-
-      // 3. Clientes
-      const clienteIds = [...new Set(
-        Object.values(mascotaMap).map(m => m.cliente_id).filter(Boolean)
-      )]
-      let clienteMap = {}
-      if (clienteIds.length) {
-        const { data: clientes } = await db
-          .from('clientes')
-          .select('id_cliente, nombre, apellido, whatsapp')
-          .in('id_cliente', clienteIds)
-        if (clientes) {
-          clienteMap = Object.fromEntries(clientes.map(c => [c.id_cliente, c]))
-        }
-      }
-
-      // 4. Aliados
-      const aliadoIds = [...new Set(rows.map(s => s.aliado_origen_id).filter(Boolean))]
-      let aliadoMap = {}
-      if (aliadoIds.length) {
-        const { data: aliados } = await db
-          .from('aliados')
-          .select('id_aliado, nombre, modalidad_comision, saldo_comision')
-          .in('id_aliado', aliadoIds)
-        if (aliados) {
-          aliadoMap = Object.fromEntries(aliados.map(a => [a.id_aliado, a]))
-        }
-      }
-
-      // 5. Planes
-      const planIds = [...new Set(rows.map(s => s.plan_id).filter(Boolean))]
-      let planMap = {}
-      if (planIds.length) {
-        const { data: planes } = await db
-          .from('planes')
-          .select('id, nombre, codigo')
-          .in('id', planIds)
-        if (planes) {
-          planMap = Object.fromEntries(planes.map(p => [p.id, p]))
-        }
-      }
-
-      // 6. Personal (técnicos)
-      const tecnicoIds = [...new Set(rows.map(s => s.tecnico_id).filter(Boolean))]
-      let tecnicoMap = {}
-      if (tecnicoIds.length) {
-        const { data: personal } = await db
-          .from('personal')
-          .select('id, nombre, apellido')
-          .in('id', tecnicoIds)
-        if (personal) {
-          tecnicoMap = Object.fromEntries(personal.map(p => [p.id, p]))
-        }
-      }
-
-      // TODO Fase 5 (revisión financiera admin/coordinador):
-      //   - Listar recibos con comprobantes en `recibo_comprobantes`
-      //     (estado='PENDIENTE_REVISION') y permitir APROBAR/RECHAZAR
-      //     (UPDATE estado + reviewed_by=personal.id + reviewed_at=now()).
-      //   - Abrir el comprobante con `db.storage.from(bucket).createSignedUrl(storage_path, 60)`
-      //     en vez de la publicUrl del jsonb (ver TODO Fase 3/7 en TecnicoApp).
-      //   - Cierre financiero: detectar medios digitales (recibo_medios_pago.metodo
-      //     IN TRANSFERENCIA/NEQUI/DAVIPLATA/TARJETA) sin comprobante APROBADO.
-      // 7. Recibos del técnico (últimos por servicio)
-      const svcIds = rows.map(s => s.id)
-      let reciboMap = {}
-      if (svcIds.length) {
-        const { data: recibos } = await db
-          .from('recibos_tecnico')
-          .select('id, servicio_id, tipo, fecha_emision, hora_emision, valor_cobrado, medios_pago, numero_recibo')
-          .in('servicio_id', svcIds)
-          .eq('tipo', 'CLIENTE')
-          .order('created_at', { ascending: false })
-        ;(recibos || []).forEach(r => {
-          if (!reciboMap[r.servicio_id]) reciboMap[r.servicio_id] = r
-        })
-      }
-
-      // 8. Enriquecer + calcular saldo
-      const enriched = rows.map(s => {
-        const mascota = mascotaMap[s.mascota_id] || null
-        const cliente = mascota ? (clienteMap[mascota.cliente_id] || null) : null
-        const aliado  = s.aliado_origen_id ? (aliadoMap[s.aliado_origen_id] || null) : null
-        const plan    = s.plan_id ? (planMap[s.plan_id] || null) : null
-        const tecnico = s.tecnico_id ? (tecnicoMap[s.tecnico_id] || null) : null
-        const recibo  = reciboMap[s.id] || null
-        const saldo   = Math.max(0, (s.valor_total || 0) - (s.valor_pagado || 0))
-        return { ...s, mascota, cliente, aliado, plan, tecnico, recibo, saldo }
-      })
-
-      setServicios(enriched)
+      const { enriched, comprobantes } = await enriquecerServicios(carteraRes.data || [], { incluirComprobantes: true })
+      setResumenServicios(resumenRes.data || [])
+      setServicios(enriched.filter(s => s.saldo > 0 && s.estado_pago !== 'COMPLETO' && s.estado_pago !== 'CORTESIA'))
+      setComprobantesSet(comprobantes)
     } catch (err) {
       console.error('[Finanzas] Error cargando datos:', err)
     } finally {
@@ -264,6 +231,69 @@ export default function Finanzas() {
   }
 
   useEffect(() => { cargar() }, [])
+
+  async function cargarComisiones(force = false) {
+    if (!force && (comisionesServicios !== null || comisionesLoading)) return
+    setComisionesLoading(true)
+    try {
+      const { data, error } = await db.from('servicios')
+        .select(SERVICIO_SELECT)
+        .not('estado', 'eq', 'CANCELADO')
+        .eq('canal_entrada', 'ALIADO')
+        .gt('comision_aliado', 0)
+        .order('fecha_ingreso', { ascending: false })
+      if (error) throw error
+      const { enriched } = await enriquecerServicios(data || [])
+      setComisionesServicios(enriched)
+    } catch (err) {
+      console.error('[Finanzas] Error cargando comisiones:', err)
+      setComisionesServicios([])
+    } finally {
+      setComisionesLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'comisiones') cargarComisiones()
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function cargarHistorialServicios(reset = true) {
+    if (historialServiciosLoading) return
+    setHistorialServiciosLoading(true)
+    try {
+      const base = reset ? [] : (historialServicios || [])
+      const from = base.length
+      const to = from + HISTORIAL_PAGE_SIZE - 1
+      const { data, error } = await db.from('servicios')
+        .select(SERVICIO_SELECT)
+        .not('estado', 'eq', 'CANCELADO')
+        .order('fecha_ingreso', { ascending: false })
+        .range(from, to)
+      if (error) throw error
+      const { enriched } = await enriquecerServicios(data || [], { incluirRecibos: true })
+      setHistorialServicios(reset ? enriched : [...base, ...enriched])
+      setHistorialHasMore((data || []).length === HISTORIAL_PAGE_SIZE)
+    } catch (err) {
+      console.error('[Finanzas] Error cargando historial de servicios:', err)
+      if (reset) setHistorialServicios([])
+      setHistorialHasMore(false)
+    } finally {
+      setHistorialServiciosLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'historial' && historialServicios === null) cargarHistorialServicios(true)
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function actualizarFinanzas() {
+    if (tab === 'comisiones') return cargarComisiones(true)
+    if (tab === 'historial') return cargarHistorialServicios(true)
+    if (tab === 'nocobrados') return cargarNoCobrados()
+    if (tab === 'conciliaciones') return cargarConciliaciones()
+    if (tab === 'tecnicos') return cargarHistorial()
+    return cargar()
+  }
 
   // Lista de técnicos/mensajeros para el selector del cuadre.
   useEffect(() => {
@@ -453,8 +483,17 @@ export default function Finanzas() {
     // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago,
     // cuando el técnico recogió de menos o cuando cobró de más sobre el valor
     // a recoger sin revisar; el coordinador puede cerrar de todas formas.
+    const idsDigitalCuadre = [...new Set(cuadreItems
+      .filter(it => !it.es_cancelado && Number(it.digital) > 0 && it.servicio_id)
+      .map(it => it.servicio_id))]
+    let comprobantesCuadre = comprobantesSet
+    if (idsDigitalCuadre.some(id => !comprobantesCuadre.has(id))) {
+      const { comprobantes } = await enriquecerServicios(idsDigitalCuadre.map(id => ({ id })), { incluirComprobantes: true })
+      comprobantesCuadre = new Set([...comprobantesCuadre, ...comprobantes])
+      setComprobantesSet(comprobantesCuadre)
+    }
     const faltanComprobante = cuadreItems.filter(it =>
-      !it.es_cancelado && Number(it.digital) > 0 && !comprobantesSet.has(it.servicio_id))
+      !it.es_cancelado && Number(it.digital) > 0 && !comprobantesCuadre.has(it.servicio_id))
     const debenTecnico = cuadreItems.filter(tecnicoDebe)
     const cobrosDeMas = cuadreItems.filter(cobroDeMasSinRevisar)
     if (faltanComprobante.length || debenTecnico.length || cobrosDeMas.length) {
@@ -940,15 +979,15 @@ export default function Finanzas() {
 
   // ── Computed ────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    const totalFacturado   = servicios.reduce((a, s) => a + (s.valor_total  || 0), 0)
-    const totalRecaudado   = servicios.reduce((a, s) => a + (s.valor_pagado || 0), 0)
-    const porCobrar        = servicios.reduce((a, s) => a + s.saldo, 0)
-    const comisionesAliado = servicios
-      .filter(s => s.canal_entrada === 'ALIADO' && !s.comision_descontada && (s.comision_aliado || 0) > 0)
-      .reduce((a, s) => a + (s.comision_aliado || 0), 0)
-    const descuentosAdicionales = servicios.reduce((a, s) => a + (s.descuento_adicional || 0), 0)
-    return { totalFacturado, totalRecaudado, porCobrar, comisionesAliado, descuentosAdicionales }
-  }, [servicios])
+    const totalFacturado   = resumenServicios.reduce((a, s) => a + (s.valor_total  || 0), 0)
+    const totalRecaudado   = resumenServicios.reduce((a, s) => a + (s.valor_pagado || 0), 0)
+    const porCobrar        = resumenServicios.reduce((a, s) => a + Math.max(0, (s.valor_total || 0) - (s.valor_pagado || 0)), 0)
+    const pendientesComision = resumenServicios.filter(s => s.canal_entrada === 'ALIADO' && !s.comision_descontada && (s.comision_aliado || 0) > 0)
+    const comisionesAliado = pendientesComision.reduce((a, s) => a + (s.comision_aliado || 0), 0)
+    const aliadosConComision = new Set(pendientesComision.map(s => s.aliado_origen_id).filter(Boolean)).size
+    const descuentosAdicionales = resumenServicios.reduce((a, s) => a + (s.descuento_adicional || 0), 0)
+    return { totalFacturado, totalRecaudado, porCobrar, comisionesAliado, aliadosConComision, descuentosAdicionales }
+  }, [resumenServicios])
 
   const carteraSvcs = useMemo(() => {
     return servicios.filter(s =>
@@ -979,7 +1018,7 @@ export default function Finanzas() {
   }, [carteraSvcs, filtroCartera, filtroAliado])
 
   const comisionesPorAliado = useMemo(() => {
-    const svcAliados = servicios.filter(
+    const svcAliados = (comisionesServicios || []).filter(
       s => s.canal_entrada === 'ALIADO' && (s.comision_aliado || 0) > 0 && s.aliado
     )
     const mapa = {}
@@ -991,24 +1030,23 @@ export default function Finanzas() {
       mapa[aId].servicios.push(s)
     }
     return Object.values(mapa)
-  }, [servicios])
+  }, [comisionesServicios])
 
   // ── Toggle comision_descontada individual (optimistic) ─────────────────────
   async function toggleComisionDescontada(svcId, nuevoValor) {
-    // Optimistic update
-    setServicios(prev =>
-      prev.map(s => s.id === svcId ? { ...s, comision_descontada: nuevoValor } : s)
-    )
+    const patchLocal = valor => {
+      setServicios(prev => prev.map(s => s.id === svcId ? { ...s, comision_descontada: valor } : s))
+      setComisionesServicios(prev => prev ? prev.map(s => s.id === svcId ? { ...s, comision_descontada: valor } : s) : prev)
+      setResumenServicios(prev => prev.map(s => s.id === svcId ? { ...s, comision_descontada: valor } : s))
+    }
+    patchLocal(nuevoValor)
     const { error } = await db
       .from('servicios')
       .update({ comision_descontada: nuevoValor })
       .eq('id', svcId)
     if (error) {
       console.error('[Finanzas] Error toggling comision_descontada:', error)
-      // Revertir
-      setServicios(prev =>
-        prev.map(s => s.id === svcId ? { ...s, comision_descontada: !nuevoValor } : s)
-      )
+      patchLocal(!nuevoValor)
     }
   }
 
@@ -1051,7 +1089,7 @@ export default function Finanzas() {
         })
       if (e2) throw e2
 
-      await cargar()
+      await Promise.all([cargar(), cargarComisiones(true)])
     } catch (err) {
       console.error('[Finanzas] Error liquidando aliado:', err)
       await showAlert(parsearErrorDB(err), { title: 'Error al liquidar' })
@@ -1145,6 +1183,8 @@ export default function Finanzas() {
 
       cerrarPagoModal()
       await cargar()
+      if (comisionesServicios !== null) cargarComisiones(true)
+      if (historialServicios !== null) cargarHistorialServicios(true)
       if (noCobrados !== null) cargarNoCobrados()
       if (avisoComprobante)
         await showAlert('El pago se registró, pero el comprobante no se pudo guardar: ' + avisoComprobante + '\n\nVuelve a adjuntarlo desde el pago.', { title: 'Comprobante no guardado', variant: 'warning' })
@@ -1185,7 +1225,7 @@ export default function Finanzas() {
     <div className="flex flex-col min-h-full" style={{ background: '#F8F9FA' }}>
       <Topbar actions={
         <button
-          onClick={cargar}
+          onClick={actualizarFinanzas}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border border-[rgba(30,80,40,0.15)] text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors"
         >
           <RefreshCw size={13} /> Actualizar
@@ -1208,7 +1248,7 @@ export default function Finanzas() {
                 icon={<DollarSign size={18} className="text-[#1A5CD8]" />}
                 label="Total facturado"
                 value={fmt(kpis.totalFacturado)}
-                sub={`${servicios.length} servicio${servicios.length !== 1 ? 's' : ''}`}
+                sub={`${resumenServicios.length} servicio${resumenServicios.length !== 1 ? 's' : ''}`}
                 color="#1A5CD8"
               />
               <KpiCard
@@ -1275,7 +1315,7 @@ export default function Finanzas() {
                     )}
                     {t.key === 'comisiones' && kpis.comisionesAliado > 0 && (
                       <span className="ml-1.5 text-[10px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                        {comisionesPorAliado.length}
+                        {comisionesServicios ? comisionesPorAliado.length : kpis.aliadosConComision}
                       </span>
                     )}
                   </button>
@@ -1452,7 +1492,11 @@ export default function Finanzas() {
               {/* ── Tab: Comisiones ──────────────────────────────────── */}
               {tab === 'comisiones' && (
                 <div className="p-5 space-y-4">
-                  {comisionesPorAliado.length === 0 ? (
+                  {comisionesLoading || comisionesServicios === null ? (
+                    <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
+                      <div className="spinner" /><span className="text-sm font-medium">Cargando comisiones…</span>
+                    </div>
+                  ) : comisionesPorAliado.length === 0 ? (
                     <div className="py-16 text-center">
                       <div className="text-4xl mb-3">🤝</div>
                       <p className="text-[14px] font-semibold text-gray-700">No hay comisiones de aliados registradas</p>
@@ -1658,7 +1702,11 @@ export default function Finanzas() {
               {/* ── Tab: Historial ───────────────────────────────────── */}
               {tab === 'historial' && (
                 <div className="p-5">
-                  {servicios.length === 0 ? (
+                  {historialServiciosLoading && historialServicios === null ? (
+                    <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
+                      <div className="spinner" /><span className="text-sm font-medium">Cargando historial…</span>
+                    </div>
+                  ) : (historialServicios || []).length === 0 ? (
                     <div className="py-16 text-center">
                       <div className="text-4xl mb-3">📋</div>
                       <p className="text-[14px] font-semibold text-gray-700">No hay servicios registrados</p>
@@ -1674,7 +1722,7 @@ export default function Finanzas() {
                           </tr>
                         </thead>
                         <tbody>
-                          {servicios.map(s => {
+                          {(historialServicios || []).map(s => {
                             const mediosPago = s.recibo?.medios_pago || (s.metodo_pago ? [{ metodo: s.metodo_pago, monto: s.valor_pagado }] : [])
                             return (
                               <tr key={s.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
@@ -1723,11 +1771,19 @@ export default function Finanzas() {
                           })}
                         </tbody>
                       </table>
+                      {historialHasMore && (
+                        <div className="py-3 text-center">
+                          <button onClick={() => cargarHistorialServicios(false)} disabled={historialServiciosLoading}
+                            className="px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60"
+                            style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                            {historialServiciosLoading ? 'Cargando…' : 'Cargar más'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-
               {/* ── Tab: Cuadre técnicos ─────────────────────────────── */}
               {tab === 'tecnicos' && (
                 <div className="p-5 space-y-5">
