@@ -2516,6 +2516,13 @@ function BitacoraTab({ tecnico }) {
   const [mes, setMes]   = useState(hoyMes)
   const [dias, setDias] = useState(null)   // null = cargando; [] = sin datos
   const [error, setError] = useState('')
+  const [modo, setModo] = useState(() => {
+    try { return localStorage.getItem('orbit_bitacora_modo') || 'dias' } catch { return 'dias' }
+  })
+  function cambiarModo(m) {
+    setModo(m)
+    try { localStorage.setItem('orbit_bitacora_modo', m) } catch { /* privado/incógnito */ }
+  }
   const cargaRef = useRef(0)               // descarta respuestas de un mes ya abandonado
 
   useEffect(() => { cargar() }, [tecnico?.id, mes]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -2633,12 +2640,21 @@ function BitacoraTab({ tecnico }) {
 
   return (
     <div className="space-y-3">
-      {/* Selector de mes */}
+      {/* Selector de mes + modo de vista */}
       <div className="flex items-center justify-between bg-white rounded-2xl border px-2 py-1.5" style={{ borderColor: '#E5E7EB' }}>
         <button onClick={() => moverMes(-1)} className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95" style={{ background: '#F3F4F6' }}>‹</button>
         <span className="text-[13px] font-bold text-gray-800 capitalize">{nombreMes}</span>
         <button onClick={() => moverMes(1)} disabled={mes >= hoyMes()}
           className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95 disabled:opacity-30" style={{ background: '#F3F4F6' }}>›</button>
+      </div>
+      <div className="flex justify-end gap-1">
+        {[['dias', 'Por días'], ['tabla', 'Tabla']].map(([k, l]) => (
+          <button key={k} onClick={() => cambiarModo(k)}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all active:scale-95 ${modo === k ? 'text-white' : 'text-gray-500 bg-white border'}`}
+            style={modo === k ? { background: '#1A5CD8' } : { borderColor: '#E5E7EB' }}>
+            {l}
+          </button>
+        ))}
       </div>
 
       {dias === null ? (
@@ -2660,8 +2676,47 @@ function BitacoraTab({ tecnico }) {
             <div className="text-[10px] text-white/50 mt-0.5">{todas.length} servicio{todas.length !== 1 ? 's' : ''}</div>
           </div>
 
+          {/* Modo tabla: la planilla clásica, una fila por servicio en orden cronológico */}
+          {modo === 'tabla' && (
+            <div className="rounded-2xl border bg-white overflow-x-auto" style={{ borderColor: '#E5E7EB' }}>
+              <table className="w-full min-w-[600px]">
+                <thead>
+                  <tr style={{ background: '#F9FAFB' }}>
+                    {['Fecha', 'Hora', 'Mascota', 'Ciudad', 'Cobrado', 'Medio', 'Ganado'].map(h => (
+                      <th key={h} className="text-left text-[10px] font-bold text-gray-500 uppercase tracking-wide px-2.5 py-2 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...todas].sort((a, b) => a.dia.localeCompare(b.dia) || (a.hora || '99').localeCompare(b.hora || '99')).map(f => (
+                    <tr key={f.servicioId} className="border-t text-[12px]" style={{ borderColor: '#F3F4F6' }}>
+                      <td className="px-2.5 py-2 text-gray-500 whitespace-nowrap">{new Date(f.dia + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit' })}</td>
+                      <td className="px-2.5 py-2 font-mono text-[11px] text-gray-400">{f.hora || '—'}</td>
+                      <td className="px-2.5 py-2 font-bold text-gray-900 whitespace-nowrap">
+                        {f.mascota}
+                        {f.cancelado && <span className="ml-1 text-[9px] font-bold text-red-500">CANC</span>}
+                      </td>
+                      <td className="px-2.5 py-2 text-gray-500 whitespace-nowrap">{f.ciudad || '—'}</td>
+                      <td className={`px-2.5 py-2 font-extrabold tabular-nums whitespace-nowrap ${f.cobrado > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
+                        {f.cobrado > 0 ? fmt(f.cobrado) : '—'}
+                      </td>
+                      <td className="px-2.5 py-2 whitespace-nowrap">
+                        {f.cobrado > 0
+                          ? <span className="text-[11px] text-gray-600">{f.medios.filter(mp => Number(mp.monto) > 0).map(mp => mp.metodo).join(' + ') || '—'}</span>
+                          : !f.cancelado ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">NO COBRADO</span> : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-2.5 py-2 font-bold tabular-nums text-[#16a34a] whitespace-nowrap">
+                        {f.ganado != null && f.ganado > 0 ? `+${fmt(f.ganado)}` : <span className="text-gray-300 font-normal">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Día a día */}
-          {dias.map(({ dia, filas }) => {
+          {modo === 'dias' && dias.map(({ dia, filas }) => {
             const totDia = filas.reduce((a, f) => a + f.cobrado, 0)
             return (
               <div key={dia} className="rounded-2xl border bg-white overflow-hidden" style={{ borderColor: '#E5E7EB' }}>
