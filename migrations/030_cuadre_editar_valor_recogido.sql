@@ -154,3 +154,6 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.set_cuadre_item_valor_recogido(uuid, numeric, uuid, text)
   TO authenticated, service_role;
+
+-- PostgREST: recargar schema cache para que tome la RPC nueva.
+NOTIFY pgrst, 'reload schema';
