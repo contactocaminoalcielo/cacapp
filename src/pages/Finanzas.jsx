@@ -99,6 +99,7 @@ export default function Finanzas() {
   const [cuadreAjusteMot, setCuadreAjusteMot] = useState('')
   const [cuadreData,      setCuadreData]      = useState(null)   // cabecera cuadres_tecnico
   const [cuadreItems,     setCuadreItems]     = useState([])
+  const [ajustesTecnico,  setAjustesTecnico]  = useState({})     // sugerencias del técnico (capa sombra) por servicio_id
   const [cuadreLoading,   setCuadreLoading]   = useState(false)
   const [cuadreError,     setCuadreError]     = useState('')
   const [cerrando,        setCerrando]        = useState(false)
@@ -386,6 +387,25 @@ export default function Finanzas() {
   // Abre un cuadre del historial en la vista normal: carga cabecera + items en
   // los mismos estados que generarCuadre, así el PDF, el read-only de CERRADO y
   // el "Actualizar cuadre" de BORRADOR funcionan sin código aparte.
+  // Sugerencias del técnico (bitácora, migración 033) para los servicios del
+  // cuadre. Capa "sombra": solo se muestran para comparar, NUNCA mueven el
+  // dinero_a_entregar ni los valores del cuadre.
+  async function cargarAjustesTecnico(items, tecnicoId) {
+    setAjustesTecnico({})
+    const ids = [...new Set((items || []).map(it => it.servicio_id).filter(Boolean))]
+    if (!ids.length || !tecnicoId) return
+    try {
+      const map = {}
+      for (let i = 0; i < ids.length; i += 80) {
+        const { data } = await db.from('bitacora_ajustes_tecnico')
+          .select('servicio_id, cobrado_sugerido, medios_sugeridos, reconocido_sugerido, nota')
+          .eq('tecnico_id', tecnicoId).in('servicio_id', ids.slice(i, i + 80))
+        for (const a of (data || [])) map[a.servicio_id] = a
+      }
+      setAjustesTecnico(map)
+    } catch { /* la comparación es opcional; si falla, el cuadre sigue igual */ }
+  }
+
   async function abrirCuadre(hdr) {
     setCuadreLoading(true); setCuadreError('')
     try {
@@ -399,6 +419,7 @@ export default function Finanzas() {
       setCuadreAjusteMot(hdr.ajustes_motivo || '')
       setCuadreData(hdr); setCuadreItems(items || [])
       setIaAnalisis(null)
+      cargarAjustesTecnico(items || [], hdr.tecnico_id)
       cargarSaldosAFavor(hdr)
       cargarEntregaNombre(hdr)
     } catch (err) {
@@ -513,6 +534,7 @@ export default function Finanzas() {
       ])
       setCuadreData(hdr); setCuadreItems(items || [])
       setEntregaPorNombre(null); setIaAnalisis(null)
+      cargarAjustesTecnico(items || [], hdr.tecnico_id)
       cargarSaldosAFavor(hdr)
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
@@ -2080,6 +2102,18 @@ export default function Finanzas() {
                         </div>
                       )}
 
+                      {/* Aviso: el técnico anotó sugerencias en su bitácora (capa sombra) */}
+                      {Object.keys(ajustesTecnico).length > 0 && (
+                        <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                          <p className="text-[13px] font-bold text-amber-800">
+                            ✎ El técnico anota {Object.keys(ajustesTecnico).length} sugerencia{Object.keys(ajustesTecnico).length !== 1 ? 's' : ''} en su bitácora
+                          </p>
+                          <p className="text-[11px] text-amber-700/90 mt-0.5 leading-snug">
+                            Aparecen junto a cada mascota, solo para comparar. No cambian el cuadre ni el dinero a entregar. Si le das la razón, ajusta el valor real con el lápiz de la columna correspondiente.
+                          </p>
+                        </div>
+                      )}
+
                       {/* Tabla detalle */}
                       {cuadreItems.length === 0 ? (
                         <div className="py-12 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
@@ -2131,6 +2165,23 @@ export default function Finanzas() {
                                     {(() => {
                                       const exp = explicacionItem(it)
                                       return exp ? <p className="text-[10px] text-gray-500 leading-snug mt-1 max-w-[260px]">{exp}</p> : null
+                                    })()}
+                                    {(() => {
+                                      const aj = ajustesTecnico[it.servicio_id]
+                                      if (!aj) return null
+                                      const recSug = (Number(it.transporte_reconocido) || 0) + (Number(it.recargo_aplicado) || 0) + (Number(it.pago_servicio) || 0)
+                                      const cobDif = aj.cobrado_sugerido != null && Number(aj.cobrado_sugerido) !== Number(it.total_cobrado || 0)
+                                      const recDif = aj.reconocido_sugerido != null && Number(aj.reconocido_sugerido) !== recSug
+                                      return (
+                                        <div className="mt-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 max-w-[260px]">
+                                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-bold text-amber-700">
+                                            <span>✎ El técnico sugiere</span>
+                                            {cobDif && <span className="tabular-nums">cobrado {fmt(Number(aj.cobrado_sugerido))}</span>}
+                                            {recDif && <span className="tabular-nums">reconoc. {fmt(Number(aj.reconocido_sugerido))}</span>}
+                                          </div>
+                                          <div className="text-[10px] text-amber-800/80 leading-snug mt-0.5">{aj.nota}</div>
+                                        </div>
+                                      )
                                     })()}
                                   </td>
                                   <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>

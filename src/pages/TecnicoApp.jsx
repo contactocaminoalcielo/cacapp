@@ -2517,6 +2517,7 @@ function BitacoraTab({ tecnico }) {
   const [mes, setMes]   = useState(hoyMes)
   const [dias, setDias] = useState(null)   // null = cargando; [] = sin datos
   const [error, setError] = useState('')
+  const [ajusteFila, setAjusteFila] = useState(null)   // fila abierta en el modal de ajuste
   const [modo, setModo] = useState(() => {
     try { return localStorage.getItem('orbit_bitacora_modo') || 'dias' } catch { return 'dias' }
   })
@@ -2556,9 +2557,10 @@ function BitacoraTab({ tecnico }) {
       if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
       if (!ids.length) { setDias([]); return }
 
-      // 2. Detalle de servicios + recibos + reconocimientos del cuadre
+      // 2. Detalle de servicios + recibos + reconocimientos del cuadre +
+      //    ajustes sugeridos por el técnico (capa sombra) + candado por cierre
       const sinError = r => { if (r.error) throw r.error; return r.data }
-      const [svcs, recibos, cItems] = await Promise.all([
+      const [svcs, recibos, cItems, ajustes, lockRows] = await Promise.all([
         enLotes(ids, lote => db.from('servicios')
           .select('id, fecha_ingreso, ciudad_recogida, estado, estado_pago, mascotas(nombre), planes(nombre)')
           .in('id', lote).then(sinError)),
@@ -2568,8 +2570,23 @@ function BitacoraTab({ tecnico }) {
         enLotes(ids, lote => db.from('cuadre_items')
           .select('servicio_id, transporte_reconocido, recargo_aplicado, pago_servicio, sin_recibo, es_cancelado')
           .in('servicio_id', lote).then(sinError)),
+        enLotes(ids, lote => db.from('bitacora_ajustes_tecnico')
+          .select('servicio_id, cobrado_sugerido, medios_sugeridos, reconocido_sugerido, nota')
+          .eq('tecnico_id', tecnico.id).in('servicio_id', lote).then(sinError)),
+        // Servicios ya cuadrados y CERRADOS → su ajuste queda congelado (ventana BORRADOR).
+        enLotes(ids, lote => db.from('cuadre_items')
+          .select('servicio_id, cuadre:cuadre_id(estado, tecnico_id)')
+          .in('servicio_id', lote).then(sinError)),
       ])
       if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
+
+      const ajusteMap = {}
+      for (const a of (ajustes || [])) ajusteMap[a.servicio_id] = a
+      const lockedSet = new Set(
+        (lockRows || [])
+          .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
+          .map(r => r.servicio_id)
+      )
 
       // Conteo único por servicio (regla del cuadre): el recibo más reciente
       // CON dinero; si ninguno cobró, el más reciente.
@@ -2604,6 +2621,8 @@ function BitacoraTab({ tecnico }) {
           efectivo,
           medios,
           ganado:   gi ? (Number(gi.transporte_reconocido) || 0) + (Number(gi.recargo_aplicado) || 0) + (Number(gi.pago_servicio) || 0) : null,
+          ajuste:   ajusteMap[s.id] || null,   // sugerencia del técnico (capa sombra)
+          locked:   lockedSet.has(s.id),        // ya cerrado → no editable
         }
       })
       const porDia = {}
@@ -2633,10 +2652,18 @@ function BitacoraTab({ tecnico }) {
   const nombreMes = new Date(yy, mm - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' })
   const fechaDia = d => new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'short' })
   const todas = (dias || []).flatMap(d => d.filas)
+  // Valores efectivos "según el técnico": la sugerencia si existe, si no lo automático.
+  const efCobrado = f => f.ajuste?.cobrado_sugerido != null ? Number(f.ajuste.cobrado_sugerido) : f.cobrado
+  const efGanado  = f => f.ajuste?.reconocido_sugerido != null ? Number(f.ajuste.reconocido_sugerido) : (f.ganado || 0)
   const totMes = {
     cobrado:  todas.reduce((a, f) => a + f.cobrado, 0),
     efectivo: todas.reduce((a, f) => a + f.efectivo, 0),
     ganado:   todas.reduce((a, f) => a + (f.ganado || 0), 0),
+  }
+  const hayAjustes = todas.some(f => f.ajuste)
+  const totSegunTecnico = {
+    cobrado: todas.reduce((a, f) => a + efCobrado(f), 0),
+    ganado:  todas.reduce((a, f) => a + efGanado(f), 0),
   }
 
   return (
@@ -2675,7 +2702,21 @@ function BitacoraTab({ tecnico }) {
               {totMes.ganado > 0 && <> · Reconocido a ti {fmt(totMes.ganado)}</>}
             </div>
             <div className="text-[10px] text-white/50 mt-0.5">{todas.length} servicio{todas.length !== 1 ? 's' : ''}</div>
+            {hayAjustes && (
+              <div className="mt-2 pt-2 border-t border-white/15 text-[11px] text-white/80 flex items-center justify-between">
+                <span>Según tú</span>
+                <span className="tabular-nums font-bold">
+                  {fmt(totSegunTecnico.cobrado)}
+                  {totSegunTecnico.ganado > 0 && <span className="text-white/60 font-normal"> · reconoc. {fmt(totSegunTecnico.ganado)}</span>}
+                </span>
+              </div>
+            )}
           </div>
+          {hayAjustes && (
+            <p className="text-[10px] text-gray-400 px-1 -mt-1">
+              Tus ajustes son solo sugerencias para revisar con gerencia — no cambian el cuadre.
+            </p>
+          )}
 
           {/* Modo tabla: la planilla clásica, una fila por servicio en orden cronológico */}
           {modo === 'tabla' && (
@@ -2683,8 +2724,8 @@ function BitacoraTab({ tecnico }) {
               <table className="w-full min-w-[600px]">
                 <thead>
                   <tr style={{ background: '#F9FAFB' }}>
-                    {['Fecha', 'Hora', 'Mascota', 'Ciudad', 'Cobrado', 'Medio', 'Ganado'].map(h => (
-                      <th key={h} className="text-left text-[10px] font-bold text-gray-500 uppercase tracking-wide px-2.5 py-2 whitespace-nowrap">{h}</th>
+                    {['Fecha', 'Hora', 'Mascota', 'Ciudad', 'Cobrado', 'Medio', 'Ganado', ''].map((h, i) => (
+                      <th key={i} className="text-left text-[10px] font-bold text-gray-500 uppercase tracking-wide px-2.5 py-2 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -2700,6 +2741,9 @@ function BitacoraTab({ tecnico }) {
                       <td className="px-2.5 py-2 text-gray-500 whitespace-nowrap">{f.ciudad || '—'}</td>
                       <td className={`px-2.5 py-2 font-extrabold tabular-nums whitespace-nowrap ${f.cobrado > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
                         {f.cobrado > 0 ? fmt(f.cobrado) : '—'}
+                        {f.ajuste?.cobrado_sugerido != null && Number(f.ajuste.cobrado_sugerido) !== f.cobrado && (
+                          <div className="text-[10px] font-bold text-amber-600">tú: {fmt(Number(f.ajuste.cobrado_sugerido))}</div>
+                        )}
                       </td>
                       <td className="px-2.5 py-2 whitespace-nowrap">
                         {f.cobrado > 0
@@ -2708,6 +2752,12 @@ function BitacoraTab({ tecnico }) {
                       </td>
                       <td className="px-2.5 py-2 font-bold tabular-nums text-[#16a34a] whitespace-nowrap">
                         {f.ganado != null && f.ganado > 0 ? `+${fmt(f.ganado)}` : <span className="text-gray-300 font-normal">—</span>}
+                        {f.ajuste?.reconocido_sugerido != null && Number(f.ajuste.reconocido_sugerido) !== (f.ganado || 0) && (
+                          <div className="text-[10px] font-bold text-amber-600">tú: {fmt(Number(f.ajuste.reconocido_sugerido))}</div>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap text-right">
+                        <BtnAjuste f={f} onClick={() => setAjusteFila(f)} />
                       </td>
                     </tr>
                   ))}
@@ -2724,6 +2774,7 @@ function BitacoraTab({ tecnico }) {
                     <td className="px-2.5 py-2.5 text-[13px] font-extrabold tabular-nums text-[#16a34a] whitespace-nowrap">
                       {totMes.ganado > 0 ? `+${fmt(totMes.ganado)}` : '—'}
                     </td>
+                    <td />
                   </tr>
                 </tfoot>
               </table>
@@ -2748,9 +2799,12 @@ function BitacoraTab({ tecnico }) {
                           <span className="text-[13px] font-bold text-gray-900 truncate">{f.mascota}</span>
                           {f.cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 flex-shrink-0">CANC</span>}
                         </div>
-                        <span className={`text-[13px] font-extrabold tabular-nums flex-shrink-0 ${f.cobrado > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
-                          {f.cobrado > 0 ? fmt(f.cobrado) : '—'}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className={`text-[13px] font-extrabold tabular-nums ${f.cobrado > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
+                            {f.cobrado > 0 ? fmt(f.cobrado) : '—'}
+                          </span>
+                          <BtnAjuste f={f} onClick={() => setAjusteFila(f)} />
+                        </div>
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-0.5">
                         <span className="text-[11px] text-gray-400 truncate">
@@ -2769,6 +2823,20 @@ function BitacoraTab({ tecnico }) {
                           )}
                         </span>
                       </div>
+                      {f.ajuste && (
+                        <div className="mt-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5">
+                          <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700">
+                            <span>✎ Tu ajuste</span>
+                            {f.ajuste.cobrado_sugerido != null && Number(f.ajuste.cobrado_sugerido) !== f.cobrado && (
+                              <span className="tabular-nums">cobrado {fmt(Number(f.ajuste.cobrado_sugerido))}</span>
+                            )}
+                            {f.ajuste.reconocido_sugerido != null && Number(f.ajuste.reconocido_sugerido) !== (f.ganado || 0) && (
+                              <span className="tabular-nums">reconoc. {fmt(Number(f.ajuste.reconocido_sugerido))}</span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-amber-800/80 mt-0.5 leading-snug">{f.ajuste.nota}</div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2777,6 +2845,171 @@ function BitacoraTab({ tecnico }) {
           })}
         </>
       )}
+
+      {ajusteFila && (
+        <AjusteModal
+          fila={ajusteFila}
+          tecnico={tecnico}
+          onClose={() => setAjusteFila(null)}
+          onSaved={() => { setAjusteFila(null); cargar() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Botón/lápiz para abrir el ajuste de una fila. Candado si el periodo ya cerró.
+function BtnAjuste({ f, onClick }) {
+  if (f.locked) {
+    return (
+      <span className="text-gray-300 text-[13px] flex-shrink-0" title="Ya cuadrado y cerrado — no editable">🔒</span>
+    )
+  }
+  return (
+    <button onClick={onClick}
+      className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 active:scale-90 transition-transform ${f.ajuste ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-400'}`}
+      title="Ajustar / anotar">
+      ✎
+    </button>
+  )
+}
+
+// ─── AJUSTE DE BITÁCORA — sugerencia del técnico (capa sombra, NO toca el cuadre)
+function AjusteModal({ fila, tecnico, onClose, onSaved }) {
+  const aj = fila.ajuste
+  // "" = no lo discuto (queda NULL). Precargar con el ajuste previo si existe.
+  const [cobrado,    setCobrado]    = useState(aj?.cobrado_sugerido    != null ? String(aj.cobrado_sugerido)    : '')
+  const [efectivo,   setEfectivo]   = useState(() => {
+    const m = Array.isArray(aj?.medios_sugeridos) ? aj.medios_sugeridos.find(x => String(x.metodo).toUpperCase() === 'EFECTIVO') : null
+    return m ? String(m.monto) : ''
+  })
+  const [digital,    setDigital]    = useState(() => {
+    const m = Array.isArray(aj?.medios_sugeridos) ? aj.medios_sugeridos.find(x => String(x.metodo).toUpperCase() !== 'EFECTIVO') : null
+    return m ? String(m.monto) : ''
+  })
+  const [reconocido, setReconocido] = useState(aj?.reconocido_sugerido != null ? String(aj.reconocido_sugerido) : '')
+  const [nota,       setNota]       = useState(aj?.nota || '')
+  const [saving,     setSaving]     = useState(false)
+  const [err,        setErr]        = useState('')
+
+  const num = v => { const n = Number(String(v).replace(/[^\d.-]/g, '')); return v === '' || Number.isNaN(n) ? null : n }
+  const cambio =
+    num(cobrado)    !== null ||
+    num(efectivo)   !== null ||
+    num(digital)    !== null ||
+    num(reconocido) !== null
+
+  async function guardar() {
+    setErr('')
+    if (!nota.trim()) { setErr('Escribe por qué anotas un valor distinto.'); return }
+    setSaving(true)
+    try {
+      // Reparto de medios sugerido: solo si el técnico tocó efectivo o digital.
+      let medios = null
+      if (num(efectivo) !== null || num(digital) !== null) {
+        medios = []
+        if (num(efectivo) !== null) medios.push({ metodo: 'EFECTIVO', monto: num(efectivo) })
+        if (num(digital)  !== null) medios.push({ metodo: 'DIGITAL',  monto: num(digital) })
+      }
+      const { error } = await db.rpc('upsert_bitacora_ajuste', {
+        p_servicio_id: fila.servicioId,
+        p_tecnico_id:  tecnico.id,
+        p_nota:        nota.trim(),
+        p_cobrado:     num(cobrado),
+        p_medios:      medios,
+        p_reconocido:  num(reconocido),
+      })
+      if (error) throw error
+      onSaved()
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar el ajuste.')
+      setSaving(false)
+    }
+  }
+
+  async function quitar() {
+    setSaving(true); setErr('')
+    try {
+      const { error } = await db.rpc('borrar_bitacora_ajuste', {
+        p_servicio_id: fila.servicioId,
+        p_tecnico_id:  tecnico.id,
+      })
+      if (error) throw error
+      onSaved()
+    } catch (e) {
+      setErr(e.message || 'No se pudo quitar el ajuste.')
+      setSaving(false)
+    }
+  }
+
+  const Real = ({ label, val }) => (
+    <div className="flex justify-between text-[12px]">
+      <span className="text-gray-400">{label}</span>
+      <span className="font-semibold text-gray-700 tabular-nums">{val}</span>
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-[80] flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+      <div className="bg-white rounded-t-3xl px-6 pt-4 pb-8 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
+        <div className="mb-1">
+          <p className="font-bold text-gray-900 text-base">{fila.mascota}</p>
+          <p className="text-[11px] text-gray-500">{[fila.ciudad, fila.plan].filter(Boolean).join(' · ') || '—'}</p>
+        </div>
+
+        {/* Lo automático (referencia, no editable) */}
+        <div className="rounded-xl bg-gray-50 border px-3 py-2.5 my-3 space-y-1" style={{ borderColor: '#E5E7EB' }}>
+          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Lo que dice el sistema</div>
+          <Real label="Cobrado" val={fila.cobrado > 0 ? fmt(fila.cobrado) : '—'} />
+          <Real label="Efectivo" val={fmt(fila.efectivo)} />
+          <Real label="Digital"  val={fmt(fila.cobrado - fila.efectivo)} />
+          <Real label="Reconocido a ti" val={fila.ganado != null ? fmt(fila.ganado) : '—'} />
+        </div>
+
+        {/* Lo que dice el técnico (deja en blanco lo que no discutes) */}
+        <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wide mb-2">
+          ¿Tú qué dices? · deja en blanco lo que esté bien
+        </div>
+        <div className="space-y-2.5">
+          <CampoNum label="Cobrado"          value={cobrado}    onChange={setCobrado} />
+          <CampoNum label="De eso, efectivo" value={efectivo}   onChange={setEfectivo} />
+          <CampoNum label="De eso, digital"  value={digital}    onChange={setDigital} />
+          <CampoNum label="Reconocido a ti"  value={reconocido} onChange={setReconocido} />
+          <div>
+            <label className="text-[11px] font-bold text-gray-500">Nota — por qué {cambio ? '(obligatoria)' : ''}</label>
+            <textarea value={nota} onChange={e => setNota(e.target.value)} rows={2}
+              placeholder="Ej: cobré $20.000 más que lo registrado; el cliente pagó todo en efectivo."
+              className="w-full mt-1 rounded-xl border px-3 py-2 text-[13px] resize-none" style={{ borderColor: '#E5E7EB' }} />
+          </div>
+        </div>
+
+        {err && <p className="text-[12px] text-red-500 mt-2">{err}</p>}
+
+        <button onClick={guardar} disabled={saving || !nota.trim()}
+          className="w-full mt-4 py-3.5 rounded-2xl text-base font-bold disabled:opacity-50" style={{ background: '#D97706', color: '#fff' }}>
+          {saving ? 'Guardando…' : aj ? 'Actualizar mi ajuste' : 'Guardar mi ajuste'}
+        </button>
+        {aj && (
+          <button onClick={quitar} disabled={saving}
+            className="w-full mt-2 py-2.5 rounded-2xl text-[13px] font-bold text-gray-500 disabled:opacity-50" style={{ background: '#F3F4F6' }}>
+            Quitar ajuste (volver a lo automático)
+          </button>
+        )}
+        <p className="text-[10px] text-gray-400 text-center mt-3 leading-snug">
+          Esto es solo una sugerencia tuya para revisar con gerencia. No cambia el cuadre ni el servicio.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function CampoNum({ label, value, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <label className="text-[13px] text-gray-600 flex-shrink-0">{label}</label>
+      <input inputMode="numeric" value={value} onChange={e => onChange(e.target.value)} placeholder="—"
+        className="w-32 rounded-xl border px-3 py-2 text-[13px] text-right tabular-nums" style={{ borderColor: '#E5E7EB' }} />
     </div>
   )
 }
