@@ -84,6 +84,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // La pregunta de "recordatorios anticipados" SOLO aplica a compostaje INDIVIDUAL.
   // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
+  // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
+  const pedirEntrega = servicio?.tiene_entrega_fisica !== false
   const mascota      = servicio?.mascota || 'tu mascota'
   // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
   const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
@@ -110,7 +112,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
       setCodigo(codU)
       const r = await portalDatos(codU)
       if (r.status === 404 || !r.ok) { setFase('no_encontrado'); return }
-      setServicio(r.servicio)
+      // tiene_entrega_fisica: si el backend no lo manda (versión vieja), asumimos true.
+      setServicio({ ...r.servicio, tiene_entrega_fisica: r.tiene_entrega_fisica !== false })
       if (r.ya_recibido) { setFase('ya_procesado'); return }
       if (r.fuera_de_ventana) { setFase('fuera_ventana'); return }
       setLimites({ max_mb: r.limites?.max_mb || 8, mimes: r.limites?.mimes || MIMES_OK })
@@ -286,7 +289,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   esCompostaje={esCompostajeIndividual}
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
-                  entrega={entrega} setEntrega={setEntrega}
+                  entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}
                   onGoTo={ir}
                 />
               )}
@@ -582,7 +585,7 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
@@ -696,7 +699,9 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           onBlur={e  => e.target.style.borderColor = comentarios.trim() ? G : BORD} />
       </div>
 
-      {/* Datos para la entrega — se usan cuando preparemos la entrega de los recuerdos */}
+      {/* Datos para la entrega — solo si hay algo físico que entregar
+          (en eco-grupal todos los recordatorios son digitales → no se pide) */}
+      {pedirEntrega && (
       <div className="bg-white rounded-2xl border p-5" style={{ borderColor: BORD }}>
         <label className="text-[16px] font-bold text-gray-800 block mb-1">
           📦 Datos para la entrega<span className="text-[13px] text-gray-400 font-normal ml-1.5">· opcional</span>
@@ -727,6 +732,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           </div>
         </div>
       </div>
+      )}
 
       <p className="text-center text-[13px] text-gray-400 pb-2 leading-relaxed px-2">
         Al enviar, autorizas el uso de estas fotos para elaborar los recordatorios de {mascota}.

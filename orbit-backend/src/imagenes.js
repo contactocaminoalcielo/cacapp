@@ -218,10 +218,29 @@ export async function datosPortal({ codigo }) {
 
     const items = (yaRecibido || fueraDeVentana) ? [] : await itemsPortal(client, s.id, soloAdicional)
 
+    // ¿Hay algo FÍSICO que entregar? Sirve para no pedir datos de entrega cuando
+    // no aplica (p.ej. eco-grupal / compostaje grupal: no se devuelven cenizas y
+    // todos los recordatorios son digitales). Regla: entrega física si el proceso
+    // es INDIVIDUAL (devuelve cenizas) o si existe algún recordatorio no-digital.
+    const esGrupal = /GRUPAL/i.test(s.tipo_proceso || '')
+    const { rows: fisRows } = await client.query(
+      `SELECT EXISTS(
+         SELECT 1 FROM public.servicio_recordatorios sr
+         JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+         WHERE sr.servicio_id = $1
+           AND COALESCE(sr.origen,'') <> 'REMOVIDO'
+           AND sr.estado <> 'NA'
+           AND COALESCE(r.categoria,'') <> 'digital'
+       ) AS tiene`,
+      [s.id]
+    )
+    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
+
     return { status: 200, body: {
       ok: true,
       ya_recibido: yaRecibido,
       fuera_de_ventana: fueraDeVentana,
+      tiene_entrega_fisica: tieneEntregaFisica,
       servicio: { id: s.id, mascota: s.mascota, especie: s.especie, plan: s.plan, tipo_proceso: s.tipo_proceso, estado: s.estado },
       items,
       limites: { max_mb: parseInt(config.max_mb) || 8, mimes: config.mimes_permitidos || [] },
