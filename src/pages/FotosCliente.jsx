@@ -86,6 +86,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
   // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
   const pedirEntrega = servicio?.tiene_entrega_fisica !== false
+  // Cuando aplica, los datos esenciales son obligatorios para enviar.
+  const CAMPOS_ENTREGA_REQ = ['direccion', 'recibe', 'telefono']
+  const entregaReqOk = !pedirEntrega || CAMPOS_ENTREGA_REQ.every(k => String(entrega[k] || '').trim())
   const mascota      = servicio?.mascota || 'tu mascota'
   // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
   const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
@@ -182,7 +185,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
 
   // ── Guardar (transaccional en el backend; el navegador no cambia estados) ───
   async function guardar() {
-    if (!todoListo) return
+    if (!todoListo || !entregaReqOk) return
     setGuardando(true)
     try {
       const recordatorios = []
@@ -206,6 +209,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
       if (r.ok || r.ya_recibido) { setFase('enviado'); return }
       if (r.error === 'incompleto')
         throw new Error('Faltan imágenes o datos: ' + (r.faltantes || []).join(', '))
+      if (r.error === 'entrega_incompleta')
+        throw new Error('Por favor completa los datos de entrega: dirección, quién recibe y teléfono.')
       if (r.error === 'ya_procesado') { setFase('ya_procesado'); return }
       if (r.error === 'fuera_de_ventana') { setFase('fuera_ventana'); return }
       throw new Error(r.error || 'No se pudo guardar')
@@ -302,12 +307,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
         <div className="max-w-lg mx-auto space-y-3">
           {esFinal ? (
             <>
-              {!todoListo && (
+              {(!todoListo || !entregaReqOk) && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
-                  Completa todas las fotos y datos requeridos para poder enviar.
+                  {!todoListo
+                    ? 'Completa todas las fotos y datos requeridos para poder enviar.'
+                    : 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'}
                 </p>
               )}
-              <motion.button onClick={guardar} disabled={guardando || !todoListo} whileTap={{ scale: 0.98 }}
+              <motion.button onClick={guardar} disabled={guardando || !todoListo || !entregaReqOk} whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
                 style={{ background: G }}>
                 {guardando
@@ -704,20 +711,20 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
       {pedirEntrega && (
       <div className="bg-white rounded-2xl border p-5" style={{ borderColor: BORD }}>
         <label className="text-[16px] font-bold text-gray-800 block mb-1">
-          📦 Datos para la entrega<span className="text-[13px] text-gray-400 font-normal ml-1.5">· opcional</span>
+          📦 Datos para la entrega<span className="text-[13px] font-bold ml-1.5" style={{ color: '#B45309' }}>· obligatorio</span>
         </label>
         <p className="text-[13px] text-gray-500 mb-4 leading-relaxed">
           Cuando los recuerdos de {mascota} estén listos, así sabremos dónde y con quién entregarlos.
         </p>
         <div className="space-y-3">
-          <CampoEntrega label="Dirección de entrega" value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
+          <CampoEntrega label="Dirección de entrega" required value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
           <div className="grid grid-cols-2 gap-3">
             <CampoEntrega label="Barrio" value={entrega.barrio} onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
             <CampoEntrega label="Localidad" value={entrega.localidad} onChange={v => setE('localidad', v)} placeholder="Localidad" />
           </div>
-          <CampoEntrega label="¿Quién recibe?" value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
+          <CampoEntrega label="¿Quién recibe?" required value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
           <div className="grid grid-cols-2 gap-3">
-            <CampoEntrega label="Teléfono" value={entrega.telefono} onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
+            <CampoEntrega label="Teléfono" required value={entrega.telefono} onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
             <CampoEntrega label="Teléfono adicional" value={entrega.telefono_adicional} onChange={v => setE('telefono_adicional', v)} placeholder="Otro contacto" inputMode="tel" />
           </div>
           <div>
@@ -799,10 +806,12 @@ function PantallaInfo({ emoji, titulo, texto, cta }) {
   )
 }
 
-function CampoEntrega({ label, value, onChange, placeholder, inputMode }) {
+function CampoEntrega({ label, value, onChange, placeholder, inputMode, required }) {
   return (
     <div>
-      <label className="text-[13px] font-bold text-gray-600 block mb-2">{label}</label>
+      <label className="text-[13px] font-bold text-gray-600 block mb-2">
+        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      </label>
       <input type="text" inputMode={inputMode} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none transition-colors"
         style={{ borderColor: value.trim() ? G : BORD, background: '#FAFCFA' }}

@@ -316,6 +316,28 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       return { status: 422, body: { ok: false, error: 'incompleto', faltantes } }
     }
 
+    // Datos de entrega OBLIGATORIOS si hay algo físico que entregar (misma regla
+    // que datosPortal.tiene_entrega_fisica). En eco-grupal (todo digital, sin
+    // cenizas) no se exige. Núcleo requerido: dirección, quién recibe y teléfono.
+    const entrega = sanitizarEntrega(payload.entrega)
+    const esGrupal = /GRUPAL/i.test(s.tipo_proceso || '')
+    const { rows: fisRows } = await client.query(
+      `SELECT EXISTS(
+         SELECT 1 FROM public.servicio_recordatorios sr
+         JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+         WHERE sr.servicio_id = $1
+           AND COALESCE(sr.origen,'') <> 'REMOVIDO'
+           AND sr.estado <> 'NA'
+           AND COALESCE(r.categoria,'') <> 'digital'
+       ) AS tiene`,
+      [s.id]
+    )
+    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
+    if (tieneEntregaFisica && (!entrega || !entrega.direccion || !entrega.recibe || !entrega.telefono)) {
+      await client.query('ROLLBACK')
+      return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
+    }
+
     // Persistir cada recordatorio. Los declinados → 'NA' (no entran a producción);
     // el resto → 'EN_PROCESO' con sus imágenes/textos.
     for (const item of items) {
@@ -347,7 +369,6 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
     // "anticipados" solo aplica a compostaje INDIVIDUAL; en eco-grupal no se pregunta ni se guarda.
     const esCompostaje = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
-    const entrega = sanitizarEntrega(payload.entrega)
     await client.query(
       `UPDATE public.servicios
        SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, now()),
