@@ -615,10 +615,16 @@ function EstadoBadge({ estado }) {
   )
 }
 
+// Normaliza texto para la búsqueda inteligente: minúsculas + sin tildes.
+const normalizar = s => (s ?? '').toString().toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+
 function VistaBitacora({ rows, loading }) {
   const [q,        setQ]        = useState('')
   const [fPersona, setFPersona] = useState('')
   const [fEstado,  setFEstado]  = useState('')
+  const [fRec,     setFRec]     = useState('')
+  const [fRango,   setFRango]   = useState('')   // '', 'hoy', '7d', '30d'
 
   // Opciones de "marcado por" a partir del propio log (incluye técnicos que no
   // están en la lista de operarios activos de producción).
@@ -626,16 +632,43 @@ function VistaBitacora({ rows, loading }) {
     rows.filter(r => r.cambiado_por).map(r => [r.cambiado_por, r.cambiado_por_nombre || 'Sin nombre'])
   ).entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
 
+  // Tipos de recordatorio presentes en el log (para el filtro por recordatorio).
+  const recOpciones = [...new Set(rows.map(r => r.recordatorio_nombre).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'es'))
+
+  // Umbral de fecha según el rango elegido.
+  const desde = (() => {
+    if (!fRango) return null
+    const d = new Date()
+    if (fRango === 'hoy') { d.setHours(0, 0, 0, 0); return d }
+    if (fRango === '7d')  { d.setDate(d.getDate() - 7);  return d }
+    if (fRango === '30d') { d.setDate(d.getDate() - 30); return d }
+    return null
+  })()
+
+  // Búsqueda inteligente: cada palabra debe aparecer en algún campo (sin tildes),
+  // así "max listo" encuentra a la mascota Max marcada como Listo, en cualquier orden.
+  const tokens = normalizar(q).split(/\s+/).filter(Boolean)
+
+  const hayFiltros = q.trim() || fPersona || fEstado || fRec || fRango
+  const limpiar = () => { setQ(''); setFPersona(''); setFEstado(''); setFRec(''); setFRango('') }
+
   const filtrados = rows.filter(r => {
     if (fPersona) {
       if (fPersona === '__auto__') { if (r.cambiado_por) return false }
       else if (String(r.cambiado_por) !== String(fPersona)) return false
     }
     if (fEstado && r.estado_nuevo !== fEstado) return false
-    if (q.trim()) {
-      const s = q.trim().toLowerCase()
-      const hay = `${r.mascota_nombre || ''} ${r.recordatorio_nombre || ''} ${r.cambiado_por_nombre || ''} ${r.asignado_nombre || ''}`.toLowerCase()
-      if (!hay.includes(s)) return false
+    if (fRec && r.recordatorio_nombre !== fRec) return false
+    if (desde && new Date(r.created_at) < desde) return false
+    if (tokens.length) {
+      const heno = normalizar([
+        r.mascota_nombre, r.recordatorio_nombre, r.cambiado_por_nombre, r.asignado_nombre,
+        ESTADO_LABEL[r.estado_anterior] || r.estado_anterior,
+        ESTADO_LABEL[r.estado_nuevo] || r.estado_nuevo,
+        r.cambiado_por ? '' : 'automatico sistema',
+      ].filter(Boolean).join(' '))
+      if (!tokens.every(t => heno.includes(t))) return false
     }
     return true
   })
@@ -655,8 +688,12 @@ function VistaBitacora({ rows, loading }) {
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
           <Input value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Buscar mascota, recordatorio, persona…" className="pl-8 w-64" />
+            placeholder="Búsqueda inteligente: mascota, persona, estado…" className="pl-8 w-72" />
         </div>
+        <Select value={fRec} onChange={e => setFRec(e.target.value)} className="w-48">
+          <option value="">Todos los recordatorios</option>
+          {recOpciones.map(nombre => <option key={nombre} value={nombre}>{nombre}</option>)}
+        </Select>
         <Select value={fPersona} onChange={e => setFPersona(e.target.value)} className="w-52">
           <option value="">Todos los que marcaron</option>
           {personas.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
@@ -667,6 +704,26 @@ function VistaBitacora({ rows, loading }) {
           {['PENDIENTE', 'EN_PROCESO', 'LISTO', 'ENTREGADO'].map(e =>
             <option key={e} value={e}>{ESTADO_LABEL[e]}</option>)}
         </Select>
+        <div className="flex gap-1 bg-surface2 rounded-[10px] p-1 border" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          {[
+            { key: '',    label: 'Todo'    },
+            { key: 'hoy', label: 'Hoy'     },
+            { key: '7d',  label: '7 días'   },
+            { key: '30d', label: '30 días'  },
+          ].map(f => (
+            <button key={f.key || 'todo'}
+              className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${fRango === f.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
+              onClick={() => setFRango(f.key)}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {hayFiltros && (
+          <button onClick={limpiar}
+            className="text-[12px] font-semibold text-ink3 hover:text-primary-dark px-2 py-1.5 rounded-lg hover:bg-surface2">
+            Limpiar
+          </button>
+        )}
         <span className="text-[11px] text-ink3 ml-auto">
           {filtrados.length} movimiento{filtrados.length !== 1 ? 's' : ''}
         </span>
