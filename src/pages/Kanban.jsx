@@ -22,6 +22,40 @@ import {
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 
+// ── Descarga directa de imágenes ──────────────────────────────────────────────
+// Las URLs del storage son cross-origin: el atributo `download` de un <a> se
+// ignora entre orígenes distintos (solo abriría la imagen). Por eso se baja el
+// blob por fetch y se fuerza la descarga con un object URL. Si CORS lo bloquea,
+// cae en abrir la imagen en pestaña nueva (comportamiento anterior).
+function nombreArchivoImagen(mascota, nombre, idx, total, url) {
+  const ext = (url.split('?')[0].match(/\.(jpe?g|png|webp|gif|heic)$/i)?.[1] || 'jpg').toLowerCase()
+  const base = [mascota, nombre, total > 1 ? idx + 1 : null]
+    .filter(Boolean).join('-')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9-]+/g, '_').replace(/^_+|_+$/g, '')
+  return `${base || 'imagen'}.${ext}`
+}
+
+async function descargarImagen(url, filename) {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('fetch failed')
+    const blob = await res.blob()
+    const objUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objUrl
+    a.download = filename || 'imagen.jpg'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(objUrl), 1000)
+    return true
+  } catch {
+    window.open(url, '_blank', 'noopener')
+    return false
+  }
+}
+
 // ── Enlace público del formulario de solicitud ────────────────────────────────
 const APP_URL        = import.meta.env.VITE_APP_URL || window.location.origin
 const LINK_SOLICITUD = `${APP_URL}/#/solicitud`
@@ -320,6 +354,7 @@ export default function Kanban() {
   const [selected, setSelected]           = useState(null)
   const [detalle, setDetalle]             = useState(null)
   const [recordatorios, setRecordatorios] = useState([])
+  const [descargandoTodas, setDescargandoTodas] = useState(false)
   const [saving, setSaving]               = useState(false)
   const [guardando, setGuardando]         = useState(false)
   const [mensajeros, setMensajeros]       = useState([])
@@ -1552,6 +1587,16 @@ export default function Kanban() {
       return urls.map((url, i) => ({ url, nombre: r.recordatorios?.nombre || 'Foto', idx: i, total: urls.length, recId: r.id }))
     })
 
+  async function descargarTodasImagenes() {
+    if (descargandoTodas || !imagenesDelCliente.length) return
+    setDescargandoTodas(true)
+    for (const img of imagenesDelCliente) {
+      await descargarImagen(img.url, nombreArchivoImagen(selected?.mascota, img.nombre, img.idx, img.total, img.url))
+      await new Promise(r => setTimeout(r, 350))   // separa las descargas para que el navegador no las bloquee
+    }
+    setDescargandoTodas(false)
+  }
+
   // ── WhatsApp message según tipo_lugar ────────────────────────────────────
   function generarMsgRuta(notif) {
     const d        = notif.datos || {}
@@ -2221,27 +2266,49 @@ export default function Kanban() {
             {/* ── Galería de imágenes del cliente (productor y admin) ── */}
             {puedeVerImagenes && imagenesDelCliente.length > 0 && (
               <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#E9D5FF', background: '#FAF5FF' }}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#7C3AED' }}>
                     <Images size={12} /> Imágenes del cliente ({imagenesDelCliente.length})
                   </div>
-                  <span className="text-[10px] text-purple-400">Clic para abrir · clic derecho para descargar</span>
+                  <button
+                    onClick={descargarTodasImagenes}
+                    disabled={descargandoTodas}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg text-white transition-opacity disabled:opacity-60 flex-shrink-0"
+                    style={{ background: '#7C3AED' }}
+                    title="Descargar todas las imágenes"
+                  >
+                    <Download size={11} /> {descargandoTodas ? 'Descargando…' : 'Descargar todas'}
+                  </button>
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {imagenesDelCliente.map((img, i) => (
-                    <a key={i} href={img.url} target="_blank" rel="noreferrer"
-                      className="group relative rounded-lg overflow-hidden bg-purple-100 block"
+                    <div key={i}
+                      className="group relative rounded-lg overflow-hidden bg-purple-100"
                       style={{ aspectRatio: '1/1' }}
                       title={img.total > 1 ? `${img.nombre} — foto ${img.idx + 1}/${img.total}` : img.nombre}
                     >
-                      <img src={img.url} alt={img.nombre} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                        <Download size={14} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <img src={img.url} alt={img.nombre} className="w-full h-full object-cover" />
+                      {/* Acciones al pasar el cursor: abrir grande o descargar directo */}
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => window.open(img.url, '_blank', 'noopener')}
+                          title="Abrir"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
+                        >
+                          <Search size={13} className="text-gray-700" />
+                        </button>
+                        <button
+                          onClick={() => descargarImagen(img.url, nombreArchivoImagen(selected?.mascota, img.nombre, img.idx, img.total, img.url))}
+                          title="Descargar"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
+                        >
+                          <Download size={13} className="text-gray-700" />
+                        </button>
                       </div>
-                      <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate leading-tight" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
+                      <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate leading-tight pointer-events-none" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
                         {img.total > 1 ? `${img.nombre} ${img.idx + 1}` : img.nombre}
                       </div>
-                    </a>
+                    </div>
                   ))}
                 </div>
               </div>
