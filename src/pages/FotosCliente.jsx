@@ -66,6 +66,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [fotos,       setFotos]      = useState({})
   const [textos,      setTextos]     = useState({})
   const [comentarios, setComentarios]= useState('')
+  const [entrega,     setEntrega]    = useState({ direccion: '', barrio: '', localidad: '', recibe: '', telefono: '', telefono_adicional: '', horarios: '' })
   const [anticipados, setAnticipados]= useState(null)
   const [interes,     setInteres]    = useState({ quiere: false, recordatorio_id: '', texto: '' })
   const [catalogo,    setCatalogo]   = useState([])
@@ -189,12 +190,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
         for (const f of files) urls.push(await subirArchivo(item.id, f))
         recordatorios.push({ sr_id: item.id, urls, textos: textos[item.id] || {} })
       }
+      const entregaLlena = Object.values(entrega).some(v => String(v).trim())
       const payload = {
         recordatorios,
         declinados: [...declinados],
         comentarios: comentarios.trim() || null,
         anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
+        entrega: entregaLlena ? entrega : undefined,
       }
       const r = await portalRecibir(codigo, payload)
       if (r.ok || r.ya_recibido) { setFase('enviado'); return }
@@ -283,6 +286,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   esCompostaje={esCompostajeIndividual}
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
+                  entrega={entrega} setEntrega={setEntrega}
                   onGoTo={ir}
                 />
               )}
@@ -578,8 +582,9 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
+  const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
   return (
     <div className="space-y-5">
@@ -691,6 +696,38 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           onBlur={e  => e.target.style.borderColor = comentarios.trim() ? G : BORD} />
       </div>
 
+      {/* Datos para la entrega — se usan cuando preparemos la entrega de los recuerdos */}
+      <div className="bg-white rounded-2xl border p-5" style={{ borderColor: BORD }}>
+        <label className="text-[16px] font-bold text-gray-800 block mb-1">
+          📦 Datos para la entrega<span className="text-[13px] text-gray-400 font-normal ml-1.5">· opcional</span>
+        </label>
+        <p className="text-[13px] text-gray-500 mb-4 leading-relaxed">
+          Cuando los recuerdos de {mascota} estén listos, así sabremos dónde y con quién entregarlos.
+        </p>
+        <div className="space-y-3">
+          <CampoEntrega label="Dirección de entrega" value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
+          <div className="grid grid-cols-2 gap-3">
+            <CampoEntrega label="Barrio" value={entrega.barrio} onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
+            <CampoEntrega label="Localidad" value={entrega.localidad} onChange={v => setE('localidad', v)} placeholder="Localidad" />
+          </div>
+          <CampoEntrega label="¿Quién recibe?" value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
+          <div className="grid grid-cols-2 gap-3">
+            <CampoEntrega label="Teléfono" value={entrega.telefono} onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
+            <CampoEntrega label="Teléfono adicional" value={entrega.telefono_adicional} onChange={v => setE('telefono_adicional', v)} placeholder="Otro contacto" inputMode="tel" />
+          </div>
+          <div>
+            <label className="text-[13px] font-bold text-gray-600 block mb-2">Horarios a tener en cuenta</label>
+            <textarea value={entrega.horarios} onChange={e => setE('horarios', e.target.value)} rows={2}
+              placeholder="Ej: entre semana después de las 2 pm, fines de semana en la mañana…"
+              className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none"
+              style={{ borderColor: entrega.horarios.trim() ? G : BORD, background: '#FAFCFA' }} />
+            <p className="text-[12px] text-gray-400 mt-2 leading-relaxed">
+              Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora exacta</strong> de entrega; te avisaremos cuando el mensajero vaya en camino.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <p className="text-center text-[13px] text-gray-400 pb-2 leading-relaxed px-2">
         Al enviar, autorizas el uso de estas fotos para elaborar los recordatorios de {mascota}.
       </p>
@@ -753,6 +790,19 @@ function PantallaInfo({ emoji, titulo, texto, cta }) {
       <p className="text-[15px] text-gray-500 max-w-xs text-center leading-relaxed">{texto}</p>
       {cta && <button onClick={cta.fn} className="mt-6 px-8 py-4 rounded-2xl font-bold text-white text-[16px]" style={{ background: G }}>{cta.label}</button>}
     </Centrado>
+  )
+}
+
+function CampoEntrega({ label, value, onChange, placeholder, inputMode }) {
+  return (
+    <div>
+      <label className="text-[13px] font-bold text-gray-600 block mb-2">{label}</label>
+      <input type="text" inputMode={inputMode} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none transition-colors"
+        style={{ borderColor: value.trim() ? G : BORD, background: '#FAFCFA' }}
+        onFocus={e => e.target.style.borderColor = G}
+        onBlur={e  => e.target.style.borderColor = value.trim() ? G : BORD} />
+    </div>
   )
 }
 

@@ -78,43 +78,67 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   field('Plan / Servicio', svc?.planes?.nombre || '—', M + CW / 2, yC)
   y = hr(y)
 
-  // Ítems entregados
+  // Ítems: separados en entregados físicamente vs enviados digitalmente.
+  // Los digitales (categoria='digital') se envían electrónicamente y NO requieren
+  // entrega física — dejarlo claro evita confusiones al firmar el recibido.
   if (items && items.length > 0) {
-    y = sec('ÍTEMS ENTREGADOS', y)
     const nonNA = items.filter(i => i.estado !== 'NA' && i.origen !== 'REMOVIDO')
-    const colW = (CW - 4) / 2
-    let col = 0; let rowY = y; let maxY = y
-    nonNA.forEach(item => {
-      const x = col === 0 ? M : M + colW + 4
-      pdf.setFillColor(col === 0 ? 248 : 244, col === 0 ? 252 : 247, col === 0 ? 248 : 244)
-      pdf.rect(x, rowY - 1.5, colW, 9, 'F')
-      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(...G)
-      const nombre = item.recordatorios?.nombre || item.nombre || 'Ítem'
-      const nlines = pdf.splitTextToSize(nombre, colW - 4)
-      pdf.text(nlines, x + 2, rowY + 4)
-      const itemH = Math.max(9, nlines.length * 4.5 + 2)
-      if (col === 0) {
-        col = 1
-        maxY = Math.max(maxY, rowY + itemH)
-      } else {
-        col = 0
-        rowY = maxY + 2
-        maxY = rowY
-      }
-    })
-    y = maxY + 4
-    y = hr(y)
+    const esDigital = i => (i.recordatorios?.categoria || i.categoria) === 'digital'
+    const fisicos   = nonNA.filter(i => !esDigital(i))
+    const digitales = nonNA.filter(i => esDigital(i))
+
+    const grupoItems = (titulo, lista, startY) => {
+      let yy = sec(titulo, startY)
+      const colW = (CW - 4) / 2
+      let col = 0, rowY = yy, maxY = yy
+      lista.forEach(item => {
+        const x = col === 0 ? M : M + colW + 4
+        pdf.setFillColor(col === 0 ? 248 : 244, col === 0 ? 252 : 247, col === 0 ? 248 : 244)
+        pdf.rect(x, rowY - 1.5, colW, 9, 'F')
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(...G)
+        const nombre = item.recordatorios?.nombre || item.nombre || 'Ítem'
+        const nlines = pdf.splitTextToSize(nombre, colW - 4)
+        pdf.text(nlines, x + 2, rowY + 4)
+        const itemH = Math.max(9, nlines.length * 4.5 + 2)
+        if (col === 0) { col = 1; maxY = Math.max(maxY, rowY + itemH) }
+        else           { col = 0; rowY = maxY + 2; maxY = rowY }
+      })
+      return maxY + 4
+    }
+
+    if (fisicos.length || digitales.length) {
+      if (fisicos.length)   y = grupoItems('ENTREGADOS FÍSICAMENTE', fisicos, y)
+      if (digitales.length) y = grupoItems('ENVIADOS DIGITALMENTE (no requieren entrega física)', digitales, y)
+      y = hr(y)
+    }
   }
 
   // Datos de entrega
   y = sec('DATOS DE ENTREGA', y)
-  const yD = y
-  const dirEntrega = entrega?.direccion_entrega || '—'
-  y = Math.max(field('Dirección de entrega', dirEntrega, M, yD, CW), yD + 10)
-  const yD2 = y
-  field('Ciudad', entrega?.ciudad || '—', M, yD2)
-  field('Tipo de entrega', entrega?.tipo_entrega || 'DOMICILIO', M + CW / 2, yD2)
-  y = yD2 + 12
+  y = Math.max(field('Dirección de entrega', entrega?.direccion_entrega || '—', M, y, CW), y + 10)
+
+  let yr = y
+  field('Barrio', entrega?.barrio || '—', M, yr)
+  field('Localidad', entrega?.localidad || '—', M + CW / 2, yr)
+  y = yr + 12
+
+  yr = y
+  field('Ciudad', entrega?.ciudad || '—', M, yr)
+  field('Tipo de entrega', entrega?.tipo_entrega || 'DOMICILIO', M + CW / 2, yr)
+  y = yr + 12
+
+  yr = y
+  field('Quién recibe', entrega?.contacto_nombre || '—', M, yr)
+  const tels = [entrega?.contacto_telefono, entrega?.telefono_adicional].filter(Boolean).join('   ·   ') || '—'
+  field('Teléfono(s)', tels, M + CW / 2, yr)
+  y = yr + 12
+
+  if (entrega?.horarios_atencion) {
+    y = Math.max(field('Horarios a tener en cuenta', entrega.horarios_atencion, M, y, CW), y + 10)
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(7); pdf.setTextColor(140, 140, 140)
+    t('No corresponde a una hora exacta de entrega confirmada.', M, y)
+    y += 5
+  }
   if (entrega?.indicaciones) {
     y = Math.max(field('Instrucciones', entrega.indicaciones, M, y, CW), y + 10)
   }

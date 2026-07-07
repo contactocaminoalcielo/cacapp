@@ -230,7 +230,7 @@ export async function datosPortal({ codigo }) {
 }
 
 // ─── Portal público: recepción transaccional de imágenes/textos (POST) ──────
-// payload: { recordatorios:[{sr_id, urls:[], textos:{}}], comentarios, anticipados, adicional_interes:{recordatorio_id?, texto?} }
+// payload: { recordatorios:[{sr_id, urls:[], textos:{}}], comentarios, anticipados, adicional_interes:{recordatorio_id?, texto?}, entrega:{direccion,barrio,localidad,recibe,telefono,telefono_adicional,horarios} }
 export async function recibirImagenesPortal({ codigo, payload = {} }) {
   const cod = (codigo || '').trim().toUpperCase()
   if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
@@ -328,17 +328,21 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
     // "anticipados" solo aplica a compostaje INDIVIDUAL; en eco-grupal no se pregunta ni se guarda.
     const esCompostaje = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
+    const entrega = sanitizarEntrega(payload.entrega)
     await client.query(
       `UPDATE public.servicios
        SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, now()),
            comentarios_cliente = COALESCE($2, comentarios_cliente),
            recordatorios_anticipados = CASE WHEN $3 THEN $4 ELSE recordatorios_anticipados END,
+           datos_entrega_cliente = COALESCE($5::jsonb, datos_entrega_cliente),
+           datos_entrega_recibidos_en = CASE WHEN $5 IS NOT NULL THEN now() ELSE datos_entrega_recibidos_en END,
            estado = CASE WHEN estado = 'EN_CUARTO_FRIO' THEN 'EN_PROCESO' ELSE estado END
        WHERE id = $1`,
       [s.id,
        payload.comentarios?.trim() ? payload.comentarios.trim() : null,
        esCompostaje && typeof payload.anticipados === 'boolean',
-       esCompostaje && typeof payload.anticipados === 'boolean' ? payload.anticipados : null]
+       esCompostaje && typeof payload.anticipados === 'boolean' ? payload.anticipados : null,
+       entrega ? JSON.stringify(entrega) : null]
     )
 
     // Solicitud → RECIBIDO (crea una si el cliente entró por enlace manual sin solicitud previa)
@@ -391,6 +395,27 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
+}
+
+// Datos de entrega que deja el cliente en el portal. Se saneen server-side (no
+// se confía en el navegador): solo campos conocidos, recortados. Devuelve null
+// si el cliente no llenó nada.
+function sanitizarEntrega(e) {
+  if (!e || typeof e !== 'object') return null
+  const txt = (v, max = 300) => {
+    const s = (v == null ? '' : String(v)).trim()
+    return s ? s.slice(0, max) : null
+  }
+  const out = {
+    direccion:          txt(e.direccion),
+    barrio:             txt(e.barrio, 120),
+    localidad:          txt(e.localidad, 120),
+    recibe:             txt(e.recibe, 120),
+    telefono:           txt(e.telefono, 40),
+    telefono_adicional: txt(e.telefono_adicional, 40),
+    horarios:           txt(e.horarios, 300),
+  }
+  return Object.values(out).some(Boolean) ? out : null
 }
 
 // ¿El recordatorio recibió todos sus requisitos? (imágenes completas + textos requeridos)

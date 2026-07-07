@@ -23,9 +23,12 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
   const [direccionEntrega, setDireccionEntrega] = useState('')
   const [ciudad,           setCiudad]           = useState('')
   const [barrio,           setBarrio]           = useState('')
+  const [localidad,        setLocalidad]        = useState('')
   const [indicaciones,     setIndicaciones]     = useState('')
   const [contactoNombre,   setContactoNombre]   = useState('')
   const [contactoTelefono, setContactoTelefono] = useState('')
+  const [telefonoAdicional,setTelefonoAdicional]= useState('')
+  const [horarios,         setHorarios]         = useState('')
   const [fechaProg,        setFechaProg]        = useState('')
   const [notas,            setNotas]            = useState('')
   const [mensajeroId,      setMensajeroId]      = useState('')
@@ -38,32 +41,43 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
   function fillFromTipo(tipo, svcData, entData) {
     const cli = svcData?.mascotas?.clientes
     const al  = svcData?.aliados
+    // Datos que el cliente dejó en el portal de fotos (prefill para domicilio).
+    const dc  = svcData?.datos_entrega_cliente || {}
 
     if (tipo === 'DOMICILIO') {
       const recDir = svcData?.punto_recogida !== 'CLINICA_ALIADA'
         ? (svcData?.direccion_recogida || '') : ''
-      setDireccionEntrega(entData?.direccion_entrega || cli?.direccion || recDir)
-      setCiudad          (entData?.ciudad            || cli?.ciudad    || svcData?.ciudad_recogida || '')
-      setBarrio          (entData?.barrio             || svcData?.barrio_recogida      || '')
-      setIndicaciones    (entData?.indicaciones       || svcData?.indicaciones_recogida || '')
-      setContactoNombre  (entData?.contacto_nombre    || (cli ? `${cli.nombre || ''} ${cli.apellido || ''}`.trim() : ''))
-      setContactoTelefono(entData?.contacto_telefono  || cli?.whatsapp || cli?.telefono || '')
+      setDireccionEntrega (entData?.direccion_entrega  || dc.direccion || cli?.direccion || recDir)
+      setCiudad           (entData?.ciudad             || cli?.ciudad    || svcData?.ciudad_recogida || '')
+      setBarrio           (entData?.barrio             || dc.barrio || svcData?.barrio_recogida || '')
+      setLocalidad        (entData?.localidad          || dc.localidad || '')
+      setIndicaciones     (entData?.indicaciones       || svcData?.indicaciones_recogida || '')
+      setContactoNombre   (entData?.contacto_nombre    || dc.recibe || (cli ? `${cli.nombre || ''} ${cli.apellido || ''}`.trim() : ''))
+      setContactoTelefono (entData?.contacto_telefono  || dc.telefono || cli?.whatsapp || cli?.telefono || '')
+      setTelefonoAdicional(entData?.telefono_adicional || dc.telefono_adicional || '')
+      setHorarios         (entData?.horarios_atencion  || dc.horarios || '')
 
     } else if (tipo === 'ALIADO') {
-      setDireccionEntrega(entData?.direccion_entrega || al?.direccion || '')
-      setCiudad          (entData?.ciudad            || al?.ciudad    || '')
-      setBarrio          (entData?.barrio             || al?.localidad || al?.barrio || '')
-      setIndicaciones    (entData?.indicaciones       || (al ? `Entregar en ${al.nombre}` : ''))
-      setContactoNombre  (entData?.contacto_nombre    || al?.contacto_nombre  || '')
-      setContactoTelefono(entData?.contacto_telefono  || al?.whatsapp || al?.telefono || '')
+      setDireccionEntrega (entData?.direccion_entrega  || al?.direccion || '')
+      setCiudad           (entData?.ciudad             || al?.ciudad    || '')
+      setBarrio           (entData?.barrio             || al?.barrio    || '')
+      setLocalidad        (entData?.localidad          || al?.localidad || '')
+      setIndicaciones     (entData?.indicaciones       || (al ? `Entregar en ${al.nombre}` : ''))
+      setContactoNombre   (entData?.contacto_nombre    || al?.contacto_nombre  || '')
+      setContactoTelefono (entData?.contacto_telefono  || al?.whatsapp || al?.telefono || '')
+      setTelefonoAdicional(entData?.telefono_adicional || '')
+      setHorarios         (entData?.horarios_atencion  || '')
 
     } else if (tipo === 'PRESENCIAL') {
-      setDireccionEntrega(entData?.direccion_entrega || 'Sede Camino al Cielo')
-      setCiudad          (entData?.ciudad            || 'Bogotá')
-      setBarrio          (entData?.barrio             || '')
-      setIndicaciones    (entData?.indicaciones       || '')
-      setContactoNombre  (entData?.contacto_nombre    || '')
-      setContactoTelefono(entData?.contacto_telefono  || '')
+      setDireccionEntrega (entData?.direccion_entrega  || 'Sede Camino al Cielo')
+      setCiudad           (entData?.ciudad             || 'Bogotá')
+      setBarrio           (entData?.barrio             || '')
+      setLocalidad        (entData?.localidad          || '')
+      setIndicaciones     (entData?.indicaciones       || '')
+      setContactoNombre   (entData?.contacto_nombre    || '')
+      setContactoTelefono (entData?.contacto_telefono  || '')
+      setTelefonoAdicional(entData?.telefono_adicional || '')
+      setHorarios         (entData?.horarios_atencion  || '')
     }
   }
 
@@ -79,9 +93,10 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
     try {
       const [{ data: svcRaw, error: e1 }, { data: entData }, { data: itmsData }, { data: persData }] = await Promise.all([
         db.from('servicios').select(
-          'id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, ' +
+          'id, fecha_ingreso, fecha_listo, valor_total, valor_pagado, estado_pago, metodo_pago, ' +
           'direccion_recogida, barrio_recogida, ciudad_recogida, indicaciones_recogida, ' +
-          'punto_recogida, mascota_id, plan_id, aliado_origen_id'
+          'punto_recogida, mascota_id, plan_id, aliado_origen_id, ' +
+          'datos_entrega_cliente, datos_entrega_recibidos_en'
         ).eq('id', servicioId).single(),
         db.from('entregas').select('*').eq('servicio_id', servicioId).maybeSingle(),
         db.from('servicio_recordatorios')
@@ -161,17 +176,20 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
     setSaving(true); setError(null)
     try {
       const patch = {
-        tipo_entrega:      tipoEntrega,
-        direccion_entrega: direccionEntrega || null,
-        ciudad:            ciudad           || null,
-        barrio:            barrio           || null,
-        indicaciones:      indicaciones     || null,
-        contacto_nombre:   contactoNombre   || null,
-        contacto_telefono: contactoTelefono || null,
-        fecha_programada:  fechaProg        || null,
-        notas:             notas            || null,
-        mensajero_id:      mensajeroId,
-        estado:            'ASIGNADA',
+        tipo_entrega:       tipoEntrega,
+        direccion_entrega:  direccionEntrega || null,
+        ciudad:             ciudad           || null,
+        barrio:             barrio           || null,
+        localidad:          localidad        || null,
+        indicaciones:       indicaciones     || null,
+        contacto_nombre:    contactoNombre   || null,
+        contacto_telefono:  contactoTelefono || null,
+        telefono_adicional: telefonoAdicional|| null,
+        horarios_atencion:  horarios         || null,
+        fecha_programada:   fechaProg        || null,
+        notas:              notas            || null,
+        mensajero_id:       mensajeroId,
+        estado:             'ASIGNADA',
         ...(tipoEntrega === 'ALIADO' && svc?.aliados?.id_aliado
           ? { aliado_id: svc.aliados.id_aliado } : {}),
       }
@@ -219,7 +237,21 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
     setGenCert(true)
     try {
       const mensajero = mensajeros.find(m => m.id === mensajeroId) || null
-      await generarCertificadoEntrega({ svc, entrega, mensajero, items })
+      // El certificado refleja lo que hay en pantalla (aunque no se haya guardado aún).
+      const entregaCert = {
+        ...(entrega || {}),
+        tipo_entrega:       tipoEntrega,
+        direccion_entrega:  direccionEntrega || null,
+        ciudad:             ciudad           || null,
+        barrio:             barrio           || null,
+        localidad:          localidad        || null,
+        indicaciones:       indicaciones     || null,
+        contacto_nombre:    contactoNombre   || null,
+        contacto_telefono:  contactoTelefono || null,
+        telefono_adicional: telefonoAdicional|| null,
+        horarios_atencion:  horarios         || null,
+      }
+      await generarCertificadoEntrega({ svc, entrega: entregaCert, mensajero, items })
     } catch (e) { setError('Error al generar certificado: ' + e.message) }
     finally { setGenCert(false) }
   }
@@ -312,6 +344,25 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
               </div>
             )}
 
+            {/* Datos que dejó el cliente en el portal de fotos (prefill ya aplicado) */}
+            {svc?.datos_entrega_cliente && (
+              <div className="rounded-xl p-3 text-[12px]" style={{ background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
+                <div className="flex items-center gap-1.5 mb-1.5 font-bold text-[#3730A3]">
+                  <MapPin size={12} /> Datos que dejó el cliente para la entrega
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[#3730A3]">
+                  {svc.datos_entrega_cliente.direccion &&          <span><b>Dir:</b> {svc.datos_entrega_cliente.direccion}</span>}
+                  {svc.datos_entrega_cliente.barrio &&             <span><b>Barrio:</b> {svc.datos_entrega_cliente.barrio}</span>}
+                  {svc.datos_entrega_cliente.localidad &&          <span><b>Localidad:</b> {svc.datos_entrega_cliente.localidad}</span>}
+                  {svc.datos_entrega_cliente.recibe &&             <span><b>Recibe:</b> {svc.datos_entrega_cliente.recibe}</span>}
+                  {svc.datos_entrega_cliente.telefono &&           <span><b>Tel:</b> {svc.datos_entrega_cliente.telefono}</span>}
+                  {svc.datos_entrega_cliente.telefono_adicional && <span><b>Tel 2:</b> {svc.datos_entrega_cliente.telefono_adicional}</span>}
+                  {svc.datos_entrega_cliente.horarios &&           <span><b>Horarios:</b> {svc.datos_entrega_cliente.horarios}</span>}
+                </div>
+                <p className="text-[10px] text-[#6366F1] mt-1.5">Ya los cargamos abajo; ajústalos si es necesario. No es una hora exacta confirmada.</p>
+              </div>
+            )}
+
             {/* WhatsApp cliente */}
             {cliente?.whatsapp && (
               <button onClick={abrirWhatsApp}
@@ -371,6 +422,10 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                   placeholder="Barrio / sector"
                   className="flex-1 px-3 py-2 rounded-xl border text-[13px] outline-none"
                   style={{ borderColor: '#E5E7EB' }} />
+                <input value={localidad} onChange={e => setLocalidad(e.target.value)}
+                  placeholder="Localidad"
+                  className="flex-1 px-3 py-2 rounded-xl border text-[13px] outline-none"
+                  style={{ borderColor: '#E5E7EB' }} />
                 <input value={ciudad} onChange={e => setCiudad(e.target.value)}
                   placeholder="Ciudad"
                   className="flex-1 px-3 py-2 rounded-xl border text-[13px] outline-none"
@@ -398,6 +453,22 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                   className="flex-1 px-3 py-2 rounded-xl border text-[13px] outline-none"
                   style={{ borderColor: '#E5E7EB' }} />
               </div>
+              <input value={telefonoAdicional} onChange={e => setTelefonoAdicional(e.target.value)}
+                placeholder="Teléfono adicional (opcional)"
+                className="w-full mt-2 px-3 py-2 rounded-xl border text-[13px] outline-none"
+                style={{ borderColor: '#E5E7EB' }} />
+            </div>
+
+            {/* Horarios a tener en cuenta */}
+            <div>
+              <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <Calendar size={11} /> Horarios a tener en cuenta
+              </label>
+              <textarea value={horarios} onChange={e => setHorarios(e.target.value)}
+                placeholder="Horarios que pidió el cliente. No es una hora exacta confirmada de entrega."
+                rows={2}
+                className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none resize-none"
+                style={{ borderColor: '#E5E7EB' }} />
             </div>
 
             {/* Fecha programada */}

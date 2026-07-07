@@ -347,6 +347,14 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
               ))}
             </div>
 
+            {/* Traza: cuándo quedó listo el servicio */}
+            {todoListo && servicio?.fecha_listo && (
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-semibold" style={{ color: '#059669' }}>
+                <CheckCircle2 size={11} />
+                Listo {new Date(servicio.fecha_listo).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </div>
+            )}
+
             {/* Botón preparar entrega cuando está LISTO */}
             {todoListo && onPrepararEntrega && (
               <button
@@ -835,7 +843,7 @@ export default function Produccion() {
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
-            servicios ( id, fecha_imagenes_recibidas, estado,
+            servicios ( id, fecha_imagenes_recibidas, fecha_listo, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
                         planes ( nombre, codigo ) )
           `)
