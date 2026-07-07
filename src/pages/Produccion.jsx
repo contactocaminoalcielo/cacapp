@@ -1,23 +1,26 @@
 import { useState, useEffect } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Modal } from '@/components/ui/dialog'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { petEmoji, parsearErrorDB } from '@/lib/utils'
-import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck } from 'lucide-react'
+import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
-const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A' }
+const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
   PENDIENTE:  { bg: '#FEF3C7', text: '#92400E', border: '#FDE68A' },
   EN_PROCESO: { bg: '#DBEAFE', text: '#1E40AF', border: '#BFDBFE' },
   LISTO:      { bg: '#D1FAE5', text: '#065F46', border: '#6EE7B7' },
   NA:         { bg: '#F3F4F6', text: '#9CA3AF', border: '#E5E7EB' },
+  ENTREGADO:  { bg: '#EDE9FE', text: '#5B21B6', border: '#DDD6FE' },
 }
 const ESTADOS_PROD = ['PENDIENTE', 'EN_PROCESO', 'LISTO']
 
@@ -599,9 +602,128 @@ function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPer
   )
 }
 
+// ── VISTA BITÁCORA (solo ADMIN/COORDINADOR) ───────────────────────────────────
+// Histórico de quién marcó cada recordatorio en cada estado y a quién quedó
+// asignado. Se alimenta de la tabla produccion_recordatorio_log (trigger en DB).
+function EstadoBadge({ estado }) {
+  const c = ESTADO_COLOR[estado] || ESTADO_COLOR.NA
+  return (
+    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+      {ESTADO_LABEL[estado] || estado || '—'}
+    </span>
+  )
+}
+
+function VistaBitacora({ rows, loading }) {
+  const [q,        setQ]        = useState('')
+  const [fPersona, setFPersona] = useState('')
+  const [fEstado,  setFEstado]  = useState('')
+
+  // Opciones de "marcado por" a partir del propio log (incluye técnicos que no
+  // están en la lista de operarios activos de producción).
+  const personas = [...new Map(
+    rows.filter(r => r.cambiado_por).map(r => [r.cambiado_por, r.cambiado_por_nombre || 'Sin nombre'])
+  ).entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
+
+  const filtrados = rows.filter(r => {
+    if (fPersona) {
+      if (fPersona === '__auto__') { if (r.cambiado_por) return false }
+      else if (String(r.cambiado_por) !== String(fPersona)) return false
+    }
+    if (fEstado && r.estado_nuevo !== fEstado) return false
+    if (q.trim()) {
+      const s = q.trim().toLowerCase()
+      const hay = `${r.mascota_nombre || ''} ${r.recordatorio_nombre || ''} ${r.cambiado_por_nombre || ''} ${r.asignado_nombre || ''}`.toLowerCase()
+      if (!hay.includes(s)) return false
+    }
+    return true
+  })
+
+  const fmtFecha = iso => {
+    if (!iso) return '—'
+    return new Date(iso).toLocaleString('es-CO', {
+      day: '2-digit', month: 'short', year: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    })
+  }
+
+  return (
+    <div>
+      {/* Filtros de la bitácora */}
+      <div className="flex flex-wrap gap-3 mb-4 items-center">
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
+          <Input value={q} onChange={e => setQ(e.target.value)}
+            placeholder="Buscar mascota, recordatorio, persona…" className="pl-8 w-64" />
+        </div>
+        <Select value={fPersona} onChange={e => setFPersona(e.target.value)} className="w-52">
+          <option value="">Todos los que marcaron</option>
+          {personas.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+          <option value="__auto__">Automático / sistema</option>
+        </Select>
+        <Select value={fEstado} onChange={e => setFEstado(e.target.value)} className="w-40">
+          <option value="">Cualquier estado</option>
+          {['PENDIENTE', 'EN_PROCESO', 'LISTO', 'ENTREGADO'].map(e =>
+            <option key={e} value={e}>{ESTADO_LABEL[e]}</option>)}
+        </Select>
+        <span className="text-[11px] text-ink3 ml-auto">
+          {filtrados.length} movimiento{filtrados.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      <div className="bg-surface border rounded-2xl shadow-sm overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+        <TableWrap>
+          <Table>
+            <thead>
+              <tr>
+                <Th>Cuándo</Th>
+                <Th>Mascota</Th>
+                <Th>Recordatorio</Th>
+                <Th>Cambio de estado</Th>
+                <Th>Asignado a</Th>
+                <Th>Marcado por</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr><Td colSpan={6} className="text-center py-12 text-ink3">Cargando bitácora…</Td></tr>
+              )}
+              {!loading && filtrados.length === 0 && (
+                <tr><Td colSpan={6} className="text-center py-12 text-ink3">Sin movimientos para este filtro</Td></tr>
+              )}
+              {!loading && filtrados.map(r => (
+                <tr key={r.id} className="border-t" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                  <Td className="whitespace-nowrap text-ink3 text-[12px]">{fmtFecha(r.created_at)}</Td>
+                  <Td className="font-semibold whitespace-nowrap">{r.mascota_nombre || '—'}</Td>
+                  <Td className="whitespace-nowrap">{r.recordatorio_nombre || '—'}</Td>
+                  <Td className="whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5">
+                      {r.estado_anterior
+                        ? <><EstadoBadge estado={r.estado_anterior} /><ArrowRight size={12} className="text-ink3" /></>
+                        : <span className="text-[10px] font-bold text-ink3 uppercase">alta</span>}
+                      <EstadoBadge estado={r.estado_nuevo} />
+                    </span>
+                  </Td>
+                  <Td className="whitespace-nowrap text-ink2">{r.asignado_nombre || <span className="text-ink3">Sin asignar</span>}</Td>
+                  <Td className="whitespace-nowrap font-semibold">
+                    {r.cambiado_por_nombre || <span className="text-ink3 font-normal italic">Automático</span>}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+      </div>
+    </div>
+  )
+}
+
 // ── MÓDULO PRINCIPAL ──────────────────────────────────────────────────────────
 export default function Produccion() {
   const { alert: showAlert } = useConfirm()
+  const { personalData } = useAuth()
+  const esAdmin = personalData?.rol === 'ADMIN' || personalData?.rol === 'COORDINADOR'
   const [recordatorios, setRecordatorios] = useState([])
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])
@@ -613,16 +735,38 @@ export default function Produccion() {
   const [filtroRec,     setFiltroRec]     = useState('')   // id de recordatorio; '' = todos
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
+  const [logRows,       setLogRows]       = useState([])   // bitácora (solo admin)
+  const [logLoading,    setLogLoading]    = useState(false)
 
   useEffect(() => {
     cargar()
     const canal = db
       .channel('produccion-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, () => {
+        cargar()
+        if (esAdmin) cargarLog()
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
       .subscribe()
     return () => { db.removeChannel(canal) }
-  }, [])
+  }, [esAdmin])
+
+  // Cargar la bitácora al abrir la pestaña (solo admin/coordinador)
+  useEffect(() => {
+    if (esAdmin && vista === 'bitacora') cargarLog()
+  }, [esAdmin, vista])
+
+  async function cargarLog() {
+    setLogLoading(true)
+    // .order() obligatorio con límite: sin él las filas nuevas quedan por fuera
+    // al superar el tope (bug silencioso ya visto en Comprobantes).
+    const { data } = await db.from('produccion_recordatorio_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    setLogRows(data || [])
+    setLogLoading(false)
+  }
 
   async function cargar() {
     try {
@@ -720,6 +864,8 @@ export default function Produccion() {
     { key: 'tabla',    label: 'Tabla'        },
     { key: 'maquina',  label: 'Por máquina'  },
     { key: 'persona',  label: 'Por persona'  },
+    // Bitácora de auditoría: solo para roles con acceso total (ADMIN/COORDINADOR)
+    ...(esAdmin ? [{ key: 'bitacora', label: 'Bitácora' }] : []),
   ]
   const vistaConFiltros = vista === 'servicio' || vista === 'tabla'
 
@@ -754,7 +900,8 @@ export default function Produccion() {
   return (
     <div>
       <Topbar actions={
-        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
+        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
+          onClick={() => { cargar(); if (esAdmin && vista === 'bitacora') cargarLog() }}>
           <RefreshCw size={15} />
         </button>
       } />
@@ -858,6 +1005,9 @@ export default function Produccion() {
             recordatorios={recordatorios} personal={personal} maquinas={maquinas}
             onClickItem={setModalItem}
           />
+        )}
+        {vista === 'bitacora' && esAdmin && (
+          <VistaBitacora rows={logRows} loading={logLoading} />
         )}
 
       </div>
