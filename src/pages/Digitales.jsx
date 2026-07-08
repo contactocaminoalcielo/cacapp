@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/dialog'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram, Youtube,
-  Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History,
+  Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
@@ -50,6 +50,21 @@ function normalizarTel(tel) {
   return d.length >= 10 ? d : null
 }
 
+// ¿Alguna pieza del servicio quedó en error (render o Instagram)?
+const conError = (s) => s.piezas.some(p => p.estado === 'ERROR' || (p.error && p.estado !== 'DESCARTADO'))
+
+// Tipos que aún no tienen enlace publicado
+const piezasFaltantes = (s) => tiposDe(s).filter(t => {
+  const p = piezaDe(s, t)
+  return !(p && p.estado === 'PUBLICADO' && p.url_publica)
+})
+
+const matchTexto = (q, ...campos) => {
+  const n = q.trim().toLowerCase()
+  if (!n) return true
+  return campos.some(c => String(c || '').toLowerCase().includes(n))
+}
+
 function buildMensaje(plantilla, s) {
   const links = publicadas(s).map(p => `• ${TIPO_LABEL[p.tipo] || p.tipo}: ${p.url_publica}`).join('\n')
   const base = plantilla || 'Hola 💛 Te compartimos los recuerdos digitales de {mascota}:\n\n{enlaces}\n\nCamino al Cielo 🕊️'
@@ -69,6 +84,9 @@ export default function Digitales() {
   const [mensajes, setMensajes] = useState({})    // servicioId → mensaje editado
   const [tels, setTels] = useState({})            // servicioId → teléfono editado
   const [encuadre, setEncuadre] = useState(null)  // {servicioId, fotoUrl, mascota, ajuste}
+  const [q, setQ] = useState('')                  // buscador (todas las pestañas)
+  const [fEstado, setFEstado] = useState('TODOS') // filtro Pipeline: estado del servicio
+  const [fPieza, setFPieza] = useState('TODAS')   // filtro Pipeline: pieza faltante
   const pollRef = useRef(null)
 
   const flash = (tipo, texto) => { setMsg({ tipo, texto }); setTimeout(() => setMsg(null), 4500) }
@@ -164,15 +182,38 @@ export default function Digitales() {
 
   const videoUrl = (p) => p?.archivo_url ? `${API_BASE}${p.archivo_url}` : null
 
-  const listos = useMemo(() => data.servicios.filter(s => listoParaEnviar(s) && s.envios.length === 0), [data])
+  const buscados = useMemo(() =>
+    data.servicios.filter(s => matchTexto(q, s.mascota, s.propietario, s.plan_nombre, s.plan_codigo, s.telefono)), [data, q])
+
+  const pipeline = useMemo(() => buscados.filter(s => {
+    const enviado = s.envios.length > 0
+    if (fEstado === 'PENDIENTES' && (enviado || listoParaEnviar(s))) return false
+    if (fEstado === 'LISTOS'     && !(listoParaEnviar(s) && !enviado)) return false
+    if (fEstado === 'ENVIADOS'   && !enviado) return false
+    if (fEstado === 'ERROR'      && !conError(s)) return false
+    if (fPieza !== 'TODAS' && !piezasFaltantes(s).includes(fPieza)) return false
+    return true
+  }), [buscados, fEstado, fPieza])
+
+  const nEstado = useMemo(() => ({
+    TODOS:      buscados.length,
+    PENDIENTES: buscados.filter(s => s.envios.length === 0 && !listoParaEnviar(s)).length,
+    LISTOS:     buscados.filter(s => s.envios.length === 0 && listoParaEnviar(s)).length,
+    ENVIADOS:   buscados.filter(s => s.envios.length > 0).length,
+    ERROR:      buscados.filter(conError).length,
+  }), [buscados])
+
+  const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && s.envios.length === 0), [buscados])
   const enviados = useMemo(() =>
-    data.servicios.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario }))), [data])
+    buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario }))), [buscados])
+  const candidatosFiltrados = useMemo(() =>
+    candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo)), [candidatos, q])
 
   const tabs = [
-    ['pipeline', `Pipeline (${data.servicios.length})`],
+    ['pipeline', `Pipeline (${pipeline.length})`],
     ['enviar', `Para enviar (${listos.length})`],
     ['enviados', `Enviados (${enviados.length})`],
-    ['candidatos', `Por generar (${candidatos.length})`],
+    ['candidatos', `Por generar (${candidatosFiltrados.length})`],
   ]
 
   return (
@@ -221,6 +262,49 @@ export default function Digitales() {
           </div>
         </div>
 
+        {/* Buscador + filtros */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <div className="relative flex-1 min-w-[220px] max-w-sm">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <Input
+              value={q} onChange={e => setQ(e.target.value)}
+              placeholder="Buscar mascota, propietario, plan o teléfono…"
+              className="pl-9 text-[13px]"
+            />
+            {q && (
+              <button onClick={() => setQ('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {tab === 'pipeline' && (
+            <>
+              <div className="flex gap-1 bg-gray-100 p-1 rounded-xl flex-wrap">
+                {[['TODOS', 'Todos'], ['PENDIENTES', 'Con pendientes'], ['LISTOS', 'Listos p/ enviar'],
+                  ['ENVIADOS', 'Enviados'], ['ERROR', 'Con error']].map(([k, label]) => (
+                  <button key={k} onClick={() => setFEstado(k)}
+                    className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition ${
+                      fEstado === k ? 'bg-white text-[#263218] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {label} <span className={fEstado === k ? 'text-gray-400' : 'text-gray-300'}>{nEstado[k]}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-1 bg-gray-100 p-1 rounded-xl flex-wrap">
+                {[['TODAS', 'Todas las piezas'], ['MEMORIAL', 'Falta memorial'],
+                  ['VIDEO', 'Falta video'], ['SHORT', 'Falta short']].map(([k, label]) => (
+                  <button key={k} onClick={() => setFPieza(k)}
+                    className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition ${
+                      fPieza === k ? 'bg-white text-[#263218] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         {!data.ig_configurado && tab === 'pipeline' && !loading && (
           <div className="mb-4 flex items-center gap-2 rounded-xl px-4 py-2.5 text-[13px] bg-amber-50 text-amber-700">
             <Instagram size={15} className="shrink-0" />
@@ -233,13 +317,13 @@ export default function Digitales() {
             <Loader2 className="animate-spin" size={18} /> Cargando…
           </div>
         ) : tab === 'candidatos' ? (
-          <CandidatosList candidatos={candidatos} busy={busy} onGenerar={generar}
+          <CandidatosList candidatos={candidatosFiltrados} busy={busy} onGenerar={generar}
             onEncuadrar={(c) => setEncuadre({ servicioId: c.servicio_id, fotoUrl: c.foto_url, mascota: c.mascota, ajuste: null })} />
         ) : tab === 'enviados' ? (
-          <EnviadosList enviados={enviados} />
+          <EnviadosList enviados={enviados} q={q} />
         ) : tab === 'enviar' ? (
           listos.length === 0
-            ? <Empty icon={Send} texto="No hay servicios con todas sus piezas publicadas pendientes de envío." />
+            ? <Empty icon={Send} texto={q ? 'Nada coincide con la búsqueda.' : 'No hay servicios con todas sus piezas publicadas pendientes de envío.'} />
             : <div className="grid gap-4">{listos.map(s => (
                 <EnvioCard key={s.servicio_id} s={s} busy={busy} tels={tels} setTels={setTels}
                   mensajes={mensajes} setMensajes={setMensajes}
@@ -249,9 +333,11 @@ export default function Digitales() {
                   onCopiar={() => copiarMensaje(s)} />
               ))}</div>
         ) : (
-          data.servicios.length === 0
-            ? <Empty icon={Film} texto="Aún no hay servicios con piezas digitales." />
-            : <div className="grid gap-4">{data.servicios.map(s => (
+          pipeline.length === 0
+            ? <Empty icon={Film} texto={data.servicios.length === 0
+                ? 'Aún no hay servicios con piezas digitales.'
+                : 'Nada coincide con la búsqueda o los filtros.'} />
+            : <div className="grid gap-4">{pipeline.map(s => (
                 <ServicioCard key={s.servicio_id} s={s} busy={busy} videoUrl={videoUrl}
                   igConfigurado={data.ig_configurado}
                   enlaces={enlaces} setEnlaces={setEnlaces}
@@ -512,8 +598,8 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, o
 }
 
 // ── Historial de envíos ─────────────────────────────────────────────────────
-function EnviadosList({ enviados }) {
-  if (!enviados.length) return <Empty icon={History} texto="Aún no se ha registrado ningún envío." />
+function EnviadosList({ enviados, q }) {
+  if (!enviados.length) return <Empty icon={History} texto={q ? 'Nada coincide con la búsqueda.' : 'Aún no se ha registrado ningún envío.'} />
   return (
     <div className="grid gap-2">
       {enviados.map(e => (
