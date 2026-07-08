@@ -5,10 +5,12 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/dialog'
+import { TableWrap, Table, Th, Td } from '@/components/ui/table'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram, Youtube,
   Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
+  Eye, PawPrint,
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
@@ -25,6 +27,7 @@ const ESTADO = {
 }
 
 const TIPO_LABEL = { MEMORIAL: 'Memorial', VIDEO: 'Video conmemorativo', SHORT: 'Short' }
+const TIPO_CORTO = { MEMORIAL: 'Memorial', VIDEO: 'Video', SHORT: 'Short' }
 const TIPOS = ['MEMORIAL', 'VIDEO', 'SHORT']
 
 // Pieza activa de un tipo (ignora descartadas)
@@ -71,6 +74,25 @@ function buildMensaje(plantilla, s) {
   return base.replaceAll('{mascota}', s.mascota || '').replaceAll('{enlaces}', links)
 }
 
+function estadoServicio(s) {
+  if (conError(s)) return { label: 'Con error', variant: 'red' }
+  if (s.envios.length > 0) return { label: 'Enviado', variant: 'green' }
+  if (listoParaEnviar(s)) return { label: 'Listo para enviar', variant: 'green' }
+  if (s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado))) {
+    return { label: 'En proceso', variant: 'amber' }
+  }
+  return { label: 'Con pendientes', variant: 'gray' }
+}
+
+function progresoServicio(s) {
+  const tipos = tiposDe(s)
+  const hechas = tipos.filter(t => {
+    const p = piezaDe(s, t)
+    return p && p.estado === 'PUBLICADO' && p.url_publica
+  }).length
+  return { hechas, total: tipos.length }
+}
+
 export default function Digitales() {
   const [tab, setTab] = useState('pipeline')
   const [formato, setFormato] = useState('1080x1350')
@@ -84,6 +106,7 @@ export default function Digitales() {
   const [mensajes, setMensajes] = useState({})    // servicioId → mensaje editado
   const [tels, setTels] = useState({})            // servicioId → teléfono editado
   const [encuadre, setEncuadre] = useState(null)  // {servicioId, fotoUrl, mascota, ajuste}
+  const [detalleId, setDetalleId] = useState(null) // servicio abierto desde la tabla
   const [q, setQ] = useState('')                  // buscador (todas las pestañas)
   const [fEstado, setFEstado] = useState('TODOS') // filtro Pipeline: estado del servicio
   const [fPieza, setFPieza] = useState('TODAS')   // filtro Pipeline: pieza faltante
@@ -208,6 +231,8 @@ export default function Digitales() {
     buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario }))), [buscados])
   const candidatosFiltrados = useMemo(() =>
     candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo)), [candidatos, q])
+  const servicioDetalle = useMemo(() =>
+    data.servicios.find(s => s.servicio_id === detalleId) || null, [data.servicios, detalleId])
 
   const tabs = [
     ['pipeline', `Pipeline (${pipeline.length})`],
@@ -337,23 +362,42 @@ export default function Digitales() {
             ? <Empty icon={Film} texto={data.servicios.length === 0
                 ? 'Aún no hay servicios con piezas digitales.'
                 : 'Nada coincide con la búsqueda o los filtros.'} />
-            : <div className="grid gap-4">{pipeline.map(s => (
-                <ServicioCard key={s.servicio_id} s={s} busy={busy} videoUrl={videoUrl}
-                  igConfigurado={data.ig_configurado}
-                  enlaces={enlaces} setEnlaces={setEnlaces}
-                  manual={manual} setManual={setManual}
-                  onGenerar={() => generar(s.servicio_id)}
-                  onEncuadrar={(pieza) => setEncuadre({
-                    servicioId: s.servicio_id, fotoUrl: s.foto_url,
-                    mascota: s.mascota, ajuste: pieza?.ajuste_foto || null,
-                  })}
-                  onAprobar={aprobar} onDescartar={descartar}
-                  onPublicarIG={publicarIG} onPublicarManual={publicarManual}
-                  onGuardarEnlace={guardarEnlace}
-                  onIrAEnviar={() => setTab('enviar')} />
-              ))}</div>
+            : <PipelineTable servicios={pipeline} onOpen={setDetalleId} />
         )}
       </div>
+
+      {servicioDetalle && (
+        <Modal
+          open={!!servicioDetalle}
+          onClose={() => setDetalleId(null)}
+          title={`Digitales — ${servicioDetalle.mascota || 'servicio'}`}
+          maxWidth="max-w-5xl"
+        >
+          <ServicioCard
+            s={servicioDetalle}
+            busy={busy}
+            videoUrl={videoUrl}
+            igConfigurado={data.ig_configurado}
+            enlaces={enlaces}
+            setEnlaces={setEnlaces}
+            manual={manual}
+            setManual={setManual}
+            onGenerar={() => generar(servicioDetalle.servicio_id)}
+            onEncuadrar={(pieza) => setEncuadre({
+              servicioId: servicioDetalle.servicio_id,
+              fotoUrl: servicioDetalle.foto_url,
+              mascota: servicioDetalle.mascota,
+              ajuste: pieza?.ajuste_foto || null,
+            })}
+            onAprobar={aprobar}
+            onDescartar={descartar}
+            onPublicarIG={publicarIG}
+            onPublicarManual={publicarManual}
+            onGuardarEnlace={guardarEnlace}
+            onIrAEnviar={() => { setDetalleId(null); setTab('enviar') }}
+          />
+        </Modal>
+      )}
 
       <EncuadreModal
         data={encuadre}
@@ -365,7 +409,116 @@ export default function Digitales() {
   )
 }
 
-// ── Tarjeta de un servicio con sus piezas ──────────────────────────────────
+// Tabla principal del pipeline
+function PipelineTable({ servicios, onOpen }) {
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      <TableWrap>
+        <Table className="min-w-[920px]">
+          <thead>
+            <tr>
+              <Th>Mascota</Th>
+              <Th>Plan</Th>
+              <Th>Imágenes</Th>
+              <Th>Piezas</Th>
+              <Th>Progreso</Th>
+              <Th>Estado</Th>
+              <Th className="text-right">Acción</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {servicios.map(s => {
+              const estado = estadoServicio(s)
+              const progreso = progresoServicio(s)
+              const pct = progreso.total ? Math.round((progreso.hechas / progreso.total) * 100) : 0
+              return (
+                <tr
+                  key={s.servicio_id}
+                  tabIndex={0}
+                  role="button"
+                  onClick={() => onOpen(s.servicio_id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onOpen(s.servicio_id)
+                    }
+                  }}
+                  className="group cursor-pointer transition-colors hover:bg-[#F8FAF5] focus:outline-none focus-visible:bg-[#F8FAF5] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#3D5A27]/25"
+                >
+                  <Td>
+                    <div className="flex items-center gap-3 min-w-0">
+                      {s.foto_url ? (
+                        <img
+                          src={s.foto_url}
+                          alt={s.mascota ? 'Foto de ' + s.mascota : 'Foto de mascota'}
+                          className="w-10 h-10 rounded-lg object-cover shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-gray-100 text-gray-400 flex items-center justify-center shrink-0">
+                          <PawPrint size={17} />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-semibold text-[#263218] truncate">{s.mascota || 'Sin nombre'}</div>
+                        <div className="text-[12px] text-gray-400 truncate">{s.propietario || 'Sin propietario'}</div>
+                      </div>
+                    </div>
+                  </Td>
+                  <Td className="max-w-[180px]">
+                    <div className="font-medium text-gray-700 truncate">{s.plan_nombre || s.plan_codigo || 'Sin plan'}</div>
+                    {s.plan_nombre && s.plan_codigo && (
+                      <div className="text-[11px] text-gray-400 truncate">{s.plan_codigo}</div>
+                    )}
+                  </Td>
+                  <Td className="whitespace-nowrap text-gray-500">{s.fecha_imagenes || '-'}</Td>
+                  <Td>
+                    <div className="flex flex-wrap gap-1.5">
+                      {tiposDe(s).map(t => {
+                        const p = piezaDe(s, t)
+                        const est = ESTADO[p?.estado || 'PENDIENTE'] || ESTADO.PENDIENTE
+                        return (
+                          <Badge key={t} variant={est.variant} className="whitespace-nowrap">
+                            {TIPO_CORTO[t]}: {est.label}
+                          </Badge>
+                        )
+                      })}
+                    </div>
+                  </Td>
+                  <Td>
+                    <div className="w-28">
+                      <div className="flex items-center justify-between text-[12px] font-medium text-gray-500 mb-1">
+                        <span>{progreso.hechas}/{progreso.total}</span>
+                        <span>{pct}%</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className={'h-full rounded-full ' + (pct === 100 ? 'bg-green-500' : 'bg-[#3D5A27]')}
+                          style={{ width: pct + '%' }}
+                        />
+                      </div>
+                    </div>
+                  </Td>
+                  <Td><Badge variant={estado.variant}>{estado.label}</Badge></Td>
+                  <Td className="text-right">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={e => { e.stopPropagation(); onOpen(s.servicio_id) }}
+                    >
+                      <Eye size={14} /> Ver
+                    </Button>
+                  </Td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </Table>
+      </TableWrap>
+    </div>
+  )
+}
+
+// Tarjeta de un servicio con sus piezas
 function ServicioCard({
   s, busy, videoUrl, igConfigurado, enlaces, setEnlaces, manual, setManual,
   onGenerar, onEncuadrar, onAprobar, onDescartar, onPublicarIG, onPublicarManual,
@@ -384,8 +537,8 @@ function ServicioCard({
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             {s.foto_url
-              ? <img src={s.foto_url} alt="" className="w-11 h-11 rounded-xl object-cover shrink-0" />
-              : <div className="w-11 h-11 rounded-xl bg-gray-100 flex items-center justify-center shrink-0">🐾</div>}
+              ? <img src={s.foto_url} alt={s.mascota ? 'Foto de ' + s.mascota : 'Foto de mascota'} className="w-11 h-11 rounded-xl object-cover shrink-0" />
+              : <div className="w-11 h-11 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center shrink-0"><PawPrint size={18} /></div>}
             <div className="min-w-0">
               <div className="font-semibold text-[#263218] truncate">{s.mascota}</div>
               <div className="text-[12px] text-gray-400 truncate">
@@ -561,7 +714,7 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, o
       <CardContent className="py-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="font-semibold text-[#263218] truncate">🐾 {s.mascota}</div>
+            <div className="font-semibold text-[#263218] truncate flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {s.mascota}</div>
             <div className="text-[12px] text-gray-400 truncate">{s.propietario || 'Sin propietario'} · {s.plan_nombre || s.plan_codigo || ''}</div>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
@@ -606,7 +759,7 @@ function EnviadosList({ enviados, q }) {
         <Card key={e.id}>
           <CardContent className="py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="font-semibold text-[#263218] text-sm truncate">🐾 {e.mascota} <span className="text-gray-400 font-normal">· {e.propietario || ''}</span></div>
+              <div className="font-semibold text-[#263218] text-sm truncate flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {e.mascota} <span className="text-gray-400 font-normal">· {e.propietario || ''}</span></div>
               <div className="text-[12px] text-gray-400 flex flex-wrap gap-x-2">
                 {(e.enlaces || []).map(l => (
                   <a key={l.tipo} href={l.url} target="_blank" rel="noreferrer" className="hover:underline text-gray-500">
@@ -718,7 +871,7 @@ function CandidatosList({ candidatos, busy, onGenerar, onEncuadrar }) {
           <CardContent className="flex items-center justify-between gap-4 py-3">
             <div className="min-w-0">
               <div className="font-semibold text-[#263218] truncate">
-                🐾 {c.mascota}
+                <span className="inline-flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {c.mascota}</span>
               </div>
               <div className="text-[13px] text-gray-500 truncate">
                 {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}
