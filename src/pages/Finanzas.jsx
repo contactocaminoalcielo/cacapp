@@ -113,6 +113,7 @@ export default function Finanzas() {
   const [histLoading,     setHistLoading]     = useState(false)
   const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
   const [entregaModal,    setEntregaModal]    = useState(false)  // modal "confirmar dinero recibido"
+  const [motivoCierreOpen, setMotivoCierreOpen] = useState(false) // modal "cerrar sin firma del técnico"
   const [entregaPorNombre, setEntregaPorNombre] = useState(null) // nombre de quien recibió el dinero
   const [guiaOpen,        setGuiaOpen]        = useState(false)  // modal "¿cómo funciona?"
   const [iaAnalisis,      setIaAnalisis]      = useState(null)   // texto del asistente IA del cuadre
@@ -543,20 +544,17 @@ export default function Finanzas() {
     }
   }
 
-  async function cerrarCuadre() {
+  async function cerrarCuadre(motivoForzado) {
     if (!cuadreData) return
-    // Confirmación bilateral (decisión David 2026-07-06): lo esperado es que el
-    // técnico confirme el borrador desde su app ANTES del cierre. Si no lo ha
-    // hecho (o confirmó otra versión), se ofrece la salida explícita
-    // "Cerrar SIN confirmación del técnico" — avisa fuerte, no bloquea.
+    // Confirmación bilateral (decisión David 2026-07-08, endurece la de 2026-07-06):
+    // el cierre queda BLOQUEADO hasta que el técnico firme el borrador desde su
+    // app (Mis pagos › Cuadres). Excepción: coordinador/admin puede forzar el
+    // cierre con un motivo OBLIGATORIO que queda registrado en firma.cierre_forzado.
+    // El gate real vive en la DB (cerrar_cuadre v2, migración 038) — esta UI solo
+    // recoge el motivo. OJO: onClick pasa el evento como argumento → validar tipo.
+    const motivo = typeof motivoForzado === 'string' && motivoForzado.trim() ? motivoForzado.trim() : null
     const confTec = confirmacionTecnico(cuadreData)
-    if (confTec !== 'CONFIRMADO') {
-      const detalle = confTec === 'SIN_CONFIRMACION'
-        ? `${nombreTecnicoSel(cuadreData.tecnico_id)} aún no ha confirmado este cuadre desde su app (Mis pagos › Cuadres).`
-        : `${nombreTecnicoSel(cuadreData.tecnico_id)} confirmó una versión anterior: los montos cambiaron después de su confirmación.`
-      if (!await confirm(`${detalle}\n\nLo recomendado es pedirle que lo revise y confirme antes de cerrar — así el cuadre queda acordado por las dos partes.`,
-        { title: 'El técnico no ha confirmado este cuadre', variant: 'warning', confirmLabel: 'Cerrar SIN confirmación del técnico' })) return
-    }
+    if (confTec !== 'CONFIRMADO' && !motivo) { setMotivoCierreOpen(true); return }
     // El cuadre SIEMPRE se puede cerrar (queda a saldo con el técnico). Un pago
     // pendiente NO bloquea. Solo se avisa cuando falta un comprobante de pago,
     // cuando el técnico recogió de menos o cuando cobró de más sobre el valor
@@ -602,11 +600,18 @@ export default function Finanzas() {
         tecnico_confirmado_en: cuadreData.tecnico_confirmado_en || null,
       }
       const { error } = await db.rpc('cerrar_cuadre', {
-        p_cuadre_id: cuadreData.id,
-        p_actor_id:  personalData?.id || null,
-        p_firma:     firma,
+        p_cuadre_id:     cuadreData.id,
+        p_actor_id:      personalData?.id || null,
+        p_firma:         firma,
+        p_forzar_motivo: motivo,
       })
-      if (error) throw error
+      if (error) {
+        if (/SIN_CONFIRMACION_TECNICO/.test(String(error.message || ''))) {
+          setMotivoCierreOpen(true)
+          return
+        }
+        throw error
+      }
       const { data: hdr } = await db.from('cuadres_tecnico').select('*').eq('id', cuadreData.id).single()
       setCuadreData(hdr)
     } catch (err) {
@@ -2515,6 +2520,16 @@ export default function Finanzas() {
       {/* ── Modal guía del cuadre (¿cómo funciona?) ──────────────────────── */}
       {guiaOpen && <GuiaCuadreModal onClose={() => setGuiaOpen(false)} />}
 
+      {/* ── Modal cerrar SIN firma del técnico (motivo obligatorio) ──────── */}
+      {motivoCierreOpen && cuadreData && (
+        <MotivoCierreModal
+          tecnicoNombre={nombreTecnicoSel(cuadreData.tecnico_id)}
+          estadoConf={confirmacionTecnico(cuadreData)}
+          onClose={() => setMotivoCierreOpen(false)}
+          onCerrar={motivo => { setMotivoCierreOpen(false); cerrarCuadre(motivo) }}
+        />
+      )}
+
       {/* ── Modal observaciones por mascota ──────────────────────────────── */}
       {/* ── Modal editar valor recogido por admin ────────────────────────── */}
       {valorRecogidoItem && (
@@ -3207,6 +3222,57 @@ function ValorRecogidoModal({ item, onClose, onSave }) {
 
 
 // ── Modal: observación por mascota (feature 3) ────────────────────────────────
+// ── Modal: cerrar el cuadre SIN la firma del técnico ─────────────────────────
+// El cierre está bloqueado por la DB (cerrar_cuadre v2, migración 038) hasta que
+// el técnico confirme desde su app. Esta es la excepción: motivo obligatorio que
+// queda registrado en firma.cierre_forzado del cuadre.
+function MotivoCierreModal({ tecnicoNombre, estadoConf, onClose, onCerrar }) {
+  const [motivo, setMotivo] = useState('')
+  const valido = motivo.trim().length >= 5
+  const detalle = estadoConf === 'DESACTUALIZADA'
+    ? `${tecnicoNombre} firmó una versión anterior: los montos cambiaron después de su confirmación, así que su firma ya no es válida para esta versión.`
+    : `${tecnicoNombre} aún no ha firmado este cuadre desde su app (Mis pagos › Cuadres). Le aparece un aviso apenas abra la app.`
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <Lock size={16} className="text-[#D97706]" />
+            <span className="text-[14px] font-bold text-gray-900">Falta la firma del técnico</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-[12px] text-gray-600">{detalle}</p>
+          <p className="text-[12px] text-gray-500">
+            Lo recomendado es <b>esperar su confirmación</b> para que el cuadre quede acordado por
+            las dos partes. Si necesitas cerrarlo ya (técnico retirado, sin respuesta, urgencia),
+            escribe el motivo — <b>queda registrado en el cuadre</b>.
+          </p>
+          <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3} autoFocus
+            placeholder="Ej: el técnico se retiró de la empresa; no responde hace 5 días y hay cierre de mes…"
+            className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#D97706]/20 focus:border-[#D97706] resize-none"
+            style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          {!valido && motivo.length > 0 && (
+            <p className="text-[11px] text-red-500">El motivo debe ser más específico.</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+              Esperar la firma
+            </button>
+            <button onClick={() => valido && onCerrar(motivo.trim())} disabled={!valido}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold text-white disabled:opacity-50"
+              style={{ background: '#D97706' }}>
+              <Lock size={14} /> Cerrar SIN firma del técnico
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ObsModal({ item, cerrado, onClose, onSave }) {
   const [texto, setTexto]   = useState(item.observaciones || '')
   const [saving, setSaving] = useState(false)
@@ -3340,7 +3406,7 @@ function GuiaCuadreModal({ onClose }) {
             <p>· Marca <strong>Lejanía</strong> si la recogida fue lejos (reconocimiento extra al técnico). Solo <strong>efectivo</strong> cuenta como plata en manos del técnico; lo digital ya entró a la empresa.</p>
           </Paso>
           <Paso n={3} titulo="Cerrar el cuadre">
-            <p>· Antes de cerrar, el <strong>técnico confirma el cuadre desde su app</strong> (Mis pagos › Cuadres): el chip junto al estado te dice si ya confirmó, si confirmó otra versión (los montos cambiaron después) o si sigue sin confirmar. Si no ha confirmado, puedes cerrar igual con la opción <strong>"Cerrar SIN confirmación del técnico"</strong> — pero lo ideal es el acuerdo de las dos partes.</p>
+            <p>· Antes de cerrar, el <strong>técnico firma el cuadre desde su app</strong> (Mis pagos › Cuadres — le aparece un aviso apenas la abre): el chip junto al estado te dice si ya firmó, si firmó otra versión (los montos cambiaron después) o si sigue sin firmar. <strong>Sin su firma el cierre queda bloqueado</strong>; solo puedes forzarlo escribiendo un motivo que queda registrado en el cuadre.</p>
             <p>· El botón <strong>Cerrar</strong> congela el cuadre (no se puede editar más). El sistema avisa si falta un comprobante de pago digital o si el técnico debe efectivo sin justificar — puedes cerrar de todas formas, pero revisa primero.</p>
             <p><strong>Dinero a entregar a gerencia</strong> = efectivo recogido − reconocido al técnico (transporte + recargos + pago por servicio + cancelados) − ajuste manual. Si da negativo, la empresa le queda debiendo al técnico (saldo a favor: se avisa en el siguiente cuadre).</p>
           </Paso>

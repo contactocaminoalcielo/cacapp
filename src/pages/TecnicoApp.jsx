@@ -1464,6 +1464,7 @@ export default function TecnicoApp() {
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
   const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
+  const [cuadresPend, setCuadresPend] = useState(0) // cuadres BORRADOR sin firmar (badge + aviso)
   const [loading, setLoading]     = useState(false)
   const [queryErr, setQueryErr]   = useState('')
   const [notif, setNotif]         = useState(null)
@@ -1680,6 +1681,21 @@ export default function TecnicoApp() {
             METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
         ).length
         setCompPend(n)
+      } catch (_) { /* badge best-effort */ }
+
+      // ── 7. Cuadres BORRADOR pendientes de la firma del técnico ──
+      // Pendiente = nunca confirmó, o confirmó otra versión (el monto cambió
+      // después — misma regla del chip en Finanzas). Alimenta el badge de
+      // "Mis pagos" y el aviso al abrir la app; sin su firma, gerencia no
+      // puede cerrar el cuadre (migración 038).
+      try {
+        const { data: cuadresBor } = await db.from('cuadres_tecnico')
+          .select('id, tecnico_confirmado_en, tecnico_confirmado_monto, dinero_a_entregar')
+          .eq('tecnico_id', tecnico.id).eq('estado', 'BORRADOR')
+        setCuadresPend((cuadresBor || []).filter(c =>
+          !c.tecnico_confirmado_en ||
+          Number(c.tecnico_confirmado_monto) !== Number(c.dinero_a_entregar)
+        ).length)
       } catch (_) { /* badge best-effort */ }
     } finally {
       if (!silent) setLoading(false)
@@ -1987,7 +2003,7 @@ export default function TecnicoApp() {
     { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
-    { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: 0,                     color: '#16a34a' },
+    { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: cuadresPend,           color: '#16a34a' },
   ]
 
   return (
@@ -2069,6 +2085,28 @@ export default function TecnicoApp() {
           <Bell size={16} className="flex-shrink-0" style={{ color: '#D97706' }} />
           <span className="text-sm font-semibold" style={{ color: '#92400E' }}>{notif}</span>
         </div>
+      )}
+
+      {/* Aviso: hay cuadre(s) esperando la firma del técnico. Sin su confirmación
+          gerencia no puede cerrar el cuadre (migración 038), así que este aviso
+          es la "notificación" — aparece apenas abre la app, en cualquier pestaña. */}
+      {cuadresPend > 0 && tab !== 'mis_cuadres' && (
+        <button
+          onClick={() => {
+            try { localStorage.setItem('tecnico_pagos_vista', 'cuadres') } catch (_) {}
+            setTab('mis_cuadres')
+          }}
+          className="mx-4 mt-3 flex items-center gap-2.5 px-4 py-3 rounded-xl text-left active:scale-[0.99] transition-transform"
+          style={{ background: '#DCFCE7', border: '1px solid #86EFAC' }}>
+          <Wallet size={16} className="flex-shrink-0" style={{ color: '#16a34a' }} />
+          <span className="text-sm font-semibold flex-1" style={{ color: '#166534' }}>
+            {cuadresPend === 1 ? 'Tu cuadre está listo para que lo revises y firmes' : `Tienes ${cuadresPend} cuadres por revisar y firmar`}
+            <span className="block text-[11px] font-normal mt-0.5" style={{ color: '#15803D' }}>
+              Gerencia no puede cerrarlo sin tu confirmación — toca aquí para verlo.
+            </span>
+          </span>
+          <span className="text-[18px]" style={{ color: '#16a34a' }}>›</span>
+        </button>
       )}
 
       {/* ── Contenido — padding-bottom para no quedar tapado por la nav ── */}
@@ -2299,7 +2337,18 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
 
 // ─── MIS CUADRES (técnico ve sus pagos de cuadres CERRADOS) ────────────
 function MisCuadresTab({ tecnico }) {
-  const [vista, setVista] = useState('bitacora')   // 'bitacora' | 'cuadres'
+  // 'bitacora' | 'cuadres' — el aviso de cuadre pendiente abre directo en Cuadres
+  // (deja la vista en localStorage antes de cambiar de pestaña; se lee y se limpia)
+  const [vista, setVista] = useState(() => {
+    try {
+      const v = localStorage.getItem('tecnico_pagos_vista')
+      if (v) {
+        localStorage.removeItem('tecnico_pagos_vista')
+        if (v === 'cuadres' || v === 'bitacora') return v
+      }
+    } catch (_) { /* privado/incógnito */ }
+    return 'bitacora'
+  })
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-gray-100">
