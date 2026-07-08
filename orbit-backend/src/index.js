@@ -321,7 +321,10 @@ app.post('/tenjo/lotes/:id/cerrar', requireAuth, requireRol('COORDINADOR', 'ADMI
 })
 
 // ── API Digitales (memorial + video + short: publicación y envío al cliente) ──
-app.get('/digitales/candidatos', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+// El PRODUCTOR gestiona las piezas digitales igual que coordinación.
+const rolDigitales = requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR')
+
+app.get('/digitales/candidatos', requireAuth, rolDigitales, async (_req, res) => {
   try {
     res.json(await listarCandidatos())
   } catch (e) {
@@ -330,7 +333,7 @@ app.get('/digitales/candidatos', requireAuth, requireRol('COORDINADOR', 'ADMIN')
   }
 })
 
-app.get('/digitales/servicios', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+app.get('/digitales/servicios', requireAuth, rolDigitales, async (_req, res) => {
   try {
     res.json(await listarServicios())
   } catch (e) {
@@ -339,7 +342,7 @@ app.get('/digitales/servicios', requireAuth, requireRol('COORDINADOR', 'ADMIN'),
   }
 })
 
-app.post('/digitales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/generar', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await generarMemorial({ servicioId: req.body.servicio_id, personalId: req.personal.id, formato: req.body.formato, ajuste: req.body.ajuste })
     res.status(r.status).json(r.body)
@@ -350,7 +353,7 @@ app.post('/digitales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), 
 })
 
 // VIDEO/SHORT hechos en Canva: registrar el enlace de YouTube.
-app.post('/digitales/enlace', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/enlace', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await registrarEnlace({ servicioId: req.body.servicio_id, tipo: req.body.tipo, url: req.body.url, personalId: req.personal.id })
     res.status(r.status).json(r.body)
@@ -361,7 +364,7 @@ app.post('/digitales/enlace', requireAuth, requireRol('COORDINADOR', 'ADMIN'), a
 })
 
 // Envío de enlaces al cliente: registro + marca ENTREGADO en servicio_recordatorios.
-app.post('/digitales/:servicioId/envio', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/:servicioId/envio', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await registrarEnvio({ servicioId: req.params.servicioId, personalId: req.personal.id, telefono: req.body.telefono, mensaje: req.body.mensaje, canal: req.body.canal })
     res.status(r.status).json(r.body)
@@ -371,7 +374,7 @@ app.post('/digitales/:servicioId/envio', requireAuth, requireRol('COORDINADOR', 
   }
 })
 
-app.post('/digitales/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/:id/aprobar', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await aprobarMemorial({ id: req.params.id, personalId: req.personal.id })
     res.status(r.status).json(r.body)
@@ -382,7 +385,7 @@ app.post('/digitales/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN
 })
 
 // Registro manual del enlace (fallback del memorial / corrección).
-app.post('/digitales/:id/publicar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/:id/publicar', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await publicarManual({ id: req.params.id, personalId: req.personal.id, url: req.body.url ?? req.body.instagram_url })
     res.status(r.status).json(r.body)
@@ -393,7 +396,7 @@ app.post('/digitales/:id/publicar', requireAuth, requireRol('COORDINADOR', 'ADMI
 })
 
 // Publicación automática en Instagram (Meta Graph API, Reels).
-app.post('/digitales/:id/publicar-instagram', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/:id/publicar-instagram', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await publicarInstagram({ id: req.params.id, personalId: req.personal.id })
     res.status(r.status).json(r.body)
@@ -403,7 +406,7 @@ app.post('/digitales/:id/publicar-instagram', requireAuth, requireRol('COORDINAD
   }
 })
 
-app.post('/digitales/:id/descartar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/:id/descartar', requireAuth, rolDigitales, async (req, res) => {
   try {
     const r = await descartarPieza({ id: req.params.id })
     res.status(r.status).json(r.body)
