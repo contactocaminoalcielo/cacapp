@@ -13,9 +13,14 @@ const BORD   = '#D8E5D8'
 
 const MIMES_OK = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
 
-// Límite de palabras para la frase/leyenda del cristal (evita leyendas larguísimas).
-const MAX_PALABRAS_FRASE = 30
-const esCampoFrase    = label => (label || '').toLowerCase().includes('frase')
+// Límite de palabras por tipo de campo de texto (evita leyendas larguísimas).
+// Devuelve 0 si el campo no tiene límite.
+const maxPalabrasCampo = label => {
+  const l = (label || '').toLowerCase()
+  if (l.includes('dedicatoria')) return 25
+  if (l.includes('frase'))       return 30
+  return 0
+}
 const contarPalabras  = s => (s || '').trim() ? s.trim().split(/\s+/).length : 0
 const limitarPalabras = (s, max) => {
   const palabras = (s || '').split(/\s+/).filter(Boolean)
@@ -525,13 +530,13 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
       {campos.length > 0 && (
         <div className="bg-white rounded-2xl border p-5 space-y-5" style={{ borderColor: BORD }}>
           {campos.map(campo => {
-            const limitaPalabras = esCampoFrase(campo.label)
+            const maxPalabras = maxPalabrasCampo(campo.label)
             return (
             <div key={campo.label}>
               <label className="text-[14px] font-bold text-gray-700 block mb-3">
                 {campo.label}
                 {campo.cantidad > 1 && <span className="text-[12px] text-gray-400 font-normal ml-1.5">({campo.cantidad} en total)</span>}
-                {limitaPalabras && <span className="text-[12px] text-gray-400 font-normal ml-1.5">(máx. {MAX_PALABRAS_FRASE} palabras)</span>}
+                {maxPalabras > 0 && <span className="text-[12px] text-gray-400 font-normal ml-1.5">(máx. {maxPalabras} palabras)</span>}
               </label>
               <div className="space-y-3">
                 {Array.from({ length: campo.cantidad || 1 }).map((_, i) => {
@@ -539,16 +544,18 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
                   return (
                   <div key={i}>
                     <input type="text" value={valor}
-                      onChange={e => setTexto(campo.label, i, limitaPalabras ? limitarPalabras(e.target.value, MAX_PALABRAS_FRASE) : e.target.value)}
+                      onChange={e => setTexto(campo.label, i, maxPalabras > 0 ? limitarPalabras(e.target.value, maxPalabras) : e.target.value)}
                       placeholder={campo.cantidad > 1 ? `${campo.label} ${i + 1}` : `Escribe aquí…`}
                       className="w-full text-[16px] border-2 rounded-xl px-4 py-3.5 outline-none transition-colors"
                       style={{ borderColor: valor.trim() ? G : BORD, background: '#FAFCFA' }}
                       onFocus={e => e.target.style.borderColor = G}
                       onBlur={e  => e.target.style.borderColor = valor.trim() ? G : BORD} />
-                    {limitaPalabras && (
+                    {maxPalabras > 0 && (
                       <p className="text-[12px] mt-1.5 text-right"
-                        style={{ color: contarPalabras(valor) >= MAX_PALABRAS_FRASE ? '#DC2626' : '#9CA3AF' }}>
-                        {contarPalabras(valor)} / {MAX_PALABRAS_FRASE} palabras
+                        style={{ color: contarPalabras(valor) >= maxPalabras ? '#DC2626' : '#9CA3AF' }}>
+                        {contarPalabras(valor) >= maxPalabras
+                          ? `Llegaste al límite de ${maxPalabras} palabras`
+                          : `${contarPalabras(valor)} / ${maxPalabras} palabras`}
                       </p>
                     )}
                   </div>
