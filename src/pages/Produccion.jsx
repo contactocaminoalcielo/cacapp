@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji, parsearErrorDB } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
@@ -102,9 +102,9 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
       maquina_id: maquina  || null,
       notas:      notas    || null,
       fecha_inicio_prod: estado !== 'PENDIENTE' && !item.fecha_inicio_prod
-        ? new Date().toISOString().slice(0, 10) : item.fecha_inicio_prod,
+        ? today() : item.fecha_inicio_prod,
       fecha_fin_prod: estado === 'LISTO'
-        ? (item.fecha_fin_prod || new Date().toISOString().slice(0, 10)) : null,
+        ? (item.fecha_fin_prod || today()) : null,
     }
     const { error } = await db.from('servicio_recordatorios').update(patch).eq('id', item.id)
     if (error) { setSaving(false); await showAlert(parsearErrorDB(error), { title: 'Error' }); return }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { db } from '@/lib/supabase'
-import { petEmoji, fmt, waLink, calcularEstadoVet } from '@/lib/utils'
+import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion } from '@/lib/notificaciones'
 import {
@@ -1621,7 +1621,7 @@ export default function TecnicoApp() {
       prevCountRef.current = total
 
       // ── 5. Reporte del día y neveras activas (desde tabla neveras) ──
-      const todayStr = new Date().toISOString().split('T')[0]
+      const todayStr = hoyLocalISO()
       const [{ data: reporteData }, { data: neverasData }] = await Promise.all([
         db.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*)')
@@ -1847,7 +1847,7 @@ export default function TecnicoApp() {
     if (recogidaId) {
       const now = new Date()
       await db.from('recogidas').update({
-        fecha_realizada: now.toISOString().split('T')[0],
+        fecha_realizada: hoyLocalISO(now),
         hora_realizada:  now.toTimeString().slice(0, 5),
       }).eq('id', recogidaId)
     }
@@ -1941,7 +1941,7 @@ export default function TecnicoApp() {
     const now = new Date()
     const patch = {
       estado:           'ENTREGADA',
-      fecha_realizada:  now.toISOString().split('T')[0],
+      fecha_realizada:  hoyLocalISO(now),
       hora_realizada:   now.toTimeString().slice(0, 5),
       foto_entrega_url: fotoUrl || null,
     }
@@ -4452,7 +4452,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_idempotency_key:        getIdemKey(),
         p_tipo:                   tipoRecibo,
         p_numero_recibo:          form.numero_recibo,
-        p_fecha_emision:          now.toISOString().split('T')[0],
+        p_fecha_emision:          hoyLocalISO(now),
         p_hora_emision:           horaActual,
         p_valor_total:            form.valor_servicio,
         p_medios:                 medios,
@@ -4526,7 +4526,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         tecnico_id:      tecnico?.id || null,
         numero_recibo:   form.numero_recibo,
         tipo:            tipoRecibo,
-        fecha_emision:   now.toISOString().split('T')[0],
+        fecha_emision:   hoyLocalISO(now),
         hora_emision:    horaActual,
         valor_total:     form.valor_servicio,
         valor_cobrado:   valorCobrado,

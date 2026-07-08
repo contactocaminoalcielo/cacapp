@@ -1419,12 +1419,12 @@ export default function Kanban() {
         codigo = generateCodigo()
         const { error: updErr } = await db.from('servicios').update({
           codigo_fotos: codigo,
-          fecha_codigo_enviado: new Date().toISOString().split('T')[0],
+          fecha_codigo_enviado: today(),
         }).eq('id', s.servicio_id)
         if (updErr) { await showAlert(parsearErrorDB(updErr), { title: 'Error al generar código' }); return }
       } else if (!svcRow?.fecha_codigo_enviado) {
         // El código ya existía pero no se había registrado la fecha de envío
-        await db.from('servicios').update({ fecha_codigo_enviado: new Date().toISOString().split('T')[0] }).eq('id', s.servicio_id)
+        await db.from('servicios').update({ fecha_codigo_enviado: today() }).eq('id', s.servicio_id)
       }
       const base = window.location.href.split('#')[0]
       const portalUrl = `${base}#/fotos/${codigo}`

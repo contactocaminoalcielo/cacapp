@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
-import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, hoyLocalISO } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
@@ -28,7 +28,7 @@ const ahoraISO = () => new Date().toISOString()
 const finCompostaje = fechaStr => {
   if (!fechaStr) return null
   const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + 2)
-  return d.toISOString().split('T')[0]
+  return hoyLocalISO(d)
 }
 const fmtFechaCorta = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })

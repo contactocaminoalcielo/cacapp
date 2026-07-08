@@ -25,10 +25,14 @@ export function waLink(numero, texto) {
   const base = `https://wa.me/${digits}`
   return texto ? `${base}?text=${encodeURIComponent(texto)}` : base
 }
-export const today = () => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+// Fecha YYYY-MM-DD en hora LOCAL del dispositivo — el espejo de parseDate para ESCRIBIR.
+// new Date().toISOString() da la fecha UTC: en Colombia (UTC-5), después de las 7 p.m.
+// ya es "mañana" y la columna DATE queda corrida un día (recibos de domingo fechados
+// lunes → se perdía el recargo dominical del técnico, migración 036). Para "hoy" o para
+// formatear cualquier Date a YYYY-MM-DD usar SIEMPRE esta (o today()), NUNCA toISOString().
+export const hoyLocalISO = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+export const today = () => hoyLocalISO()
 export const petEmoji = e => ({ Perro: '🐕', Gato: '🐈', Conejo: '🐇', Ave: '🐦', Hámster: '🐹' })[e] || '🐾'
 export const initials = (n, a) => ((n || '?')[0] + (a || '?')[0]).toUpperCase()
 export const needsAcomp = p => p && ['CREMACION_INDIVIDUAL', 'COMPOSTAJE_INDIVIDUAL'].includes(p.tipo_proceso)

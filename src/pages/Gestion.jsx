@@ -12,7 +12,7 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { fmt, parsearErrorDB } from '@/lib/utils'
+import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
@@ -1503,7 +1503,7 @@ function TabHistorialServicios({ canEdit }) {
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url; a.download = `servicios_${new Date().toISOString().slice(0, 10)}.csv`
+    a.href = url; a.download = `servicios_${today()}.csv`
     a.click(); URL.revokeObjectURL(url)
     setExporting(false)
   }

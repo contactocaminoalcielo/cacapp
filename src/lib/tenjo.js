@@ -4,7 +4,7 @@
 // Tenjo LEE la custodia vía v_candidatos_tenjo; nunca administra neveras.
 import { db } from '@/lib/supabase'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
-import { today } from '@/lib/utils'
+import { today, hoyLocalISO } from '@/lib/utils'
 
 // ─── Configuración (defaults de respaldo; la fuente es config_operativa) ─────
 export const CONFIG_DEFAULTS = {
@@ -105,7 +105,7 @@ export function proximaJornada(config, desde = new Date()) {
   const d = new Date(desde)
   for (let i = 1; i <= 7; i++) {
     d.setDate(d.getDate() + 1)
-    if (dias.includes(d.getDay())) return d.toISOString().split('T')[0]
+    if (dias.includes(d.getDay())) return hoyLocalISO(d)
   }
   return null
 }
@@ -117,7 +117,7 @@ export function proximasJornadas(config, n = 8, desde = new Date()) {
   const d = new Date(desde)
   for (let i = 1; i <= 90 && out.length < n; i++) {
     d.setDate(d.getDate() + 1)
-    if (dias.includes(d.getDay())) out.push(d.toISOString().split('T')[0])
+    if (dias.includes(d.getDay())) out.push(hoyLocalISO(d))
   }
   return out
 }
@@ -505,14 +505,14 @@ export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
 export const DIAS_CENIZAS  = 5   // dias calendario tras la cremacion
 export const MESES_COMPOST = 2   // meses calendario tras ingresar al cubiculo
 
-const soloFecha = v => v ? new Date(v).toISOString().split('T')[0] : null
+const soloFecha = v => v ? hoyLocalISO(new Date(String(v).includes('T') ? v : v + 'T12:00:00')) : null
 const sumarDias = (fechaStr, n) => {
   const d = new Date(fechaStr + 'T12:00:00'); d.setDate(d.getDate() + n)
-  return d.toISOString().split('T')[0]
+  return hoyLocalISO(d)
 }
 const sumarMeses = (fechaStr, n) => {
   const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + n)
-  return d.toISOString().split('T')[0]
+  return hoyLocalISO(d)
 }
 
 /**

@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
-import { fmt, parsearErrorDB, parseDate } from '@/lib/utils'
+import { fmt, parsearErrorDB, parseDate, today } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
@@ -1167,7 +1167,7 @@ export default function Finanzas() {
           valor_comision:   totalPendiente,
           modalidad_pago:   modalidad,
           estado:           estadoComision,
-          fecha_generacion: new Date().toISOString().split('T')[0],
+          fecha_generacion: today(),
           notas:            `Liquidación de ${pendientes.length} servicio${pendientes.length !== 1 ? 's' : ''}`,
         })
       if (e2) throw e2

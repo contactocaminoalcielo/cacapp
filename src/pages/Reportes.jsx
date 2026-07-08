@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
-import { fmt, waLink, parseDate } from '@/lib/utils'
+import { fmt, waLink, parseDate, hoyLocalISO } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from 'recharts'
 import { Download, CalendarDays } from 'lucide-react'
 
@@ -25,7 +25,8 @@ function getRango(key) {
     default:          return { from: null, to: null }
   }
 }
-function toISO(d) { return d ? d.toISOString().split('T')[0] : null }
+// hoyLocalISO (fecha local), NO toISOString (fecha UTC: corre +1 día después de las 7 p.m.)
+function toISO(d) { return d ? hoyLocalISO(d) : null }
 
 const RANGOS = [
   { key: 'mes',     label: 'Este mes' },

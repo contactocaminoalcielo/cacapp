@@ -18,7 +18,7 @@ import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
 import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import ControlTab from '@/pages/tenjo/ControlTab'
-import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
+import { addDiasHabiles, parsearErrorDB, petEmoji, today, hoyLocalISO } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock, History } from 'lucide-react'
 
 function fmtFecha(s) {
@@ -397,7 +397,7 @@ export default function Tenjo() {
       // fecha_fin_estimada = fecha_inicio + 2 meses
       const fechaFin = new Date(formCubiculo.fecha_inicio + 'T12:00:00')
       fechaFin.setMonth(fechaFin.getMonth() + 2)
-      const fechaFinStr = fechaFin.toISOString().split('T')[0]
+      const fechaFinStr = hoyLocalISO(fechaFin)
 
       await db.from('seguimiento_compostaje').update({
         fecha_inicio:       formCubiculo.fecha_inicio,
@@ -990,7 +990,7 @@ export default function Tenjo() {
                 onChange={e => setFormCubiculo(p => ({ ...p, fecha_inicio: e.target.value }))} />
               {formCubiculo.fecha_inicio && (
                 <p className="text-[11px] text-ink3 mt-1">
-                  → Fin estimado: <strong>{(() => { const d = new Date(formCubiculo.fecha_inicio + 'T12:00:00'); d.setMonth(d.getMonth() + 2); return fmtFecha(d.toISOString().split('T')[0]) })()} </strong>
+                  → Fin estimado: <strong>{(() => { const d = new Date(formCubiculo.fecha_inicio + 'T12:00:00'); d.setMonth(d.getMonth() + 2); return fmtFecha(hoyLocalISO(d)) })()} </strong>
                 </p>
               )}
             </div>

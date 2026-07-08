@@ -7,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { petEmoji, fmt, waLink } from '@/lib/utils'
+import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
 import {
   Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package,
   History, ChevronDown, ChevronUp, Plus, Trash2, Thermometer,
@@ -42,7 +42,7 @@ function ReporteCard({ reporte, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   const neveras = reporte.estado_nevera_reporte || []
   const p       = reporte.personal
-  const esHoy   = reporte.fecha === new Date().toISOString().split('T')[0]
+  const esHoy   = reporte.fecha === hoyLocalISO()
 
   const checks = [
     { key: 'ozonizadores_ok',   emoji: '💨', label: 'Ozonizadores en funcionamiento' },
@@ -598,7 +598,7 @@ export default function CuartoFrio() {
     porNevera[k].push(r)
   })
 
-  const hoy        = new Date().toISOString().split('T')[0]
+  const hoy        = hoyLocalISO()
   const reporteHoy = reportes.find(r => r.fecha === hoy)
 
   const registrosFiltrados = registros.filter(r => {
