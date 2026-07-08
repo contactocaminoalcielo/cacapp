@@ -1,0 +1,190 @@
+# Módulo "Digitales" — Diseño (2026-07-08)
+
+> Evolución del módulo Memoriales → **Digitales**: reúne las tres piezas digitales
+> publicables de un servicio (Memorial, Video conmemorativo, Short), controla sus
+> enlaces, gestiona la publicación (Instagram automático / YouTube manual) y el
+> envío al cliente por WhatsApp.
+
+## 1. Realidad actual (verificada en prod 2026-07-08)
+
+| Pieza | Recordatorio en DB | Servicios con la pieza | Se produce en | Se publica en |
+|---|---|---|---|---|
+| Memorial | `Memorial digital` | 362 | **Orbit** (Remotion, orbit-backend) | Instagram |
+| Video conmemorativo | `Video conmemorativo` | 79 | Canva (manual) | YouTube |
+| Short | `Short YouTube` | 79 | Canva (manual) | YouTube (Shorts) |
+
+- La tabla `memoriales` (migración 025) solo cubre el memorial: pipeline
+  `GENERANDO → GENERADO → APROBADO → PUBLICADO`, con `instagram_url` pegado a mano.
+- `servicio_recordatorios` ya tiene las filas de las 3 piezas por plan, con estados
+  `PENDIENTE / EN_PROCESO / LISTO / ENTREGADO / NA`.
+- El certificado de entrega (`lib/certificadoEntrega.js`) ya separa
+  `categoria='digital'` como "enviados digitalmente".
+- Hoy el envío al cliente es artesanal: botón "copiar enlaces" y WhatsApp a mano.
+- No hay registro de **qué se envió, a quién ni cuándo**.
+
+## 2. Objetivo del módulo
+
+1. **Una sola vista por servicio** con sus piezas digitales esperadas y el estado de cada una.
+2. **Publicación automática en Instagram** del memorial (Meta Graph API) con
+   extracción automática del permalink.
+3. **YouTube manual por ahora**: video/short se hacen en Canva → se publican a mano
+   → se pega el enlace en Orbit (con validación y normalización).
+4. **Envío al cliente controlado**: mensaje WhatsApp con los enlaces, registrado
+   (quién/cuándo/qué enlaces), y que al enviarse marque los
+   `servicio_recordatorios` digitales como `ENTREGADO` (cierra el ciclo con
+   Producción y el certificado de entrega).
+
+## 3. Modelo de datos (migración 035)
+
+### 3.1 `memoriales` → `piezas_digitales` (rename + extensión)
+
+Renombrar conserva historial y evita mover archivos. Cambios:
+
+```sql
+ALTER TABLE public.memoriales RENAME TO piezas_digitales;
+ALTER TABLE public.piezas_digitales
+  ADD COLUMN tipo text NOT NULL DEFAULT 'MEMORIAL'
+    CHECK (tipo IN ('MEMORIAL','VIDEO','SHORT')),
+  ADD COLUMN plataforma text
+    CHECK (plataforma IN ('INSTAGRAM','YOUTUBE')),   -- derivada del tipo al insertar
+  ADD COLUMN url_publica text,                        -- permalink IG o URL YouTube
+  ADD COLUMN publicacion_media_id text,               -- id del media en la Graph API
+  ADD COLUMN publicado_auto boolean NOT NULL DEFAULT false;
+-- UNIQUE(servicio_id) → UNIQUE(servicio_id, tipo)
+-- backfill: tipo='MEMORIAL', plataforma='INSTAGRAM', url_publica=instagram_url
+```
+
+- Estados: los actuales + **`PENDIENTE`** (pieza esperada, aún sin nada — estado
+  inicial de VIDEO/SHORT) y **`PUBLICANDO`** (contenedor IG creado, esperando
+  confirmación de Meta).
+- Para VIDEO/SHORT los campos de render (`formato`, `ajuste_foto`, `archivo_path`,
+  `intentos`) quedan NULL; su ciclo es `PENDIENTE → PUBLICADO` (pegar enlace).
+- `instagram_url` se conserva una migración como columna legada y luego se elimina
+  (el backend pasa a leer/escribir `url_publica`).
+- Mapping pieza→recordatorio en `config_operativa` módulo `DIGITALES`
+  (`recordatorio_memorial_id`, `recordatorio_video_id`, `recordatorio_short_id`)
+  para derivar qué piezas espera cada servicio desde `servicio_recordatorios`
+  (`estado <> 'NA' AND origen <> 'REMOVIDO'`).
+
+### 3.2 `digitales_envios` (nueva)
+
+Registro de cada envío al cliente:
+
+```sql
+CREATE TABLE public.digitales_envios (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  servicio_id  uuid NOT NULL REFERENCES public.servicios(id) ON DELETE CASCADE,
+  canal        text NOT NULL DEFAULT 'WHATSAPP_MANUAL'
+                 CHECK (canal IN ('WHATSAPP_MANUAL','ZOLUTIUM')),
+  telefono     text,
+  enlaces      jsonb NOT NULL,        -- [{tipo, url}]
+  mensaje      text,
+  enviado_por  uuid REFERENCES public.personal(id),
+  enviado_en   timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Ambas tablas: mismo patrón que 025 — RLS habilitado sin policies, acceso solo vía
+orbit-backend (rol postgres). GRANTs revocados a anon/authenticated.
+
+### 3.3 Efecto sobre `servicio_recordatorios`
+
+Al registrar un envío, el backend marca `estado='ENTREGADO'` en las filas de los
+recordatorios digitales incluidos en ese envío. Así Producción, el
+ModalPreparaEntrega y el certificado reflejan la realidad sin pasos extra.
+
+## 4. Publicación automática en Instagram (memorial)
+
+**Método: Meta Graph API — Content Publishing (Reels).** Es la única vía
+soportada: la API ya no publica video de feed, solo `media_type=REELS`
+(y STORIES). Consecuencia de diseño: **la pieza que se auto-publica debe ser la
+vertical 1080x1920**; el formato 4:5 queda para publicación manual si se quiere
+en el feed.
+
+Flujo en orbit-backend (nuevo `src/digitales-ig.js` + job):
+
+1. `APROBADO` + acción "Publicar en Instagram" → estado `PUBLICANDO`.
+2. `POST /{ig_user_id}/media` con `media_type=REELS`,
+   `video_url=<enlace firmado del mp4>` (el actual, TTL 6 h, sirve porque Meta lo
+   descarga en minutos), `caption` desde plantilla en config
+   (ej.: `"En memoria de {mascota} 🕊️ #caminoalcielo"`).
+3. Poll `GET /{container_id}?fields=status_code` hasta `FINISHED` (o `ERROR`).
+4. `POST /{ig_user_id}/media_publish` → `media_id`.
+5. `GET /{media_id}?fields=permalink` → guarda `url_publica`, `publicado_auto=true`,
+   estado `PUBLICADO`. En error → estado `ERROR` con detalle, reintento manual.
+
+El poll lo hace el job existente de cron del VPS (o un setInterval del proceso,
+como el poll de render actual). Fallback siempre disponible: pegar la URL a mano
+(igual que hoy) → `publicado_auto=false`.
+
+**Prerrequisitos que solo David puede hacer (una vez):**
+- [ ] Cuenta de Instagram en modo **profesional** (Business/Creator).
+- [ ] Vincularla a una página de Facebook.
+- [ ] Crear app en developers.facebook.com (tipo Business). En modo desarrollo
+      basta para publicar en cuentas propias (rol admin/tester en la app) —
+      **no requiere App Review**.
+- [ ] Generar token de larga duración (60 días) con
+      `instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+      `business_management` → variable de entorno del backend.
+- Cron mensual en el backend refresca el token antes de vencer (si falla,
+  alerta en el módulo).
+
+Límite de la API: 25 publicaciones/día por cuenta — sobra para la operación.
+
+## 5. YouTube (video y short) — manual por ahora, y por qué
+
+Se queda manual deliberadamente:
+1. Las piezas se hacen en **Canva** — Orbit no tiene el archivo, no hay nada que subir.
+2. La YouTube Data API bloquea en "privado" los videos subidos por apps no
+   auditadas por Google (auditoría de compliance) — burocracia desproporcionada.
+
+En Orbit: campo "Pegar enlace de YouTube" por pieza, con validación/normalización
+(`youtube.com/watch?v=`, `youtu.be/`, `/shorts/`) → guarda `url_publica`, estado
+`PUBLICADO`. Si algún día los videos salen de Orbit (Remotion), se reevalúa la
+subida automática.
+
+## 6. Envío al cliente
+
+- **Fase 1 — wa.me (voz del coordinador):** botón "Enviar por WhatsApp" cuando el
+  servicio tiene todas sus piezas esperadas en `PUBLICADO`. Abre wa.me con mensaje
+  precompuesto (plantilla en config, con nombre de mascota y enlaces) y registra el
+  envío en `digitales_envios` + marca `ENTREGADO`. Coherente con la regla de
+  canales: wa.me para lo que "dice" el coordinador.
+- **Fase 3 — Zolutium (opcional):** cuando haya plantilla WhatsApp aprobada por
+  Meta, envío automático al completarse la última pieza (canal `ZOLUTIUM` en el
+  mismo registro). Requiere aprobación de plantilla — no bloquea nada de lo demás.
+- También se permite envío parcial (ej. solo memorial si el plan no lleva video),
+  y reenvío (queda otro registro en el historial).
+
+## 7. UI — página `/digitales` (reemplaza `/memoriales`)
+
+Sidebar: "Digitales" (icono Clapperboard/Sparkles). Tabs:
+
+1. **Pipeline** — tarjetas por servicio (agrupa sus piezas). Por pieza:
+   - Memorial: lo actual (generar, encuadre, preview, aprobar) + botón
+     **"Publicar en Instagram"** (auto) y fallback pegar enlace.
+   - Video / Short: estado + campo pegar enlace YouTube.
+2. **Para enviar** — servicios con todo publicado y sin envío registrado:
+   teléfono del cliente, preview del mensaje, botón WhatsApp, copiar enlaces.
+3. **Enviados** — historial de `digitales_envios` (quién, cuándo, enlaces, reenviar).
+4. **Candidatos** — lo actual (por generar memorial).
+
+Roles: los mismos del módulo actual (ADMIN/COORDINADOR; PRODUCTOR si hoy lo ve).
+
+## 8. Orden de implementación
+
+| Fase | Contenido | Dependencias externas | Despliegue |
+|---|---|---|---|
+| **1** | Migración 035 (rename + `tipo` + `digitales_envios`), endpoints `/digitales` en orbit-backend, página `/digitales` (pipeline + enlaces YT manuales + envío wa.me + registro + `ENTREGADO`) | Ninguna | migración VPS + backend tar+SSH + `git push` frontend |
+| **2** | Publicación automática IG: `digitales-ig.js`, estado `PUBLICANDO`, permalink automático, refresh de token | Checklist Meta de David (sección 4) | backend + env vars en VPS |
+| **3** (opcional) | Envío automático Zolutium al completar piezas; recordatorio de pendientes | Plantilla WA aprobada por Meta | backend |
+
+## 9. Decisiones abiertas (para David)
+
+1. **Formato del memorial auto-publicado**: la API solo publica Reels (9:16).
+   ¿Pasamos el formato por defecto a 1080x1920, o generamos ambas y el 4:5 queda
+   para publicación manual en feed cuando se quiera?
+2. **Caption de Instagram**: texto/hashtags de la plantilla (editable en config).
+3. ¿El "Video conmemorativo" y el "Short" van siempre a YouTube, o el short a
+   veces también a Instagram? (afecta la validación del enlace).
+4. Plantilla del mensaje de WhatsApp al cliente (tono, orden de los enlaces).

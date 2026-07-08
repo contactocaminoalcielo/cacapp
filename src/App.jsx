@@ -32,7 +32,7 @@ const Recibos            = lazy(() => import('@/pages/Recibos'))
 const Finanzas           = lazy(() => import('@/pages/Finanzas'))
 const Certificados       = lazy(() => import('@/pages/Certificados'))
 const Eutanasias         = lazy(() => import('@/pages/Eutanasias'))
-const Memoriales         = lazy(() => import('@/pages/Memoriales'))
+const Digitales          = lazy(() => import('@/pages/Digitales'))
 
 function FullScreenLoader() {
   return (
@@ -89,7 +89,9 @@ function AppRoutes({ rol }) {
             {routes.has('/finanzas')       && <Route path="/finanzas"       element={<Finanzas />} />}
             {routes.has('/certificados')   && <Route path="/certificados"   element={<Certificados />} />}
             {routes.has('/eutanasias')     && <Route path="/eutanasias"     element={<Eutanasias />} />}
-            {routes.has('/memoriales')     && <Route path="/memoriales"     element={<Memoriales />} />}
+            {routes.has('/digitales')      && <Route path="/digitales"      element={<Digitales />} />}
+            {/* Ruta anterior del módulo (marcadores guardados) */}
+            {routes.has('/digitales')      && <Route path="/memoriales"     element={<Navigate to="/digitales" replace />} />}
             <Route path="*" element={<Navigate to={redirectTo} replace />} />
           </Routes>
         </Suspense>

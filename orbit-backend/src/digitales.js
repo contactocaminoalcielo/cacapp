@@ -1,0 +1,526 @@
+// Digitales — piezas digitales publicables por servicio (evolución de memorial.js).
+// MEMORIAL: render propio (Remotion) → Instagram. VIDEO/SHORT: se hacen en Canva,
+// se publican a mano en YouTube y aquí solo se registra el enlace.
+// Envío al cliente: registrado en digitales_envios + marca ENTREGADO los
+// servicio_recordatorios digitales correspondientes.
+// Diseño: docs/Modulo_Digitales_Diseno.md · Migración: 035_digitales.sql
+import { spawn } from 'node:child_process'
+import path from 'node:path'
+import fs from 'node:fs'
+import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { pool, log } from './db.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const RENDER_ENTRY = path.join(__dirname, '..', 'memorial', 'render.mjs')
+const APP_ROOT = path.join(__dirname, '..')
+const DATA_DIR = process.env.MEMORIAL_DATA_DIR || '/data/memoriales'
+const SIGN_SECRET = process.env.MEMORIAL_SIGN_SECRET || process.env.JWT_SECRET || 'dev-secret'
+// Base pública del API (nginx /api → backend) — para URLs que Meta debe poder descargar.
+const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || 'https://orbit.orbitacac.com/api'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export function uuidOrNull(v) {
+  if (!v) return null
+  const s = String(v)
+  return UUID_RE.test(s) ? s : null
+}
+
+const TIPOS = ['MEMORIAL', 'VIDEO', 'SHORT']
+
+const CONFIG_DEFAULTS = {
+  activo: true,
+  planes_excluidos: ['ANGEL', 'DESAMPARADO'],
+  formato: '1080x1350',
+  frase: 'Siempre en nuestro corazón',
+}
+
+async function cargarConfig(client) {
+  const cfg = { ...CONFIG_DEFAULTS }
+  const { rows } = await client.query(
+    `SELECT clave, valor FROM public.config_operativa WHERE modulo = 'MEMORIAL'`
+  )
+  rows.forEach(r => { cfg[r.clave] = r.valor })
+  return cfg
+}
+
+export async function cargarConfigDigitales(client = pool) {
+  const cfg = {}
+  const { rows } = await client.query(
+    `SELECT clave, valor FROM public.config_operativa WHERE modulo = 'DIGITALES'`
+  )
+  rows.forEach(r => { cfg[r.clave] = r.valor })
+  return cfg
+}
+
+// Encuadre de la foto {zoom, posX, posY} — validado a rangos seguros.
+function normalizarAjuste(a) {
+  if (!a || typeof a !== 'object') return null
+  const num = (v, d, min, max) => {
+    const n = parseFloat(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d
+  }
+  return {
+    zoom: num(a.zoom, 1, 1, 3),
+    posX: num(a.posX, 50, 0, 100),
+    posY: num(a.posY, 50, 0, 100),
+  }
+}
+
+// Foto representativa del servicio = primera imagen que envió el cliente.
+async function fotoDelServicio(client, servicioId) {
+  const { rows } = await client.query(
+    `SELECT sr.imagen_cliente_url, sr.imagenes_cliente_urls
+     FROM public.servicio_recordatorios sr
+     WHERE sr.servicio_id = $1
+       AND (sr.imagen_cliente_url IS NOT NULL
+            OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+     ORDER BY sr.created_at ASC`,
+    [servicioId]
+  )
+  for (const r of rows) {
+    if (r.imagen_cliente_url) return r.imagen_cliente_url
+    if (Array.isArray(r.imagenes_cliente_urls) && r.imagenes_cliente_urls[0]) return r.imagenes_cliente_urls[0]
+  }
+  return null
+}
+
+// ── Enlace firmado del archivo (para <video> y descarga sin header de auth) ──
+function firmarToken(id, ttlSec = 6 * 3600) {
+  const exp = Math.floor(Date.now() / 1000) + ttlSec
+  const h = crypto.createHmac('sha256', SIGN_SECRET).update(`${id}.${exp}`).digest('hex').slice(0, 32)
+  return `${exp}.${h}`
+}
+function verificarToken(id, t) {
+  if (!t) return false
+  const [exp, h] = String(t).split('.')
+  if (!exp || !h) return false
+  if (parseInt(exp) * 1000 < Date.now()) return false
+  const good = crypto.createHmac('sha256', SIGN_SECRET).update(`${id}.${exp}`).digest('hex').slice(0, 32)
+  try { return crypto.timingSafeEqual(Buffer.from(h), Buffer.from(good)) } catch { return false }
+}
+function urlArchivo(id) {
+  return `/digitales/${id}/archivo?t=${firmarToken(id)}`
+}
+// URL absoluta con TTL largo — Meta descarga el video desde aquí al publicar el Reel.
+export function urlArchivoAbsoluta(id, ttlSec = 24 * 3600) {
+  return `${PUBLIC_API_BASE}/digitales/${id}/archivo?t=${firmarToken(id, ttlSec)}`
+}
+
+// ── Normalización de enlaces de YouTube (video/short hechos en Canva) ──
+export function normalizarYoutube(url) {
+  const s = String(url || '').trim()
+  let m = s.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]{6,20})/i)
+  if (m) return `https://www.youtube.com/shorts/${m[1]}`
+  m = s.match(/youtu\.be\/([A-Za-z0-9_-]{6,20})/i)
+  if (m) return `https://www.youtube.com/watch?v=${m[1]}`
+  m = s.match(/youtube\.com\/(?:watch\?(?:[^#]*&)?v=|live\/|embed\/)([A-Za-z0-9_-]{6,20})/i)
+  if (m) return `https://www.youtube.com/watch?v=${m[1]}`
+  return null
+}
+
+// ── Candidatos a memorial: imagen lista, plan no excluido, sin memorial activo ──
+export async function listarCandidatos() {
+  const client = await pool.connect()
+  try {
+    const cfg = await cargarConfig(client)
+    const excl = Array.isArray(cfg.planes_excluidos) ? cfg.planes_excluidos : []
+    const { rows } = await client.query(
+      `SELECT s.id AS servicio_id,
+              to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
+              m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
+              TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
+              f.foto_url
+       FROM public.servicios s
+       JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.planes p    ON p.id = s.plan_id
+       LEFT JOIN public.piezas_digitales mem
+         ON mem.servicio_id = s.id AND mem.tipo = 'MEMORIAL'
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND (sr.imagen_cliente_url IS NOT NULL
+                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+         ORDER BY sr.created_at ASC
+         LIMIT 1
+       ) f ON true
+       WHERE s.fecha_imagenes_recibidas IS NOT NULL
+         AND s.estado <> 'CANCELADO'
+         AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
+         AND (mem.id IS NULL OR mem.estado IN ('ERROR', 'DESCARTADO'))
+       ORDER BY s.fecha_imagenes_recibidas DESC
+       LIMIT 300`,
+      [excl]
+    )
+    return rows
+  } finally { client.release() }
+}
+
+// ── Vista principal: servicios con sus piezas digitales, esperadas y envíos ──
+export async function listarServicios() {
+  const client = await pool.connect()
+  try {
+    const cfg = await cargarConfigDigitales(client)
+    const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+    const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
+    const tipoPorRec = {}
+    TIPOS.forEach(t => { if (mapa[t]) tipoPorRec[mapa[t]] = t })
+
+    const { rows: servicios } = await client.query(
+      `SELECT s.id AS servicio_id,
+              to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
+              m.nombre AS mascota,
+              TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
+              COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
+              p.codigo AS plan_codigo, p.nombre AS plan_nombre,
+              f.foto_url,
+              COALESCE(e.rec_ids, '{}') AS rec_ids
+       FROM public.servicios s
+       JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.planes p   ON p.id = s.plan_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND (sr.imagen_cliente_url IS NOT NULL
+                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+         ORDER BY sr.created_at ASC
+         LIMIT 1
+       ) f ON true
+       LEFT JOIN LATERAL (
+         SELECT array_agg(DISTINCT sr.recordatorio_id::text) AS rec_ids
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND sr.recordatorio_id = ANY($1::uuid[])
+           AND sr.estado <> 'NA'
+           AND COALESCE(sr.origen, '') <> 'REMOVIDO'
+       ) e ON true
+       WHERE s.estado <> 'CANCELADO'
+         AND s.fecha_imagenes_recibidas IS NOT NULL
+         AND (e.rec_ids IS NOT NULL
+              OR EXISTS (SELECT 1 FROM public.piezas_digitales pd WHERE pd.servicio_id = s.id))
+       ORDER BY s.fecha_imagenes_recibidas DESC
+       LIMIT 200`,
+      [recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000']]
+    )
+
+    const ids = servicios.map(s => s.servicio_id)
+    let piezas = [], envios = []
+    if (ids.length) {
+      const [pz, ev] = await Promise.all([
+        client.query(
+          `SELECT id, servicio_id, tipo, estado, plataforma, mascota_nombre, fecha_texto,
+                  formato, archivo_path, error, url_publica, publicado_auto, ajuste_foto,
+                  generado_en, aprobado_en, publicado_en, updated_at
+           FROM public.piezas_digitales
+           WHERE servicio_id = ANY($1::uuid[])`,
+          [ids]
+        ),
+        client.query(
+          `SELECT de.id, de.servicio_id, de.canal, de.telefono, de.enlaces, de.mensaje, de.enviado_en,
+                  TRIM(COALESCE(per.nombre,'') || ' ' || COALESCE(per.apellido,'')) AS enviado_por_nombre
+           FROM public.digitales_envios de
+           LEFT JOIN public.personal per ON per.id = de.enviado_por
+           WHERE de.servicio_id = ANY($1::uuid[])
+           ORDER BY de.enviado_en DESC`,
+          [ids]
+        ),
+      ])
+      piezas = pz.rows
+      envios = ev.rows
+    }
+
+    const porServicio = Object.fromEntries(servicios.map(s => [s.servicio_id, s]))
+    servicios.forEach(s => {
+      s.esperadas = TIPOS.filter(t => (s.rec_ids || []).includes(String(mapa[t] || '')))
+      delete s.rec_ids
+      s.piezas = []
+      s.envios = []
+    })
+    piezas.forEach(p => {
+      p.archivo_url = p.archivo_path ? urlArchivo(p.id) : null
+      delete p.archivo_path
+      porServicio[p.servicio_id]?.piezas.push(p)
+    })
+    envios.forEach(e => porServicio[e.servicio_id]?.envios.push(e))
+
+    return {
+      servicios,
+      ig_configurado: !!(process.env.IG_USER_ID && process.env.IG_ACCESS_TOKEN),
+      plantillas: {
+        mensaje_cliente: typeof cfg.mensaje_cliente === 'string' ? cfg.mensaje_cliente : '',
+        caption_instagram: typeof cfg.caption_instagram === 'string' ? cfg.caption_instagram : '',
+      },
+    }
+  } finally { client.release() }
+}
+
+// ── Generar memorial (render async en segundo plano) ──
+const FORMATOS = ['1080x1350', '1080x1920']
+
+export async function generarMemorial({ servicioId, personalId, formato: formatoReq, ajuste }) {
+  const actor = uuidOrNull(personalId)
+  const ajusteNorm = normalizarAjuste(ajuste)   // null si no se envió → conserva el guardado
+  const client = await pool.connect()
+  let piezaId = null, payload = null
+  try {
+    await client.query('BEGIN')
+    const cfg = await cargarConfig(client)
+    if (cfg.activo === false) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'El módulo de memoriales está desactivado.' } } }
+    const excl = Array.isArray(cfg.planes_excluidos) ? cfg.planes_excluidos : []
+
+    const { rows: svcRows } = await client.query(
+      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas,
+              to_char(s.fecha_ingreso, 'FMDD · FMMM · YYYY') AS fecha_texto,
+              m.nombre AS mascota, p.codigo AS plan_codigo
+       FROM public.servicios s
+       JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.planes p ON p.id = s.plan_id
+       WHERE s.id = $1
+       FOR UPDATE OF s`,
+      [servicioId]
+    )
+    const svc = svcRows[0]
+    if (!svc) { await client.query('ROLLBACK'); return { status: 404, body: { error: 'Servicio no encontrado' } } }
+    if (svc.estado === 'CANCELADO') { await client.query('ROLLBACK'); return { status: 422, body: { error: 'El servicio está cancelado.' } } }
+    if (!svc.fecha_imagenes_recibidas) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'Aún no se han recibido las imágenes del cliente.' } } }
+    if (svc.plan_codigo && excl.includes(svc.plan_codigo)) { await client.query('ROLLBACK'); return { status: 422, body: { error: `El plan ${svc.plan_codigo} no lleva memorial.` } } }
+
+    const foto = await fotoDelServicio(client, servicioId)
+    if (!foto) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'No hay una foto del cliente para este servicio.' } } }
+
+    const frase = typeof cfg.frase === 'string' ? cfg.frase : CONFIG_DEFAULTS.frase
+    const formato = FORMATOS.includes(formatoReq) ? formatoReq
+      : (FORMATOS.includes(cfg.formato) ? cfg.formato : CONFIG_DEFAULTS.formato)
+    const compositionId = formato === '1080x1920' ? 'MemorialVertical' : 'Memorial'
+
+    const { rows: up } = await client.query(
+      `INSERT INTO public.piezas_digitales
+         (servicio_id, tipo, plataforma, estado, mascota_nombre, fecha_texto, formato, ajuste_foto, intentos, generado_por, generado_en, error)
+       VALUES ($1, 'MEMORIAL', 'INSTAGRAM', 'GENERANDO', $2, $3, $4, $6::jsonb, 1, $5, NULL, NULL)
+       ON CONFLICT (servicio_id, tipo) DO UPDATE SET
+         estado = 'GENERANDO',
+         mascota_nombre = EXCLUDED.mascota_nombre,
+         fecha_texto = EXCLUDED.fecha_texto,
+         formato = EXCLUDED.formato,
+         ajuste_foto = COALESCE($6::jsonb, public.piezas_digitales.ajuste_foto),
+         intentos = public.piezas_digitales.intentos + 1,
+         generado_por = EXCLUDED.generado_por,
+         error = NULL,
+         updated_at = now()
+       RETURNING id, ajuste_foto`,
+      [servicioId, svc.mascota, svc.fecha_texto, formato, actor, ajusteNorm ? JSON.stringify(ajusteNorm) : null]
+    )
+    piezaId = up[0].id
+    const ajusteEfectivo = up[0].ajuste_foto || {}
+    payload = { name: svc.mascota, date: svc.fecha_texto, photo: foto, frase, compositionId, ...ajusteEfectivo }
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
+
+  // Render fuera de la transacción y sin bloquear la respuesta.
+  runRender(piezaId, payload).catch(err => log('[digitales] runRender ERROR', err.message))
+  return { status: 200, body: { ok: true, id: piezaId, estado: 'GENERANDO' } }
+}
+
+async function runRender(piezaId, payload) {
+  await fs.promises.mkdir(DATA_DIR, { recursive: true })
+  const outPath = path.join(DATA_DIR, `${piezaId}.mp4`)
+  const child = spawn('node', [RENDER_ENTRY, JSON.stringify({ ...payload, outPath })], {
+    cwd: APP_ROOT, env: process.env,
+  })
+  let out = '', err = ''
+  child.stdout.on('data', d => { out += d })
+  child.stderr.on('data', d => { err += d })
+
+  await new Promise((resolve) => {
+    child.on('close', async (code) => {
+      let ok = false, error = null
+      try {
+        const last = out.trim().split('\n').pop() || '{}'
+        const j = JSON.parse(last)
+        ok = j.ok === true; error = j.error || null
+      } catch { error = (err || `exit ${code}`).slice(0, 500) }
+      try {
+        if (ok && fs.existsSync(outPath)) {
+          await pool.query(
+            `UPDATE public.piezas_digitales SET estado='GENERADO', archivo_path=$2, generado_en=now(), error=NULL, updated_at=now() WHERE id=$1`,
+            [piezaId, `${piezaId}.mp4`]
+          )
+          log('[digitales] memorial generado', piezaId)
+        } else {
+          await pool.query(
+            `UPDATE public.piezas_digitales SET estado='ERROR', error=$2, updated_at=now() WHERE id=$1`,
+            [piezaId, (error || 'El render falló').slice(0, 500)]
+          )
+          log('[digitales] render ERROR', piezaId, error)
+        }
+      } catch (e) { log('[digitales] update post-render ERROR', e.message) }
+      resolve()
+    })
+  })
+}
+
+export async function aprobarMemorial({ id, personalId }) {
+  const actor = uuidOrNull(personalId)
+  const { rows } = await pool.query(`SELECT estado FROM public.piezas_digitales WHERE id = $1`, [id])
+  if (!rows[0]) return { status: 404, body: { error: 'Pieza no encontrada' } }
+  if (!['GENERADO', 'APROBADO', 'PUBLICADO'].includes(rows[0].estado))
+    return { status: 422, body: { error: 'Solo se aprueba un memorial ya generado.' } }
+  await pool.query(
+    `UPDATE public.piezas_digitales SET estado='APROBADO', aprobado_por=$2, aprobado_en=now(), updated_at=now() WHERE id=$1`,
+    [id, actor]
+  )
+  return { status: 200, body: { ok: true } }
+}
+
+// Registro manual del enlace de una pieza ya publicada (fallback del memorial
+// cuando no hay publicación automática; también corrige un enlace equivocado).
+export async function publicarManual({ id, personalId, url }) {
+  const actor = uuidOrNull(personalId)
+  const { rows } = await pool.query(`SELECT estado, plataforma FROM public.piezas_digitales WHERE id = $1`, [id])
+  if (!rows[0]) return { status: 404, body: { error: 'Pieza no encontrada' } }
+
+  let final = (url || '').trim()
+  if (rows[0].plataforma === 'YOUTUBE') {
+    final = normalizarYoutube(final)
+    if (!final) return { status: 422, body: { error: 'Pega un enlace de YouTube válido.' } }
+  } else if (!/^https?:\/\//i.test(final)) {
+    return { status: 422, body: { error: 'El enlace no es válido (https://…).' } }
+  }
+
+  await pool.query(
+    `UPDATE public.piezas_digitales
+     SET estado='PUBLICADO', url_publica=$2, publicado_auto=false,
+         publicado_por=$3, publicado_en=now(), updated_at=now()
+     WHERE id=$1`,
+    [id, final, actor]
+  )
+  return { status: 200, body: { ok: true } }
+}
+
+// VIDEO/SHORT hechos en Canva: registrar el enlace de YouTube crea (o actualiza)
+// la pieza directamente en PUBLICADO — no pasan por el pipeline de render.
+export async function registrarEnlace({ servicioId, tipo, url, personalId }) {
+  const actor = uuidOrNull(personalId)
+  if (!['VIDEO', 'SHORT'].includes(tipo))
+    return { status: 422, body: { error: 'Tipo de pieza inválido (VIDEO o SHORT).' } }
+  const final = normalizarYoutube(url)
+  if (!final) return { status: 422, body: { error: 'Pega un enlace de YouTube válido (watch, youtu.be o shorts).' } }
+
+  const { rows: svc } = await pool.query(
+    `SELECT m.nombre AS mascota
+     FROM public.servicios s JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+     WHERE s.id = $1`,
+    [servicioId]
+  )
+  if (!svc[0]) return { status: 404, body: { error: 'Servicio no encontrado' } }
+
+  const { rows } = await pool.query(
+    `INSERT INTO public.piezas_digitales
+       (servicio_id, tipo, plataforma, estado, mascota_nombre, formato, url_publica, publicado_auto, publicado_por, publicado_en)
+     VALUES ($1, $2, 'YOUTUBE', 'PUBLICADO', $3, NULL, $4, false, $5, now())
+     ON CONFLICT (servicio_id, tipo) DO UPDATE SET
+       estado = 'PUBLICADO',
+       url_publica = EXCLUDED.url_publica,
+       publicado_auto = false,
+       publicado_por = EXCLUDED.publicado_por,
+       publicado_en = now(),
+       error = NULL,
+       updated_at = now()
+     RETURNING id, tipo, estado, url_publica`,
+    [servicioId, tipo, svc[0].mascota, final, actor]
+  )
+  return { status: 200, body: { ok: true, pieza: rows[0] } }
+}
+
+export async function descartarPieza({ id }) {
+  const { rows } = await pool.query(`SELECT id FROM public.piezas_digitales WHERE id = $1`, [id])
+  if (!rows[0]) return { status: 404, body: { error: 'Pieza no encontrada' } }
+  await pool.query(`UPDATE public.piezas_digitales SET estado='DESCARTADO', updated_at=now() WHERE id=$1`, [id])
+  return { status: 200, body: { ok: true } }
+}
+
+// ── Envío al cliente: registro + marca ENTREGADO en servicio_recordatorios ──
+export async function registrarEnvio({ servicioId, personalId, telefono, mensaje, canal }) {
+  const actor = uuidOrNull(personalId)
+  const canalFinal = canal === 'ZOLUTIUM' ? 'ZOLUTIUM' : 'WHATSAPP_MANUAL'
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: piezas } = await client.query(
+      `SELECT tipo, url_publica FROM public.piezas_digitales
+       WHERE servicio_id = $1 AND estado = 'PUBLICADO' AND url_publica IS NOT NULL
+       ORDER BY tipo`,
+      [servicioId]
+    )
+    if (!piezas.length) {
+      await client.query('ROLLBACK')
+      return { status: 422, body: { error: 'Este servicio no tiene piezas publicadas con enlace.' } }
+    }
+    const enlaces = piezas.map(p => ({ tipo: p.tipo, url: p.url_publica }))
+
+    const { rows: env } = await client.query(
+      `INSERT INTO public.digitales_envios (servicio_id, canal, telefono, enlaces, mensaje, enviado_por)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+       RETURNING id, enviado_en`,
+      [servicioId, canalFinal, (telefono || '').trim() || null, JSON.stringify(enlaces), mensaje || null, actor]
+    )
+
+    // Los digitales enviados quedan ENTREGADOS en producción/entrega/certificado.
+    const cfg = await cargarConfigDigitales(client)
+    const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+    const recIds = enlaces.map(e => mapa[e.tipo]).filter(Boolean)
+    if (recIds.length) {
+      await client.query(
+        `UPDATE public.servicio_recordatorios
+         SET estado = 'ENTREGADO'
+         WHERE servicio_id = $1
+           AND recordatorio_id = ANY($2::uuid[])
+           AND estado <> 'NA'
+           AND COALESCE(origen, '') <> 'REMOVIDO'`,
+        [servicioId, recIds]
+      )
+    }
+    await client.query('COMMIT')
+    return { status: 200, body: { ok: true, envio: env[0], enlaces } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
+}
+
+// ── Servir el archivo (enlace firmado; sin JWT para que funcione en <video>) ──
+export async function servirArchivo(req, res) {
+  const { id } = req.params
+  if (!verificarToken(id, req.query.t)) return res.status(403).end('Forbidden')
+  const { rows } = await pool.query(`SELECT archivo_path FROM public.piezas_digitales WHERE id = $1`, [id])
+  const ap = rows[0]?.archivo_path
+  if (!ap) return res.status(404).end('No encontrado')
+  const full = path.join(DATA_DIR, ap)
+  if (!fs.existsSync(full)) return res.status(404).end('Archivo no disponible')
+
+  const size = fs.statSync(full).size
+  if (req.query.dl) res.setHeader('Content-Disposition', `attachment; filename="memorial_${id}.mp4"`)
+  res.setHeader('Content-Type', 'video/mp4')
+  res.setHeader('Accept-Ranges', 'bytes')
+
+  const range = req.headers.range
+  if (range) {
+    const m = /bytes=(\d+)-(\d*)/.exec(range)
+    const start = parseInt(m[1])
+    const end = m[2] ? parseInt(m[2]) : size - 1
+    res.status(206)
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`)
+    res.setHeader('Content-Length', end - start + 1)
+    fs.createReadStream(full, { start, end }).pipe(res)
+  } else {
+    res.setHeader('Content-Length', size)
+    fs.createReadStream(full).pipe(res)
+  }
+}

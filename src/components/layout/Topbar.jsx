@@ -16,7 +16,7 @@ const PAGE_META = {
   '/imagenes':     { title: 'Imágenes',               sub: 'Solicitudes y recepción de fotos' },
   '/gestion':      { title: 'Gestión',                sub: 'Clientes, mascotas, aliados y personal' },
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
-  '/memoriales':   { title: 'Memoriales',             sub: 'Video animado para publicar en Instagram' },
+  '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/reportes':     { title: 'Reportes',               sub: 'Análisis operacional y financiero' },
   '/presequiales': { title: 'Planes presequiales',    sub: 'Afiliaciones anticipadas' },
   '/configuracion':  { title: 'Configuración',        sub: 'Planes, recordatorios y catálogos' },

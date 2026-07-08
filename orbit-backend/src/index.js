@@ -12,7 +12,11 @@ import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupal
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
-import { listarCandidatos, listarMemoriales, generarMemorial, aprobarMemorial, publicarMemorial, descartarMemorial, servirArchivo } from './memorial.js'
+import {
+  listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
+  publicarManual, registrarEnlace, registrarEnvio, descartarPieza, servirArchivo,
+} from './digitales.js'
+import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
 
 const app = express()
@@ -316,71 +320,106 @@ app.post('/tenjo/lotes/:id/cerrar', requireAuth, requireRol('COORDINADOR', 'ADMI
   }
 })
 
-// ── API Memoriales (video animado por servicio; render Remotion self-host) ──
-app.get('/memoriales/candidatos', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+// ── API Digitales (memorial + video + short: publicación y envío al cliente) ──
+app.get('/digitales/candidatos', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
     res.json(await listarCandidatos())
   } catch (e) {
-    log('[memoriales/candidatos] ERROR', e.message)
+    log('[digitales/candidatos] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-app.get('/memoriales', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+app.get('/digitales/servicios', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
-    res.json(await listarMemoriales())
+    res.json(await listarServicios())
   } catch (e) {
-    log('[memoriales] ERROR', e.message)
+    log('[digitales/servicios] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-app.post('/memoriales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+app.post('/digitales/generar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const r = await generarMemorial({ servicioId: req.body.servicio_id, personalId: req.personal.id, formato: req.body.formato, ajuste: req.body.ajuste })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[memoriales/generar] ERROR', e.message)
+    log('[digitales/generar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-app.post('/memoriales/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+// VIDEO/SHORT hechos en Canva: registrar el enlace de YouTube.
+app.post('/digitales/enlace', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await registrarEnlace({ servicioId: req.body.servicio_id, tipo: req.body.tipo, url: req.body.url, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[digitales/enlace] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Envío de enlaces al cliente: registro + marca ENTREGADO en servicio_recordatorios.
+app.post('/digitales/:servicioId/envio', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await registrarEnvio({ servicioId: req.params.servicioId, personalId: req.personal.id, telefono: req.body.telefono, mensaje: req.body.mensaje, canal: req.body.canal })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[digitales/envio] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/digitales/:id/aprobar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const r = await aprobarMemorial({ id: req.params.id, personalId: req.personal.id })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[memoriales/aprobar] ERROR', e.message)
+    log('[digitales/aprobar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-app.post('/memoriales/:id/publicar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+// Registro manual del enlace (fallback del memorial / corrección).
+app.post('/digitales/:id/publicar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
-    const r = await publicarMemorial({ id: req.params.id, personalId: req.personal.id, instagramUrl: req.body.instagram_url })
+    const r = await publicarManual({ id: req.params.id, personalId: req.personal.id, url: req.body.url ?? req.body.instagram_url })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[memoriales/publicar] ERROR', e.message)
+    log('[digitales/publicar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-app.post('/memoriales/:id/descartar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+// Publicación automática en Instagram (Meta Graph API, Reels).
+app.post('/digitales/:id/publicar-instagram', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
-    const r = await descartarMemorial({ id: req.params.id })
+    const r = await publicarInstagram({ id: req.params.id, personalId: req.personal.id })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[memoriales/descartar] ERROR', e.message)
+    log('[digitales/publicar-instagram] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
 
-// Archivo del memorial — enlace firmado (sin JWT) para <video> y descarga.
-app.get('/memoriales/:id/archivo', async (req, res) => {
+app.post('/digitales/:id/descartar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await descartarPieza({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[digitales/descartar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Archivo del memorial — enlace firmado (sin JWT) para <video>, descarga y Meta.
+// Se mantiene el alias /memoriales/:id/archivo por enlaces firmados aún vigentes.
+app.get(['/digitales/:id/archivo', '/memoriales/:id/archivo'], async (req, res) => {
   try {
     await servirArchivo(req, res)
   } catch (e) {
-    log('[memoriales/archivo] ERROR', e.message)
+    log('[digitales/archivo] ERROR', e.message)
     if (!res.headersSent) res.status(500).end('Error interno')
   }
 })
