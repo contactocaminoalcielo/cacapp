@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td } from '@/components/ui/table'
 import { orbitApi } from '@/lib/orbitApi'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram, Youtube,
   Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
@@ -53,6 +54,23 @@ function normalizarTel(tel) {
   return d.length >= 10 ? d : null
 }
 
+// ¿Ya hubo un envío exitoso? Los intentos fallidos de Zolutium (estado ERROR)
+// no cuentan como enviado — el servicio sigue en "Para enviar".
+const fueEnviado = (s) => s.envios.some(e => (e.estado || 'ENVIADO') === 'ENVIADO')
+const envioExitoso = (s) => s.envios.find(e => (e.estado || 'ENVIADO') === 'ENVIADO')
+const ultimoError = (s) => (s.envios[0]?.estado === 'ERROR' ? s.envios[0] : null)
+
+// Plantilla Zolutium aplicable según las piezas que lleva el servicio:
+// 3 digitales → plantilla completa · solo memorial → plantilla de memorial ·
+// cualquier otra combinación → sin plantilla (envío manual).
+function plantillaAplicable(s, zolutium) {
+  if (!zolutium?.activo) return null
+  const tipos = tiposDe(s)
+  if (tipos.length === 3) return zolutium.plantilla_completos
+  if (tipos.length === 1 && tipos[0] === 'MEMORIAL') return zolutium.plantilla_memorial
+  return null
+}
+
 // ¿Alguna pieza del servicio quedó en error (render o Instagram)?
 const conError = (s) => s.piezas.some(p => p.estado === 'ERROR' || (p.error && p.estado !== 'DESCARTADO'))
 
@@ -76,7 +94,7 @@ function buildMensaje(plantilla, s) {
 
 function estadoServicio(s) {
   if (conError(s)) return { label: 'Con error', variant: 'red' }
-  if (s.envios.length > 0) return { label: 'Enviado', variant: 'green' }
+  if (fueEnviado(s)) return { label: 'Enviado', variant: 'green' }
   if (listoParaEnviar(s)) return { label: 'Listo para enviar', variant: 'green' }
   if (s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado))) {
     return { label: 'En proceso', variant: 'amber' }
@@ -97,7 +115,7 @@ export default function Digitales() {
   const [tab, setTab] = useState('pipeline')
   const [formato, setFormato] = useState('1080x1350')
   const [candidatos, setCandidatos] = useState([])
-  const [data, setData] = useState({ servicios: [], ig_configurado: false, plantillas: {} })
+  const [data, setData] = useState({ servicios: [], ig_configurado: false, plantillas: {}, zolutium: {} })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState({})            // clave → true mientras hace una acción
   const [msg, setMsg] = useState(null)            // {tipo:'ok'|'err', texto}
@@ -111,6 +129,7 @@ export default function Digitales() {
   const [fEstado, setFEstado] = useState('TODOS') // filtro Pipeline: estado del servicio
   const [fPieza, setFPieza] = useState('TODAS')   // filtro Pipeline: pieza faltante
   const pollRef = useRef(null)
+  const { confirm } = useConfirm()
 
   const flash = (tipo, texto) => { setMsg({ tipo, texto }); setTimeout(() => setMsg(null), 4500) }
   const setBusyKey = (k, v) => setBusy(b => ({ ...b, [k]: v }))
@@ -122,7 +141,7 @@ export default function Digitales() {
         orbitApi('/digitales/servicios'),
       ])
       setCandidatos(cand || [])
-      setData(dig || { servicios: [], ig_configurado: false, plantillas: {} })
+      setData(dig || { servicios: [], ig_configurado: false, plantillas: {}, zolutium: {} })
     } catch (e) {
       flash('err', e.message || 'No se pudo cargar')
     } finally { setLoading(false) }
@@ -175,6 +194,22 @@ export default function Digitales() {
       `${TIPO_LABEL[tipo]} registrado.`)
   }
 
+  // Envío automático por Zolutium: el backend manda la plantilla aprobada y
+  // registra la evidencia (message_id) + marca ENTREGADO, todo en una operación.
+  const enviarAuto = async (s) => {
+    const tel = tels[s.servicio_id] ?? (s.telefono || '')
+    if (!normalizarTel(tel)) return flash('err', 'No hay un teléfono válido para WhatsApp.')
+    const plantilla = plantillaAplicable(s, data.zolutium)
+    const ok = await confirm(
+      `Se enviará la plantilla «${plantilla}» por WhatsApp al ${tel} con los enlaces de ${s.mascota}.`,
+      { title: 'Enviar digitales al cliente', variant: 'success', confirmLabel: 'Enviar' }
+    )
+    if (!ok) return
+    accion(`envio:${s.servicio_id}`, () =>
+      orbitApi(`/digitales/${s.servicio_id}/enviar-zolutium`, { method: 'POST', body: { telefono: tel } }),
+      'Enviado por WhatsApp — los digitales quedaron como entregados.')
+  }
+
   const registrarEnvio = (s, abrirWhatsApp) => {
     const texto = mensajes[s.servicio_id] ?? buildMensaje(data.plantillas.mensaje_cliente, s)
     const tel = tels[s.servicio_id] ?? (s.telefono || '')
@@ -209,7 +244,7 @@ export default function Digitales() {
     data.servicios.filter(s => matchTexto(q, s.mascota, s.propietario, s.plan_nombre, s.plan_codigo, s.telefono)), [data, q])
 
   const pipeline = useMemo(() => buscados.filter(s => {
-    const enviado = s.envios.length > 0
+    const enviado = fueEnviado(s)
     if (fEstado === 'PENDIENTES' && (enviado || listoParaEnviar(s))) return false
     if (fEstado === 'LISTOS'     && !(listoParaEnviar(s) && !enviado)) return false
     if (fEstado === 'ENVIADOS'   && !enviado) return false
@@ -220,13 +255,13 @@ export default function Digitales() {
 
   const nEstado = useMemo(() => ({
     TODOS:      buscados.length,
-    PENDIENTES: buscados.filter(s => s.envios.length === 0 && !listoParaEnviar(s)).length,
-    LISTOS:     buscados.filter(s => s.envios.length === 0 && listoParaEnviar(s)).length,
-    ENVIADOS:   buscados.filter(s => s.envios.length > 0).length,
+    PENDIENTES: buscados.filter(s => !fueEnviado(s) && !listoParaEnviar(s)).length,
+    LISTOS:     buscados.filter(s => !fueEnviado(s) && listoParaEnviar(s)).length,
+    ENVIADOS:   buscados.filter(fueEnviado).length,
     ERROR:      buscados.filter(conError).length,
   }), [buscados])
 
-  const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && s.envios.length === 0), [buscados])
+  const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && !fueEnviado(s)), [buscados])
   const enviados = useMemo(() =>
     buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario }))), [buscados])
   const candidatosFiltrados = useMemo(() =>
@@ -353,6 +388,8 @@ export default function Digitales() {
                 <EnvioCard key={s.servicio_id} s={s} busy={busy} tels={tels} setTels={setTels}
                   mensajes={mensajes} setMensajes={setMensajes}
                   plantilla={data.plantillas.mensaje_cliente}
+                  zolutium={data.zolutium}
+                  onEnviarAuto={() => enviarAuto(s)}
                   onEnviar={() => registrarEnvio(s, true)}
                   onMarcar={() => registrarEnvio(s, false)}
                   onCopiar={() => copiarMensaje(s)} />
@@ -528,7 +565,7 @@ function ServicioCard({
   const mem = piezaDe(s, 'MEMORIAL')
   const url = videoUrl(mem)
   const nPub = publicadas(s).length
-  const enviado = s.envios.length > 0
+  const enviado = fueEnviado(s)
 
   return (
     <Card>
@@ -689,7 +726,7 @@ function ServicioCard({
           <div className="flex items-center justify-between gap-2 pt-1">
             <div className="text-[12px] text-gray-400">
               {enviado
-                ? <>Enviado al cliente el {new Date(s.envios[0].enviado_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</>
+                ? <>Enviado al cliente el {new Date(envioExitoso(s).enviado_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</>
                 : listoParaEnviar(s)
                   ? 'Todas las piezas publicadas — listo para enviar al cliente.'
                   : `${nPub} de ${tipos.length} pieza${tipos.length > 1 ? 's' : ''} publicada${nPub > 1 ? 's' : ''}.`}
@@ -705,10 +742,12 @@ function ServicioCard({
 }
 
 // ── Tarjeta de envío al cliente ─────────────────────────────────────────────
-function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, onEnviar, onMarcar, onCopiar }) {
+function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, zolutium, onEnviarAuto, onEnviar, onMarcar, onCopiar }) {
   const texto = mensajes[s.servicio_id] ?? buildMensaje(plantilla, s)
   const tel = tels[s.servicio_id] ?? (s.telefono || '')
   const k = `envio:${s.servicio_id}`
+  const plantillaZol = plantillaAplicable(s, zolutium)
+  const errorPrevio = ultimoError(s)
   return (
     <Card>
       <CardContent className="py-4 space-y-3">
@@ -722,6 +761,13 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, o
           </div>
         </div>
 
+        {errorPrevio && (
+          <div className="flex items-start gap-2 text-red-600 text-[12px] bg-red-50 rounded-lg px-3 py-2">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            El último envío automático falló: {errorPrevio.error || 'error desconocido'}. Puedes reintentar o enviar manual.
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-gray-400 font-medium shrink-0">WhatsApp:</span>
           <Input value={tel} placeholder="Teléfono del cliente"
@@ -729,16 +775,39 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, o
             className="text-[13px] max-w-[220px]" />
         </div>
 
+        {plantillaZol ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={onEnviarAuto} disabled={busy[k]}>
+              {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} Enviar
+            </Button>
+            <span className="text-[12px] text-gray-400">
+              Automático por Zolutium · plantilla «{plantillaZol}»
+            </span>
+          </div>
+        ) : zolutium?.activo ? (
+          <div className="flex items-start gap-2 text-amber-700 text-[12px] bg-amber-50 rounded-lg px-3 py-2">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            Las piezas de este servicio ({tiposDe(s).map(t => TIPO_CORTO[t]).join(' + ')}) no coinciden
+            con ninguna plantilla aprobada — envíalo manual con el mensaje de abajo.
+          </div>
+        ) : null}
+
         <textarea
           value={texto}
           onChange={e => setMensajes(v => ({ ...v, [s.servicio_id]: e.target.value }))}
           rows={Math.min(10, texto.split('\n').length + 1)}
           className="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#3D5A27]/30"
         />
+        {plantillaZol && (
+          <p className="text-[11px] text-gray-400 -mt-2">
+            Este texto solo aplica al envío manual — el automático usa la plantilla aprobada en Meta.
+          </p>
+        )}
 
         <div className="flex flex-wrap gap-2">
-          <Button onClick={onEnviar} disabled={busy[k]}>
-            {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <MessageCircle size={16} />} Enviar por WhatsApp
+          <Button variant={plantillaZol ? 'secondary' : 'default'} onClick={onEnviar} disabled={busy[k]}>
+            {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <MessageCircle size={16} />}
+            {plantillaZol ? 'Enviar manual (wa.me)' : 'Enviar por WhatsApp'}
           </Button>
           <Button variant="secondary" onClick={onCopiar}><Copy size={15} /> Copiar mensaje</Button>
           <Button variant="ghost" onClick={onMarcar} disabled={busy[k]}>
@@ -769,10 +838,13 @@ function EnviadosList({ enviados, q }) {
               </div>
             </div>
             <div className="text-right shrink-0">
-              <div className="text-[12px] text-gray-500 font-medium">
+              <div className="text-[12px] text-gray-500 font-medium flex items-center justify-end gap-1.5">
+                {e.estado === 'ERROR' && <Badge variant="red">Falló</Badge>}
                 {new Date(e.enviado_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </div>
-              <div className="text-[11px] text-gray-400">{e.enviado_por_nombre || ''} · {e.canal === 'ZOLUTIUM' ? 'Automático' : 'WhatsApp'}</div>
+              <div className="text-[11px] text-gray-400">
+                {e.enviado_por_nombre || ''} · {e.canal === 'ZOLUTIUM' ? `Automático${e.plantilla ? ` («${e.plantilla}»)` : ''}` : 'WhatsApp'}
+              </div>
             </div>
           </CardContent>
         </Card>

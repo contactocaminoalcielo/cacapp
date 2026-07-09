@@ -1,5 +1,14 @@
 # Módulo "Digitales" — Diseño (2026-07-08)
 
+> **ESTADO 2026-07-08: DESPLEGADO EN PRODUCCIÓN** (commit e6afa6c).
+> Migración 035 aplicada, backend recreado en el VPS, frontend por Actions.
+> Fases 1 y 2 implementadas; la publicación automática de Instagram queda
+> **inactiva hasta configurar** `IG_USER_ID` + `IG_ACCESS_TOKEN` en
+> `/opt/orbit-backend/.env` (checklist en la sección 4). Mientras tanto la UI
+> lo indica y el enlace de Instagram se registra a mano, como antes.
+> Plantillas editables por SQL en `config_operativa` módulo `DIGITALES`
+> (`mensaje_cliente`, `caption_instagram`).
+
 > Evolución del módulo Memoriales → **Digitales**: reúne las tres piezas digitales
 > publicables de un servicio (Memorial, Video conmemorativo, Short), controla sus
 > enlaces, gestiona la publicación (Instagram automático / YouTube manual) y el
@@ -150,11 +159,28 @@ subida automática.
   precompuesto (plantilla en config, con nombre de mascota y enlaces) y registra el
   envío en `digitales_envios` + marca `ENTREGADO`. Coherente con la regla de
   canales: wa.me para lo que "dice" el coordinador.
-- **Fase 3 — Zolutium (opcional):** cuando haya plantilla WhatsApp aprobada por
-  Meta, envío automático al completarse la última pieza (canal `ZOLUTIUM` en el
-  mismo registro). Requiere aprobación de plantilla — no bloquea nada de lo demás.
-- También se permite envío parcial (ej. solo memorial si el plan no lleva video),
-  y reenvío (queda otro registro en el historial).
+- **Fase 3 — Zolutium (IMPLEMENTADA 2026-07-09, migración 040):** botón **"Enviar"**
+  en la pestaña Para enviar. El backend (`POST /digitales/:servicioId/enviar-zolutium`)
+  envía la plantilla HSM aprobada vía `enviarPlantillaGenerica` (mismo contrato real
+  de Zolutium/GHL que solicitud de imágenes) y persiste la evidencia
+  (`message_id`, `contact_id`, `estado`, `plantilla`) en `digitales_envios` + marca
+  `ENTREGADO`, en una sola operación. Dos plantillas aprobadas:
+  - `envio_digitales_individual` (es_MX) — servicios que llevan los 3 digitales
+    (standard, exclusivos, premium, compets, plata, oro, diamante):
+    `{{1}}` video · `{{2}}` short · `{{3}}` memorial.
+  - `envio_digitales` (es) — solo memorial (básicos y ecogrupales): `{{1}}` memorial.
+
+  La plantilla se elige por las **piezas que el servicio lleva** (esperadas por
+  `recordatorios_tipo` + piezas creadas), no por lista de planes. Combinación mixta
+  (p. ej. le quitaron el short) → **no hay envío automático**, solo manual (decisión
+  David 2026-07-09). Config en `config_operativa` DIGITALES: `usar_plantilla`,
+  `plantilla_completos`, `plantilla_memorial` (jsonb `{nombre, idioma, categoria}`).
+  Un envío automático exitoso por servicio (anti doble clic); los intentos con
+  `estado='ERROR'` no marcan ENTREGADO y el servicio sigue en "Para enviar" con el
+  error visible y opción de reintentar.
+- El envío manual wa.me sigue disponible como alternativa (y único camino en
+  combinaciones mixtas). También se permite envío parcial manual y reenvío
+  (queda otro registro en el historial).
 
 ## 7. UI — página `/digitales` (reemplaza `/memoriales`)
 
@@ -177,7 +203,7 @@ Roles: los mismos del módulo actual (ADMIN/COORDINADOR; PRODUCTOR si hoy lo ve)
 |---|---|---|---|
 | **1** | Migración 035 (rename + `tipo` + `digitales_envios`), endpoints `/digitales` en orbit-backend, página `/digitales` (pipeline + enlaces YT manuales + envío wa.me + registro + `ENTREGADO`) | Ninguna | migración VPS + backend tar+SSH + `git push` frontend |
 | **2** | Publicación automática IG: `digitales-ig.js`, estado `PUBLICANDO`, permalink automático, refresh de token | Checklist Meta de David (sección 4) | backend + env vars en VPS |
-| **3** (opcional) | Envío automático Zolutium al completar piezas; recordatorio de pendientes | Plantilla WA aprobada por Meta | backend |
+| **3** ✅ 2026-07-09 | Envío automático Zolutium (botón "Enviar", 2 plantillas aprobadas, evidencia en `digitales_envios`) | Plantillas `envio_digitales_individual` (es_MX) y `envio_digitales` (es) aprobadas ✅ | migración 040 VPS + backend tar+SSH + `git push` frontend |
 
 ## 9. Decisiones abiertas (para David)
 

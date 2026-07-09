@@ -14,7 +14,7 @@ import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal 
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
-  publicarManual, registrarEnlace, registrarEnvio, descartarPieza, servirArchivo,
+  publicarManual, registrarEnlace, registrarEnvio, enviarZolutium, descartarPieza, servirArchivo,
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
@@ -370,6 +370,17 @@ app.post('/digitales/:servicioId/envio', requireAuth, rolDigitales, async (req, 
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[digitales/envio] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Envío automático por Zolutium (plantilla HSM aprobada): red + evidencia en el backend.
+app.post('/digitales/:servicioId/enviar-zolutium', requireAuth, rolDigitales, async (req, res) => {
+  try {
+    const r = await enviarZolutium({ servicioId: req.params.servicioId, personalId: req.personal.id, telefono: req.body.telefono })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[digitales/enviar-zolutium] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

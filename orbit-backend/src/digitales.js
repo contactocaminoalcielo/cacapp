@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { pool, log } from './db.js'
+import { enviarPlantillaGenerica } from './whatsapp.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RENDER_ENTRY = path.join(__dirname, '..', 'memorial', 'render.mjs')
@@ -221,6 +222,7 @@ export async function listarServicios() {
         ),
         client.query(
           `SELECT de.id, de.servicio_id, de.canal, de.telefono, de.enlaces, de.mensaje, de.enviado_en,
+                  de.estado, de.error, de.plantilla,
                   TRIM(COALESCE(per.nombre,'') || ' ' || COALESCE(per.apellido,'')) AS enviado_por_nombre
            FROM public.digitales_envios de
            LEFT JOIN public.personal per ON per.id = de.enviado_por
@@ -254,6 +256,7 @@ export async function listarServicios() {
         mensaje_cliente: typeof cfg.mensaje_cliente === 'string' ? cfg.mensaje_cliente : '',
         caption_instagram: typeof cfg.caption_instagram === 'string' ? cfg.caption_instagram : '',
       },
+      zolutium: infoZolutium(cfg),
     }
   } finally { client.release() }
 }
@@ -446,6 +449,178 @@ export async function descartarPieza({ id }) {
   return { status: 200, body: { ok: true } }
 }
 
+// ── Envío automático por Zolutium (plantillas HSM aprobadas) ─────────────────
+// Dos plantillas según lo que el servicio lleva (mismo criterio que la UI):
+//   plantilla_completos → espera los 3 digitales: {{1}} video, {{2}} short, {{3}} memorial
+//   plantilla_memorial  → espera solo memorial:   {{1}} memorial
+// Cualquier otra combinación (p. ej. le quitaron el short) NO se envía
+// automático — queda el envío manual (decisión David 2026-07-09, opción a).
+function plantillaCfg(v) {
+  return (v && typeof v === 'object' && typeof v.nombre === 'string' && v.nombre.trim())
+    ? { nombre: v.nombre.trim(), idioma: v.idioma || 'es_MX', categoria: v.categoria || 'UTILITY' }
+    : null
+}
+
+function infoZolutium(cfg) {
+  const usar = cfg.usar_plantilla === true || cfg.usar_plantilla === 'true'
+  const completos = plantillaCfg(cfg.plantilla_completos)
+  const memorial = plantillaCfg(cfg.plantilla_memorial)
+  return {
+    activo: usar && !!(completos || memorial) && !!process.env.GHL_TOKEN,
+    plantilla_completos: completos?.nombre || null,
+    plantilla_memorial: memorial?.nombre || null,
+  }
+}
+
+// Marca ENTREGADO en servicio_recordatorios los digitales cuyos enlaces se enviaron.
+async function marcarDigitalesEntregados(client, servicioId, tiposEnviados) {
+  const cfg = await cargarConfigDigitales(client)
+  const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+  const recIds = tiposEnviados.map(t => mapa[t]).filter(Boolean)
+  if (!recIds.length) return
+  await client.query(
+    `UPDATE public.servicio_recordatorios
+     SET estado = 'ENTREGADO'
+     WHERE servicio_id = $1
+       AND recordatorio_id = ANY($2::uuid[])
+       AND estado <> 'NA'
+       AND COALESCE(origen, '') <> 'REMOVIDO'`,
+    [servicioId, recIds]
+  )
+}
+
+export async function enviarZolutium({ servicioId, personalId, telefono }) {
+  const actor = uuidOrNull(personalId)
+  if (!uuidOrNull(servicioId)) return { status: 422, body: { error: 'Servicio inválido' } }
+
+  // 1) Lecturas y validaciones (sin transacción: el envío es una llamada de red)
+  const cfg = await cargarConfigDigitales(pool)
+  const zol = infoZolutium(cfg)
+  if (!zol.activo) return { status: 409, body: { error: 'El envío automático por Zolutium no está configurado (usar_plantilla / GHL_TOKEN).' } }
+  const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+
+  const { rows: svcRows } = await pool.query(
+    `SELECT s.id, s.estado,
+            m.nombre AS mascota,
+            TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
+            COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono
+     FROM public.servicios s
+     JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+     LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+     WHERE s.id = $1`,
+    [servicioId]
+  )
+  const svc = svcRows[0]
+  if (!svc) return { status: 404, body: { error: 'Servicio no encontrado' } }
+  if (svc.estado === 'CANCELADO') return { status: 422, body: { error: 'El servicio está cancelado.' } }
+
+  const destino = (telefono || '').trim() || svc.telefono
+  if (!destino) return { status: 422, body: { error: 'El cliente no tiene un teléfono de WhatsApp registrado.' } }
+
+  // Un solo envío automático exitoso por servicio (el botón desaparece al enviar;
+  // esto cierra la ventana del doble clic / doble pestaña).
+  const { rows: previos } = await pool.query(
+    `SELECT 1 FROM public.digitales_envios
+     WHERE servicio_id = $1 AND canal = 'ZOLUTIUM' AND estado = 'ENVIADO' LIMIT 1`,
+    [servicioId]
+  )
+  if (previos.length) return { status: 409, body: { error: 'Este servicio ya tiene un envío automático registrado.' } }
+
+  // 2) Piezas del servicio: qué lleva (esperadas + creadas) y qué está publicado
+  const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
+  const [{ rows: espRows }, { rows: piezas }] = await Promise.all([
+    pool.query(
+      `SELECT COALESCE(array_agg(DISTINCT sr.recordatorio_id::text), '{}') AS rec_ids
+       FROM public.servicio_recordatorios sr
+       WHERE sr.servicio_id = $1
+         AND sr.recordatorio_id = ANY($2::uuid[])
+         AND sr.estado <> 'NA'
+         AND COALESCE(sr.origen, '') <> 'REMOVIDO'`,
+      [servicioId, recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000']]
+    ),
+    pool.query(
+      `SELECT tipo, estado, url_publica FROM public.piezas_digitales
+       WHERE servicio_id = $1 AND estado <> 'DESCARTADO'`,
+      [servicioId]
+    ),
+  ])
+  const esperadasRec = espRows[0]?.rec_ids || []
+  const tipos = TIPOS.filter(t =>
+    esperadasRec.includes(String(mapa[t] || '')) || piezas.some(p => p.tipo === t))
+  const urls = Object.fromEntries(
+    piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica).map(p => [p.tipo, p.url_publica]))
+
+  const faltantes = tipos.filter(t => !urls[t])
+  if (!tipos.length) return { status: 422, body: { error: 'Este servicio no lleva piezas digitales.' } }
+  if (faltantes.length) return { status: 422, body: { error: `Faltan piezas por publicar: ${faltantes.join(', ')}.` } }
+
+  // 3) Elegir plantilla según la combinación de piezas
+  let plantilla = null, bodyParams = []
+  if (tipos.length === 3) {
+    plantilla = plantillaCfg(cfg.plantilla_completos)
+    bodyParams = [urls.VIDEO, urls.SHORT, urls.MEMORIAL]
+  } else if (tipos.length === 1 && tipos[0] === 'MEMORIAL') {
+    plantilla = plantillaCfg(cfg.plantilla_memorial)
+    bodyParams = [urls.MEMORIAL]
+  }
+  if (!plantilla) {
+    return { status: 422, body: { error: `La combinación de piezas (${tipos.join(' + ')}) no coincide con ninguna plantilla aprobada — usa el envío manual.` } }
+  }
+
+  const enlaces = tipos.map(t => ({ tipo: t, url: urls[t] }))
+  const mensaje = construirMensajeCliente(cfg, svc.mascota, enlaces)
+
+  // 4) Envío (red) → luego evidencia atómica, mismo patrón que reportes grupales
+  let envioOk = null, envioErr = null
+  try {
+    envioOk = await enviarPlantillaGenerica({
+      telefono: destino,
+      nombre: svc.propietario || '',
+      plantillaNombre: plantilla.nombre,
+      idioma: plantilla.idioma,
+      category: plantilla.categoria,
+      mensaje,
+      bodyParams,
+      // Sin fromNumber: GHL/Zolutium lo ignora para números WABA y rutea por el canal por defecto.
+    })
+  } catch (e) {
+    envioErr = (e.message || 'Error enviando por Zolutium').slice(0, 900)
+    log('[digitales] enviarZolutium ERROR', servicioId, envioErr)
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: env } = await client.query(
+      `INSERT INTO public.digitales_envios
+         (servicio_id, canal, telefono, enlaces, mensaje, enviado_por, estado, error, plantilla, message_id, contact_id)
+       VALUES ($1, 'ZOLUTIUM', $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, enviado_en, estado`,
+      [servicioId, destino, JSON.stringify(enlaces), mensaje, actor,
+       envioOk ? 'ENVIADO' : 'ERROR', envioErr, plantilla.nombre,
+       envioOk?.messageId || null, envioOk?.contactId || null]
+    )
+    if (envioOk) await marcarDigitalesEntregados(client, servicioId, tipos)
+    await client.query('COMMIT')
+    if (!envioOk) return { status: 502, body: { error: `El envío falló: ${envioErr}` } }
+    return { status: 200, body: { ok: true, envio: env[0], enlaces, plantilla: plantilla.nombre } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
+}
+
+// Texto legible que queda en la evidencia y en la conversación de GHL
+// (lo que el cliente ve lo define la plantilla aprobada en Meta).
+function construirMensajeCliente(cfg, mascota, enlaces) {
+  const labels = { MEMORIAL: 'Memorial', VIDEO: 'Video conmemorativo', SHORT: 'Short' }
+  const links = enlaces.map(e => `• ${labels[e.tipo] || e.tipo}: ${e.url}`).join('\n')
+  const base = typeof cfg.mensaje_cliente === 'string' && cfg.mensaje_cliente
+    ? cfg.mensaje_cliente
+    : 'Hola 💛 Te compartimos los recuerdos digitales de {mascota}:\n\n{enlaces}\n\nCamino al Cielo 🕊️'
+  return base.replaceAll('{mascota}', mascota || '').replaceAll('{enlaces}', links)
+}
+
 // ── Envío al cliente: registro + marca ENTREGADO en servicio_recordatorios ──
 export async function registrarEnvio({ servicioId, personalId, telefono, mensaje, canal }) {
   const actor = uuidOrNull(personalId)
@@ -473,20 +648,7 @@ export async function registrarEnvio({ servicioId, personalId, telefono, mensaje
     )
 
     // Los digitales enviados quedan ENTREGADOS en producción/entrega/certificado.
-    const cfg = await cargarConfigDigitales(client)
-    const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
-    const recIds = enlaces.map(e => mapa[e.tipo]).filter(Boolean)
-    if (recIds.length) {
-      await client.query(
-        `UPDATE public.servicio_recordatorios
-         SET estado = 'ENTREGADO'
-         WHERE servicio_id = $1
-           AND recordatorio_id = ANY($2::uuid[])
-           AND estado <> 'NA'
-           AND COALESCE(origen, '') <> 'REMOVIDO'`,
-        [servicioId, recIds]
-      )
-    }
+    await marcarDigitalesEntregados(client, servicioId, enlaces.map(e => e.tipo))
     await client.query('COMMIT')
     return { status: 200, body: { ok: true, envio: env[0], enlaces } }
   } catch (e) {
