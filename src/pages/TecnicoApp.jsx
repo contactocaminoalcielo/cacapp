@@ -4476,6 +4476,23 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     return { novedadPago, novedadNota }
   }
 
+  // Sube el PDF del recibo al storage SIEMPRE que se guarda (antes solo se
+  // subía al enviarlo por WhatsApp) — así coordinación puede abrirlo desde
+  // Orbit (Kanban/Gestión) aunque el técnico nunca lo envíe. Fire-and-forget:
+  // si falla no afecta el guardado (el envío por WA lo vuelve a subir).
+  function subirPdfReciboAlStorage(tipo = tipoRecibo) {
+    ;(async () => {
+      try {
+        const pdfBlob = await descargarPDF(tipo, true, true)
+        if (!pdfBlob) return
+        const suffix   = tipo === 'VETERINARIA' ? '_VET' : '_CLI'
+        const fileName = `recibos/${servicioSel.id}/${form.numero_recibo}${suffix}_${Date.now()}.pdf`
+        await db.storage.from('evidencias')
+          .upload(fileName, pdfBlob, { upsert: true, contentType: 'application/pdf' })
+      } catch (_) { /* best-effort */ }
+    })()
+  }
+
   async function guardarRecibo() {
     // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
     if (!esFacturacionMensual && !pagoPendiente && totalMedios <= 0 && saldoPendiente > 0) {
@@ -4549,6 +4566,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       setGuardado(true)
       setTipoFijado(true)
       limpiarIdemKey()
+      subirPdfReciboAlStorage()
       if (onGuardado) onGuardado(res.recibo_id)
     } catch (e) {
       setErr('Error al guardar: ' + (e.message || e))
@@ -4662,11 +4680,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setGuardado(true)
     setTipoFijado(true)
     limpiarIdemKey()
+    subirPdfReciboAlStorage()
     if (onGuardado) onGuardado(data.id)
   }
 
-  async function descargarPDF(tipo = tipoRecibo, soloBlob = false) {
-    if (!guardado) {
+  // `ignorarGuardado`: la subida automática al storage corre justo después de
+  // setGuardado(true), cuando el estado `guardado` del closure aún es false
+  async function descargarPDF(tipo = tipoRecibo, soloBlob = false, ignorarGuardado = false) {
+    if (!guardado && !ignorarGuardado) {
       setErr('Debes guardar el recibo primero antes de descargarlo.')
       return null
     }
