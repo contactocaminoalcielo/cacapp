@@ -17,6 +17,7 @@ import { aplicarRecalculoPorPeso } from '@/lib/precios'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
+import FichaServicio from '@/components/servicio/FichaServicio'
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
 const nullify = (obj, keys) => {
@@ -1410,6 +1411,8 @@ function TabHistorialServicios({ canEdit }) {
   const [recogForm,   setRecogForm]   = useState({ tipo_lugar: 'DOMICILIO', ciudad: '', direccion: '', barrio: '', aliado_id: '' })
   const [recogCiudadOrig, setRecogCiudadOrig] = useState('')
   const [savingRecog, setSavingRecog] = useState(false)
+  // ficha completa de la mascota/servicio (clic en la fila)
+  const [fichaServId, setFichaServId]   = useState(null)
   // quitar ítems / ajuste por adicional no tomado
   const [itemsServ, setItemsServ]       = useState(null) // servicio cuyo modal de ítems está abierto
   const [itemsList, setItemsList]       = useState([])
@@ -1785,7 +1788,7 @@ function TabHistorialServicios({ canEdit }) {
                   const pc  = PAGO_COLOR[s.estado_pago] || {}
                   const tec = s.tecnico
                   return (
-                    <Tr key={s.id}>
+                    <Tr key={s.id} onClick={() => setFichaServId(s.id)}>
                       <Td className="text-[11px] text-ink3 whitespace-nowrap">{fmtFecha(s.fecha_ingreso)}</Td>
                       <Td>
                         <div className="font-semibold text-ink text-[12px] whitespace-nowrap">{cli.nombre} {cli.apellido}</div>
@@ -1827,7 +1830,7 @@ function TabHistorialServicios({ canEdit }) {
                           <div className="flex items-center gap-1.5">
                             {tieneComision(s) ? (
                               <button
-                                onClick={() => abrirEdicionComision(s)}
+                                onClick={e => { e.stopPropagation(); abrirEdicionComision(s) }}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-colors"
                                 style={s.comision_descontada
                                   ? { background: '#E8F3EB', color: '#1D8A55', borderColor: '#BFE3CC' }
@@ -1837,13 +1840,13 @@ function TabHistorialServicios({ canEdit }) {
                               </button>
                             ) : null}
                             <button
-                              onClick={() => abrirItems(s)}
+                              onClick={e => { e.stopPropagation(); abrirItems(s) }}
                               className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-ink2 hover:bg-gray-50 transition-colors"
                               title="Quitar ítems / ajustar cobro por adicional no tomado">
                               Ítems
                             </button>
                             <button
-                              onClick={() => abrirRecogida(s)}
+                              onClick={e => { e.stopPropagation(); abrirRecogida(s) }}
                               className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-ink2 hover:bg-gray-50 transition-colors"
                               title="Cambiar el lugar de recogida (tipo, ciudad, dirección)">
                               Recogida
@@ -1869,6 +1872,11 @@ function TabHistorialServicios({ canEdit }) {
             </div>
           )}
         </>
+      )}
+
+      {/* Ficha completa de la mascota/servicio (clic en la fila) */}
+      {fichaServId && (
+        <FichaServicio servicioId={fichaServId} onClose={() => setFichaServId(null)} />
       )}
 
       {editServ && (() => {
