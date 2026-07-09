@@ -4140,6 +4140,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   )
   const [guardado, setGuardado]         = useState(!!reciboExistente)
   const [pagoPendiente, setPagoPendiente] = useState(reciboExistente?.datos_form?.pago_pendiente || false)
+  // Motivo cuando el técnico cobra MÁS que el valor del recibo (obligatorio
+  // para guardar en ese caso; la RPC lo exige — migración 041)
+  const [sobrepagoMotivo, setSobrepagoMotivo] = useState(reciboExistente?.datos_form?.sobrepago_motivo || '')
 
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
   const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
@@ -4444,6 +4447,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
 
+  // Cobro superior al valor del recibo — misma condición que valida la RPC
+  // (tolerancia de $1 por redondeos). Se permite solo con motivo explícito
+  // (migración 041). OJO: declarado DESPUÉS de esFacturacionMensual (TDZ).
+  const valorReciboNum = parseFloat(form.valor_servicio) || 0
+  const haySobrepago   = !pagoPendiente && !esFacturacionMensual
+    && valorReciboNum > 0 && totalMedios > valorReciboNum + 1
+  const sobrepagoDiff  = haySobrepago ? totalMedios - valorReciboNum : 0
+
   // Medios digitales con cobro pero sin comprobante adjunto todavía
   const comprobantesPendientes = mediosPago.filter(m =>
     METODOS_CON_COMPROBANTE.includes(m.metodo) &&
@@ -4499,6 +4510,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       setErr('Registra al menos un medio de pago con monto.')
       return
     }
+    // Cobrar más que el recibo se permite, pero SIEMPRE explicando la diferencia
+    if (haySobrepago && !sobrepagoMotivo.trim()) {
+      setErr(`Estás cobrando ${fmt(sobrepagoDiff)} más que el valor del recibo. Indica de qué es esa diferencia antes de guardar.`)
+      return
+    }
     // El comprobante NO bloquea la creación del recibo: si falta, el recibo
     // se guarda igual y queda como "comprobante pendiente" para reintentar
     const sinComprobante = comprobantesPendientes
@@ -4530,6 +4546,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_comision_aliado:        comisionParaGuardar,
         p_novedad_pago:           novedadPago,
         p_novedad_nota:           novedadNota,
+        p_sobrepago_motivo:       haySobrepago ? sobrepagoMotivo.trim() : null,
       })
 
       if (rpcErr) {
@@ -4541,7 +4558,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         }
         // Errores de validación de la RPC → mensaje claro, sin reintentar
         if (/SERVICIO_CANCELADO/.test(msg)) { setErr('Este servicio fue cancelado. No se puede generar un recibo nuevo — comunícate con el coordinador.'); return }
-        if (/SOBREPAGO/.test(msg))          { setErr('El total cobrado supera el valor del recibo. Revisa los montos.'); return }
+        if (/SOBREPAGO/.test(msg))          { setErr('El total cobrado supera el valor del recibo. Revisa los montos o indica el motivo de la diferencia.'); return }
         if (/NO_AUTORIZADO/.test(msg))      { setErr('No estás asignado a la recogida de este servicio. Avísale al coordinador.'); return }
         if (/MONTO_NEGATIVO/.test(msg))     { setErr('Los montos de pago no pueden ser negativos.'); return }
         // Cualquier OTRO error de la RPC (bug, drift de esquema, etc.): la RPC es
@@ -4598,7 +4615,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         valor_total:     form.valor_servicio,
         valor_cobrado:   valorCobrado,
         medios_pago:     pagoPendiente ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
-        datos_form:      { ...form, pago_pendiente: pagoPendiente },
+        datos_form:      {
+          ...form, pago_pendiente: pagoPendiente,
+          ...(haySobrepago ? { sobrepago_valor: sobrepagoDiff, sobrepago_motivo: sobrepagoMotivo.trim() } : {}),
+        },
         estado:          'GUARDADO',
       }).select('id').single()
       if (error) throw error
@@ -4673,6 +4693,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
           descripcion:    `Recibo ${form.numero_recibo} guardado con comprobante PENDIENTE (${sinComprobante.map(m => m.metodo).join(', ')}). El técnico puede reintentarlo desde el módulo Recibos.`,
+          registrado_por: tecnico?.id || null,
+        })
+      }
+
+      // Rastro del cobro superior al recibo (en la RPC lo hace el servidor)
+      if (haySobrepago) {
+        await db.from('novedades_servicio').insert({
+          servicio_id:    servicioSel.id,
+          tipo_novedad:   'NOTA',
+          descripcion:    `💰 Cobro SUPERIOR al recibo ${form.numero_recibo}: recibió ${fmt(totalMedios)} vs recibo ${fmt(valorReciboNum)} (diferencia +${fmt(sobrepagoDiff)}). Motivo del técnico: ${sobrepagoMotivo.trim()}`,
+          valor_ajuste:   sobrepagoDiff,
           registrado_por: tecnico?.id || null,
         })
       }
@@ -5565,6 +5596,24 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
               style={{ background: '#D1FAE5', borderTop: '1px solid #86EFAC' }}>
               <CheckCircle size={13} style={{ color: '#16A34A' }} />
               <span className="text-[11px] font-bold text-green-800">Pago completo cubierto</span>
+            </div>
+          )}
+          {haySobrepago && (
+            <div className="px-4 py-3 space-y-2" style={{ background: '#FFF7ED', borderTop: '1px solid #FED7AA' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] font-bold" style={{ color: '#9A3412' }}>Estás cobrando de más</span>
+                <span className="font-extrabold text-[15px]" style={{ color: '#9A3412' }}>+{fmt(sobrepagoDiff)}</span>
+              </div>
+              <p className="text-[11px] leading-snug" style={{ color: '#C2410C' }}>
+                Se puede guardar así, pero indica de qué es esa diferencia — queda registrada en el historial del servicio y en el cuadre.
+              </p>
+              <input
+                value={sobrepagoMotivo}
+                onChange={e => setSobrepagoMotivo(e.target.value)}
+                placeholder="Ej: adicional huella tomado en sitio, transporte extra…"
+                className="w-full px-3 py-2.5 text-[13px] rounded-xl border outline-none bg-white"
+                style={{ borderColor: sobrepagoMotivo.trim() ? '#86EFAC' : '#FDBA74' }}
+              />
             </div>
           )}
         </div>

@@ -142,6 +142,12 @@ export default function RecibosServicio({ servicioId }) {
                   Generado sin cobro (pago pendiente)
                 </span>
               )}
+              {r.datos_form?.sobrepago_motivo && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full max-w-full truncate" style={{ background: '#FFEDD5', color: '#9A3412' }}
+                  title={`Cobró más que el valor del recibo. Motivo: ${r.datos_form.sobrepago_motivo}`}>
+                  +{fmt(Number(r.datos_form.sobrepago_valor) || Math.max(0, (r.valor_cobrado || 0) - (r.valor_total || 0)))} de más · {r.datos_form.sobrepago_motivo}
+                </span>
+              )}
             </div>
             {medios.length > 0 && (
               <div className="flex items-center gap-1.5 flex-wrap">
