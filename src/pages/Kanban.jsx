@@ -2337,16 +2337,20 @@ export default function Kanban() {
                                   ))}
                                 </div>
                               )}
-                              {enRecogida && s.hora_recogida && (
+                              {s.hora_recogida && (
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 ${
                                   tiempoAlert === 'vencida' ? 'bg-red-100 text-red-700'
                                   : tiempoAlert === 'proxima' ? 'bg-amber-100 text-amber-700'
                                   : 'bg-cyan-50 text-cyan-700'}`}
-                                  title="Hora de llegada confirmada por el técnico">
-                                  🕐 Llega {String(s.hora_recogida).slice(0, 5)}
-                                  {minRec != null && (minRec < 0
-                                    ? ` · hace ${fmtMinutos(minRec)}`
-                                    : minRec <= 60 ? ` · en ${fmtMinutos(minRec)}` : '')}
+                                  title="Hora de llegada confirmada por el técnico al iniciar la ruta">
+                                  {enRecogida ? (
+                                    <>🕐 Llega {String(s.hora_recogida).slice(0, 5)}
+                                    {minRec != null && (minRec < 0
+                                      ? ` · hace ${fmtMinutos(minRec)}`
+                                      : minRec <= 60 ? ` · en ${fmtMinutos(minRec)}` : '')}</>
+                                  ) : (
+                                    <>🕐 Recogida {String(s.hora_recogida).slice(0, 5)}</>
+                                  )}
                                 </div>
                               )}
                               {pend.length > 0 && (
