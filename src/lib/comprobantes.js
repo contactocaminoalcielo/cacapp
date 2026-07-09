@@ -8,6 +8,35 @@ import { db } from '@/lib/supabase'
 // self-hosted. Misma lógica probada del ComprobanteModal de Finanzas
 // (buscar por servicio_id: un servicio puede tener varios recibos y el
 // comprobante suele quedar bajo un recibo_id distinto).
+// Abre en pestaña nueva el PDF más reciente del recibo de un servicio
+// (prefiere el CLIENTE sobre el VET). Los PDF viven en
+// evidencias/recibos/{servicio_id}/{numero}_{CLI|VET}_{timestamp}.pdf.
+// La ventana se abre ANTES del await para que el navegador no la bloquee.
+// Devuelve false si el servicio no tiene ningún PDF subido.
+export async function abrirPdfReciboServicio(servicioId) {
+  if (!servicioId) return false
+  const w = window.open('', '_blank')
+  try {
+    const { data: files } = await db.storage.from('evidencias')
+      .list(`recibos/${servicioId}`, { limit: 100 })
+    const ts = n => parseInt(n.match(/_(\d+)\.pdf$/i)?.[1] || '0', 10)
+    const pdfs = (files || []).map(f => f.name)
+      .filter(n => /\.pdf$/i.test(n))
+      .sort((a, b) => ts(a) - ts(b))
+    const elegido = [...pdfs].reverse().find(n => n.includes('_CLI_')) || pdfs.at(-1)
+    if (!elegido) { if (w) w.close(); return false }
+    const { data } = await db.storage.from('evidencias')
+      .createSignedUrl(`recibos/${servicioId}/${elegido}`, 600)
+    if (!data?.signedUrl) { if (w) w.close(); return false }
+    if (w) w.location = data.signedUrl
+    else window.open(data.signedUrl, '_blank', 'noopener')
+    return true
+  } catch {
+    if (w) w.close()
+    return false
+  }
+}
+
 export async function cargarComprobantesServicio(servicioId) {
   if (!servicioId) return []
   const out = []

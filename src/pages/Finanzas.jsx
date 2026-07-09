@@ -13,6 +13,8 @@ import {
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
   HelpCircle, Sparkles, Pencil,
 } from 'lucide-react'
+import { abrirPdfReciboServicio } from '@/lib/comprobantes'
+import RecibosServicio from '@/components/servicio/RecibosServicio'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
 //  · VERIFICADO          → saldado, no se debe nada; ese dinero cuenta en Finanzas.
@@ -2154,12 +2156,25 @@ export default function Finanzas() {
                                   style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alertaGestion ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
-                                    <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
-                                      className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
-                                      title="Ver tarjeta completa de la mascota">
-                                      {alertaGestion && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
-                                      {it.mascota_nombre || '—'}
-                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
+                                        className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left flex items-center gap-1 disabled:no-underline disabled:hover:text-gray-900"
+                                        title="Ver tarjeta completa de la mascota">
+                                        {alertaGestion && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
+                                        {it.mascota_nombre || '—'}
+                                      </button>
+                                      {it.servicio_id && !it.sin_recibo && (
+                                        <button type="button"
+                                          onClick={async () => {
+                                            if (!await abrirPdfReciboServicio(it.servicio_id))
+                                              await showAlert('Este servicio no tiene PDF de recibo subido. Los recibos anteriores al 9 de julio solo lo tienen si el técnico los envió por WhatsApp.', { title: 'Sin PDF' })
+                                          }}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0B1D4F] hover:bg-gray-100 transition-colors flex-shrink-0"
+                                          title="Ver PDF del recibo">
+                                          <FileText size={12} />
+                                        </button>
+                                      )}
+                                    </div>
                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                       {it.es_cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">CANCELADO</span>}
                                       {it.sin_recibo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-700" title="El técnico recogió este servicio pero no generó recibo (no cobró). Pendiente por cobrar.">SIN RECIBO</span>}
@@ -2444,9 +2459,22 @@ export default function Finanzas() {
                                 <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
                                   <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
                                   <td className="px-3 py-2.5">
-                                    <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
-                                      className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left disabled:no-underline"
-                                      title="Ver tarjeta completa de la mascota">{it.mascota_nombre || '—'}</button>
+                                    <div className="flex items-center gap-1">
+                                      <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
+                                        className="font-semibold text-gray-900 hover:text-[#1A5CD8] hover:underline text-left disabled:no-underline"
+                                        title="Ver tarjeta completa de la mascota">{it.mascota_nombre || '—'}</button>
+                                      {it.servicio_id && (
+                                        <button type="button"
+                                          onClick={async () => {
+                                            if (!await abrirPdfReciboServicio(it.servicio_id))
+                                              await showAlert('Este servicio no tiene PDF de recibo subido. Los recibos anteriores al 9 de julio solo lo tienen si el técnico los envió por WhatsApp.', { title: 'Sin PDF' })
+                                          }}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0B1D4F] hover:bg-gray-100 transition-colors flex-shrink-0"
+                                          title="Ver PDF del recibo">
+                                          <FileText size={12} />
+                                        </button>
+                                      )}
+                                    </div>
                                     {(() => {
                                       const exp = explicacionItem(it)
                                       return exp ? <p className="text-[10px] text-gray-500 leading-snug mt-1 max-w-[260px]">{exp}</p> : null
@@ -2942,6 +2970,9 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                 </div>
               )}
             </div>
+
+            {/* Recibos del servicio (cuál afecta Finanzas + PDF + comprobantes) */}
+            {servicioId && <RecibosServicio servicioId={servicioId} />}
 
             {/* Trazabilidad */}
             <div>
