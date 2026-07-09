@@ -13,6 +13,7 @@ import { FileText, Camera, ChevronUp, ChevronDown } from 'lucide-react'
 // Usado en el modal del Kanban y en la ficha del Historial (Gestión).
 export default function RecibosServicio({ servicioId }) {
   const [recibos, setRecibos]           = useState(null)   // null = cargando
+  const [pdfFiles, setPdfFiles]         = useState([])     // PDFs del recibo en storage
   const [comps, setComps]               = useState(null)   // null = aún no cargados (lazy)
   const [compsOpen, setCompsOpen]       = useState(false)
   const [compsLoading, setCompsLoading] = useState(false)
@@ -20,14 +21,38 @@ export default function RecibosServicio({ servicioId }) {
 
   useEffect(() => {
     let activo = true
-    setRecibos(null); setComps(null); setCompsOpen(false); setCompsError('')
+    setRecibos(null); setPdfFiles([]); setComps(null); setCompsOpen(false); setCompsError('')
     db.from('recibos_tecnico')
       .select('id, numero_recibo, tipo, fecha_emision, hora_emision, valor_total, valor_cobrado, medios_pago, datos_form, created_at, personal:tecnico_id(nombre, apellido)')
       .eq('servicio_id', servicioId)
       .order('created_at', { ascending: false })
       .then(({ data }) => { if (activo) setRecibos(data || []) })
+    // PDFs del recibo: el técnico los sube a evidencias/recibos/{servicioId}/
+    // con nombre {numero}_{CLI|VET}_{timestamp}.pdf al enviarlos por WhatsApp
+    db.storage.from('evidencias').list(`recibos/${servicioId}`, { limit: 100 })
+      .then(({ data }) => { if (activo) setPdfFiles((data || []).map(f => f.name).filter(n => /\.pdf$/i.test(n))) })
+      .catch(() => {})
     return () => { activo = false }
   }, [servicioId])
+
+  // El más reciente que corresponde a este recibo (timestamp al final del nombre)
+  function pdfDeRecibo(r) {
+    const pref = `${r.numero_recibo}_${r.tipo === 'VETERINARIA' ? 'VET' : 'CLI'}_`
+    const matches = pdfFiles.filter(n => n.startsWith(pref))
+    return matches.length ? matches.sort().at(-1) : null
+  }
+
+  // Abre el PDF con URL firmada (bucket puede ser privado). La ventana se abre
+  // ANTES del await para que el navegador no la bloquee como popup.
+  async function abrirPdf(name) {
+    const w = window.open('', '_blank')
+    const { data } = await db.storage.from('evidencias')
+      .createSignedUrl(`recibos/${servicioId}/${name}`, 600)
+    if (data?.signedUrl) {
+      if (w) w.location = data.signedUrl
+      else window.open(data.signedUrl, '_blank', 'noopener')
+    } else if (w) w.close()
+  }
 
   async function toggleComprobantes() {
     if (compsOpen) { setCompsOpen(false); return }
@@ -70,12 +95,26 @@ export default function RecibosServicio({ servicioId }) {
         const pagoPend  = String(r.datos_form?.pago_pendiente) === 'true'
         const medios    = (Array.isArray(r.medios_pago) ? r.medios_pago : []).filter(mp => Number(mp.monto) > 0)
         const tecNombre = r.personal ? `${r.personal.nombre || ''} ${r.personal.apellido || ''}`.trim() : ''
+        const pdfName   = pdfDeRecibo(r)
         return (
           <div key={r.id} className="rounded-lg border bg-white px-3 py-2.5 space-y-1.5"
             style={{ borderColor: esReal ? '#86EFAC' : '#E5E7EB' }}>
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[12px] font-bold text-gray-900">
+              <span className="text-[12px] font-bold text-gray-900 inline-flex items-center gap-2">
                 No. {r.numero_recibo}{esVet ? '-VET' : ''}
+                {pdfName ? (
+                  <button onClick={() => abrirPdf(pdfName)}
+                    className="inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full transition-opacity hover:opacity-80"
+                    style={{ background: '#0B1D4F', color: '#fff' }}
+                    title="Abrir el PDF del recibo tal como se envió">
+                    <FileText size={9} /> Ver PDF
+                  </button>
+                ) : (
+                  <span className="text-[9px] font-semibold text-gray-300"
+                    title="El PDF se genera cuando el técnico envía el recibo por WhatsApp desde su app">
+                    Sin PDF
+                  </span>
+                )}
               </span>
               {esReal ? (
                 <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#DCFCE7', color: '#166534' }}>
@@ -121,6 +160,24 @@ export default function RecibosServicio({ servicioId }) {
           </div>
         )
       })}
+
+      {/* PDFs en storage que no calzan con ningún recibo listado (números viejos) */}
+      {(() => {
+        const huerfanos = pdfFiles.filter(n => !recibos.some(r => n.startsWith(`${r.numero_recibo}_`)))
+        if (!huerfanos.length) return null
+        return (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] text-gray-400">Otros PDF:</span>
+            {huerfanos.map(n => (
+              <button key={n} onClick={() => abrirPdf(n)}
+                className="inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
+                title={n}>
+                <FileText size={9} /> {n.replace(/_\d+\.pdf$/i, '')}
+              </button>
+            ))}
+          </div>
+        )
+      })()}
 
       {/* Comprobantes de pago (firma URLs solo al abrir) */}
       <button onClick={toggleComprobantes}
