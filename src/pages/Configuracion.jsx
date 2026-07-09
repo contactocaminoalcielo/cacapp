@@ -1767,12 +1767,32 @@ function TabComisiones() {
   async function guardar() {
     if (!form.plan_id) return setFormError('Selecciona un plan.')
     if (!form.porcentaje) return setFormError('El porcentaje es requerido.')
+    const rMin = parseInt(form.rango_min) || 0
+    const rMax = form.rango_max !== '' ? parseInt(form.rango_max) : null
+    // El rango es Nº DE SERVICIOS del aliado en el mes (0, 1, 2, 3…). Un valor
+    // grande casi siempre es un porcentaje tecleado en el campo equivocado: así
+    // se crearon reglas "de 20 a 27 servicios/mes" que nunca hacían match y
+    // dejaban la comisión en $0 (corregido en migración 039).
+    if (rMin >= 10 || (rMax !== null && rMax >= 10)) {
+      return setFormError('El rango es el número de servicios del aliado en el mes (normalmente 0 a 3). Parece que pusiste el porcentaje en el campo del rango.')
+    }
+    if (rMax !== null && rMin > rMax) return setFormError('El rango mínimo no puede ser mayor que el máximo.')
+    const solapada = data.find(r =>
+      r.id !== selected?.id &&
+      r.plan_id === form.plan_id &&
+      !!r.es_vip === !!form.es_vip &&
+      rMin <= (r.rango_max ?? Infinity) &&
+      r.rango_min <= (rMax ?? Infinity)
+    )
+    if (solapada) {
+      return setFormError(`Ya existe una regla ${solapada.es_vip ? 'VIP' : 'no-VIP'} para ese plan con rango ${solapada.rango_min}–${solapada.rango_max ?? '∞'} que se cruza con este. Edítala o elimínala primero.`)
+    }
     setFormError(''); setSaving(true)
     const body = {
       plan_id:    form.plan_id,
       es_vip:     !!form.es_vip,
-      rango_min:  parseInt(form.rango_min) || 0,
-      rango_max:  form.rango_max !== '' ? parseInt(form.rango_max) : null,
+      rango_min:  rMin,
+      rango_max:  rMax,
       porcentaje: parseFloat(form.porcentaje),
       notas:      form.notas || null,
     }
@@ -1941,8 +1961,8 @@ function TabComisiones() {
               </Select>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <div><label className={LABEL}>Rango mín</label><Input type="number" min="0" value={form.rango_min} onChange={e => setForm(p => ({ ...p, rango_min: e.target.value }))} /></div>
-              <div><label className={LABEL}>Rango máx (∞=vacío)</label><Input type="number" min="0" value={form.rango_max} onChange={e => setForm(p => ({ ...p, rango_max: e.target.value }))} placeholder="∞" /></div>
+              <div><label className={LABEL}>Desde (serv./mes)</label><Input type="number" min="0" value={form.rango_min} onChange={e => setForm(p => ({ ...p, rango_min: e.target.value }))} /></div>
+              <div><label className={LABEL}>Hasta (serv./mes, ∞=vacío)</label><Input type="number" min="0" value={form.rango_max} onChange={e => setForm(p => ({ ...p, rango_max: e.target.value }))} placeholder="∞" /></div>
               <div><label className={LABEL}>Porcentaje *</label><Input type="number" min="0" max="100" step="0.5" value={form.porcentaje} onChange={e => setForm(p => ({ ...p, porcentaje: e.target.value }))} placeholder="%" /></div>
             </div>
             <div><label className={LABEL}>Notas</label><Input value={form.notas || ''} onChange={e => setForm(p => ({ ...p, notas: e.target.value }))} placeholder="Observaciones opcionales" /></div>
