@@ -559,7 +559,14 @@ function TabMascotas({ isAdmin, canEdit }) {
   // recalcula y actualiza AUTOMÁTICAMENTE si entró a otro rango. Solo se informa
   // del cambio aplicado (no se pregunta). Lógica centralizada en lib/precios.js.
   async function ofrecerRecalcularPrecio(mascotaId, pesoPrevio, pesoNuevo, especieId) {
-    const cambios = await aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieId)
+    let cambios
+    try {
+      cambios = await aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieId)
+    } catch (e) {
+      // El peso ya quedó guardado; si el recálculo falla debe verse, no morir en silencio
+      await showAlert(`El peso se guardó, pero no se pudo recalcular el precio del servicio: ${e.message}`, { title: 'Recálculo de precio falló', variant: 'warning' })
+      return
+    }
     if (!cambios.length) return
 
     const detalleCambios = cambios.map(c => {

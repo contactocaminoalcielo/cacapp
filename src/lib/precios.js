@@ -101,8 +101,13 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
       const hoy = new Date()
       const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
-      const [{ data: aliado }, { data: svcsDelMes }, { data: filas }] = await Promise.all([
-        db.from('aliados').select('vip').eq('id_aliado', svc.aliado_origen_id).maybeSingle(),
+      // El fetch del aliado va PRIMERO y separado: la consulta de config_comisiones
+      // depende de aliado.vip. Meter las tres en un solo Promise.all referenciando
+      // `aliado` dentro del mismo destructuring lanza ReferenceError por TDZ y el
+      // recálculo muere en silencio (bug real: servicios con comisión de aliado
+      // nunca se recalculaban al cambiar el peso).
+      const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', svc.aliado_origen_id).maybeSingle()
+      const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
         db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', svc.aliado_origen_id).gte('fecha_ingreso', inicioMes),
         db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
       ])

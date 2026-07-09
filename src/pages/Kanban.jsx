@@ -338,6 +338,7 @@ export default function Kanban() {
   const [fechaDesde, setFechaDesde]       = useState('')   // rango por fecha_ingreso (YYYY-MM-DD)
   const [fechaHasta, setFechaHasta]       = useState('')
   const [filtroRec, setFiltroRec]         = useState('')   // id de recordatorio (solo tablero producción)
+  const [filtroRecEstado, setFiltroRecEstado] = useState('') // estado de ese recordatorio; '' = cualquiera
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
   const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
@@ -1530,9 +1531,12 @@ export default function Kanban() {
     if (fechaHasta && (!s.fecha_ingreso || s.fecha_ingreso > fechaHasta)) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
     if (filtroPlanes.length && !filtroPlanes.includes(s.plan)) return false
-    // Filtro por recordatorio: solo aplica en el tablero de producción
-    if (esVistaProd && filtroRec &&
-        !(s.items_rec || []).some(i => String(i.recordatorio_id) === String(filtroRec))) return false
+    // Filtro por recordatorio (y opcionalmente su estado): solo tablero de producción
+    if (esVistaProd && filtroRec) {
+      const delRec = (s.items_rec || []).filter(i => String(i.recordatorio_id) === String(filtroRec) && i.estado !== 'NA')
+      if (!delRec.length) return false
+      if (filtroRecEstado && !delRec.some(i => i.estado === filtroRecEstado)) return false
+    }
     if (busqueda.trim()) {
       const q = busqueda.trim().toLowerCase()
       const qDigits = q.replace(/\D/g, '')
@@ -1786,12 +1790,36 @@ export default function Kanban() {
             )}
           </div>
 
-          {/* Filtro por recordatorio (solo tablero producción) */}
+          {/* Filtro por recordatorio + estado de ese recordatorio (solo tablero producción) */}
           {esVistaProd && recOpcionesKanban.length > 0 && (
-            <Select value={filtroRec} onChange={e => setFiltroRec(e.target.value)} className="h-9 text-[12px] w-48">
-              <option value="">Todos los recordatorios</option>
-              {recOpcionesKanban.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <Select value={filtroRec}
+                onChange={e => { setFiltroRec(e.target.value); if (!e.target.value) setFiltroRecEstado('') }}
+                className="h-9 text-[12px] w-48">
+                <option value="">Todos los recordatorios</option>
+                {recOpcionesKanban.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+              </Select>
+              {filtroRec && (
+                <div className="flex flex-wrap gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                  {[
+                    { key: '',           label: 'Todos',      color: '#111827' },
+                    { key: 'PENDIENTE',  label: 'Pendientes', color: '#92400E' },
+                    { key: 'EN_PROCESO', label: 'En proceso', color: '#1E40AF' },
+                    { key: 'LISTO',      label: 'Listos',     color: '#065F46' },
+                  ].map(f => {
+                    const active = filtroRecEstado === f.key
+                    return (
+                      <button key={f.key}
+                        className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition-all ${active ? 'bg-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        style={active ? { color: f.color } : {}}
+                        onClick={() => setFiltroRecEstado(f.key)}>
+                        {f.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )}
 
           {vista === 'tabla' && (
@@ -2545,8 +2573,10 @@ export default function Kanban() {
                         if (detalle?.aliado_origen_id && (detalle?.comision_aliado ?? 0) > 0) {
                           const hoy = new Date()
                           const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
-                          const [{ data: aliado }, { data: svcsDelMes }, { data: filas }] = await Promise.all([
-                            db.from('aliados').select('vip').eq('id_aliado', detalle.aliado_origen_id).maybeSingle(),
+                          // aliado va primero y separado: usarlo dentro del mismo
+                          // destructuring del Promise.all lanza ReferenceError (TDZ)
+                          const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', detalle.aliado_origen_id).maybeSingle()
+                          const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
                             db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', detalle.aliado_origen_id).gte('fecha_ingreso', inicioMes),
                             db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
                           ])
