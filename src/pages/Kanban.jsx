@@ -2592,9 +2592,12 @@ export default function Kanban() {
                   </span>
                 )
               })}
-              {['INGRESADO', 'EN_RECOGIDA'].includes(selected.estado) && selected.hora_recogida && (
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700">
-                  🕐 Técnico llega {String(selected.hora_recogida).slice(0, 5)}
+              {selected.hora_recogida && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700"
+                  title="Hora de llegada que confirmó el técnico al iniciar la ruta">
+                  {['INGRESADO', 'EN_RECOGIDA'].includes(selected.estado)
+                    ? <>🕐 Técnico llega {String(selected.hora_recogida).slice(0, 5)}</>
+                    : <>🕐 Recogida confirmada a las {String(selected.hora_recogida).slice(0, 5)}</>}
                 </span>
               )}
             </div>
