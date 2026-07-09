@@ -97,6 +97,66 @@ const COL_STYLE = {
   ENTREGADO:      { bar: '#6B7280', dot: '#F3F4F6' },
 }
 
+// ── Método de pago en la tarjeta ──────────────────────────────────────────────
+// Cubre tanto los metodos de recibo_medios_pago (EFECTIVO/TRANSFERENCIA/NEQUI/
+// DAVIPLATA/TARJETA/OTRO) como el metodo_pago grueso de servicios (DATAFONO).
+const METODO_PAGO_META = {
+  EFECTIVO:      { label: 'Efectivo',  emoji: '💵', bg: '#DCFCE7', color: '#166534' },
+  TRANSFERENCIA: { label: 'Transf.',   emoji: '🏦', bg: '#DBEAFE', color: '#1E40AF' },
+  NEQUI:         { label: 'Nequi',     emoji: '📱', bg: '#F3E8FF', color: '#6B21A8' },
+  DAVIPLATA:     { label: 'Daviplata', emoji: '📱', bg: '#FEE2E2', color: '#991B1B' },
+  TARJETA:       { label: 'Tarjeta',   emoji: '💳', bg: '#E0E7FF', color: '#3730A3' },
+  DATAFONO:      { label: 'Datáfono',  emoji: '💳', bg: '#E0E7FF', color: '#3730A3' },
+  OTRO:          { label: 'Otro',      emoji: '💰', bg: '#F3F4F6', color: '#374151' },
+}
+
+// Índice de cada estado dentro del flujo — para saber qué exigencias aplican
+// según la etapa en la que va la tarjeta (CANCELADO no está: no exige nada)
+const IDX_ESTADO = Object.fromEntries(TODAS_COLS.map((e, i) => [e, i]))
+
+// 'HH:MM[:SS]' (hora que confirmó el técnico) → minutos que faltan respecto al
+// reloj local; negativo si ya pasó, null si no hay hora o no parsea
+function minutosParaHora(horaStr, ahoraMs) {
+  const m = String(horaStr || '').match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  const ahora = new Date(ahoraMs)
+  const objetivo = new Date(ahoraMs)
+  objetivo.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0)
+  return Math.round((objetivo - ahora) / 60000)
+}
+
+function fmtMinutos(min) {
+  const abs = Math.abs(min)
+  if (abs < 60) return `${abs} min`
+  const h = Math.floor(abs / 60), m = abs % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+
+// Pendientes que arrastra un servicio según su etapa. La tarjeta se pinta
+// rojiza si devuelve algo, y el modal lista estos mismos motivos.
+// tiene_recibo/nevera_codigo llegan como undefined si su consulta falló →
+// se comparan estrictos contra false/null para no pintar falsos rojos.
+function pendientesDe(s) {
+  const idx = IDX_ESTADO[s.estado]
+  if (idx == null) return []
+  const p = []
+  if (idx <= IDX_ESTADO.EN_RECOGIDA && !s.tecnico_id) p.push('Sin técnico asignado')
+  if (idx >= IDX_ESTADO.EN_CUARTO_FRIO) {
+    if (s.tiene_recibo === false && idx < IDX_ESTADO.ENTREGADO)
+      p.push('No se ha generado el recibo del servicio')
+    if (s.estado_pago === 'PENDIENTE' || s.estado_pago === 'PARCIAL') {
+      const saldo = s.saldo_pendiente ?? ((s.valor_total || 0) - (s.valor_pagado || 0))
+      const etiqueta = s.estado_pago === 'PENDIENTE' ? 'Pago pendiente' : 'Pago parcial'
+      p.push(saldo > 0 ? `${etiqueta} — saldo ${fmt(saldo)}` : etiqueta)
+    }
+    if (s.estado === 'EN_CUARTO_FRIO' && s.nevera_codigo === null)
+      p.push('Sin nevera registrada en cuarto frío')
+    if (s.alerta_fotos_pendientes)
+      p.push('Fotos del cliente sin recibir (más de 3 días hábiles)')
+  }
+  return p
+}
+
 // ── Dropdown de planes con selección múltiple ────────────────────────────────
 function MultiSelectPlanes({ opciones, seleccion, onChange }) {
   const [open, setOpen] = useState(false)
@@ -350,6 +410,9 @@ export default function Kanban() {
 
   // ── Alertas inicio ruta ───────────────────────────────────────────────────
   const [alertasRuta, setAlertasRuta]     = useState([])   // notificaciones TECNICO_INICIO_RUTA pendientes (toasts en esquina)
+
+  // ── Reloj para alertas por hora de recogida (amarillo ≤15 min, rojo vencida) ─
+  const [ahoraTick, setAhoraTick]         = useState(() => Date.now())
 
   // ── Modal ─────────────────────────────────────────────────────────────────
   const [selected, setSelected]           = useState(null)
@@ -808,6 +871,13 @@ export default function Kanban() {
     return () => { db.removeChannel(canal) }
   }, [])
 
+  // Refresca el reloj cada 30 s: así la tarjeta pasa sola a amarillo/rojo
+  // cuando se acerca o se vence la hora confirmada por el técnico
+  useEffect(() => {
+    const iv = setInterval(() => setAhoraTick(Date.now()), 30_000)
+    return () => clearInterval(iv)
+  }, [])
+
   // Polling alertas de inicio de ruta para coordinador/admin
   useEffect(() => {
     if (!personalData?.id) return
@@ -864,22 +934,56 @@ export default function Kanban() {
         // consulta falla en silencio (se pierden teléfonos alternos, badge de
         // adicional y peso). Se trocea en lotes de 80 ids (~3K chars por URL).
         const lotes = Array.from({ length: Math.ceil(ids.length / 80) }, (_, i) => ids.slice(i * 80, i * 80 + 80))
-        const [telsParts, itemsParts] = await Promise.all([
+        const [telsParts, itemsParts, cfParts, recogParts, recibosParts, mediosParts] = await Promise.all([
           Promise.all(lotes.map(l => db.from('servicios')
-            .select('id, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
+            .select('id, metodo_pago, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .in('id', l))),
           Promise.all(lotes.map(l => db.from('servicio_recordatorios')
             .select('servicio_id, recordatorio_id, estado, origen')
             .neq('origen', 'REMOVIDO').in('servicio_id', l))),
+          // Nevera solo mientras hay custodia física (fecha_salida IS NULL)
+          Promise.all(lotes.map(l => db.from('cuarto_frio')
+            .select('servicio_id, nevera_codigo')
+            .is('fecha_salida', null).in('servicio_id', l))),
+          // Hora de llegada confirmada por el técnico al iniciar ruta
+          Promise.all(lotes.map(l => db.from('recogidas')
+            .select('servicio_id, hora_programada')
+            .in('servicio_id', l))),
+          // Existe recibo generado (mismo criterio del gate de la app del técnico)
+          Promise.all(lotes.map(l => db.from('recibos_tecnico')
+            .select('servicio_id')
+            .in('servicio_id', l))),
+          // Medios de pago reales cobrados en el recibo (EFECTIVO/NEQUI/…)
+          Promise.all(lotes.map(l => db.from('recibo_medios_pago')
+            .select('servicio_id, metodo')
+            .gt('monto', 0).in('servicio_id', l))),
         ])
         const tels  = telsParts.flatMap(r => r.data || [])
         const items = itemsParts.flatMap(r => r.data || [])
         const mapa = {}
         const pesos = {}
+        const metodoRegistro = {}
         ;(tels || []).forEach(t => {
           const c = t.mascotas?.clientes
           if (c) mapa[t.id] = c
           pesos[t.id] = t.mascotas?.peso_kg ?? null
+          metodoRegistro[t.id] = t.metodo_pago || null
+        })
+        // Nevera: solo los servicios con fila vigente en cuarto_frio quedan en el
+        // mapa (null = fila sin nevera → pendiente real; ausente = sin custodia)
+        const neveraMap = {}
+        cfParts.flatMap(r => r.data || []).forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
+        const horaMap = {}
+        recogParts.flatMap(r => r.data || []).forEach(r => { if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada })
+        // Si la consulta de recibos falló, tiene_recibo queda undefined para no
+        // pintar todo el tablero en rojo por un error transitorio
+        const recibosOk  = recibosParts.every(r => !r.error)
+        const conRecibo  = new Set(recibosParts.flatMap(r => r.data || []).map(r => r.servicio_id))
+        const mediosMap  = {}
+        mediosParts.flatMap(r => r.data || []).forEach(r => {
+          const arr = mediosMap[r.servicio_id] || (mediosMap[r.servicio_id] = [])
+          const met = String(r.metodo || '').toUpperCase()
+          if (met && !arr.includes(met)) arr.push(met)
         })
         const conAdicional = new Set(items.filter(i => i.origen === 'ADICIONAL').map(i => i.servicio_id))
         // Ítems de recordatorio por servicio (sin NA) — alimenta el filtro por recordatorio
@@ -897,11 +1001,19 @@ export default function Kanban() {
             cliente_telefono:  c.telefono  || null,
             cliente_telefono2: c.telefono2 || null,
           } : s
+          // Método de pago: primero lo cobrado de verdad en el recibo; si aún no
+          // hay recibo, el declarado en el registro (PENDIENTE no es un método)
+          const metodoReg = metodoRegistro[s.servicio_id]
           return {
             ...base,
             mascota_peso_kg: pesos[s.servicio_id] ?? null,
             tiene_adicional: conAdicional.has(s.servicio_id),
             items_rec:       itemsPorSvc[s.servicio_id] || [],
+            nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
+            hora_recogida:   horaMap[s.servicio_id] || null,
+            tiene_recibo:    recibosOk ? conRecibo.has(s.servicio_id) : undefined,
+            metodos_pago:    mediosMap[s.servicio_id]
+              || (metodoReg && metodoReg !== 'PENDIENTE' ? [metodoReg] : []),
           }
         })
       }
@@ -1983,11 +2095,24 @@ export default function Kanban() {
                           const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
                           const puedeNotifTec  = !esVistaProd && col === 'INGRESADO' && !!s.tecnico_id
                           const sinTecnico     = !esVistaProd && ['INGRESADO','EN_RECOGIDA'].includes(col) && !s.tecnico_id
+                          // Pendientes de la etapa + alerta por hora de recogida confirmada
+                          const pend   = pendientesDe(s)
+                          const enRecogida = ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
+                          const minRec = enRecogida ? minutosParaHora(s.hora_recogida, ahoraTick) : null
+                          const tiempoAlert = minRec == null ? null : minRec < 0 ? 'vencida' : minRec <= 15 ? 'proxima' : null
+                          // Prioridad visual: hora vencida (rojo) > pendientes (rojizo)
+                          // > hora próxima (amarillo) > alerta SLA existente
+                          let cardBg     = '#fff'
+                          let cardBorder = al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6'
+                          if (tiempoAlert === 'proxima') { cardBg = '#FFFBEB'; cardBorder = '#FCD34D' }
+                          if (pend.length)               { cardBg = '#FEF2F2'; cardBorder = '#FCA5A5' }
+                          if (tiempoAlert === 'vencida') { cardBg = '#FEE2E2'; cardBorder = '#F87171' }
+                          const metodosCard = (s.metodos_pago || []).filter(m => METODO_PAGO_META[m] || m)
                           return (
                             <div key={s.servicio_id} draggable
                               onDragStart={e => onDragStart(e, s)} onDragEnd={onDragEnd}
-                              className="bg-white border rounded-xl p-3.5 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:-translate-y-px transition-all select-none"
-                              style={{ borderColor: al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6', opacity: draggingId === s.servicio_id ? 0.35 : 1 }}
+                              className="border rounded-xl p-3.5 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:-translate-y-px transition-all select-none"
+                              style={{ background: cardBg, borderColor: cardBorder, opacity: draggingId === s.servicio_id ? 0.35 : 1 }}
                               onClick={() => draggingId === null && abrirModal(s)}
                             >
                               <div className="flex items-start gap-2 mb-2">
@@ -1996,6 +2121,27 @@ export default function Kanban() {
                                   <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
                                   <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
                                 </div>
+                                {(s.nevera_codigo || metodosCard.length > 0) && (
+                                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                    {s.nevera_codigo && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md"
+                                        style={{ background: '#CFFAFE', color: '#0E7490' }}
+                                        title={`En cuarto frío — nevera ${s.nevera_codigo}`}>
+                                        🧊 {s.nevera_codigo}
+                                      </span>
+                                    )}
+                                    {metodosCard.slice(0, 2).map(m => {
+                                      const meta = METODO_PAGO_META[m] || METODO_PAGO_META.OTRO
+                                      return (
+                                        <span key={m} className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md"
+                                          style={{ background: meta.bg, color: meta.color }}
+                                          title={`Pago por ${meta.label.toLowerCase()}`}>
+                                          {meta.emoji} {meta.label}
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex items-center justify-between gap-2 mb-2">
                                 <div className="text-[11px] text-gray-500 font-medium truncate flex-1">{s.plan}</div>
@@ -2022,6 +2168,25 @@ export default function Kanban() {
                                       {tel}
                                     </a>
                                   ))}
+                                </div>
+                              )}
+                              {enRecogida && s.hora_recogida && (
+                                <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 ${
+                                  tiempoAlert === 'vencida' ? 'bg-red-100 text-red-700'
+                                  : tiempoAlert === 'proxima' ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-cyan-50 text-cyan-700'}`}
+                                  title="Hora de llegada confirmada por el técnico">
+                                  🕐 Llega {String(s.hora_recogida).slice(0, 5)}
+                                  {minRec != null && (minRec < 0
+                                    ? ` · hace ${fmtMinutos(minRec)}`
+                                    : minRec <= 60 ? ` · en ${fmtMinutos(minRec)}` : '')}
+                                </div>
+                              )}
+                              {pend.length > 0 && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 bg-red-100 text-red-700"
+                                  title={pend.join(' · ')}>
+                                  <AlertTriangle size={9} />
+                                  {pend.length} pendiente{pend.length > 1 ? 's' : ''}
                                 </div>
                               )}
                               {al && (
@@ -2247,7 +2412,47 @@ export default function Kanban() {
                   {selected.dias_para_vencer < 0 ? `${Math.abs(selected.dias_para_vencer)}d vencido` : `${selected.dias_para_vencer}d restantes`}
                 </span>
               )}
+              {selected.nevera_codigo && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#CFFAFE', color: '#0E7490' }}>
+                  🧊 Nevera {selected.nevera_codigo}
+                </span>
+              )}
+              {(selected.metodos_pago || []).map(m => {
+                const meta = METODO_PAGO_META[m] || METODO_PAGO_META.OTRO
+                return (
+                  <span key={m} className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: meta.bg, color: meta.color }}>
+                    {meta.emoji} {meta.label}
+                  </span>
+                )
+              })}
+              {['INGRESADO', 'EN_RECOGIDA'].includes(selected.estado) && selected.hora_recogida && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700">
+                  🕐 Técnico llega {String(selected.hora_recogida).slice(0, 5)}
+                </span>
+              )}
             </div>
+
+            {/* ── Por qué la tarjeta está en rojo: pendientes de la etapa ── */}
+            {selected.estado !== 'CANCELADO' && (() => {
+              const pend = pendientesDe(selected)
+              if (!pend.length) return null
+              return (
+                <div className="rounded-xl px-4 py-3"
+                  style={{ background: '#FEF2F2', border: '1.5px solid #FCA5A5' }}>
+                  <p className="text-[13px] font-bold flex items-center gap-1.5" style={{ color: '#991B1B' }}>
+                    <AlertTriangle size={13} /> Pendientes de este servicio
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {pend.map((p, i) => (
+                      <li key={i} className="text-[12px]" style={{ color: '#B91C1C' }}>• {p}</li>
+                    ))}
+                  </ul>
+                  <p className="text-[11px] mt-1.5" style={{ color: '#DC2626' }}>
+                    Estos puntos deberían estar resueltos para la etapa en la que va el servicio.
+                  </p>
+                </div>
+              )
+            })()}
 
             {/* ── Banner servicio cancelado: trazabilidad completa ── */}
             {selected.estado === 'CANCELADO' && (
