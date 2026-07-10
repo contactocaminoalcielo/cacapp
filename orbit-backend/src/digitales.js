@@ -131,6 +131,7 @@ export async function listarCandidatos() {
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
               m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
+              COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
               f.foto_url
        FROM public.servicios s
        JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
