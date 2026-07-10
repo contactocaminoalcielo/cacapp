@@ -307,6 +307,40 @@ export async function agregarServicioAReporteGrupal({ servicioId, personalId }) 
       [lote.id, conteoServicios[0]?.total || 0]
     )
 
+    // El servicio quedó vinculado a un lote COMPLETADO: reflejarlo en la
+    // operación igual que el botón "Completar lote" de LotesGrupales. Sin esto
+    // el servicio se queda EN_CUARTO_FRIO para siempre (su lote ya no vuelve a
+    // completarse) y el cuarto frío lo sigue contando en custodia — al
+    // 2026-07-10 había 124 servicios represados así en el Kanban.
+    await client.query(
+      `UPDATE public.servicios SET estado = 'EN_PRODUCCION'
+       WHERE id = $1
+         AND estado NOT IN ('EN_PRODUCCION','LISTO','EN_ENTREGA','ENTREGADO','CANCELADO')`,
+      [servicioId]
+    )
+    const { rows: cfAbiertos } = await client.query(
+      `SELECT id, estado, nevera_codigo FROM public.cuarto_frio
+       WHERE servicio_id = $1 AND fecha_salida IS NULL
+       FOR UPDATE`,
+      [servicioId]
+    )
+    if (cfAbiertos.length) {
+      await client.query(
+        `UPDATE public.cuarto_frio SET estado = 'TRASLADADO', fecha_salida = now()
+         WHERE id = ANY($1::uuid[])`,
+        [cfAbiertos.map((r) => r.id)]
+      )
+      for (const cf of cfAbiertos) {
+        await client.query(
+          `INSERT INTO public.cuarto_frio_movimientos
+             (cuarto_frio_id, personal_id, tipo, nevera_anterior, nevera_nueva, estado_anterior, estado_nuevo, notas)
+           VALUES ($1, $2, 'SALIDA_TENJO', $3, NULL, $4, 'TRASLADADO', $5)`,
+          [cf.id, actorId, cf.nevera_codigo || null, cf.estado,
+           `Salida registrada al vincular el servicio al lote ${lote.numero_lote} (COMPLETADO) desde Control grupal`]
+        )
+      }
+    }
+
     const resultado = await construirReporteDeLote(client, lote, { generadoPor: actorId })
     await evento(client, {
       reporteId: resultado.reporteId,
