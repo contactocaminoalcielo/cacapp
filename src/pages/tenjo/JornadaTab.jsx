@@ -17,6 +17,7 @@ import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
 } from '@/lib/tenjo'
+import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -106,6 +107,16 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       responsable_proceso_id: respId,
       fecha_inicio_proceso: ahoraISO(),
     }, false)
+    // Respaldo idempotente: si el proceso arranca en Tenjo, la mascota ya no
+    // está en el cuarto frío — cierra la custodia si el traslado no la registró
+    // (fuga real: 34 custodias fantasma detectadas el 2026-07-10).
+    try {
+      await registrarSalidaCuartoFrio(item.servicio_id, {
+        personalId: personalData?.id,
+        tipo: 'SALIDA_TENJO',
+        motivo: 'Proceso iniciado en jornada Tenjo — salida no registrada en el traslado',
+      })
+    } catch (e) { console.error('[salida cuarto frío]', e?.message) }
     // Primer proceso iniciado → el lote pasa a EN_EJECUCION (best-effort)
     await db.from('lotes_tenjo').update({ estado: 'EN_EJECUCION' })
       .eq('id', item.lote_id).eq('estado', 'CONFIRMADO')

@@ -379,6 +379,13 @@ export default function Tenjo() {
     if (!await confirm('El servicio pasará a EN_PRODUCCION.', { title: '¿Confirmar que las cenizas están listas?', variant: 'warning', confirmLabel: 'Confirmar' })) return
     try {
       await db.from('servicios').update({ estado: 'EN_PRODUCCION' }).eq('id', servicioId)
+      // Respaldo idempotente: cenizas listas ⇒ la mascota salió del cuarto frío
+      // hace rato; cierra la custodia si el traslado no la registró.
+      await registrarSalidaCuartoFrio(servicioId, {
+        personalId: personalData?.id,
+        tipo:       'SALIDA_TENJO',
+        motivo:     'Cenizas confirmadas — salida no registrada en el traslado',
+      })
       await cargar()
       // Ofrecer generar certificado inmediatamente después de confirmar
       if (traslado) setCertIndModal(traslado)
