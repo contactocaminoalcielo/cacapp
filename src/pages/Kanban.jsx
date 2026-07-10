@@ -438,6 +438,12 @@ export default function Kanban() {
   const [editEstadoPago, setEditEstadoPago] = useState('')
   const [editNotas, setEditNotas]         = useState('')
   const [editComisionAliado, setEditComisionAliado] = useState('')
+  // ── Asignar veterinaria a un servicio que entró como particular ───────────
+  const [asignaAliadoId,    setAsignaAliadoId]    = useState('')
+  const [asignaComision,    setAsignaComision]    = useState('')  // monto editable ($)
+  const [asignaComisionPct, setAsignaComisionPct] = useState(0)
+  const [asignaCalculando,  setAsignaCalculando]  = useState(false)
+  const [asignandoAliado,   setAsignandoAliado]   = useState(false)
   const [novedades, setNovedades]         = useState([])
   const [nuevoComentario, setNuevoComentario] = useState('')
   const [guardandoComentario, setGuardandoComentario] = useState(false)
@@ -1060,6 +1066,7 @@ export default function Kanban() {
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
     setAddRecId(''); setAddRecQty(1)
     setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobante(null)
+    setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
 
     // Si está cancelado, traer la trazabilidad en query aparte (defensivo: si
@@ -1360,6 +1367,75 @@ export default function Kanban() {
       await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
     } finally {
       setAddingRec(false)
+    }
+  }
+
+  // Al elegir la vet se calcula la comisión sugerida: % de config_comisiones
+  // (rango por Nº de servicios del aliado en el mes; VIP = tasas fijas) sobre
+  // el valor del PLAN según peso actual — nunca sobre valor_total, que trae
+  // transporte y adicionales. El monto queda editable.
+  async function seleccionarAliadoNuevo(aliadoId) {
+    setAsignaAliadoId(aliadoId)
+    setAsignaComision(''); setAsignaComisionPct(0)
+    if (!aliadoId || !detalle?.plan_id) return
+    setAsignaCalculando(true)
+    try {
+      const al   = aliadoPorId(aliadoId)
+      const plan = planPorId(detalle.plan_id)
+      const pct  = await calcularComisionPct(aliadoId, !!al?.vip, detalle.plan_id, plan?.tipo_proceso)
+      const valorPlan = await calcularPrecioPlan(detalle.plan_id)
+      setAsignaComisionPct(pct)
+      if (pct > 0 && valorPlan > 0) setAsignaComision(String(Math.round(valorPlan * pct / 100)))
+    } finally {
+      setAsignaCalculando(false)
+    }
+  }
+
+  // Servicio que entró como particular pero resultó referido por una vet:
+  // se asigna el aliado y queda la comisión para cuadrar aparte (el cobro al
+  // cliente ya se hizo completo → comision_descontada=false). canal_entrada
+  // pasa a ALIADO porque Finanzas › Comisiones filtra por ese canal.
+  async function asignarVeterinaria() {
+    if (!selected || !asignaAliadoId || asignandoAliado) return
+    const al    = aliadoPorId(asignaAliadoId)
+    const monto = Math.round(parseFloat(asignaComision) || 0)
+    const ok = await confirm(
+      `Veterinaria: ${al?.nombre || '—'}\n\nComisión: ${fmt(monto)}${asignaComisionPct ? ` (${asignaComisionPct}% sobre el plan)` : ''}\n\nEl cobro al cliente no cambia: la comisión se cuadra aparte con la veterinaria y aparecerá en Finanzas › Comisiones.`,
+      { title: '¿Asignar veterinaria a este servicio?', confirmLabel: 'Sí, asignar' }
+    )
+    if (!ok) return
+    setAsignandoAliado(true)
+    try {
+      const { error } = await db.from('servicios').update({
+        aliado_origen_id:    asignaAliadoId,
+        canal_entrada:       'ALIADO',
+        comision_aliado:     monto,
+        comision_descontada: false,
+      }).eq('id', selected.servicio_id)
+      if (error) throw error
+
+      const { data: novInserted } = await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `Veterinaria asignada: ${al?.nombre || '—'}. El servicio entró como particular y resultó referido por la vet. ` +
+                        `Comisión: ${fmt(monto)}${asignaComisionPct ? ` (${asignaComisionPct}% sobre el plan)` : ''} — se cuadra aparte, no se descontó del cobro al cliente.`,
+        registrado_por: personalData?.id || null,
+      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+
+      setDetalle(prev => prev ? { ...prev, aliado_origen_id: asignaAliadoId, comision_aliado: monto, comision_descontada: false } : prev)
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id
+        ? { ...s, aliado_origen_id: asignaAliadoId, comision_aliado: monto }
+        : s
+      ))
+      if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
+      db.from('aliados').select('nombre, horario, telefono, whatsapp')
+        .eq('id_aliado', asignaAliadoId).maybeSingle()
+        .then(({ data }) => { if (data) setAliadoHorario(data) })
+      setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al asignar la veterinaria' })
+    } finally {
+      setAsignandoAliado(false)
     }
   }
 
@@ -2807,6 +2883,58 @@ export default function Kanban() {
                           Guardar
                         </button>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Asignar veterinaria — entró como particular pero resultó referido por una vet */}
+                  {detalle && !detalle.aliado_origen_id && (esAdmin || rol === 'COORDINADOR') && selected.estado !== 'CANCELADO' && (
+                    <div className="rounded-lg px-3 py-2.5 space-y-2" style={{ background: '#EFF6FF', border: '1px solid #BFDBFE' }}>
+                      <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <Stethoscope size={10} /> ¿Referido por una veterinaria?
+                      </div>
+                      <p className="text-[11px] text-blue-700">
+                        Si esta mascota entró como particular pero resultó referida por una vet aliada, asígnala aquí: la comisión se calcula sola y queda para cuadrar con la veterinaria.
+                      </p>
+                      <Select
+                        value={asignaAliadoId}
+                        onChange={e => seleccionarAliadoNuevo(e.target.value)}
+                        className="w-full text-[12px]"
+                      >
+                        <option value="">Seleccionar veterinaria…</option>
+                        {aliados.map(a => (
+                          <option key={a.id_aliado} value={a.id_aliado}>{a.nombre}{a.vip ? ' ⭐ VIP' : ''}</option>
+                        ))}
+                      </Select>
+                      {asignaAliadoId && (asignaCalculando
+                        ? <p className="text-[11px] text-blue-600">Calculando comisión…</p>
+                        : (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-semibold text-blue-700">Comisión $</span>
+                              <input
+                                type="number" min="0" step="1000"
+                                value={asignaComision}
+                                onChange={e => setAsignaComision(e.target.value)}
+                                placeholder="Monto…"
+                                className="w-28 px-2 py-1 text-[12px] font-bold text-blue-800 bg-white border border-blue-300 rounded-lg outline-none focus:border-blue-500 text-right"
+                              />
+                              {asignaComisionPct > 0 && (
+                                <span className="text-[11px] text-blue-600">({asignaComisionPct}% sobre el plan)</span>
+                              )}
+                            </div>
+                            {!(parseFloat(asignaComision) > 0) && (
+                              <p className="text-[10px] text-amber-600">⚠️ Sin un monto mayor a $0 la comisión no aparecerá en Finanzas › Comisiones.</p>
+                            )}
+                            <button
+                              onClick={asignarVeterinaria}
+                              disabled={asignandoAliado}
+                              className="w-full py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50"
+                              style={{ background: '#1D4ED8', color: '#fff' }}>
+                              <Stethoscope size={12} />
+                              {asignandoAliado ? 'Asignando…' : 'Asignar veterinaria'}
+                            </button>
+                          </>
+                        ))}
                     </div>
                   )}
 
