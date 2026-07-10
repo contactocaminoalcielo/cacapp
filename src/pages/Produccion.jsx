@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
-import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
@@ -263,7 +263,19 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
     porServicio[r.servicio_id].items.push(r)
   })
 
-  if (Object.keys(porServicio).length === 0) return (
+  // Servicios LISTO primero, ordenados por fecha límite de entrega (el más
+  // próximo a vencer arriba; sin límite al final). El resto conserva su orden.
+  const tarjetas = Object.entries(porServicio).sort(([, a], [, b]) => {
+    const la = a.servicio?.estado === 'LISTO'
+    const lb = b.servicio?.estado === 'LISTO'
+    if (la !== lb) return la ? -1 : 1
+    if (!la) return 0
+    const ta = parseDate(a.servicio?.fecha_limite_entrega)?.getTime() ?? Infinity
+    const tb = parseDate(b.servicio?.fecha_limite_entrega)?.getTime() ?? Infinity
+    return ta - tb
+  })
+
+  if (tarjetas.length === 0) return (
     <div className="col-span-3 text-center py-16 text-ink3">
       <div className="text-4xl mb-3">⚙️</div>
       <div className="text-sm font-medium">Sin ítems para este filtro</div>
@@ -272,9 +284,13 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {Object.entries(porServicio).map(([sId, { servicio, items, fotos_ok }]) => {
+      {tarjetas.map(([sId, { servicio, items, fotos_ok }]) => {
         const mascota = servicio?.mascotas
         const plan    = servicio?.planes
+        const fmtCorta    = d => d?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
+        const limite      = parseDate(servicio?.fecha_limite_entrega)
+        const diasAlLimite = limite ? Math.round((limite - parseDate(today())) / 86400000) : null
+        const fechaFotos  = fotos_ok ? fmtCorta(parseDate(servicio.fecha_imagenes_recibidas)) : null
         const listosCnt = items.filter(i => ['LISTO', 'ENTREGADO'].includes(i.estado)).length
         const pct = items.length > 0 ? Math.round((listosCnt / items.length) * 100) : 0
         const bloqueados = items.filter(i =>
@@ -308,12 +324,29 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
               </div>
             </div>
 
-            {/* Indicadores fotos */}
+            {/* Indicadores fotos + fecha límite de entrega */}
             <div className="flex flex-wrap gap-1.5 mb-2.5">
+              {limite && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  title="Fecha máxima de entrega prometida al cliente"
+                  style={diasAlLimite < 0
+                    ? { background: '#FEE2E2', color: '#B91C1C' }
+                    : diasAlLimite <= 2
+                      ? { background: '#FEF3C7', color: '#92400E' }
+                      : { background: '#E0E7FF', color: '#3730A3' }}>
+                  <Clock size={9} />
+                  {diasAlLimite < 0
+                    ? `Venció ${fmtCorta(limite)}`
+                    : diasAlLimite === 0
+                      ? 'Entrega máx HOY'
+                      : `Entrega máx ${fmtCorta(limite)}`}
+                </span>
+              )}
               {fotos_ok
                 ? <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                    title="Fecha en que el cliente subió las imágenes"
                     style={{ background: '#D1FAE5', color: '#065F46' }}>
-                    <CheckCircle2 size={9} /> Fotos OK
+                    <CheckCircle2 size={9} /> Fotos {fechaFotos || 'OK'}
                   </span>
                 : <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                     style={{ background: '#FEF9C3', color: '#713F12' }}>
@@ -843,7 +876,7 @@ export default function Produccion() {
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
-            servicios ( id, fecha_imagenes_recibidas, fecha_listo, estado,
+            servicios ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
                         planes ( nombre, codigo ) )
           `)
@@ -900,7 +933,7 @@ export default function Produccion() {
         recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                         recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
-        servicios ( id, fecha_imagenes_recibidas, estado,
+        servicios ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                     mascotas ( nombre, especie_id, especies ( nombre ) ),
                     planes ( nombre, codigo ) )
       `)
