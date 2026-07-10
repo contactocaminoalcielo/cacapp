@@ -49,6 +49,13 @@ Los recordatorios adicionales no llevan comisión del aliado.
 ## Gestión en app
 - Gestionado en `Gestion.jsx` (tab Aliados): CRUD completo con editor de horario.
 - Configuración de comisiones en `Configuracion.jsx`.
+- **Asignación retroactiva (2026-07-10)**: si un servicio entró como particular y después se
+  descubre que fue referido por una vet, se asigna desde Kanban › modal › Financiero (panel
+  "¿Referido por una veterinaria?", coordinador/admin). Escribe `aliado_origen_id` +
+  `canal_entrada='ALIADO'` (requisito para que Finanzas › Comisiones lo liste) +
+  `comision_aliado` (auto: % por volumen/VIP sobre el valor del plan por peso, editable) con
+  `comision_descontada=false` (el cobro ya fue completo; se cuadra aparte). El trigger
+  `fn_gestionar_comision_recogida` no re-dispara en este caso — el cálculo lo hace el frontend.
 
 ## Pendiente
 - Tabla `comisiones` por servicio con estado pagada/pendiente — no existe aún.
