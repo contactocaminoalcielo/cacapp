@@ -13,7 +13,7 @@ import {
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
   HelpCircle, Sparkles, Pencil,
 } from 'lucide-react'
-import { abrirPdfReciboServicio } from '@/lib/comprobantes'
+import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -1206,21 +1206,6 @@ export default function Finanzas() {
     setPagoError('')
     setPagoSaving(false)
     setPagoComprobante(null)
-  }
-
-  // Sube el comprobante del pago al bucket compartido `evidencias` y devuelve su ruta.
-  async function subirComprobantePago(servicioId, file) {
-    const tipo = (file.type || '').toLowerCase()
-    if (!(tipo.startsWith('image/') || tipo === 'application/pdf'))
-      throw new Error('El comprobante debe ser una imagen o un PDF.')
-    if (file.size > 8 * 1024 * 1024)
-      throw new Error('El comprobante supera 8 MB. Usa un archivo más liviano.')
-    const ext  = tipo === 'application/pdf' ? 'pdf' : (tipo.split('/')[1] || 'jpg')
-    const path = `pagos/${servicioId}/${crypto.randomUUID()}.${ext}`
-    const { error } = await db.storage.from('evidencias')
-      .upload(path, file, { upsert: false, contentType: file.type || undefined })
-    if (error) throw new Error('No se pudo subir el comprobante: ' + error.message)
-    return { bucket: 'evidencias', storage_path: path, mime_type: file.type || null }
   }
 
   // ── Modal pago — guardar ────────────────────────────────────────────────────

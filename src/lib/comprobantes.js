@@ -37,6 +37,23 @@ export async function abrirPdfReciboServicio(servicioId) {
   }
 }
 
+// Sube el comprobante de un pago al bucket compartido `evidencias` y devuelve
+// su ubicación para registrarla en `recibo_comprobantes`. Lanza error con
+// mensaje legible si el archivo no es válido o falla la subida.
+export async function subirComprobantePago(servicioId, file) {
+  const tipo = (file.type || '').toLowerCase()
+  if (!(tipo.startsWith('image/') || tipo === 'application/pdf'))
+    throw new Error('El comprobante debe ser una imagen o un PDF.')
+  if (file.size > 8 * 1024 * 1024)
+    throw new Error('El comprobante supera 8 MB. Usa un archivo más liviano.')
+  const ext  = tipo === 'application/pdf' ? 'pdf' : (tipo.split('/')[1] || 'jpg')
+  const path = `pagos/${servicioId}/${crypto.randomUUID()}.${ext}`
+  const { error } = await db.storage.from('evidencias')
+    .upload(path, file, { upsert: false, contentType: file.type || undefined })
+  if (error) throw new Error('No se pudo subir el comprobante: ' + error.message)
+  return { bucket: 'evidencias', storage_path: path, mime_type: file.type || null }
+}
+
 export async function cargarComprobantesServicio(servicioId) {
   if (!servicioId) return []
   const out = []

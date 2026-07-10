@@ -11,13 +11,14 @@ import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
+import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
-  Copy, Check, Phone, Gift, Stethoscope,
+  Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
@@ -483,6 +484,9 @@ export default function Kanban() {
   const [addRecId,     setAddRecId]     = useState('')
   const [addRecQty,    setAddRecQty]    = useState(1)
   const [addingRec,    setAddingRec]    = useState(false)
+  const [addRecPagado,      setAddRecPagado]      = useState(false)
+  const [addRecMetodo,      setAddRecMetodo]      = useState('TRANSFERENCIA')
+  const [addRecComprobante, setAddRecComprobante] = useState(null)
   // ── Quitar ítem / ajuste por adicional no tomado ──────────────────────────
   const [itemAQuitar, setItemAQuitar] = useState(null)  // fila servicio_recordatorios, o {} para ajuste manual
   const [quitarMonto, setQuitarMonto] = useState('')
@@ -1055,6 +1059,7 @@ export default function Kanban() {
     setEditNotas(s.notas || ''); setEditComisionAliado('')
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
     setAddRecId(''); setAddRecQty(1)
+    setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobante(null)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
 
     // Si está cancelado, traer la trazabilidad en query aparte (defensivo: si
@@ -1259,9 +1264,16 @@ export default function Kanban() {
     if (!rec) return
     const qty      = Math.max(1, parseInt(addRecQty) || 1)
     const subtotal = (rec.precio_base || 0) * qty
+    const pagado   = addRecPagado && subtotal > 0
 
     setAddingRec(true)
     try {
+      // Si pagó, subir el comprobante PRIMERO (si lo adjuntaron): si falla la
+      // subida no se toca nada y el usuario corrige y reintenta.
+      let comprobante = null
+      if (pagado && addRecComprobante)
+        comprobante = await subirComprobantePago(selected.servicio_id, addRecComprobante)
+
       // Insertar ítem adicional (guardamos el precio cobrado para que sea
       // removible después con el monto correcto prellenado)
       const { error: recErr } = await db.from('servicio_recordatorios').insert({
@@ -1276,21 +1288,48 @@ export default function Kanban() {
       // Actualizar valor_total + desglose de adicionales del servicio.
       // valor_adicionales solo se toca con su valor real en DB (no pisar con
       // estado local que puede no traer la columna).
-      const nuevoTotal = (selected.valor_total || 0) + subtotal
+      const nuevoTotal  = (selected.valor_total || 0) + subtotal
+      const nuevoPagado = (selected.valor_pagado || 0) + (pagado ? subtotal : 0)
+      // El adicional cambia el total → recalcular estado_pago siempre (un
+      // servicio COMPLETO con adicional sin cobrar pasa a PARCIAL; si no,
+      // Finanzas no lo vería como pendiente).
+      const nuevoEstadoPago = nuevoPagado >= nuevoTotal ? 'COMPLETO' : (nuevoPagado > 0 ? 'PARCIAL' : 'PENDIENTE')
       const { data: curSv } = await db.from('servicios')
         .select('valor_adicionales').eq('id', selected.servicio_id).maybeSingle()
-      const updSv = { valor_total: nuevoTotal }
+      const updSv = { valor_total: nuevoTotal, estado_pago: nuevoEstadoPago }
       if (curSv?.valor_adicionales != null) updSv.valor_adicionales = curSv.valor_adicionales + subtotal
+      if (pagado) {
+        updSv.valor_pagado = nuevoPagado
+        updSv.metodo_pago  = addRecMetodo
+      }
       const { error: svErr } = await db.from('servicios')
         .update(updSv)
         .eq('id', selected.servicio_id)
       if (svErr) throw svErr
 
+      // Registrar el comprobante (no crítico: el cobro ya quedó). Si falla,
+      // se avisa pero no se revierte nada.
+      let avisoComprobante = null
+      if (comprobante) {
+        const { error: ce } = await db.from('recibo_comprobantes').insert({
+          servicio_id:  selected.servicio_id,
+          bucket:       comprobante.bucket,
+          storage_path: comprobante.storage_path,
+          mime_type:    comprobante.mime_type,
+          estado:       'APROBADO',
+          uploaded_by:  personalData?.id || null,
+        })
+        if (ce) avisoComprobante = ce.message
+      }
+
       // Registrar novedad
       const { data: novInserted } = await db.from('novedades_servicio').insert({
         servicio_id:    selected.servicio_id,
-        tipo_novedad:   'NOTA',
-        descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. Pendiente de cobro en entrega.`,
+        tipo_novedad:   pagado ? 'PAGO_RECIBIDO' : 'NOTA',
+        descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. ` +
+                        (pagado
+                          ? `Pagado (${addRecMetodo})${comprobante ? ', comprobante adjunto' : ''}.`
+                          : 'Pendiente de cobro en entrega.'),
         valor_ajuste:   subtotal,
         registrado_por: personalData?.id || null,
       }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
@@ -1304,13 +1343,19 @@ export default function Kanban() {
       if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
 
       // Update local state
-      const saldoNuevo = nuevoTotal - (selected.valor_pagado || 0)
-      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id
-        ? { ...s, valor_total: nuevoTotal, saldo_pendiente: saldoNuevo }
-        : s
-      ))
-      setSelected(prev => ({ ...prev, valor_total: nuevoTotal, saldo_pendiente: saldoNuevo }))
+      const upd = {
+        valor_total:     nuevoTotal,
+        valor_pagado:    nuevoPagado,
+        saldo_pendiente: nuevoTotal - nuevoPagado,
+        estado_pago:     nuevoEstadoPago,
+      }
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
+      setSelected(prev => ({ ...prev, ...upd }))
+      setEditEstadoPago(nuevoEstadoPago)
       setAddRecId(''); setAddRecQty(1)
+      setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobante(null)
+      if (avisoComprobante)
+        await showAlert('El adicional y el pago quedaron registrados, pero el comprobante no se pudo guardar: ' + avisoComprobante + '\n\nVuelve a adjuntarlo desde Finanzas.', { title: 'Comprobante no guardado', variant: 'warning' })
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
     } finally {
@@ -2955,7 +3000,7 @@ export default function Kanban() {
                 <div className="flex gap-2">
                   <Select
                     value={addRecId}
-                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1) }}
+                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1); setAddRecPagado(false); setAddRecComprobante(null) }}
                     className="flex-1 text-[12px]"
                   >
                     <option value="">Seleccionar ítem…</option>
@@ -2979,18 +3024,63 @@ export default function Kanban() {
                   if (!r) return null
                   const sub = (r.precio_base || 0) * addRecQty
                   return (
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] text-amber-700">
-                        {sub > 0 ? `+${fmt(sub)} — pendiente de cobro en entrega` : 'Sin costo adicional'}
-                      </p>
-                      <button
-                        onClick={agregarAdicional}
-                        disabled={addingRec}
-                        className="px-3 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-50"
-                        style={{ background: '#D97706', color: '#fff' }}>
-                        <Package size={11} />
-                        {addingRec ? 'Agregando…' : 'Agregar'}
-                      </button>
+                    <div className="space-y-2">
+                      {sub > 0 && (
+                        <>
+                          <label className="flex items-center gap-2 text-[11px] font-semibold text-amber-800 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={addRecPagado}
+                              onChange={e => { setAddRecPagado(e.target.checked); if (!e.target.checked) setAddRecComprobante(null) }}
+                              className="accent-[#D97706]"
+                            />
+                            El cliente ya pagó este adicional
+                          </label>
+                          {addRecPagado && (
+                            <div className="flex gap-2 items-center">
+                              <Select
+                                value={addRecMetodo}
+                                onChange={e => setAddRecMetodo(e.target.value)}
+                                className="text-[11px] w-36"
+                              >
+                                {['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO'].map(m => (
+                                  <option key={m} value={m}>{m}</option>
+                                ))}
+                              </Select>
+                              {addRecComprobante ? (
+                                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border bg-white min-w-0 flex-1" style={{ borderColor: '#FDE68A' }}>
+                                  <FileText size={12} className="text-amber-600 flex-shrink-0" />
+                                  <span className="text-[11px] text-gray-700 truncate flex-1">{addRecComprobante.name}</span>
+                                  <button type="button" onClick={() => setAddRecComprobante(null)} className="text-gray-400 hover:text-red-500 flex-shrink-0" title="Quitar">
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <label className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed cursor-pointer text-[11px] font-semibold text-amber-700 hover:bg-amber-50 transition-colors flex-1" style={{ borderColor: '#FBBF24' }}>
+                                  <Paperclip size={12} /> Comprobante
+                                  <input type="file" accept="image/*,application/pdf" className="hidden"
+                                    onChange={e => setAddRecComprobante(e.target.files?.[0] || null)} />
+                                </label>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] text-amber-700">
+                          {sub > 0
+                            ? `+${fmt(sub)} — ${addRecPagado ? `pagado (${addRecMetodo})` : 'pendiente de cobro en entrega'}`
+                            : 'Sin costo adicional'}
+                        </p>
+                        <button
+                          onClick={agregarAdicional}
+                          disabled={addingRec}
+                          className="px-3 py-1.5 rounded-lg text-[12px] font-bold flex items-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-50"
+                          style={{ background: '#D97706', color: '#fff' }}>
+                          <Package size={11} />
+                          {addingRec ? 'Agregando…' : 'Agregar'}
+                        </button>
+                      </div>
                     </div>
                   )
                 })()}
