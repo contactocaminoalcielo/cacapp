@@ -11,7 +11,7 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram, Youtube,
   Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
-  Eye, PawPrint,
+  Eye, PawPrint, Phone,
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
@@ -83,7 +83,14 @@ const piezasFaltantes = (s) => tiposDe(s).filter(t => {
 const matchTexto = (q, ...campos) => {
   const n = q.trim().toLowerCase()
   if (!n) return true
-  return campos.some(c => String(c || '').toLowerCase().includes(n))
+  // Si la búsqueda trae dígitos, comparar también solo-dígitos: así "3123456789"
+  // encuentra teléfonos guardados como "+57 312 345 6789" o "312-3456789".
+  const dq = n.replace(/\D/g, '')
+  return campos.some(c => {
+    const s = String(c || '').toLowerCase()
+    if (s.includes(n)) return true
+    return dq.length >= 3 && s.replace(/\D/g, '').includes(dq)
+  })
 }
 
 function buildMensaje(plantilla, s) {
@@ -263,9 +270,9 @@ export default function Digitales() {
 
   const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && !fueEnviado(s)), [buscados])
   const enviados = useMemo(() =>
-    buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario }))), [buscados])
+    buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario, telefono: e.telefono || s.telefono }))), [buscados])
   const candidatosFiltrados = useMemo(() =>
-    candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo)), [candidatos, q])
+    candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo, c.telefono)), [candidatos, q])
   const servicioDetalle = useMemo(() =>
     data.servicios.find(s => s.servicio_id === detalleId) || null, [data.servicios, detalleId])
 
@@ -498,6 +505,11 @@ function PipelineTable({ servicios, onOpen }) {
                       <div className="min-w-0">
                         <div className="font-semibold text-[#263218] truncate">{s.mascota || 'Sin nombre'}</div>
                         <div className="text-[12px] text-gray-400 truncate">{s.propietario || 'Sin propietario'}</div>
+                        {s.telefono && (
+                          <div className="text-[11px] text-gray-400 truncate flex items-center gap-1">
+                            <Phone size={10} className="shrink-0" /> {s.telefono}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </Td>
@@ -579,7 +591,7 @@ function ServicioCard({
             <div className="min-w-0">
               <div className="font-semibold text-[#263218] truncate">{s.mascota}</div>
               <div className="text-[12px] text-gray-400 truncate">
-                {s.propietario || 'Sin propietario'} · {s.plan_nombre || s.plan_codigo || 'Sin plan'} · imágenes {s.fecha_imagenes}
+                {s.propietario || 'Sin propietario'}{s.telefono ? ` · ${s.telefono}` : ''} · {s.plan_nombre || s.plan_codigo || 'Sin plan'} · imágenes {s.fecha_imagenes}
               </div>
             </div>
           </div>
@@ -829,6 +841,11 @@ function EnviadosList({ enviados, q }) {
           <CardContent className="py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="font-semibold text-[#263218] text-sm truncate flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {e.mascota} <span className="text-gray-400 font-normal">· {e.propietario || ''}</span></div>
+              {e.telefono && (
+                <div className="text-[11px] text-gray-400 flex items-center gap-1">
+                  <Phone size={10} className="shrink-0" /> {e.telefono}
+                </div>
+              )}
               <div className="text-[12px] text-gray-400 flex flex-wrap gap-x-2">
                 {(e.enlaces || []).map(l => (
                   <a key={l.tipo} href={l.url} target="_blank" rel="noreferrer" className="hover:underline text-gray-500">
@@ -947,6 +964,7 @@ function CandidatosList({ candidatos, busy, onGenerar, onEncuadrar }) {
               </div>
               <div className="text-[13px] text-gray-500 truncate">
                 {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}
+                {c.telefono ? ` · ${c.telefono}` : ''}
               </div>
             </div>
             <div className="flex gap-2 shrink-0">
