@@ -178,6 +178,25 @@ subida automática.
   Un envío automático exitoso por servicio (anti doble clic); los intentos con
   `estado='ERROR'` no marcan ENTREGADO y el servicio sigue en "Para enviar" con el
   error visible y opción de reintentar.
+
+  **Límite de Meta y verificación post-envío (fix 2026-07-14, commit 12090b3):**
+  Meta limita a **1024 caracteres** el texto de la plantilla + parámetros del
+  cuerpo. Las URLs de Instagram copiadas con "copiar enlace" traen
+  `?utm_source=...&igsh=...` (~50 chars extra) y con la plantilla `envio_digitales`
+  (cuerpo ~950 chars) desbordaban el límite → Meta rechazaba con `#132005` **de
+  forma asíncrona**: GHL responde 201 + `messageId` y el `status: failed` solo
+  aparece ~3 s después en `GET /conversations/messages/{id}`. 29 de 37 envíos
+  fallaron así en silencio (quedaban ENVIADO + ENTREGADO sin llegar al cliente).
+  Mitigación en `orbit-backend/src/digitales.js`:
+  - `limpiarUrlInstagram()` canoniza reel/p/tv a `https://www.instagram.com/reel/<id>/`
+    (~43 chars) al registrar el enlace (`publicarManual`) y al armar los
+    `bodyParams` (`enviarZolutium`).
+  - Tras el envío, el backend espera 5 s y consulta el estado real con
+    `consultarEstadoMensajeGHL()` (`whatsapp.js`); si Meta rechazó, el envío se
+    persiste como `ERROR` con el motivo y NO marca ENTREGADO.
+
+  ⚠️ La plantilla `envio_digitales` quedó con ~29 chars de margen: si se alarga
+  su texto en Meta, vuelve a desbordar. Validar longitud antes de editarla.
 - El envío manual wa.me sigue disponible como alternativa (y único camino en
   combinaciones mixtas). También se permite envío parcial manual y reenvío
   (queda otro registro en el historial).
