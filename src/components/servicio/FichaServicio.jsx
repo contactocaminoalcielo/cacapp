@@ -4,6 +4,7 @@ import { db } from '@/lib/supabase'
 import { fmt, parseDate, parsearErrorDB, petEmoji, fmtDateTime } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
+import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import {
   User, MapPin, CreditCard, Clock, Camera, Truck, Package, Snowflake, PawPrint,
 } from 'lucide-react'
@@ -23,19 +24,6 @@ const PAGO_STYLE = {
 
 const fmtD  = f => f ? parseDate(f)?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
 const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'
-
-// Tiempo que el técnico estuvo en el sitio: desde que confirmó su llegada hasta
-// que cerró la recogida. Solo se puede calcular con ambas marcas (las recogidas
-// anteriores al paso "Confirmar llegada" no tienen hora_llegada).
-function minutosEnSitio(rec) {
-  if (!rec?.fecha_llegada || !rec?.hora_llegada || !rec?.fecha_realizada || !rec?.hora_realizada) return null
-  const ini = new Date(`${rec.fecha_llegada}T${String(rec.hora_llegada).slice(0, 8)}`)
-  const fin = new Date(`${rec.fecha_realizada}T${String(rec.hora_realizada).slice(0, 8)}`)
-  if (isNaN(ini) || isNaN(fin)) return null
-  const mins = Math.round((fin - ini) / 60000)
-  if (mins < 0) return null
-  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`
-}
 
 function Dato({ label, children }) {
   if (children == null || children === '' || children === '—') return null
@@ -248,14 +236,14 @@ export default function FichaServicio({ servicioId, onClose }) {
               <Dato label="Contacto">{recogida?.contacto_nombre}</Dato>
               <Dato label="Tel. contacto">{recogida?.contacto_telefono}</Dato>
               <Dato label="Fecha programada">{recogida?.fecha_programada ? fmtD(recogida.fecha_programada) : null}</Dato>
-              <Dato label="Hora estimada (técnico)">{recogida?.hora_programada ? String(recogida.hora_programada).slice(0, 5) : null}</Dato>
-              <Dato label="Llegada real al sitio">{recogida?.hora_llegada ? `${String(recogida.hora_llegada).slice(0, 5)}${recogida.fecha_llegada ? ` · ${fmtD(recogida.fecha_llegada)}` : ''}` : null}</Dato>
-              <Dato label="Cierre de la recogida">{recogida?.hora_realizada ? String(recogida.hora_realizada).slice(0, 5) : null}</Dato>
-              <Dato label="Tiempo en sitio">{minutosEnSitio(recogida)}</Dato>
+              {/* Las horas viven en la Línea de tiempo (abajo), no repetidas aquí */}
               {(recogida?.notas || svc?.indicaciones_recogida) && (
                 <div className="text-[11px] text-gray-500 italic mt-1.5">"{recogida?.notas || svc.indicaciones_recogida}"</div>
               )}
             </Box>
+
+            {/* Todas las horas de la recogida, en orden */}
+            <LineaTiempoServicio servicioId={servicioId} />
 
             {/* Cuarto frío */}
             {cf && (

@@ -21,6 +21,7 @@ import {
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
+import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 
@@ -2605,6 +2606,11 @@ export default function Kanban() {
                 </div>
               )
             })()}
+
+            {/* ── Todas las horas de la recogida, en orden ── */}
+            <div className="rounded-xl border border-gray-100 bg-white px-4 py-3">
+              <LineaTiempoServicio servicioId={selected.servicio_id} />
+            </div>
 
             {/* ── Banner servicio cancelado: trazabilidad completa ── */}
             {selected.estado === 'CANCELADO' && (
