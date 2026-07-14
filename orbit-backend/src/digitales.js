@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { pool, log } from './db.js'
-import { enviarPlantillaGenerica } from './whatsapp.js'
+import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RENDER_ENTRY = path.join(__dirname, '..', 'memorial', 'render.mjs')
@@ -118,6 +118,17 @@ export function normalizarYoutube(url) {
   m = s.match(/youtube\.com\/(?:watch\?(?:[^#]*&)?v=|live\/|embed\/)([A-Za-z0-9_-]{6,20})/i)
   if (m) return `https://www.youtube.com/watch?v=${m[1]}`
   return null
+}
+
+// "Copiar enlace" de Instagram agrega ?utm_source=...&igsh=... (~50 chars) que
+// desbordan el límite de 1024 del cuerpo de la plantilla HSM de Meta (#132005:
+// texto de la plantilla + parámetros). Canonizar deja la URL en ~43 chars.
+export function limpiarUrlInstagram(url) {
+  const s = String(url || '').trim()
+  const m = s.match(/instagram\.com\/(reel|p|tv)\/([A-Za-z0-9_-]+)/i)
+  if (m) return `https://www.instagram.com/${m[1].toLowerCase()}/${m[2]}/`
+  if (/instagram\.com/i.test(s)) return s.split(/[?#]/)[0]
+  return s
 }
 
 // ── Candidatos a memorial: imagen lista, plan no excluido, sin memorial activo ──
@@ -396,6 +407,8 @@ export async function publicarManual({ id, personalId, url }) {
     if (!final) return { status: 422, body: { error: 'Pega un enlace de YouTube válido.' } }
   } else if (!/^https?:\/\//i.test(final)) {
     return { status: 422, body: { error: 'El enlace no es válido (https://…).' } }
+  } else {
+    final = limpiarUrlInstagram(final)
   }
 
   await pool.query(
@@ -549,7 +562,8 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   const tipos = TIPOS.filter(t =>
     esperadasRec.includes(String(mapa[t] || '')) || piezas.some(p => p.tipo === t))
   const urls = Object.fromEntries(
-    piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica).map(p => [p.tipo, p.url_publica]))
+    piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
+      .map(p => [p.tipo, limpiarUrlInstagram(p.url_publica)]))
 
   const faltantes = tipos.filter(t => !urls[t])
   if (!tipos.length) return { status: 422, body: { error: 'Este servicio no lleva piezas digitales.' } }
@@ -589,6 +603,24 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
     log('[digitales] enviarZolutium ERROR', servicioId, envioErr)
   }
 
+  // GHL acepta el mensaje (201 + messageId) aunque Meta lo rechace segundos
+  // después (p. ej. #132005 plantilla demasiado larga) — verificar el estado
+  // real antes de dar por ENVIADO y marcar los digitales como entregados.
+  if (envioOk) {
+    try {
+      await new Promise(r => setTimeout(r, 5000))
+      const est = await consultarEstadoMensajeGHL(envioOk.messageId)
+      if (est?.status === 'failed') {
+        envioErr = `Meta rechazó el envío: ${est.error || 'sin detalle'}`.slice(0, 900)
+        log('[digitales] enviarZolutium META RECHAZO', servicioId, envioErr)
+      }
+    } catch (e) {
+      // Si la verificación falla no bloquea: se conserva el envío como exitoso.
+      log('[digitales] verificación post-envío falló (se asume enviado)', e.message)
+    }
+  }
+  const exito = !!envioOk && !envioErr
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -598,12 +630,12 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
        VALUES ($1, 'ZOLUTIUM', $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, enviado_en, estado`,
       [servicioId, destino, JSON.stringify(enlaces), mensaje, actor,
-       envioOk ? 'ENVIADO' : 'ERROR', envioErr, plantilla.nombre,
+       exito ? 'ENVIADO' : 'ERROR', envioErr, plantilla.nombre,
        envioOk?.messageId || null, envioOk?.contactId || null]
     )
-    if (envioOk) await marcarDigitalesEntregados(client, servicioId, tipos)
+    if (exito) await marcarDigitalesEntregados(client, servicioId, tipos)
     await client.query('COMMIT')
-    if (!envioOk) return { status: 502, body: { error: `El envío falló: ${envioErr}` } }
+    if (!exito) return { status: 502, body: { error: `El envío falló: ${envioErr}` } }
     return { status: 200, body: { ok: true, envio: env[0], enlaces, plantilla: plantilla.nombre } }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

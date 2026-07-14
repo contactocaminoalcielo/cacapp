@@ -214,6 +214,23 @@ export async function enviarPlantillaGenerica({
   return { messageId: dataEnvio.messageId, contactId }
 }
 
+/**
+ * Consulta el estado real de un mensaje ya aceptado por GHL. La API responde
+ * 201 con messageId aunque Meta rechace la plantilla segundos después (p. ej.
+ * #132005 plantilla+parámetros > 1024 chars) — el rechazo solo se ve aquí.
+ * @returns {{ status, error }|null}  status: sent|delivered|read|failed
+ */
+export async function consultarEstadoMensajeGHL(messageId) {
+  const GHL_TOKEN = process.env.GHL_TOKEN
+  if (!GHL_TOKEN || !messageId) return null
+  const r = await fetch(`${GHL_BASE}/conversations/messages/${messageId}`, {
+    headers: { 'Authorization': `Bearer ${GHL_TOKEN}`, 'Version': '2021-07-28' },
+  })
+  const data = await r.json()
+  if (!r.ok) throw new Error(data.message || `Error consultando mensaje: ${r.status}`)
+  return { status: data.message?.status || null, error: data.message?.error || null }
+}
+
 // Payload EXACTO que usa el UI de Zolutium contra /conversations/messages
 // (capturado por DevTools): message + whatsapp.placeholders con valores resueltos
 // y el PDF en el header tipo document.
