@@ -718,7 +718,25 @@ function ContactoSheet({ modal, onClose }) {
 }
 
 // ─── CARD RECOGIDA ──────────────────────────────────────────────────────
-function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
+// Gate del paso "Confirmar llegada", leído de DB (nunca de useState): mientras
+// no haya hora_llegada, el técnico no ve la foto ni el botón de completar.
+// Un servicio sin fila en `recogidas` no puede sellar la hora, así que el paso
+// no aplica y el flujo sigue exactamente como antes (no se bloquea al técnico).
+function yaLlegoAlSitio(svc) {
+  const r = svc?.recogidas?.[0]
+  return !r?.id || !!r?.hora_llegada
+}
+
+// Minutos en sitio desde la llegada (solo informativo, para la card del técnico)
+function minutosEnSitio(recogida) {
+  if (!recogida?.fecha_llegada || !recogida?.hora_llegada) return null
+  const inicio = new Date(`${recogida.fecha_llegada}T${String(recogida.hora_llegada).slice(0, 8)}`)
+  if (isNaN(inicio)) return null
+  const mins = Math.floor((Date.now() - inicio.getTime()) / 60000)
+  return mins >= 0 ? mins : null
+}
+
+function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onConfirmarLlegada, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
   const [contactoModal, setContactoModal] = useState(null)
   const [sheetOpen, setSheetOpen]         = useState(false)
   const [declinarOpen, setDeclinarOpen]   = useState(false)
@@ -732,6 +750,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   const [checked, setChecked]         = useState([])
   const [valorCobrado, setValorCobrado] = useState('')
   const [completing, setCompleting]   = useState(false)
+  const [confirmandoLlegada, setConfirmandoLlegada] = useState(false)
   const [actErr, setActErr]           = useState('')
 
   const mascota  = svc.mascotas
@@ -742,8 +761,13 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   const cf       = svc.cuarto_frio_data || null
 
   const pendiente    = svc.estado === 'INGRESADO'
-  const enCamino     = svc.estado === 'EN_RECOGIDA'
+  const llego        = yaLlegoAlSitio(svc)
+  const enCamino     = svc.estado === 'EN_RECOGIDA' && !llego
+  const enSitio      = svc.estado === 'EN_RECOGIDA' &&  llego
   const enCuartoFrio = svc.estado === 'EN_CUARTO_FRIO' && !cf?.nevera_codigo
+
+  const horaLlegada = recogida?.hora_llegada ? String(recogida.hora_llegada).slice(0, 5) : null
+  const minsSitio   = minutosEnSitio(recogida)
 
   const itemsReq = ['id_ok']
   const checklistListo = checked.includes('id_ok') && !!fotoUrl
@@ -761,15 +785,24 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
     finally { setCompleting(false) }
   }
 
+  async function confirmarLlegada() {
+    setConfirmandoLlegada(true); setActErr('')
+    try { await onConfirmarLlegada(svc, recogida?.id) }
+    catch (e) { setActErr(e.message || 'Error al confirmar la llegada') }
+    finally { setConfirmandoLlegada(false) }
+  }
+
   const BADGE = {
     INGRESADO:    { bg: '#FEF3C7', color: '#92400E', label: 'Pendiente' },
     EN_RECOGIDA:  { bg: '#DBEAFE', color: '#1E40AF', label: 'En camino' },
     EN_CUARTO_FRIO:{ bg: '#EEF3FB', color: '#1D4ED8', label: 'En cuarto frío' },
   }
-  const badge = BADGE[svc.estado] || { bg: '#F3F4F6', color: '#374151', label: svc.estado }
+  const badge = enSitio
+    ? { bg: '#EDE9FE', color: '#5B21B6', label: 'En sitio' }
+    : (BADGE[svc.estado] || { bg: '#F3F4F6', color: '#374151', label: svc.estado })
 
-  const borderColor = enCamino ? '#93C5FD' : enCuartoFrio ? '#BFDBFE' : '#F0F0F0'
-  const borderWidth = (enCamino || enCuartoFrio) ? 2 : 1
+  const borderColor = enSitio ? '#C4B5FD' : enCamino ? '#93C5FD' : enCuartoFrio ? '#BFDBFE' : '#F0F0F0'
+  const borderWidth = (enCamino || enSitio || enCuartoFrio) ? 2 : 1
 
   return (
     <>
@@ -983,7 +1016,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
           </div>
         )}
 
-        {/* ── FASE 2: EN CAMINO ── */}
+        {/* ── FASE 2: EN CAMINO — solo se puede confirmar la llegada ── */}
         {enCamino && (
           <div className="mt-2">
             <div className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 mb-4"
@@ -992,6 +1025,51 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
               <button
                 onClick={() => setProblemaOpen(true)}
                 className="text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all active:scale-95"
+                style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>
+                ⚠️ Reportar problema
+              </button>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-4"
+              style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
+              <MapPin size={14} style={{ color: '#7C3AED', flexShrink: 0, marginTop: 1 }} />
+              <span className="text-[11px] font-medium" style={{ color: '#5B21B6' }}>
+                Apenas llegues al sitio, toca <strong>Confirmar llegada</strong>. Queda registrada la hora exacta —
+                luego tomas la foto y generas el recibo con calma.
+              </span>
+            </div>
+
+            {actErr && (
+              <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
+                style={{ background: '#FEE2E2', color: '#991B1B' }}>
+                <AlertCircle size={13} /> {actErr}
+              </div>
+            )}
+
+            <button onClick={confirmarLlegada} disabled={confirmandoLlegada}
+              className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-60"
+              style={{ background: '#7C3AED', color: '#fff' }}>
+              {confirmandoLlegada ? 'Registrando llegada…' : '📍 Confirmar llegada'}
+            </button>
+          </div>
+        )}
+
+        {/* ── FASE 3: EN SITIO — foto, checklist y cierre de la recogida ── */}
+        {enSitio && (
+          <div className="mt-2">
+            <div className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 mb-4"
+              style={{ background: '#EDE9FE' }}>
+              <span className="text-sm font-semibold" style={{ color: '#5B21B6' }}>
+                📍 En sitio{horaLlegada ? ` desde las ${horaLlegada}` : ''}
+                {minsSitio !== null && (
+                  <span className="block text-[11px] font-medium mt-0.5" style={{ color: '#7C3AED' }}>
+                    Llevas {minsSitio < 60 ? `${minsSitio} min` : `${Math.floor(minsSitio / 60)} h ${minsSitio % 60} min`} aquí
+                  </span>
+                )}
+              </span>
+              <button
+                onClick={() => setProblemaOpen(true)}
+                className="text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all active:scale-95 flex-shrink-0"
                 style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>
                 ⚠️ Reportar problema
               </button>
@@ -1533,7 +1611,7 @@ export default function TecnicoApp() {
             especies ( nombre ),
             clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono, telefono2 )
           ),
-          recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas, foto_recogida_url ),
+          recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, fecha_llegada, hora_llegada, notas, foto_recogida_url ),
           planes:plan_id ( nombre, codigo ),
           aliados:aliado_origen_id ( nombre, horario, telefono, whatsapp )
         `
@@ -1782,6 +1860,74 @@ export default function TecnicoApp() {
         wa_aliado:      tipoLugar === 'CLINICA_ALIADA'  ? (waTelContacto || waCliente) : null,
       },
     })))
+    await cargar()
+  }
+
+  // Sella la hora REAL de llegada al sitio. Entre llegar y completar la recogida
+  // (foto + recibo) pueden pasar 30 minutos, así que hora_realizada no sirve para
+  // medir cumplimiento de la cita ni tiempo en sitio.
+  async function confirmarLlegadaRecogida(svc, recogidaId) {
+    if (await estaCancelado(svc.id)) {
+      await cargar()
+      throw new Error('Este servicio fue cancelado por coordinación. No realices la recogida — comunícate con el coordinador.')
+    }
+    if (!recogidaId) throw new Error('Esta recogida no tiene registro asociado. Avisa al coordinador.')
+
+    // Idempotente: doble toque o reintento con señal mala NO debe pisar la hora
+    // original de llegada. Se verifica contra DB, no contra el estado en memoria.
+    const { data: rec } = await db.from('recogidas')
+      .select('hora_llegada').eq('id', recogidaId).maybeSingle()
+    if (rec?.hora_llegada) { await cargar(); return }
+
+    const now   = new Date()
+    const fecha = hoyLocalISO(now)
+    const hora  = now.toTimeString().slice(0, 5)
+
+    const { error } = await db.from('recogidas').update({
+      fecha_llegada:          fecha,
+      hora_llegada:           hora,
+      llegada_registrada_por: tecnico?.id || null,
+    }).eq('id', recogidaId)
+    if (error) throw new Error(error.message)
+
+    // La hora ya quedó sellada: si falla la bitácora o el aviso, no se bloquea
+    // al técnico ni se le pide repetir el paso.
+    try {
+      const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+      const recogida = svc.recogidas?.[0]
+      const lugar    = recogida?.contacto_nombre || svc.direccion_recogida || 'destino'
+      const estimada = recogida?.hora_programada ? String(recogida.hora_programada).slice(0, 5) : null
+
+      await db.from('novedades_servicio').insert({
+        servicio_id:    svc.id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `📍 ${tecnico?.nombre || 'El técnico'} confirmó llegada al sitio a las ${hora}.${estimada ? ` Hora estimada al iniciar ruta: ${estimada}.` : ''}`,
+        registrado_por: tecnico?.id || null,
+      })
+
+      const coords = await getCoordinadores()
+      await Promise.all(coords.map(c => crearNotificacion({
+        para_personal_id: c.id,
+        de_personal_id:   tecnico?.id,
+        tipo:             'TECNICO_LLEGADA',
+        titulo:           `${tecnico?.nombre} llegó al sitio`,
+        mensaje:          `Llegó a recoger a ${mascotaNombre} a las ${hora}. Lugar: ${lugar}`,
+        servicio_id:      svc.id,
+        datos: {
+          hora_llegada:   hora,
+          fecha_llegada:  fecha,
+          hora_estimada:  estimada,
+          mascota:        mascotaNombre,
+          lugar,
+          tecnico_nombre: `${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim(),
+        },
+      })))
+    } catch (e) {
+      console.error('[llegada] hora registrada, falló el aviso:', e?.message)
+    }
+
+    setNotif(`📍 Llegada registrada a las ${hora}.`)
+    setTimeout(() => setNotif(null), 5000)
     await cargar()
   }
 
@@ -2122,6 +2268,7 @@ export default function TecnicoApp() {
                 recogidas={recogidas} tecnico={tecnico}
                 neverasList={neverasActivas}
                 onIniciar={iniciarRecogida}
+                onConfirmarLlegada={confirmarLlegadaRecogida}
                 onCompletar={completarRecogida}
                 onCuartoFrio={confirmarCuartoFrio}
                 onDeclinar={declinarRecogida}
@@ -2263,7 +2410,7 @@ function SeccionHeader({ color, dot, emoji, titulo, count }) {
   )
 }
 
-function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
+function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, onConfirmarLlegada, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }) {
   const [busqueda,    setBusqueda]    = useState('')
   const [filtroFecha, setFiltroFecha] = useState('')
 
@@ -2280,10 +2427,11 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
   })
 
   const porRecoger = filtradas.filter(s => s.estado === 'INGRESADO')
-  const enCamino   = filtradas.filter(s => s.estado === 'EN_RECOGIDA')
+  const enCamino   = filtradas.filter(s => s.estado === 'EN_RECOGIDA' && !yaLlegoAlSitio(s))
+  const enSitio    = filtradas.filter(s => s.estado === 'EN_RECOGIDA' &&  yaLlegoAlSitio(s))
   const cuartoFrio = filtradas.filter(s => s.estado === 'EN_CUARTO_FRIO')
 
-  const cardProps = { tecnico, neverasList, onIniciar, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }
+  const cardProps = { tecnico, neverasList, onIniciar, onConfirmarLlegada, onCompletar, onCuartoFrio, onDeclinar, onReportarProblema }
 
   return (
     <div>
@@ -2323,6 +2471,12 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
         <div>
           <SeccionHeader color="#1E40AF" dot="#DBEAFE" emoji="🚐" titulo="En camino" count={enCamino.length} />
           {enCamino.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
+        </div>
+      )}
+      {enSitio.length > 0 && (
+        <div>
+          <SeccionHeader color="#7C3AED" dot="#EDE9FE" emoji="📍" titulo="En sitio" count={enSitio.length} />
+          {enSitio.map(r => <CardRecogida key={r.id} svc={r} {...cardProps} />)}
         </div>
       )}
       {cuartoFrio.length > 0 && (
@@ -3367,6 +3521,7 @@ function CardServicioRecibo({ item, onSeleccionar, disabled }) {
         {rec?.fecha_realizada && (
           <div className="text-[10px] text-gray-400 mt-0.5">
             🚐 Recogido: {rec.fecha_realizada}{rec.hora_realizada ? ` · ${rec.hora_realizada}` : ''}
+            {rec.hora_llegada ? ` · 📍 Llegada ${String(rec.hora_llegada).slice(0, 5)}` : ''}
           </div>
         )}
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -3454,7 +3609,7 @@ function ReciboTab({ tecnico }) {
           id, estado, estado_pago, valor_total, valor_pagado, fecha_ingreso,
           mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
           planes:plan_id ( nombre ),
-          recogidas ( fecha_realizada, hora_realizada )
+          recogidas ( fecha_realizada, hora_realizada, hora_llegada )
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ESTADOS_RECOGIDO)

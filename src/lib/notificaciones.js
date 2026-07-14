@@ -3,6 +3,7 @@ import { db } from '@/lib/supabase'
 
 export const TIPOS = {
   TECNICO_INICIO_RUTA:  'TECNICO_INICIO_RUTA',    // técnico → coordinador
+  TECNICO_LLEGADA:      'TECNICO_LLEGADA',          // técnico → coordinador (hora real de llegada al sitio)
   TECNICO_DECLINA:      'TECNICO_DECLINA',          // técnico → coordinador
   REASIGNACION_TECNICO: 'REASIGNACION_TECNICO',     // coordinador → técnico nuevo
   REASIGNACION_REMOVIDO:'REASIGNACION_REMOVIDO',    // coordinador → técnico anterior

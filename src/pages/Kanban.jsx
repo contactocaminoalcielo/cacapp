@@ -956,9 +956,10 @@ export default function Kanban() {
           Promise.all(lotes.map(l => db.from('cuarto_frio')
             .select('servicio_id, nevera_codigo')
             .is('fecha_salida', null).in('servicio_id', l))),
-          // Hora de llegada confirmada por el técnico al iniciar ruta
+          // hora_programada = llegada ESTIMADA al iniciar ruta;
+          // hora_llegada    = llegada REAL sellada por el técnico al llegar al sitio
           Promise.all(lotes.map(l => db.from('recogidas')
-            .select('servicio_id, hora_programada')
+            .select('servicio_id, hora_programada, hora_llegada')
             .in('servicio_id', l))),
           // Existe recibo generado (mismo criterio del gate de la app del técnico)
           Promise.all(lotes.map(l => db.from('recibos_tecnico')
@@ -985,7 +986,11 @@ export default function Kanban() {
         const neveraMap = {}
         cfParts.flatMap(r => r.data || []).forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
         const horaMap = {}
-        recogParts.flatMap(r => r.data || []).forEach(r => { if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada })
+        const llegadaMap = {}
+        recogParts.flatMap(r => r.data || []).forEach(r => {
+          if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada
+          if (r.hora_llegada)    llegadaMap[r.servicio_id] = r.hora_llegada
+        })
         // Si la consulta de recibos falló, tiene_recibo queda undefined para no
         // pintar todo el tablero en rojo por un error transitorio
         const recibosOk  = recibosParts.every(r => !r.error)
@@ -1022,6 +1027,7 @@ export default function Kanban() {
             items_rec:       itemsPorSvc[s.servicio_id] || [],
             nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
             hora_recogida:   horaMap[s.servicio_id] || null,
+            hora_llegada:    llegadaMap[s.servicio_id] || null,
             tiene_recibo:    recibosOk ? conRecibo.has(s.servicio_id) : undefined,
             metodos_pago:    mediosMap[s.servicio_id]
               || (metodoReg && metodoReg !== 'PENDIENTE' ? [metodoReg] : []),
@@ -2220,7 +2226,10 @@ export default function Kanban() {
                           // Pendientes de la etapa + alerta por hora de recogida confirmada
                           const pend   = pendientesDe(s)
                           const enRecogida = ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
-                          const minRec = enRecogida ? minutosParaHora(s.hora_recogida, ahoraTick) : null
+                          // La cuenta regresiva es contra la hora ESTIMADA: en cuanto el técnico
+                          // confirma su llegada real deja de correr (si no, la tarjeta se pinta
+                          // roja por "vencida" con el técnico ya en el sitio).
+                          const minRec = (enRecogida && !s.hora_llegada) ? minutosParaHora(s.hora_recogida, ahoraTick) : null
                           const tiempoAlert = minRec == null ? null : minRec < 0 ? 'vencida' : minRec <= 15 ? 'proxima' : null
                           // Prioridad visual: hora vencida (rojo) > pendientes (rojizo)
                           // > hora próxima (amarillo) > alerta SLA existente
@@ -2292,7 +2301,14 @@ export default function Kanban() {
                                   ))}
                                 </div>
                               )}
-                              {s.hora_recogida && (
+                              {s.hora_llegada ? (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1"
+                                  style={{ background: '#EDE9FE', color: '#5B21B6' }}
+                                  title="Hora real en que el técnico confirmó su llegada al sitio">
+                                  📍 Llegó {String(s.hora_llegada).slice(0, 5)}
+                                  {s.hora_recogida ? ` · citó ${String(s.hora_recogida).slice(0, 5)}` : ''}
+                                </div>
+                              ) : s.hora_recogida && (
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 ${
                                   tiempoAlert === 'vencida' ? 'bg-red-100 text-red-700'
                                   : tiempoAlert === 'proxima' ? 'bg-amber-100 text-amber-700'
@@ -2557,6 +2573,13 @@ export default function Kanban() {
                   {['INGRESADO', 'EN_RECOGIDA'].includes(selected.estado)
                     ? <>🕐 Técnico llega {String(selected.hora_recogida).slice(0, 5)}</>
                     : <>🕐 Recogida confirmada a las {String(selected.hora_recogida).slice(0, 5)}</>}
+                </span>
+              )}
+              {selected.hora_llegada && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ background: '#EDE9FE', color: '#5B21B6' }}
+                  title="Hora real en que el técnico confirmó su llegada al sitio">
+                  📍 Llegó a las {String(selected.hora_llegada).slice(0, 5)}
                 </span>
               )}
             </div>

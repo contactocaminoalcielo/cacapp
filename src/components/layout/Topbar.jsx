@@ -26,6 +26,7 @@ const PAGE_META = {
 
 const TIPO_ICON = {
   TECNICO_INICIO_RUTA:   '🚗',
+  TECNICO_LLEGADA:       '📍',
   TECNICO_DECLINA:       '❌',
   REASIGNACION_TECNICO:  '🔄',
   REASIGNACION_REMOVIDO: '📋',
