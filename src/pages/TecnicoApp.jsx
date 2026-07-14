@@ -14,6 +14,7 @@ import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
+import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 
 const POLL = 30_000
 
@@ -2058,14 +2059,29 @@ export default function TecnicoApp() {
       estado:          'REFRIGERADO',
       foto_pesaje_url: fotoUrl || null,
     }
+    let cuartoFrioId = cfId
     if (cfId) {
       const { error } = await db.from('cuarto_frio').update(datosCF).eq('id', cfId)
       if (error) throw new Error(error.message)
     } else {
       // El trigger de DB debió crear la fila al crear el servicio; si no existe
       // (servicio antiguo), crearla aquí — antes nevera/peso/foto se perdían en silencio
-      const { error } = await db.from('cuarto_frio').insert({ servicio_id: svc.id, ...datosCF })
+      const { data, error } = await db.from('cuarto_frio')
+        .insert({ servicio_id: svc.id, ...datosCF }).select('id').single()
       if (error) throw new Error(error.message)
+      cuartoFrioId = data?.id
+    }
+
+    // Hora REAL de ingreso a la nevera + bitácora. La nevera ya quedó guardada:
+    // si esto falla no se bloquea al técnico ni se le pide repetir el paso.
+    try {
+      await registrarIngresoCuartoFrio(cuartoFrioId, {
+        personalId:  tecnico?.id || null,
+        neveraNueva: nevera,
+        notas:       `Ingreso registrado por ${tecnico?.nombre || 'el técnico'}${pesoNum ? ` · ${pesoNum} kg` : ''}`,
+      })
+    } catch (e) {
+      console.error('[cuarto frío] nevera guardada, falló el sello de hora:', e?.message)
     }
     // El peso de báscula pasa a ser el oficial para la mascota
     if (pesoNum && svc.mascotas?.id_mascota) {

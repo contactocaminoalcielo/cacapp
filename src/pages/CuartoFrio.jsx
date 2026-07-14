@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
+import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import {
   Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package,
   History, ChevronDown, ChevronUp, Plus, Trash2, Thermometer,
@@ -150,7 +151,8 @@ function LogMovimientos({ movimientos }) {
             const quien = m.personal ? `${m.personal.nombre} ${m.personal.apellido}` : 'Sistema'
             const fecha = new Date(m.created_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) +
                           ' · ' + new Date(m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
-            const tipoLabel = m.tipo === 'CAMBIO_NEVERA' ? '❄️ Cambio de nevera'
+            const tipoLabel = m.tipo === 'INGRESO' ? '📥 Ingreso a la nevera'
+              : m.tipo === 'CAMBIO_NEVERA' ? '❄️ Cambio de nevera'
               : m.tipo === 'CAMBIO_ESTADO' ? '📋 Cambio de estado'
               : m.tipo === 'SALIDA_TENJO' ? '🚚 Salida a Tenjo'
               : m.tipo === 'SALIDA_LOTE_GRUPAL' ? '📦 Salida en lote grupal' : m.tipo
@@ -227,7 +229,13 @@ function DetalleModal({ registro: r, onClose, onEdit, movimientos }) {
             { label: 'Nevera',       value: r.nevera_codigo || 'Sin asignar',                           mono: true     },
             { label: 'Peso báscula', value: r.peso_kg ? `${r.peso_kg} kg ✓` : (m?.peso_kg ? `${m.peso_kg} kg ~` : 'No registrado') },
             { label: 'Técnico',      value: t ? `${t.nombre} ${t.apellido}` : '—'                      },
-            { label: 'Ingreso',      value: fmtFechaHora(r.fecha_ingreso)                              },
+            // fecha_ingreso = cuando se registró el servicio (la crea el trigger);
+            // fecha_ingreso_real = cuando la mascota entró de verdad a la nevera.
+            { label: 'Registro del servicio', value: fmtFechaHora(r.fecha_ingreso) },
+            { label: 'Ingreso a la nevera',
+              value: r.fecha_ingreso_real
+                ? `${fmtFechaHora(r.fecha_ingreso_real)}${r.registrador ? ` · ${r.registrador.nombre}` : ''}`
+                : '—' },
           ].map((item, idx) => (
             <div key={idx} className="bg-gray-50 rounded-xl p-2.5">
               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{item.label}</div>
@@ -491,7 +499,7 @@ export default function CuartoFrio() {
       setLoading(true)
       const [{ data, error: err }, { data: rep }] = await Promise.all([
         db.from('cuarto_frio')
-          .select(`*, servicios(
+          .select(`*, registrador:registrado_por(nombre,apellido), servicios(
             mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),
             planes(nombre,codigo,tipo_proceso),
             recogidas(foto_recogida_url),
@@ -542,7 +550,17 @@ export default function CuartoFrio() {
       if (form.nevera_codigo !== (selected.nevera_codigo || '')) cambios.push('nevera')
       if (canEdit && form.estado !== selected.estado) cambios.push('estado')
 
-      if (cambios.length > 0) {
+      // Ponerle nevera a una mascota que no tenía = INGRESO físico (aquí lo hace
+      // coordinación, no el técnico): sella la hora real y deja el movimiento.
+      // Cambiar de una nevera a otra sigue siendo CAMBIO_NEVERA.
+      const esIngreso = !selected.nevera_codigo && !!form.nevera_codigo
+      if (esIngreso) {
+        await registrarIngresoCuartoFrio(selected.id, {
+          personalId:  personalData?.id || null,
+          neveraNueva: form.nevera_codigo,
+          notas:       form.notas || 'Ingreso registrado desde Cuarto Frío',
+        })
+      } else if (cambios.length > 0) {
         await db.from('cuarto_frio_movimientos').insert({
           cuarto_frio_id:   selected.id,
           personal_id:      personalData?.id || null,
@@ -843,7 +861,7 @@ export default function CuartoFrio() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  {['Mascota', 'Cliente', 'Plan', 'Nevera', 'Peso', 'Técnico', 'Estado', 'Ingreso', ''].map(h => (
+                  {['Mascota', 'Cliente', 'Plan', 'Nevera', 'Peso', 'Técnico', 'Estado', 'Ingreso a nevera', ''].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -886,7 +904,14 @@ export default function CuartoFrio() {
                           {e.label || r.estado?.replace(/_/g,' ')}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-[11px] text-gray-400 whitespace-nowrap">{fmtFechaHora(r.fecha_ingreso)}</td>
+                      {/* Hora real de ingreso a la nevera. Las mascotas ingresadas antes de
+                          esta mejora no la tienen: se muestra "—" en vez de la fecha de
+                          registro del servicio, que no es una hora de ingreso. */}
+                      <td className="px-4 py-3 text-[11px] whitespace-nowrap">
+                        {r.fecha_ingreso_real
+                          ? <span className="text-gray-500 font-medium">{fmtFechaHora(r.fecha_ingreso_real)}</span>
+                          : <span className="text-gray-300" title="Ingresó antes de que se registrara la hora">—</span>}
+                      </td>
                       <td className="px-4 py-3">
                         <button
                           className="text-[11px] font-semibold px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"

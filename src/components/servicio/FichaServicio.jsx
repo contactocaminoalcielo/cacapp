@@ -89,7 +89,7 @@ export default function FichaServicio({ servicioId, onClose }) {
             .select('tipo_lugar, ciudad, direccion_recogida, barrio, contacto_nombre, contacto_telefono, estado, fecha_programada, hora_programada, fecha_llegada, hora_llegada, fecha_realizada, hora_realizada, notas, foto_recogida_url')
             .eq('servicio_id', servicioId),
           db.from('cuarto_frio')
-            .select('nevera_codigo, posicion, estado, peso_kg, foto_ingreso_url, foto_pesaje_url, fecha_salida, created_at')
+            .select('nevera_codigo, posicion, estado, peso_kg, foto_ingreso_url, foto_pesaje_url, fecha_salida, created_at, fecha_ingreso_real, registrador:registrado_por(nombre, apellido)')
             .eq('servicio_id', servicioId),
           db.from('entregas').select('*').eq('servicio_id', servicioId),
           db.from('servicio_recordatorios')
@@ -265,6 +265,7 @@ export default function FichaServicio({ servicioId, onClose }) {
                 <Dato label="Estado">{cf.estado ? cf.estado.replace(/_/g, ' ').toLowerCase() : null}</Dato>
                 <Dato label="Peso báscula">{cf.peso_kg ? `${cf.peso_kg} kg` : null}</Dato>
                 <Dato label="Registrado">{cf.created_at ? fmtTS(cf.created_at) : null}</Dato>
+                <Dato label="Ingreso a la nevera">{cf.fecha_ingreso_real ? `${fmtTS(cf.fecha_ingreso_real)}${cf.registrador ? ` · ${cf.registrador.nombre}` : ''}` : null}</Dato>
                 <Dato label="Salida">{cf.fecha_salida ? fmtD(cf.fecha_salida) : 'Aún en custodia'}</Dato>
               </Box>
             )}
