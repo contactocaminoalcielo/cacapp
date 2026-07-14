@@ -15,3 +15,10 @@
 # Solicitud de imagenes — prepara los contactos del dia (NO envia; una persona valida).
 # 10:00 Bogota = 15:00 UTC (todos los dias). Idempotente; recupera vencidos no procesados.
 0 15 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+
+# Seguimiento de imagenes — 2o contacto (+3 dias habiles) y 3er contacto (+15) desde
+# el envio del 1o; cierra SIN_RESPUESTA + alerta tras el 3o. SOLO dias habiles (L-V):
+# el cron no conoce los festivos de Colombia, pero el job SI (fn_sumar_dias_habiles);
+# en festivo simplemente no habra nada vencido. 10:30 Bogota = 15:30 UTC.
+# Idempotente: el indice unico (solicitud_id, numero) impide duplicar un contacto.
+30 15 * * 1-5 root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/seguimiento-imagenes >> /var/log/orbit-backend-cron.log 2>&1

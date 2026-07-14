@@ -23,6 +23,74 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   plantilla_nombre:  'solicitud_imagenes_cliente',
   plantilla_idioma:  'es_MX',
   plantilla_categoria: 'UTILITY',   // debe coincidir con la categoría aprobada en Meta (UTILITY o MARKETING)
+
+  // ─── Seguimiento automático: 2º y 3er contacto (migración 044) ────────────
+  // Ancla ÚNICA = fecha de envío del contacto 1 (no encadenado): recalcular la
+  // fecha de cualquier contacto siempre da el mismo resultado.
+  seguimiento_activo:     true,
+  dias_contacto_2:        3,     // días hábiles desde el contacto 1
+  dias_contacto_3:        15,    // días hábiles desde el contacto 1 (NO desde el 2º)
+  dias_cierre:            3,     // días hábiles tras el 3º sin respuesta → SIN_RESPUESTA
+  arranque_desde:         null,  // no perseguir contactos 1 anteriores a esta fecha (anti-blast del backlog)
+  max_envios_por_corrida: 40,
+  // Plantillas aprobadas en Zolutium. null → el job NO envía (deja el contacto
+  // programado y lo reporta). Sembrarlas es el acto que arma la automatización.
+  // Forma: { nombre, idioma, categoria, vars:[tokens] } — ver TOKENS_PLANTILLA.
+  plantilla_contacto_2:   null,
+  plantilla_contacto_3:   null,
+}
+
+/** Tokens permitidos en `vars` de las plantillas de seguimiento. */
+export const TOKENS_PLANTILLA = ['nombre', 'propietario', 'mascota', 'enlace', 'codigo']
+
+// Meta rechaza el mensaje si plantilla + parámetros superan 1024 caracteres
+// (error #132005). GHL responde 201 igual y el rechazo solo se ve al consultar
+// el estado del mensaje. Ver el fix del módulo Digitales (2026-07-14).
+export const LIMITE_META_CHARS = 1024
+
+/**
+ * Normaliza la config de plantilla de un contacto (2 ó 3). Devuelve null si no
+ * está sembrada o le falta el nombre → quien llama NO debe enviar.
+ */
+export function plantillaContacto(config, numero) {
+  const raw = config[`plantilla_contacto_${numero}`]
+  const p = typeof raw === 'string' ? safeJson(raw) : raw
+  if (!p || !p.nombre) return null
+  const vars = Array.isArray(p.vars) ? p.vars.filter(v => TOKENS_PLANTILLA.includes(v)) : ['mascota', 'enlace']
+  return {
+    nombre:    p.nombre,
+    idioma:    p.idioma    || config.plantilla_idioma    || 'es_MX',
+    categoria: p.categoria || config.plantilla_categoria || 'UTILITY',
+    vars,
+  }
+}
+
+function safeJson(s) { try { return JSON.parse(s) } catch { return null } }
+
+/**
+ * Resuelve los parámetros posicionales del cuerpo según el orden declarado en
+ * `vars`. Un token desconocido nunca llega aquí (plantillaContacto lo filtra),
+ * pero un valor vacío se manda como '' — Meta rechaza el parámetro ausente.
+ */
+export function resolverBodyParams(vars, datos) {
+  const dic = {
+    nombre:      (datos.cliente_nombre || datos.propietario || '').split(' ')[0] || '',
+    propietario: datos.propietario || datos.cliente_nombre || '',
+    mascota:     datos.mascota || 'tu mascota',
+    enlace:      datos.enlace || '',
+    codigo:      datos.codigo || '',
+  }
+  return vars.map(v => String(dic[v] ?? ''))
+}
+
+/** Texto del recordatorio (lo que queda registrado como "lo que vio el cliente"). */
+export function mensajeRecordatorio({ nombre, mascota, enlace, numero }) {
+  const n = (nombre || '').split(' ')[0] || nombre || ''
+  const cortesia = numero === 3
+    ? 'Queremos asegurarnos de no continuar sin tus fotografías'
+    : 'Aún no hemos recibido las fotografías'
+  return `Hola, ${n}. ${cortesia} para los recordatorios de ${mascota || 'tu mascota'}. ` +
+    `Puedes adjuntarlas aquí: ${enlace}. Si necesitas ayuda, respóndenos por este medio. — Camino al Cielo`
 }
 
 export async function cargarConfigImagenes(client) {

@@ -14,7 +14,7 @@ import { pool, log } from './db.js'
 import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
 } from './reglas-imagenes.js'
-import { enviarPlantillaGenerica } from './whatsapp.js'
+import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
@@ -120,7 +120,25 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       })
     } catch (e) { envioErr = e.message }
 
+    // GHL acepta el mensaje (201 + messageId) aunque Meta lo rechace segundos
+    // después (#132005). Verificarlo importa doble aquí: este envío es el ANCLA
+    // de la cadencia (2º y 3er contacto se calculan desde su fecha) — darlo por
+    // bueno sin confirmar sería perseguir al cliente desde una fecha fantasma.
+    let estadoMeta = null
     if (envioOk) {
+      try {
+        await new Promise(r => setTimeout(r, 5000))
+        const est = await consultarEstadoMensajeGHL(envioOk.messageId)
+        estadoMeta = est?.status || null
+        if (est?.status === 'failed') {
+          envioErr = `Meta rechazó el envío: ${est.error || 'sin detalle'}`.slice(0, 900)
+        }
+      } catch (e) {
+        log('[imagenes/enviar] verificación post-envío falló (se asume enviado)', e.message)
+      }
+    }
+
+    if (envioOk && !envioErr) {
       await client.query(
         `UPDATE public.solicitudes_imagenes
          SET estado = 'ENVIADO', codigo = $2, enlace = $3, whatsapp_destino = $4, linea_wa = $5,
@@ -129,6 +147,13 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
          WHERE id = $1`,
         [solicitudId, codigo, enlace, sol.whatsapp, linea, envioOk.messageId, envioOk.contactId, actorId]
       )
+      // Contacto 1 en la bitácora: es el ancla de los contactos 2 y 3 (migr. 044).
+      await registrarContacto1(client, {
+        solicitudId, servicioId: sol.servicio_id, plantilla: config.plantilla_nombre,
+        idioma: config.plantilla_idioma || 'es_MX', destino: sol.whatsapp, mensaje,
+        messageId: envioOk.messageId, contactId: envioOk.contactId, estadoMeta,
+        error: null, actorId,
+      })
       await client.query('COMMIT')
       log('[imagenes/enviar]', solicitudId, 'ENVIADO', envioOk.messageId)
       return { status: 200, body: { ok: true, estado: 'ENVIADO', message_id: envioOk.messageId } }
@@ -140,6 +165,12 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
          WHERE id = $1`,
         [solicitudId, codigo, enlace, sol.whatsapp, linea, envioErr, actorId]
       )
+      await registrarContacto1(client, {
+        solicitudId, servicioId: sol.servicio_id, plantilla: config.plantilla_nombre,
+        idioma: config.plantilla_idioma || 'es_MX', destino: sol.whatsapp, mensaje,
+        messageId: envioOk?.messageId || null, contactId: envioOk?.contactId || null,
+        estadoMeta, error: envioErr, actorId,
+      })
       await client.query('COMMIT')
       log('[imagenes/enviar]', solicitudId, 'ERROR', envioErr)
       return { status: 200, body: { ok: false, estado: 'ERROR', error: envioErr } }
@@ -148,6 +179,35 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
+}
+
+// Deja constancia del contacto 1 (el que autoriza una persona) en la bitácora de
+// contactos. Su `enviado_en` es el ANCLA desde la que se calculan el 2º (+3 días
+// hábiles) y el 3er contacto (+15). Si el envío falló, queda ERROR y sin ancla:
+// la cadencia no arranca sobre un mensaje que nunca salió. Un reintento exitoso
+// pisa la fila y fija el ancla real. Migración 044.
+async function registrarContacto1(client, {
+  solicitudId, servicioId, plantilla, idioma, destino, mensaje,
+  messageId, contactId, estadoMeta, error, actorId,
+}) {
+  const ok = !error
+  await client.query(
+    `INSERT INTO public.solicitud_imagenes_contactos
+       (solicitud_id, servicio_id, numero, estado, automatico, plantilla, idioma,
+        whatsapp_destino, mensaje, message_id, contact_id, estado_meta, ultimo_error,
+        programado_para, enviado_en, autorizado_por)
+     VALUES ($1, $2, 1, $3, false, $4, $5, $6, $7, $8, $9, $10, $11,
+             public.fn_hoy_bogota(), CASE WHEN $3 = 'ENVIADO' THEN now() END, $12)
+     ON CONFLICT (solicitud_id, numero) DO UPDATE
+       SET estado = EXCLUDED.estado, plantilla = EXCLUDED.plantilla, idioma = EXCLUDED.idioma,
+           whatsapp_destino = EXCLUDED.whatsapp_destino, mensaje = EXCLUDED.mensaje,
+           message_id = EXCLUDED.message_id, contact_id = EXCLUDED.contact_id,
+           estado_meta = EXCLUDED.estado_meta, ultimo_error = EXCLUDED.ultimo_error,
+           enviado_en = COALESCE(EXCLUDED.enviado_en, solicitud_imagenes_contactos.enviado_en),
+           autorizado_por = COALESCE(EXCLUDED.autorizado_por, solicitud_imagenes_contactos.autorizado_por)`,
+    [solicitudId, servicioId, ok ? 'ENVIADO' : 'ERROR', plantilla, idioma, destino,
+     mensaje, messageId, contactId, estadoMeta, error, actorId]
+  )
 }
 
 // ─── Cancelar una solicitud ─────────────────────────────────────────────────
@@ -210,7 +270,7 @@ export async function datosPortal({ codigo }) {
     // solo_adicional según la solicitud activa (Ángel/Desamparado con adicional)
     const { rows: solRows } = await client.query(
       `SELECT solo_adicional FROM public.solicitudes_imagenes
-       WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR')
+       WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR','SIN_RESPUESTA')
        ORDER BY created_at DESC NULLS LAST LIMIT 1`,
       [s.id]
     )
@@ -273,7 +333,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     if (s.fecha_imagenes_recibidas) {
       await client.query(
         `UPDATE public.solicitudes_imagenes SET estado = 'RECIBIDO', fecha_recepcion = COALESCE(fecha_recepcion, CURRENT_DATE)
-         WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR')`,
+         WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR','SIN_RESPUESTA')`,
         [s.id]
       )
       await client.query('COMMIT')
@@ -289,7 +349,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
 
     const { rows: solRows } = await client.query(
       `SELECT id, solo_adicional FROM public.solicitudes_imagenes
-       WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR')
+       WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR','SIN_RESPUESTA')
        ORDER BY created_at DESC NULLS LAST LIMIT 1`,
       [s.id]
     )

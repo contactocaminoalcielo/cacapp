@@ -6,11 +6,14 @@ import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 
 export const ESTADO_SOLICITUD = {
-  POR_VALIDAR: { label: 'Por validar', color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
-  ENVIADO:     { label: 'Enviado',     color: '#3B6FBF', bg: '#EEF3FB', border: '#C5D8F5' },
-  RECIBIDO:    { label: 'Recibido',    color: '#1D8A55', bg: '#E8F3EB', border: '#A0D4B0' },
-  ERROR:       { label: 'Error',       color: '#C03030', bg: '#FEE8E8', border: '#FCA5A5' },
-  CANCELADO:   { label: 'Cancelado',   color: '#6B7280', bg: '#F3F4F6', border: '#D1D5DB' },
+  POR_VALIDAR:   { label: 'Por validar',   color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
+  ENVIADO:       { label: 'Enviado',       color: '#3B6FBF', bg: '#EEF3FB', border: '#C5D8F5' },
+  RECIBIDO:      { label: 'Recibido',      color: '#1D8A55', bg: '#E8F3EB', border: '#A0D4B0' },
+  ERROR:         { label: 'Error',         color: '#C03030', bg: '#FEE8E8', border: '#FCA5A5' },
+  CANCELADO:     { label: 'Cancelado',     color: '#6B7280', bg: '#F3F4F6', border: '#D1D5DB' },
+  // Agotados los 3 contactos sin que el cliente cargue → requiere llamada humana.
+  // El enlace del portal sigue vivo: si carga tarde, la solicitud pasa a RECIBIDO.
+  SIN_RESPUESTA: { label: 'Sin respuesta', color: '#B45309', bg: '#FEF3C7', border: '#FCD34D' },
 }
 
 // ¿El recordatorio requiere imagen? (mismo gate que el backend)
@@ -26,6 +29,7 @@ export async function obtenerSolicitudes() {
       id, estado, codigo, enlace, whatsapp_destino, linea_wa, solo_adicional,
       fecha_solicitud, fecha_programada, fecha_envio, fecha_recepcion,
       message_id, contact_id, intentos, ultimo_error,
+      seguimiento_pausado, motivo_cierre, fecha_cierre,
       servicios (
         id, fecha_ingreso, codigo_fotos,
         mascotas ( nombre, especies ( nombre ), clientes ( nombre, apellido, whatsapp ) ),
@@ -65,6 +69,24 @@ export function reintentarSolicitud(solicitudId) {
 
 export function cancelarSolicitud(solicitudId) {
   return orbitApi('/imagenes/cancelar', { method: 'POST', body: { solicitud_id: solicitudId } })
+}
+
+// ─── Seguimiento automático: 2º y 3er contacto (migración 044) ───────────────
+// Las fechas de los contactos son días HÁBILES (con festivos): las calcula la DB.
+// El navegador nunca las recalcula — solo pinta lo que el backend le da.
+export async function obtenerSeguimiento() {
+  const r = await orbitApi('/imagenes/seguimiento')
+  return r?.seguimiento || {}
+}
+
+/** Adelanta el 2º/3er contacto sin esperar al cron (lo decide una persona). */
+export function forzarContacto(solicitudId, numero) {
+  return orbitApi('/imagenes/forzar-contacto', { method: 'POST', body: { solicitud_id: solicitudId, numero } })
+}
+
+/** Saca (o devuelve) un caso de la cadencia automática. */
+export function pausarSeguimiento(solicitudId, pausado) {
+  return orbitApi('/imagenes/pausar-seguimiento', { method: 'POST', body: { solicitud_id: solicitudId, pausado } })
 }
 
 // ─── Portal público (sin JWT; el código de acceso es el secreto) ─────────────

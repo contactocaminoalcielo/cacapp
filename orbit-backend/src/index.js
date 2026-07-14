@@ -11,6 +11,8 @@ import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServ
 import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupales-ia.js'
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
+import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
+import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
@@ -81,6 +83,17 @@ app.post('/jobs/contactos-imagenes', requireJob, async (_req, res) => {
   }
 })
 
+// ── Job: cadencia automática del 2º y 3er contacto (migración 044) ──
+// ?dry=1 → simula (no envía, no cierra): sirve para ver a quién le tocaría hoy.
+app.post('/jobs/seguimiento-imagenes', requireJob, async (req, res) => {
+  try {
+    res.json(await jobSeguimientoImagenes({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[seguimiento-imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── API Solicitud de imágenes — el coordinador valida y autoriza el envío ──
 app.post('/imagenes/preparar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
@@ -116,6 +129,40 @@ app.post('/imagenes/cancelar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), 
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[imagenes/cancelar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Bitácora de contactos + fecha del próximo (días hábiles calculados en la DB).
+app.get('/imagenes/seguimiento', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json({ ok: true, seguimiento: await resumenSeguimiento() })
+  } catch (e) {
+    log('[imagenes/seguimiento] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Adelantar el 2º/3er contacto sin esperar al cron (lo decide una persona).
+app.post('/imagenes/forzar-contacto', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await forzarContacto({
+      solicitudId: req.body.solicitud_id, numero: req.body.numero, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[imagenes/forzar-contacto] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Sacar un caso de la cadencia automática (cliente sensible, ya se habló por teléfono).
+app.post('/imagenes/pausar-seguimiento', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await pausarSeguimiento({ solicitudId: req.body.solicitud_id, pausado: req.body.pausado })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[imagenes/pausar-seguimiento] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

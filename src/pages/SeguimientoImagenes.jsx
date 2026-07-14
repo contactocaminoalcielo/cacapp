@@ -8,18 +8,20 @@ import { petEmoji, parseDate } from '@/lib/utils'
 import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import {
   ESTADO_SOLICITUD, obtenerSolicitudes, enviarSolicitud, reintentarSolicitud,
-  cancelarSolicitud, prepararContactos,
+  cancelarSolicitud, prepararContactos, obtenerSeguimiento, forzarContacto, pausarSeguimiento,
 } from '@/lib/imagenes'
 import {
   MessageCircle, RefreshCw, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
+  Pause, Play, PhoneCall, Clock,
 } from 'lucide-react'
 
 const FILTROS = [
-  { key: 'todos',       label: 'Todos' },
-  { key: 'POR_VALIDAR', label: 'Por validar' },
-  { key: 'ENVIADO',     label: 'Enviados' },
-  { key: 'RECIBIDO',    label: 'Recibidos' },
-  { key: 'ERROR',       label: 'Error' },
+  { key: 'todos',         label: 'Todos' },
+  { key: 'POR_VALIDAR',   label: 'Por validar' },
+  { key: 'ENVIADO',       label: 'Enviados' },
+  { key: 'RECIBIDO',      label: 'Recibidos' },
+  { key: 'SIN_RESPUESTA', label: 'Sin respuesta' },
+  { key: 'ERROR',         label: 'Error' },
 ]
 
 const ENVIABLE = new Set(['POR_VALIDAR', 'ERROR'])
@@ -31,9 +33,29 @@ function fechaCorta(v) {
   return d ? d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '-'
 }
 
+// Un punto por contacto (1 manual · 2 y 3 automáticos). El color dice qué pasó:
+// verde = salió y Meta lo aceptó · rojo = falló · azul = en curso · gris = aún no.
+const PUNTO = {
+  ENVIADO:  { bg: '#E8F3EB', color: '#1D8A55', border: '#A0D4B0' },
+  ERROR:    { bg: '#FEE8E8', color: '#C03030', border: '#FCA5A5' },
+  ENVIANDO: { bg: '#EEF3FB', color: '#3B6FBF', border: '#C5D8F5' },
+  PENDIENTE:{ bg: '#F3F4F6', color: '#9CA3AF', border: '#E5E7EB' },
+}
+
+function tituloContacto(c, numero) {
+  if (!c) return `Contacto ${numero}: aún no enviado`
+  const cuando = c.enviado_en ? new Date(c.enviado_en).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'
+  const como   = c.automatico ? 'automático' : 'manual'
+  if (c.estado === 'ERROR') return `Contacto ${numero} (${como}): ERROR — ${c.ultimo_error || 'sin detalle'}`
+  if (c.estado === 'ENVIANDO') return `Contacto ${numero}: envío en curso`
+  const meta = c.estado_meta ? ` · Meta: ${c.estado_meta}` : ''
+  return `Contacto ${numero} (${como}): enviado ${cuando}${meta}`
+}
+
 export default function SeguimientoImagenes() {
   const { confirm, alert: showAlert } = useConfirm()
   const [solicitudes, setSolicitudes] = useState([])
+  const [seguimiento, setSeguimiento] = useState({})   // { solicitud_id: { contactos[], proximo } }
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [filtro,   setFiltro]   = useState('POR_VALIDAR')
@@ -47,14 +69,21 @@ export default function SeguimientoImagenes() {
   async function cargar() {
     try {
       setLoading(true)
-      setSolicitudes(await obtenerSolicitudes())
+      const [sols, seg] = await Promise.all([
+        obtenerSolicitudes(),
+        // El seguimiento es accesorio: si el backend no responde, la bandeja
+        // sigue funcionando (solo se queda sin la columna de contactos).
+        obtenerSeguimiento().catch(() => ({})),
+      ])
+      setSolicitudes(sols)
+      setSeguimiento(seg)
       setError(null)
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
 
   const conteo = useMemo(() => {
-    const c = { POR_VALIDAR: 0, ENVIADO: 0, RECIBIDO: 0, ERROR: 0 }
+    const c = { POR_VALIDAR: 0, ENVIADO: 0, RECIBIDO: 0, ERROR: 0, SIN_RESPUESTA: 0 }
     solicitudes.forEach(s => { if (c[s.estado] !== undefined) c[s.estado]++ })
     return c
   }, [solicitudes])
@@ -144,6 +173,33 @@ export default function SeguimientoImagenes() {
     finally { setBusy(null); await cargar() }
   }
 
+  // Adelantar el 2º/3er contacto sin esperar al cron (el cron lo haría solo).
+  async function adelantar(s, numero) {
+    if (busy) return
+    const m = s.servicios?.mascotas
+    const okc = await confirm(
+      `¿Enviar ahora el contacto ${numero} a ${m?.clientes?.nombre || 'el cliente'} por el recordatorio de imágenes de ${m?.nombre || 'su mascota'}?`,
+      { title: `Adelantar contacto ${numero}`, confirmLabel: 'Sí, enviar ahora' }
+    )
+    if (!okc) return
+    setBusy(s.id); setInfo(null)
+    try {
+      const r = await forzarContacto(s.id, numero)
+      if (!r?.ok) await showAlert(r?.error || 'No se pudo enviar', { title: 'Contacto no enviado' })
+    } catch (e) {
+      await showAlert(e.message, { title: 'Contacto no enviado' })
+    } finally { setBusy(null); await cargar() }
+  }
+
+  // Sacar el caso de la cadencia (p.ej. ya se habló por teléfono con el cliente).
+  async function togglePausa(s) {
+    if (busy) return
+    setBusy(s.id)
+    try { await pausarSeguimiento(s.id, !s.seguimiento_pausado) }
+    catch (e) { await showAlert(e.message, { title: 'No se pudo cambiar el seguimiento' }) }
+    finally { setBusy(null); await cargar() }
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center h-64 gap-3">
       <div className="spinner" /><span className="text-sm text-ink3">Cargando...</span>
@@ -204,12 +260,24 @@ export default function SeguimientoImagenes() {
           <span className="text-[11px] text-green-700">— configurada como línea por defecto en Zolutium</span>
         </div>
 
+        {/* Sin respuesta tras los 3 contactos → requiere llamada humana */}
+        {conteo.SIN_RESPUESTA > 0 && (
+          <div className="rounded-xl p-3.5 border flex items-center gap-3"
+            style={{ background: '#FEF3C7', borderColor: '#FCD34D' }}>
+            <PhoneCall size={16} style={{ color: '#B45309' }} />
+            <span className="text-[13px] font-semibold" style={{ color: '#B45309' }}>
+              {conteo.SIN_RESPUESTA} cliente{conteo.SIN_RESPUESTA > 1 ? 's' : ''} no respondió a los 3 contactos por WhatsApp — requiere{conteo.SIN_RESPUESTA > 1 ? 'n' : ''} llamada. El enlace sigue activo: si cargan, se cierra solo.
+            </span>
+          </div>
+        )}
+
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Por validar" value={conteo.POR_VALIDAR} valueColor="#9A5500" />
-          <StatCard label="Enviados"    value={conteo.ENVIADO}     valueColor="#3B6FBF" />
-          <StatCard label="Recibidos"   value={conteo.RECIBIDO}    valueColor="#1D8A55" />
-          <StatCard label="Con error"   value={conteo.ERROR}       valueColor="#C03030" />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard label="Por validar"   value={conteo.POR_VALIDAR}   valueColor="#9A5500" />
+          <StatCard label="Enviados"      value={conteo.ENVIADO}       valueColor="#3B6FBF" />
+          <StatCard label="Recibidos"     value={conteo.RECIBIDO}      valueColor="#1D8A55" />
+          <StatCard label="Sin respuesta" value={conteo.SIN_RESPUESTA} valueColor="#B45309" />
+          <StatCard label="Con error"     value={conteo.ERROR}         valueColor="#C03030" />
         </div>
 
         {/* Filtros + acción masiva */}
@@ -252,6 +320,7 @@ export default function SeguimientoImagenes() {
                 <Th>Recordatorios con imagen</Th>
                 <Th>Código / Enlace</Th>
                 <Th>Estado</Th>
+                <Th>Contactos</Th>
                 <Th>Acciones</Th>
               </tr>
             </thead>
@@ -264,6 +333,10 @@ export default function SeguimientoImagenes() {
                 const est = ESTADO_SOLICITUD[s.estado] || {}
                 const enviable = ENVIABLE.has(s.estado)
                 const trabajando = busy === s.id
+                const seg = seguimiento[s.id] || {}
+                // Se puede adelantar el siguiente contacto mientras la solicitud siga
+                // viva (enviada, sin carga del cliente) y no esté pausada.
+                const puedeAdelantar = s.estado === 'ENVIADO' && !s.seguimiento_pausado && seg.proximo && wa
                 return (
                   <Tr key={s.id}>
                     <Td>
@@ -328,7 +401,48 @@ export default function SeguimientoImagenes() {
                       {s.estado === 'ENVIADO' && s.intentos > 0 && (
                         <div className="text-[9px] text-ink3 mt-1">intento{s.intentos > 1 ? `s ×${s.intentos}` : ''}</div>
                       )}
+                      {s.estado === 'SIN_RESPUESTA' && s.motivo_cierre === 'FUERA_DE_VENTANA' && (
+                        <div className="text-[9px] text-ink3 mt-1">el servicio ya no admite carga</div>
+                      )}
                     </Td>
+
+                    {/* Seguimiento: 1 (manual) · 2 (+3 hábiles) · 3 (+15 hábiles) */}
+                    <Td>
+                      {s.estado === 'POR_VALIDAR' ? (
+                        <span className="text-ink3 text-[11px]">—</span>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1">
+                            {[1, 2, 3].map(n => {
+                              const c  = (seg.contactos || []).find(x => x.numero === n)
+                              const st = PUNTO[c?.estado || 'PENDIENTE'] || PUNTO.PENDIENTE
+                              return (
+                                <span key={n} title={tituloContacto(c, n)}
+                                  className="inline-flex items-center justify-center w-5 h-5 rounded-full border text-[9px] font-bold cursor-default"
+                                  style={{ background: st.bg, color: st.color, borderColor: st.border }}>
+                                  {n}
+                                </span>
+                              )
+                            })}
+                          </div>
+                          {s.seguimiento_pausado ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-ink3">
+                              <Pause size={9} /> pausado
+                            </span>
+                          ) : s.estado === 'SIN_RESPUESTA' ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-semibold" style={{ color: '#B45309' }}>
+                              <PhoneCall size={9} /> llamar
+                            </span>
+                          ) : seg.proximo ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] text-ink3"
+                              title={`El contacto ${seg.proximo.numero} sale solo ese día (día hábil)`}>
+                              <Clock size={9} /> {seg.proximo.numero}º: {fechaCorta(seg.proximo.fecha)}
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
+                    </Td>
+
                     <Td>
                       <div className="flex gap-1.5 flex-wrap">
                         {s.estado === 'POR_VALIDAR' && wa && (
@@ -347,6 +461,25 @@ export default function SeguimientoImagenes() {
                             Reintentar
                           </button>
                         )}
+                        {puedeAdelantar && (
+                          <button onClick={() => adelantar(s, seg.proximo.numero)} disabled={trabajando}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-opacity disabled:opacity-50"
+                            style={{ background: '#F5F0E6', color: '#8A6D2F', border: '1px solid #E3D5B8' }}
+                            title={`El contacto ${seg.proximo.numero} saldría solo el ${fechaCorta(seg.proximo.fecha)}. Enviarlo ahora.`}>
+                            {trabajando ? <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" /> : <Send size={11} />}
+                            Adelantar {seg.proximo.numero}º
+                          </button>
+                        )}
+                        {['ENVIADO', 'SIN_RESPUESTA'].includes(s.estado) && (
+                          <button onClick={() => togglePausa(s)} disabled={trabajando}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors hover:bg-surface2 disabled:opacity-50"
+                            style={{ color: '#6B7280' }}
+                            title={s.seguimiento_pausado
+                              ? 'Reanudar los recordatorios automáticos'
+                              : 'No enviar más recordatorios automáticos a este cliente'}>
+                            {s.seguimiento_pausado ? <><Play size={11} /> Reanudar</> : <><Pause size={11} /> Pausar</>}
+                          </button>
+                        )}
                         {ENVIABLE.has(s.estado) && (
                           <button onClick={() => cancelar(s)} disabled={trabajando}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors hover:bg-red-50 disabled:opacity-50"
@@ -360,7 +493,7 @@ export default function SeguimientoImagenes() {
                 )
               })}
               {filtradas.length === 0 && (
-                <tr><td colSpan={9} className="text-center py-8 text-ink3 text-sm">Sin solicitudes</td></tr>
+                <tr><td colSpan={10} className="text-center py-8 text-ink3 text-sm">Sin solicitudes</td></tr>
               )}
             </tbody>
           </Table>
