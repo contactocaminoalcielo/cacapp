@@ -3,6 +3,7 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { fmt, parsearErrorDB, parseDate, today } from '@/lib/utils'
 import {
@@ -212,6 +213,7 @@ export default function Finanzas() {
       const { data, error } = await db.from('servicios')
         .select(RESUMEN_SELECT)
         .not('estado', 'eq', 'CANCELADO')
+        .gte('fecha_ingreso', FECHA_CORTE)
       if (error) throw error
       setResumenServicios(data || [])
     } catch (err) {
@@ -230,6 +232,7 @@ export default function Finanzas() {
       const { data, error } = await db.from('servicios')
         .select(SERVICIO_SELECT)
         .not('estado', 'eq', 'CANCELADO')
+        .gte('fecha_ingreso', FECHA_CORTE)
         .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
         .order('fecha_ingreso', { ascending: false })
       if (error) throw error
@@ -255,6 +258,7 @@ export default function Finanzas() {
       const { data, error } = await db.from('servicios')
         .select(SERVICIO_SELECT)
         .not('estado', 'eq', 'CANCELADO')
+        .gte('fecha_ingreso', FECHA_CORTE)
         .eq('canal_entrada', 'ALIADO')
         .gt('comision_aliado', 0)
         .order('fecha_ingreso', { ascending: false })
@@ -283,6 +287,7 @@ export default function Finanzas() {
       const { data, error } = await db.from('servicios')
         .select(SERVICIO_SELECT)
         .not('estado', 'eq', 'CANCELADO')
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: false })
         .range(from, to)
       if (error) throw error

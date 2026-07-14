@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { fmt, petEmoji } from '@/lib/utils'
 import { Search, RefreshCw, Download, Filter, X, Eye, FileText, CheckSquare, Square } from 'lucide-react'
 
@@ -405,7 +406,7 @@ export default function Recibos() {
           planes:plan_id(nombre, codigo),
           aliados:aliado_origen_id(nombre),
           tecnico:tecnico_id(id, nombre, apellido)
-        `).order('fecha_ingreso', { ascending: false }).limit(500),
+        `).gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false }).limit(500),
         db.from('personal').select('id, nombre, apellido').eq('activo', true).order('nombre'),
       ])
       if (e1) throw e1

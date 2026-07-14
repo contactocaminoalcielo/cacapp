@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
@@ -85,7 +86,8 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     setLote(l || null)
     if (l) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios(estado, notas, tipo_acompanamiento, recogidas(notas, contacto_telefono), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso))')
+        .select('*, servicios!inner(estado, notas, tipo_acompanamiento, recogidas(notas, contacto_telefono), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso))')
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
       setItems(its || [])

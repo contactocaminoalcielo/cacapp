@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
@@ -499,12 +500,13 @@ export default function CuartoFrio() {
       setLoading(true)
       const [{ data, error: err }, { data: rep }] = await Promise.all([
         db.from('cuarto_frio')
-          .select(`*, registrador:registrado_por(nombre,apellido), servicios(
+          .select(`*, registrador:registrado_por(nombre,apellido), servicios!inner(
             mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),
             planes(nombre,codigo,tipo_proceso),
             recogidas(foto_recogida_url),
             tecnico:tecnico_id(nombre,apellido)
           )`)
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_ingreso', { ascending: false }),
         db.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*), personal:registrado_por(nombre,apellido)')

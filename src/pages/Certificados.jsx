@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmtDateTime } from '@/lib/utils'
 import {
   generarHTMLIndividual, imprimirCertificado, registrarCertificado,
@@ -216,6 +217,7 @@ export default function Certificados() {
         .from('traslados_tenjo')
         .select('id, fecha_completado, servicio_id, servicios!inner(id, estado, mascotas(nombre, peso_kg, especie_id, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, tipo_proceso))')
         .eq('estado', 'COMPLETADO')
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('fecha_completado', { ascending: false })
 
       const indItems = (traslados || [])

@@ -7,6 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
 import { Star, MessageCircle, RefreshCw } from 'lucide-react'
 
@@ -34,7 +35,8 @@ export default function Nps() {
     try {
       setLoading(true)
       const { data, error: err } = await db.from('nps_seguimiento')
-        .select('*, servicios(mascotas(nombre,clientes(nombre,apellido,whatsapp)),planes(nombre))')
+        .select('*, servicios!inner(mascotas(nombre,clientes(nombre,apellido,whatsapp)),planes(nombre))')
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('fecha_programada', { ascending: true })
       if (err) throw err
       setSeguimientos(data || [])

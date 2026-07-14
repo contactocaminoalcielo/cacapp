@@ -4,6 +4,7 @@
 // (transaccional, idempotente, persiste evidencia y respeta la plantilla).
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
+import { FECHA_CORTE } from '@/lib/constants'
 
 export const ESTADO_SOLICITUD = {
   POR_VALIDAR:   { label: 'Por validar',   color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
@@ -30,7 +31,7 @@ export async function obtenerSolicitudes() {
       fecha_solicitud, fecha_programada, fecha_envio, fecha_recepcion,
       message_id, contact_id, intentos, ultimo_error,
       seguimiento_pausado, motivo_cierre, fecha_cierre,
-      servicios (
+      servicios!inner (
         id, fecha_ingreso, codigo_fotos,
         mascotas ( nombre, especies ( nombre ), clientes ( nombre, apellido, whatsapp ) ),
         planes ( nombre, codigo ),
@@ -38,6 +39,7 @@ export async function obtenerSolicitudes() {
       )
     `)
     .neq('estado', 'CANCELADO')
+    .gte('servicios.fecha_ingreso', FECHA_CORTE)
     .order('fecha_solicitud', { ascending: false })
   if (error) throw error
 

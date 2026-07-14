@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
@@ -876,12 +877,13 @@ export default function Produccion() {
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
-            servicios ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+            servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
                         planes ( nombre, codigo ) )
           `)
           .neq('origen', 'REMOVIDO')
           .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('created_at', { ascending: false }),
         db.from('personal').select('id, nombre, apellido, activo').eq('activo', true).order('nombre'),
         db.from('maquinas_produccion').select('*').eq('activo', true).order('nombre'),
@@ -933,12 +935,13 @@ export default function Produccion() {
         recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                         recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
-        servicios ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+        servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                     mascotas ( nombre, especie_id, especies ( nombre ) ),
                     planes ( nombre, codigo ) )
       `)
       .neq('origen', 'REMOVIDO')
       .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])
+      .gte('servicios.fecha_ingreso', FECHA_CORTE)
       .order('created_at', { ascending: false })
     setRecordatorios(recsNuevos || [])
   }

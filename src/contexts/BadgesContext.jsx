@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 
 const BadgesContext = createContext({ kanban: 0, produccion: 0, imagenes: 0, nps: 0 })
 
@@ -9,8 +10,10 @@ export function BadgesProvider({ children }) {
   async function fetchBadges() {
     try {
       const [a, p, i, n] = await Promise.all([
-        db.from('v_alertas').select('*', { count: 'exact', head: true }).in('nivel_alerta', ['VENCIDO','HOY','URGENTE']),
-        db.from('servicio_recordatorios').select('*', { count: 'exact', head: true }).eq('estado', 'PENDIENTE').neq('origen', 'REMOVIDO'),
+        db.from('v_alertas').select('*', { count: 'exact', head: true }).in('nivel_alerta', ['VENCIDO','HOY','URGENTE'])
+          .gte('fecha_ingreso', FECHA_CORTE),
+        db.from('servicio_recordatorios').select('*, servicios!inner(id)', { count: 'exact', head: true }).eq('estado', 'PENDIENTE').neq('origen', 'REMOVIDO')
+          .gte('servicios.fecha_ingreso', FECHA_CORTE),
         db.from('solicitudes_imagenes').select('*', { count: 'exact', head: true }).eq('estado', 'POR_VALIDAR'),
         db.from('nps_seguimiento').select('*', { count: 'exact', head: true }).eq('estado', 'PENDIENTE'),
       ])

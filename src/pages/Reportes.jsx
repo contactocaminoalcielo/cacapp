@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { fmt, waLink, parseDate, hoyLocalISO } from '@/lib/utils'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from 'recharts'
 import { Download, CalendarDays } from 'lucide-react'
@@ -60,6 +61,7 @@ function TabContabilidad({ rango }) {
     const { from, to } = getRango(rango)
     let q = db.from('v_kanban').select('servicio_id,mascota,cliente,plan,estado,fecha_ingreso,valor_total,valor_pagado,saldo_pendiente,estado_pago,cliente_wa')
       .neq('estado', 'CANCELADO')
+      .gte('fecha_ingreso', FECHA_CORTE)
     if (from) q = q.gte('fecha_ingreso', toISO(from))
     if (to)   q = q.lte('fecha_ingreso', toISO(to))
     q.order('fecha_ingreso', { ascending: false }).then(({ data: d }) => {
@@ -201,6 +203,7 @@ function TabServicios({ rango }) {
   useEffect(() => {
     const { from, to } = getRango(rango)
     let q = db.from('v_kanban').select('servicio_id,mascota,cliente,plan,estado,canal_entrada,fecha_ingreso,valor_total,estado_pago')
+      .gte('fecha_ingreso', FECHA_CORTE)
     if (from) q = q.gte('fecha_ingreso', toISO(from))
     if (to)   q = q.lte('fecha_ingreso', toISO(to))
     q.order('fecha_ingreso', { ascending: false }).then(({ data: d }) => {
@@ -277,6 +280,7 @@ function TabTiempoPromesa({ rango }) {
   useEffect(() => {
     const { from, to } = getRango(rango)
     let q = db.from('v_tiempo_promesa').select('*').order('fecha_ingreso', { ascending: false })
+      .gte('fecha_ingreso', FECHA_CORTE)
     if (from) q = q.gte('fecha_ingreso', toISO(from))
     if (to)   q = q.lte('fecha_ingreso', toISO(to))
     q.then(({ data: d }) => { setData(d || []); setLoading(false) })
@@ -427,6 +431,7 @@ function TabVentasUsuario({ rango }) {
     let q = db.from('servicios')
       .select('id, fecha_ingreso, valor_total, registrado_por, registrador:registrado_por(nombre, apellido, rol_principal_id)')
       .neq('estado', 'CANCELADO')
+      .gte('fecha_ingreso', FECHA_CORTE)
     if (from) q = q.gte('fecha_ingreso', toISO(from))
     if (to)   q = q.lte('fecha_ingreso', toISO(to))
     q.order('fecha_ingreso', { ascending: false }).then(({ data: d }) => {

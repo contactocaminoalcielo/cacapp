@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { useAuth } from '@/contexts/AuthContext'
 import { parsearErrorDB, petEmoji, today } from '@/lib/utils'
@@ -433,6 +434,7 @@ export default function LotesGrupales() {
         .select('servicio_id,mascota,especie,cliente,cliente_wa,fecha_ingreso,estado,tipo_proceso,plan,codigo_plan')
         .in('tipo_proceso', ['CREMACION_GRUPAL', 'COMPOSTAJE_GRUPAL'])
         .not('estado', 'in', '(CANCELADO,ENTREGADO)')
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: true })
 
       // 3. lote_id de esos servicios (v_kanban no expone lote_id)
@@ -490,6 +492,7 @@ export default function LotesGrupales() {
           .from('servicios')
           .select('id, lote_id, fecha_ingreso, mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido))')
           .in('lote_id', histIds)
+          .gte('fecha_ingreso', FECHA_CORTE)
 
         ;(svcsH || []).forEach(s => {
           const lId = s.lote_id

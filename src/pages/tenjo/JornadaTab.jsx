@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
 import { petEmoji, parsearErrorDB, today, hoyLocalISO } from '@/lib/utils'
@@ -73,7 +74,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     const map = {}
     for (const l of (ls || [])) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido, whatsapp)))')
+        .select('*, servicios!inner(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido, whatsapp)))')
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
       map[l.id] = its || []

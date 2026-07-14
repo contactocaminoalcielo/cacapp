@@ -6,6 +6,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, parseDate } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { AlertTriangle, TrendingUp, TrendingDown, PlusCircle, Activity, Snowflake, Package, Truck, Layers, Camera, Star, Calendar, DollarSign, BadgePercent, Clock } from 'lucide-react'
@@ -59,9 +60,10 @@ export default function Dashboard() {
       const hoy = new Date()
       const primerMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
 
-      let kanbanQ = db.from('v_kanban').select('*').order('fecha_ingreso', { ascending: false })
+      let kanbanQ = db.from('v_kanban').select('*').gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false })
       let alertasQ = db.from('v_alertas').select('*')
         .in('nivel_alerta', ['VENCIDO','HOY','URGENTE'])
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('dias_para_vencer', { ascending: true })
       const npsQ = db.from('nps_seguimiento')
         .select('nps')

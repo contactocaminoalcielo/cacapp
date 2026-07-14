@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion } from '@/lib/notificaciones'
@@ -1620,6 +1621,7 @@ export default function TecnicoApp() {
         .select(SELECT_SVC)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: false })
 
       if (svcErr) { setQueryErr(svcErr.message); return }
@@ -1645,6 +1647,7 @@ export default function TecnicoApp() {
           .eq('tecnico_id', tecnico.id)
           .in('id', idsRezag)
           .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
+          .gte('fecha_ingreso', FECHA_CORTE)
         const cfBySvc = Object.fromEntries((cfRezag || []).map(cf => [cf.servicio_id, cf]))
         rezagados = (rezData || []).map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
       }
@@ -2769,7 +2772,7 @@ function BitacoraTab({ tecnico }) {
 
       // 1. Servicios del técnico en el mes (por servicio o por recogida suya)
       const [{ data: porServicio }, { data: porRecogida }] = await Promise.all([
-        db.from('servicios').select('id').eq('tecnico_id', tecnico.id).gte('fecha_ingreso', desde).lte('fecha_ingreso', hasta),
+        db.from('servicios').select('id').eq('tecnico_id', tecnico.id).gte('fecha_ingreso', desde).lte('fecha_ingreso', hasta).gte('fecha_ingreso', FECHA_CORTE),
         db.from('recogidas').select('servicio_id').eq('tecnico_id', tecnico.id).gte('fecha_programada', desde).lte('fecha_programada', hasta),
       ])
       const ids = [...new Set([...(porServicio || []).map(s => s.id), ...(porRecogida || []).map(r => r.servicio_id)])].filter(Boolean)
@@ -2780,9 +2783,11 @@ function BitacoraTab({ tecnico }) {
       //    ajustes sugeridos por el técnico (capa sombra) + candado por cierre
       const sinError = r => { if (r.error) throw r.error; return r.data }
       const [svcs, recibos, cItems, ajustes, lockRows] = await Promise.all([
+        // El corte también recorta los ids que entraron por `recogidas` (arriba):
+        // un servicio previo al corte no aparece en el cuadre aunque su recogida sí caiga en el mes.
         enLotes(ids, lote => db.from('servicios')
           .select('id, fecha_ingreso, ciudad_recogida, estado, estado_pago, mascotas(nombre), planes(nombre)')
-          .in('id', lote).then(sinError)),
+          .in('id', lote).gte('fecha_ingreso', FECHA_CORTE).then(sinError)),
         enLotes(ids, lote => db.from('recibos_tecnico')
           .select('servicio_id, fecha_emision, hora_emision, valor_cobrado, medios_pago, created_at')
           .in('servicio_id', lote).then(sinError)),
@@ -3629,6 +3634,7 @@ function ReciboTab({ tecnico }) {
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ESTADOS_RECOGIDO)
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: false })
         .limit(60)
       if (error) throw error
@@ -3965,9 +3971,13 @@ function ComprobanteTab({ tecnico, onCount }) {
       // Los recibos son la fuente: partir de la lista de servicios (que crece sin
       // tope) con .limit() y sin .order() dejaba los servicios nuevos por fuera
       // cuando el técnico pasaba de 80 acumulados, y la pestaña decía "Al día".
+      // El corte se aplica en la FUENTE (no al hidratar mascota/plan más abajo):
+      // si se filtrara allí, el recibo previo al corte igual entraría a la lista
+      // pero sin mascota ni plan.
       const { data: recs, error } = await db.from('recibos_tecnico')
-        .select('id, servicio_id, numero_recibo, medios_pago, created_at')
+        .select('id, servicio_id, numero_recibo, medios_pago, created_at, servicios!inner(fecha_ingreso)')
         .eq('tecnico_id', tecnico.id)
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('created_at', { ascending: false })
         .limit(200)
       if (error) throw error

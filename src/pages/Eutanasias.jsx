@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { fmt, today, fmtDateTime, parseDate, petEmoji } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
@@ -86,7 +87,11 @@ export default function Eutanasias() {
     try {
       const [{ data: ag, error: e1 }, { data: vets }, { data: tar }, { data: per }, { data: esp }] =
         await Promise.all([
-          db.from('v_eutanasias_agenda').select('*').order('fecha_solicitada', { ascending: false, nullsFirst: false }),
+          // Corte por fecha_solicitada (no por la del servicio): hay eutanasias sin
+          // servicio asociado y filtrarlas por servicios.fecha_ingreso las borraría.
+          db.from('v_eutanasias_agenda').select('*')
+            .gte('fecha_solicitada', FECHA_CORTE)
+            .order('fecha_solicitada', { ascending: false, nullsFirst: false }),
           db.from('veterinarios').select('*').order('nombre'),
           db.from('eutanasia_tarifas').select('*').order('peso_min_kg'),
           db.from('personal').select('id,nombre,apellido').eq('activo', true).order('nombre'),

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { db } from '@/lib/supabase'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
-import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
+import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
@@ -931,7 +931,9 @@ export default function Kanban() {
     setLoading(true); setError(null)
     try {
       const { data, error: err } = await db
-        .from('v_kanban').select('*').order('fecha_ingreso', { ascending: false })
+        .from('v_kanban').select('*')
+        .gte('fecha_ingreso', FECHA_CORTE)
+        .order('fecha_ingreso', { ascending: false })
       if (err) throw err
       let rows = data || []
 

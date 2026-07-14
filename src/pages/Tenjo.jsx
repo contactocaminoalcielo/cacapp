@@ -12,6 +12,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { EstadoBadge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/lib/tenjo'
 import PlanificacionTab from '@/pages/tenjo/PlanificacionTab'
@@ -225,27 +226,32 @@ export default function Tenjo() {
       setLoading(true)
       const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: comp }, { data: per }, { data: procComp }] = await Promise.all([
         db.from('traslados_tenjo')
-          .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
+          .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
           .in('estado', ['PROGRAMADO','EN_CAMINO'])
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_traslado', { ascending: true }),
         // Traslados completados donde servicio aún está EN_PROCESO → contar 5 días
         db.from('traslados_tenjo')
           .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
           .eq('estado', 'COMPLETADO')
           .eq('servicios.estado', 'EN_PROCESO')
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_completado', { ascending: true }),
         db.from('cuarto_frio')
-          .select('*, servicios(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
-          .eq('estado', 'REFRIGERADO'),
+          .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
+          .eq('estado', 'REFRIGERADO')
+          .gte('servicios.fecha_ingreso', FECHA_CORTE),
         db.from('seguimiento_compostaje')
           .select('id, cubiculo_codigo, fecha_inicio, fecha_fin_estimada, estado, planta_lista, planta_entregada, servicio_id, servicios!inner(estado, mascotas(nombre,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)), planes(nombre))')
           .eq('estado', 'EN_PROCESO')
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_inicio', { ascending: true }),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         // Individuales procesados (cenizas ya confirmadas) — para emitir certificados
         db.from('traslados_tenjo')
           .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
           .eq('estado', 'COMPLETADO')
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_completado', { ascending: false })
           .limit(30),
       ])
@@ -317,6 +323,7 @@ export default function Tenjo() {
       const cfg = await cargarConfigTenjo()
       setConfig(cfg)
       const { data: cand, error: errCand } = await db.from('v_candidatos_tenjo').select('*')
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: true })
       if (errCand) {
         setCandidatas(null) // migración 003 sin aplicar — las tabs nuevas muestran el aviso

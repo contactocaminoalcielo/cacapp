@@ -53,3 +53,6 @@ docs/ORBIT_Resumen_Ejecutivo_Jefe.html
 # Python cache
 __pycache__/
 *.pyc
+
+# Volcados de respaldo de la DB: contienen datos de clientes (nombres, teléfonos)
+respaldos/

@@ -4,6 +4,7 @@
 // flujo grupal traída a Certificados para no andar entre dos módulos.
 import { useState, useEffect, useCallback } from 'react'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { Button } from '@/components/ui/button'
@@ -113,6 +114,7 @@ export default function LotesTab({ onChanged, onGoPendientes }) {
         const { data: s } = await db.from('servicios')
           .select('id, lote_id, estado, mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido))')
           .in('lote_id', ids)
+          .gte('fecha_ingreso', FECHA_CORTE)
         ;(s || []).forEach(x => {
           const m = x.mascotas, c = m?.clientes
           if (!map[x.lote_id]) map[x.lote_id] = []

@@ -16,7 +16,7 @@ import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
-import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
+import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import FichaServicio from '@/components/servicio/FichaServicio'
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
@@ -1449,6 +1449,9 @@ function TabHistorialServicios({ canEdit }) {
   }, [])
 
   function buildQuery(base) {
+    // Corte de datos: el histórico arranca en FECHA_CORTE. Si el usuario elige un
+    // "desde" anterior, ambos gte se combinan con AND y gana el más estricto.
+    base = base.gte('fecha_ingreso', FECHA_CORTE)
     if (filtroEstado)  base = base.eq('estado', filtroEstado)
     if (filtroPago)    base = base.eq('estado_pago', filtroPago)
     if (filtroPlan)    base = base.eq('plan_id', filtroPlan)

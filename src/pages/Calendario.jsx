@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Topbar from '@/components/layout/Topbar'
 import { EstadoBadge } from '@/components/ui/badge'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, parseDate } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, AlertTriangle, RefreshCw, Calendar, Clock } from 'lucide-react'
 
@@ -34,7 +35,7 @@ export default function Calendario() {
   async function cargar() {
     try {
       setLoading(true)
-      const { data, error: err } = await db.from('v_kanban').select('*')
+      const { data, error: err } = await db.from('v_kanban').select('*').gte('fecha_ingreso', FECHA_CORTE)
       if (err) throw err
       setServicios(data || [])
     } catch (e) {

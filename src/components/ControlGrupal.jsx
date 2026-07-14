@@ -5,6 +5,7 @@
 // y pedirle a la IA una alerta de vencimientos. Vive dentro del módulo Certificados.
 import { useState, useEffect, useCallback } from 'react'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { Button } from '@/components/ui/button'
@@ -81,6 +82,7 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
         .from('servicios')
         .select('id, lote_id, estado, fecha_ingreso, plan_id, planes(nombre, codigo, tipo_proceso), mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido, whatsapp))')
         .in('plan_id', planIds)
+        .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: true })
 
       const lista = svcs || []

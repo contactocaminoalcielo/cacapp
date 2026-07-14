@@ -1,3 +1,9 @@
+// Corte de datos operativo: Orbit solo muestra servicios ingresados desde esta fecha.
+// Lo anterior sigue en la base (y respaldado en el esquema `respaldo_jun0108`), pero no
+// se lista en ningún módulo. Los listados filtran por `servicios.fecha_ingreso >= FECHA_CORTE`;
+// las consultas por ID (ficha, línea de tiempo, app del técnico) NO aplican el corte.
+export const FECHA_CORTE = '2026-06-09'
+
 export const TIPO_LABEL = {
   CREMACION_GRUPAL: 'Cremación grupal',
   CREMACION_INDIVIDUAL: 'Cremación individual · Aquamación',

@@ -11,6 +11,7 @@ import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { FECHA_CORTE } from '@/lib/constants'
 import { calcularListoProceso, reconciliarServicioTenjo } from '@/lib/tenjo'
 import { petEmoji, parsearErrorDB } from '@/lib/utils'
 import { Flame, Leaf, Wrench, CheckCircle2, AlertTriangle } from 'lucide-react'
@@ -61,8 +62,9 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
     const { data, error } = await db.from('lotes_tenjo_items')
       .select('id, estado, cubiculo_codigo, fecha_inicio_proceso, fecha_fin_proceso, fecha_compostaje_inicio, '
         + 'lotes_tenjo!lote_id(numero_lote, fecha_jornada), '
-        + 'servicios(planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
+        + 'servicios!inner(planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
       .in('estado', ['EN_PROCESO', 'PROCESADO'])
+      .gte('servicios.fecha_ingreso', FECHA_CORTE)
       .order('fecha_fin_proceso', { ascending: true, nullsFirst: true })
     if (error) { setSinTabla(true); setRows(null); return }
     setRows(data || [])
@@ -70,8 +72,9 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
     // Limpieza (solo coordinador/admin): mascotas individuales aún en custodia
     if (canPlan) {
       const { data: cf } = await db.from('cuarto_frio')
-        .select('id, servicio_id, servicios(id, estado, planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
+        .select('id, servicio_id, servicios!inner(id, estado, planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
         .is('fecha_salida', null)
+        .gte('servicios.fecha_ingreso', FECHA_CORTE)
       setCustodia((cf || []).filter(r => TIPOS_INDIVIDUALES.includes(r.servicios?.planes?.tipo_proceso)))
     }
   }, [canPlan])
