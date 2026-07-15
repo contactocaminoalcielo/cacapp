@@ -13,14 +13,14 @@ import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
-import { petEmoji, parsearErrorDB, today, hoyLocalISO } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, hoyLocalISO, waLink } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
-  recibirItemLoteTenjo, RECEPCION_CFG,
+  recibirItemLoteTenjo, RECEPCION_CFG, TIPO_PROCESO_LABEL,
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
-import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox } from 'lucide-react'
+import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox, Phone, MessageCircle, Info, Check } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 const fmtFechaLarga = f => f
@@ -42,6 +42,20 @@ const fmtHora = ts => ts
 // Un item sigue "por recibir" mientras no haya llegado a la planta
 const POR_RECIBIR = ['AUTORIZADA_SALIDA', 'EN_TRASLADO']
 
+// Evidencias obligatorias para iniciar el proceso, según el tipo de proceso.
+// Compostaje: 2 fotos del cubículo. Cremación (u otro individual): altar + horno.
+function slotsEvidenciaInicio(tipoProceso) {
+  if (tipoProceso === 'COMPOSTAJE_INDIVIDUAL')
+    return [
+      { key: 'cubiculo_1', label: 'Cubículo — foto 1' },
+      { key: 'cubiculo_2', label: 'Cubículo — foto 2' },
+    ]
+  return [
+    { key: 'altar', label: 'Evidencia del altar' },
+    { key: 'horno', label: 'Ingreso al horno' },
+  ]
+}
+
 function Chip({ cfg, fallback }) {
   return (
     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
@@ -60,6 +74,9 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
 
   const [modalIniciar,   setModalIniciar]   = useState(null) // item
   const [respId,         setRespId]         = useState('')
+  const [iniEvid,        setIniEvid]        = useState({})    // { slotKey: url } evidencias de inicio
+  const [iniSubiendo,    setIniSubiendo]    = useState(null)  // slotKey en subida
+  const [modalDetalle,   setModalDetalle]   = useState(null)  // item (ficha + contacto)
   const [modalChecklist, setModalChecklist] = useState(null) // item
   const [chkForm,        setChkForm]        = useState({})
   const [subiendo,       setSubiendo]       = useState(false)
@@ -82,7 +99,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     const map = {}
     for (const l of (ls || [])) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios!inner(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido, whatsapp)))')
+        .select('*, servicios!inner(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)))')
         .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
@@ -108,14 +125,34 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     } finally { setSaving(false) }
   }
 
+  // Subir una evidencia de inicio a un slot concreto (altar/horno/cubículo)
+  async function subirEvidenciaInicio(item, slotKey, file) {
+    if (!file) return
+    setIniSubiendo(slotKey)
+    try {
+      const url = await subirEvidencia(file, item.id)
+      setIniEvid(prev => ({ ...prev, [slotKey]: url }))
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error subiendo evidencia', variant: 'danger' })
+    } finally { setIniSubiendo(null) }
+  }
+
   async function iniciarProceso() {
     const item = modalIniciar
     if (!item) return
     if (!respId) { await showAlert('Selecciona el responsable del proceso.', { title: 'Responsable requerido' }); return }
+    const slots = slotsEvidenciaInicio(item.servicios?.planes?.tipo_proceso)
+    const faltan = slots.filter(s => !iniEvid[s.key])
+    if (faltan.length) {
+      await showAlert(`Carga las evidencias requeridas antes de iniciar: ${faltan.map(s => s.label).join(', ')}.`, { title: 'Evidencias requeridas' }); return
+    }
+    const urlsNuevas = slots.map(s => iniEvid[s.key])
     await updateItem(item, {
       estado: 'EN_PROCESO',
       responsable_proceso_id: respId,
       fecha_inicio_proceso: ahoraISO(),
+      evidencia_inicio: iniEvid,
+      evidencia_urls: [...(item.evidencia_urls || []), ...urlsNuevas],
     }, false)
     // Respaldo idempotente: si el proceso arranca en Tenjo, la mascota ya no
     // está en el cuarto frío — cierra la custodia si el traslado no la registró
@@ -130,7 +167,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     // Primer proceso iniciado → el lote pasa a EN_EJECUCION (best-effort)
     await db.from('lotes_tenjo').update({ estado: 'EN_EJECUCION' })
       .eq('id', item.lote_id).eq('estado', 'CONFIRMADO')
-    setModalIniciar(null); setRespId('')
+    setModalIniciar(null); setRespId(''); setIniEvid({})
     await cargar(); onChanged?.()
   }
 
@@ -296,7 +333,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
         <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-ink">{m?.nombre || '—'}</span>
+            <button type="button" onClick={() => setModalDetalle(item)}
+              className="font-semibold text-ink hover:text-primary-dark hover:underline inline-flex items-center gap-1">
+              {m?.nombre || '—'} <Info size={12} className="text-ink3" />
+            </button>
             <Chip cfg={ITEM_ESTADO_CFG[item.estado]} fallback={item.estado} />
             {recepCfg && item.recepcion_estado !== 'RECIBIDA' && <Chip cfg={recepCfg} fallback={item.recepcion_estado} />}
             <span className="text-[10px] text-ink3">{VARIANTE_LABEL[variante]}</span>
@@ -358,7 +398,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           )}
           {item.estado === 'RECIBIDA' && (
             <Button size="sm" disabled={saving}
-              onClick={() => { setModalIniciar(item); setRespId(item.responsable_proceso_id || personalData?.id || '') }}>
+              onClick={() => { setModalIniciar(item); setRespId(item.responsable_proceso_id || personalData?.id || ''); setIniEvid(item.evidencia_inicio || {}) }}>
               <Play size={12} /> Iniciar proceso
             </Button>
           )}
@@ -448,15 +488,19 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       })}
 
       {/* ── Modal iniciar proceso ── */}
-      {modalIniciar && (
+      {modalIniciar && (() => {
+        const slots = slotsEvidenciaInicio(modalIniciar.servicios?.planes?.tipo_proceso)
+        const faltanEvid = slots.filter(s => !iniEvid[s.key]).length
+        const puedeIniciar = !!respId && faltanEvid === 0 && !iniSubiendo
+        return (
         <Modal open onClose={() => setModalIniciar(null)}
           title={`Iniciar proceso — ${modalIniciar.servicios?.mascotas?.nombre || ''}`}
           maxWidth="max-w-md"
           footer={<>
             <Button variant="secondary" onClick={() => setModalIniciar(null)}>Cancelar</Button>
-            <Button onClick={iniciarProceso} disabled={saving}>{saving ? 'Guardando…' : 'Iniciar'}</Button>
+            <Button onClick={iniciarProceso} disabled={saving || !puedeIniciar}>{saving ? 'Guardando…' : 'Iniciar'}</Button>
           </>}>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <p className="text-[12px] text-ink2">Se registrará la fecha y hora de inicio. El lote pasará a EN EJECUCIÓN.</p>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Responsable del proceso *</label>
@@ -465,9 +509,48 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 {(personal || []).map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
               </Select>
             </div>
+            {/* Evidencias obligatorias para iniciar */}
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1.5">
+                <Camera size={11} className="inline mr-1" />Evidencias obligatorias ({slots.length - faltanEvid}/{slots.length})
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {slots.map(s => {
+                  const url = iniEvid[s.key]
+                  const subiendo = iniSubiendo === s.key
+                  return (
+                    <label key={s.key}
+                      className={`relative flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed p-2 cursor-pointer text-center min-h-[92px] transition-all ${url ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                      {url ? (
+                        <>
+                          <img src={url} alt={s.label} className="w-full h-12 object-cover rounded-lg" />
+                          <span className="text-[10px] font-semibold text-green-700 inline-flex items-center gap-0.5">
+                            <Check size={10} /> {s.label}
+                          </span>
+                        </>
+                      ) : subiendo ? (
+                        <span className="text-[11px] text-ink3">Subiendo…</span>
+                      ) : (
+                        <>
+                          <Camera size={18} className="text-ink3" />
+                          <span className="text-[10px] font-semibold text-ink2 leading-tight">{s.label}</span>
+                          <span className="text-[9px] text-ink3">Toca para tomar/subir</span>
+                        </>
+                      )}
+                      <input type="file" accept="image/*" capture="environment" className="hidden" disabled={subiendo}
+                        onChange={e => { subirEvidenciaInicio(modalIniciar, s.key, e.target.files?.[0]); e.target.value = '' }} />
+                    </label>
+                  )
+                })}
+              </div>
+              {faltanEvid > 0 && (
+                <p className="text-[10px] text-amber-700 mt-1.5">Carga las {slots.length} fotos para poder iniciar el proceso.</p>
+              )}
+            </div>
           </div>
         </Modal>
-      )}
+        )
+      })()}
 
       {/* ── Modal checklist / evidencias ── */}
       {modalChecklist && (() => {
@@ -683,6 +766,82 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           </div>
         </Modal>
       )}
+
+      {/* ── Modal detalles de la mascota (ficha + contacto) ── */}
+      {modalDetalle && (() => {
+        const item = modalDetalle
+        const m   = item.servicios?.mascotas
+        const cl  = m?.clientes
+        const plan = item.servicios?.planes
+        const rec = Array.isArray(item.servicios?.recogidas) ? item.servicios.recogidas[0] : item.servicios?.recogidas
+        const contacto = cl?.whatsapp || rec?.contacto_telefono || null
+        const observaciones = item.servicios?.notas || rec?.notas || null
+        const recibidor = personal?.find(p => p.id === item.recibido_por)
+        const msgWa = `Hola, te saludamos con mucho respeto de Camino al Cielo 🕊️ sobre el proceso de ${m?.nombre || 'tu mascotica'}.`
+        const Fila = ({ label, value }) => (
+          <div className="flex justify-between gap-3 py-1.5 border-b last:border-0" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+            <span className="text-[11px] text-ink3">{label}</span>
+            <span className="text-[12px] font-semibold text-ink text-right">{value ?? '—'}</span>
+          </div>
+        )
+        return (
+          <Modal open onClose={() => setModalDetalle(null)}
+            title={`${m?.nombre || 'Mascota'} — detalles`}
+            maxWidth="max-w-md"
+            footer={<Button variant="secondary" onClick={() => setModalDetalle(null)}>Cerrar</Button>}>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{petEmoji(m?.especies?.nombre)}</span>
+                <div>
+                  <div className="font-bold text-ink text-[15px]">{m?.nombre || '—'}</div>
+                  <div className="text-[11px] text-ink3">{cl?.nombre} {cl?.apellido}</div>
+                </div>
+              </div>
+
+              {/* Contacto: WhatsApp + llamar */}
+              <div className="flex flex-wrap gap-2">
+                {contacto ? (
+                  <>
+                    <a href={waLink(contacto, msgWa)} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-white flex-1 justify-center"
+                      style={{ background: '#25D366' }}>
+                      <MessageCircle size={14} /> WhatsApp
+                    </a>
+                    <a href={`tel:${contacto}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold flex-1 justify-center border"
+                      style={{ borderColor: '#1A5CD8', color: '#1A5CD8' }}>
+                      <Phone size={14} /> Llamar
+                    </a>
+                  </>
+                ) : (
+                  <span className="text-[12px] text-amber-700">⚠ Sin teléfono de contacto registrado.</span>
+                )}
+              </div>
+
+              <div className="space-y-0">
+                <Fila label="Especie" value={m?.especies?.nombre} />
+                <Fila label="Peso" value={m?.peso_kg ? `${m.peso_kg} kg` : null} />
+                <Fila label="Teléfono" value={contacto} />
+                <Fila label="Plan" value={plan?.nombre} />
+                <Fila label="Tipo de proceso" value={TIPO_PROCESO_LABEL[plan?.tipo_proceso] || plan?.tipo_proceso} />
+                <Fila label="Acompañamiento" value={VARIANTE_LABEL[varianteProceso(plan?.codigo, item.servicios?.tipo_acompanamiento)]} />
+                <Fila label="Estado en el lote" value={ITEM_ESTADO_CFG[item.estado]?.label || item.estado} />
+                {item.cubiculo_codigo && <Fila label="Cubículo" value={`${item.cubiculo_codigo} · ${item.meses_compostaje || 2} meses`} />}
+                {item.fecha_recepcion && (
+                  <Fila label="Recibida" value={`${fmtHora(item.fecha_recepcion)}${recibidor ? ` · ${recibidor.nombre}` : ''}`} />
+                )}
+              </div>
+
+              {observaciones && (
+                <div className="rounded-xl p-3 text-[12px] bg-surface2">
+                  <div className="text-[10px] font-bold text-ink3 mb-1">📝 Observaciones</div>
+                  <div className="text-ink2 italic">{observaciones}</div>
+                </div>
+              )}
+            </div>
+          </Modal>
+        )
+      })()}
     </div>
   )
 }
