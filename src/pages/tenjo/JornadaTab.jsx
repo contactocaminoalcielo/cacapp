@@ -20,7 +20,7 @@ import {
   recibirItemLoteTenjo, RECEPCION_CFG, TIPO_PROCESO_LABEL,
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
-import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox, Phone, MessageCircle, Info, Check } from 'lucide-react'
+import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox, Phone, MessageCircle, Info, Check, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 const fmtFechaLarga = f => f
@@ -72,6 +72,13 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [sinTabla, setSinTabla] = useState(false)
   const [saving,   setSaving]   = useState(false)
 
+  // Filtros de la jornada + colapso por lote
+  const [fNombre,    setFNombre]    = useState('')
+  const [fPlan,      setFPlan]      = useState('')
+  const [fFecha,     setFFecha]     = useState('')
+  const [colapsados, setColapsados] = useState({})   // lote.id -> true (colapsado)
+  const [initColapso, setInitColapso] = useState(false)
+
   const [modalIniciar,   setModalIniciar]   = useState(null) // item
   const [respId,         setRespId]         = useState('')
   const [iniEvid,        setIniEvid]        = useState({})    // { slotKey: url } evidencias de inicio
@@ -109,6 +116,17 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
+
+  // Al cargar por primera vez, si hay varios lotes deja abierto solo el primero
+  // (menos scroll). No pisa los toggles posteriores del usuario.
+  useEffect(() => {
+    if (!initColapso && Array.isArray(lotes) && lotes.length > 1) {
+      const init = {}
+      lotes.forEach((l, idx) => { if (idx > 0) init[l.id] = true })
+      setColapsados(init)
+      setInitColapso(true)
+    }
+  }, [lotes, initColapso])
 
   if (sinTabla) return <SetupNotice />
   if (lotes === undefined) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando jornada…</span></div>
@@ -437,55 +455,119 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     )
   }
 
+  // Opciones de los filtros (derivadas de los lotes/items cargados)
+  const planesUnicos = [...new Map(
+    Object.values(items).flat()
+      .filter(i => i.servicios?.planes?.codigo)
+      .map(i => [i.servicios.planes.codigo, i.servicios.planes.nombre])
+  ).entries()]
+  const fechasLotes = (lotes || []).map(l => l.fecha_jornada)
+
   return (
     <div className="space-y-5">
+      {/* ── Filtros de la jornada ── */}
+      {lotes.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
+            <input value={fNombre} onChange={e => setFNombre(e.target.value)}
+              placeholder="Buscar mascota o cliente…"
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]" />
+          </div>
+          <select value={fPlan} onChange={e => setFPlan(e.target.value)}
+            className="px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27] min-w-[150px]">
+            <option value="">Todos los planes</option>
+            {planesUnicos.map(([codigo, nombre]) => <option key={codigo} value={codigo}>{nombre}</option>)}
+          </select>
+          <select value={fFecha} onChange={e => setFFecha(e.target.value)}
+            className="px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27] min-w-[150px]">
+            <option value="">Todas las fechas</option>
+            {fechasLotes.map(f => <option key={f} value={f}>{fmtFechaCorta(f)}</option>)}
+          </select>
+          {(fNombre || fPlan || fFecha) && (
+            <Button size="sm" variant="secondary" onClick={() => { setFNombre(''); setFPlan(''); setFFecha('') }}>
+              <X size={12} /> Limpiar
+            </Button>
+          )}
+        </div>
+      )}
+
       {lotes.length === 0 ? (
         <div className="bg-surface border rounded-2xl py-12 text-center" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <div className="text-3xl mb-2">🗓️</div>
           <p className="text-[14px] font-semibold text-ink2">No hay lotes confirmados en ejecución</p>
           <p className="text-[12px] text-ink3 mt-1">Confirma un lote en la pestaña Planificación para verlo aquí el día de la jornada.</p>
         </div>
-      ) : lotes.map(lote => {
-        const its = items[lote.id] || []
-        const activos = its.filter(i => !['REPROGRAMADO', 'RETIRADO_DEL_LOTE', 'NO_EJECUTADO'].includes(i.estado))
-        const porRecibirLote = activos.filter(i => POR_RECIBIR.includes(i.estado) && i.recepcion_estado !== 'NO_LLEGO')
-        const procesados = activos.filter(i => i.estado === 'PROCESADO')
-        const listos = procesados.filter(i =>
-          validarItemCierre(i, i.servicios?.planes?.codigo, i.servicios?.tipo_acompanamiento, config).length === 0
-        ).length
-        return (
-          <div key={lote.id} className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-            <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-              <div className="font-semibold text-[15px] text-ink flex-1">
-                Lote {lote.numero_lote} — {fmtFechaLarga(lote.fecha_jornada)}
+      ) : (() => {
+        const nom = fNombre.trim().toLowerCase()
+        const hayFiltroItem = !!(nom || fPlan)
+        const matchItem = i => {
+          const m = i.servicios?.mascotas
+          const okNom = !nom || (m?.nombre || '').toLowerCase().includes(nom)
+            || `${m?.clientes?.nombre || ''} ${m?.clientes?.apellido || ''}`.toLowerCase().includes(nom)
+          const okPlan = !fPlan || i.servicios?.planes?.codigo === fPlan
+          return okNom && okPlan
+        }
+        const cards = (lotes || [])
+          .filter(l => !fFecha || l.fecha_jornada === fFecha)
+          .map(lote => {
+            const its = items[lote.id] || []
+            const activos = its.filter(i => !['REPROGRAMADO', 'RETIRADO_DEL_LOTE', 'NO_EJECUTADO'].includes(i.estado))
+            const visibles = hayFiltroItem ? activos.filter(matchItem) : activos
+            if (hayFiltroItem && visibles.length === 0) return null
+            const porRecibirLote = activos.filter(i => POR_RECIBIR.includes(i.estado) && i.recepcion_estado !== 'NO_LLEGO')
+            const procesados = activos.filter(i => i.estado === 'PROCESADO')
+            const listos = procesados.filter(i =>
+              validarItemCierre(i, i.servicios?.planes?.codigo, i.servicios?.tipo_acompanamiento, config).length === 0
+            ).length
+            const colapsado = !hayFiltroItem && !!colapsados[lote.id]
+            return (
+              <div key={lote.id} className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                <div className="px-5 py-4 flex items-center gap-2 flex-wrap" style={{ borderBottom: colapsado ? 'none' : '1px solid rgba(30,80,40,0.1)' }}>
+                  <button type="button" onClick={() => setColapsados(c => ({ ...c, [lote.id]: !c[lote.id] }))}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left hover:opacity-80">
+                    {colapsado ? <ChevronRight size={16} className="text-ink3 flex-shrink-0" /> : <ChevronDown size={16} className="text-ink3 flex-shrink-0" />}
+                    <span className="font-semibold text-[15px] text-ink truncate">Lote {lote.numero_lote} — {fmtFechaLarga(lote.fecha_jornada)}</span>
+                  </button>
+                  <Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} />
+                  <span className="text-[11px] text-ink3">
+                    {porRecibirLote.length > 0 && <span className="text-cyan-700 font-semibold">{porRecibirLote.length} por recibir · </span>}
+                    {procesados.length}/{activos.length} procesados · {listos} listos para cierre
+                  </span>
+                  {porRecibirLote.length > 0 && (
+                    <Button size="sm" disabled={saving} onClick={() => recibirTodas(lote)}>
+                      <Inbox size={12} /> Recibir todas ({porRecibirLote.length})
+                    </Button>
+                  )}
+                  {canPlan && (
+                    <Button size="sm" variant="gold" disabled={saving}
+                      onClick={() => { setModalCerrar(lote); setMotivos({}); setObsCierre(''); setNovCierre('') }}>
+                      <Lock size={12} /> Cerrar lote
+                    </Button>
+                  )}
+                </div>
+                {!colapsado && (
+                  visibles.length === 0 ? (
+                    <div className="py-8 text-center text-ink3 text-sm">Sin mascoticas activas en este lote.</div>
+                  ) : (
+                    <div className="p-4 space-y-2.5">
+                      {visibles.map(i => <ItemRow key={i.id} item={i} lote={lote} />)}
+                    </div>
+                  )
+                )}
               </div>
-              <Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} />
-              <span className="text-[11px] text-ink3">
-                {porRecibirLote.length > 0 && <span className="text-cyan-700 font-semibold">{porRecibirLote.length} por recibir · </span>}
-                {procesados.length}/{activos.length} procesados · {listos} listos para cierre
-              </span>
-              {porRecibirLote.length > 0 && (
-                <Button size="sm" disabled={saving} onClick={() => recibirTodas(lote)}>
-                  <Inbox size={12} /> Recibir todas ({porRecibirLote.length})
-                </Button>
-              )}
-              {canPlan && (
-                <Button size="sm" variant="gold" disabled={saving}
-                  onClick={() => { setModalCerrar(lote); setMotivos({}); setObsCierre(''); setNovCierre('') }}>
-                  <Lock size={12} /> Cerrar lote
-                </Button>
-              )}
+            )
+          })
+          .filter(Boolean)
+        if (cards.length === 0) {
+          return (
+            <div className="bg-surface border rounded-2xl py-10 text-center" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+              <p className="text-[13px] text-ink3">Ninguna mascotica coincide con el filtro.</p>
             </div>
-            {activos.length === 0 ? (
-              <div className="py-8 text-center text-ink3 text-sm">Sin mascoticas activas en este lote.</div>
-            ) : (
-              <div className="p-4 space-y-2.5">
-                {activos.map(i => <ItemRow key={i.id} item={i} lote={lote} />)}
-              </div>
-            )}
-          </div>
-        )
-      })}
+          )
+        }
+        return cards
+      })()}
 
       {/* ── Modal iniciar proceso ── */}
       {modalIniciar && (() => {

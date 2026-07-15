@@ -32,7 +32,8 @@ export const ROLE_CONFIG = {
   PRODUCTOR: {
     isTecnico:  false,
     redirectTo: '/',
-    routes:     new Set(['/', '/kanban', '/calendario', '/produccion', '/imagenes', '/nps', '/digitales']),
+    // En Tenjo el PRODUCTOR solo ve Jornada y Operación (gating de pestañas en Tenjo.jsx)
+    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales']),
   },
   OPERARIO: {
     isTecnico:  false,

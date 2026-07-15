@@ -205,12 +205,19 @@ export default function Tenjo() {
   const [formRetro,         setFormRetro]         = useState({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
   const [modalRecibir,      setModalRecibir]      = useState(null) // traslado individual a recibir en planta
   const [formRecibir,       setFormRecibir]       = useState({ recibidoPor: '', novedad: '' })
-  // El operario arranca en la Jornada (Planificación es de solo lectura para él)
-  const [tab,               setTab]               = useState(personalData?.rol === 'OPERARIO' ? 'jornada' : 'planificacion')
+  // El PRODUCTOR solo ejecuta en planta: ve únicamente Jornada y Operación.
+  // El operario arranca en la Jornada (Planificación es de solo lectura para él).
+  const esProductor = personalData?.rol === 'PRODUCTOR'
+  const arrancaEnJornada = esProductor || personalData?.rol === 'OPERARIO'
+  const [tab,               setTab]               = useState(arrancaEnJornada ? 'jornada' : 'planificacion')
   const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
   const [candidatas,        setCandidatas]        = useState([]) // null = migración 003 sin aplicar
 
   const canPlan = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+  // Pestañas que puede ver cada rol. El PRODUCTOR queda limitado a Jornada y Operación.
+  const tabsVisibles = esProductor
+    ? ['jornada', 'operacion']
+    : ['planificacion', 'jornada', 'candidatas', 'control', 'operacion']
 
   useEffect(() => {
     cargar()
@@ -538,13 +545,15 @@ export default function Tenjo() {
       <div className="p-7">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="mb-5">
-            <TabsTrigger value="planificacion">📋 Planificación</TabsTrigger>
-            <TabsTrigger value="jornada">🔥 Jornada</TabsTrigger>
-            <TabsTrigger value="candidatas">
-              🐾 Candidatas{Array.isArray(candidatas) && candidatas.length > 0 ? ` (${candidatas.length})` : ''}
-            </TabsTrigger>
-            <TabsTrigger value="control">📊 Control</TabsTrigger>
-            <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>
+            {tabsVisibles.includes('planificacion') && <TabsTrigger value="planificacion">📋 Planificación</TabsTrigger>}
+            {tabsVisibles.includes('jornada') && <TabsTrigger value="jornada">🔥 Jornada</TabsTrigger>}
+            {tabsVisibles.includes('candidatas') && (
+              <TabsTrigger value="candidatas">
+                🐾 Candidatas{Array.isArray(candidatas) && candidatas.length > 0 ? ` (${candidatas.length})` : ''}
+              </TabsTrigger>
+            )}
+            {tabsVisibles.includes('control') && <TabsTrigger value="control">📊 Control</TabsTrigger>}
+            {tabsVisibles.includes('operacion') && <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="planificacion">
