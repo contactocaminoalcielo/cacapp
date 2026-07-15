@@ -5,7 +5,7 @@ import Topbar from '@/components/layout/Topbar'
 import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
-import { fmt, parsearErrorDB, parseDate, today } from '@/lib/utils'
+import { fmt, parsearErrorDB, parseDate, today, petEmoji } from '@/lib/utils'
 import {
   DollarSign, TrendingUp, AlertCircle, Check, X,
   RefreshCw, ChevronDown, ChevronUp, CreditCard,
@@ -146,7 +146,7 @@ export default function Finanzas() {
 
     const [mascotasRes, aliadosRes, planesRes, personalRes, recibosRes, compsRes, recsComprobanteRes] = await Promise.all([
       mascotaIds.length
-        ? db.from('mascotas').select('id_mascota, nombre, cliente_id').in('id_mascota', mascotaIds)
+        ? db.from('mascotas').select('id_mascota, nombre, cliente_id, especies(nombre)').in('id_mascota', mascotaIds)
         : Promise.resolve(empty),
       aliadoIds.length
         ? db.from('aliados').select('id_aliado, nombre, modalidad_comision, saldo_comision').in('id_aliado', aliadoIds)
@@ -1283,6 +1283,9 @@ export default function Finanzas() {
     if (!s.cliente) return '—'
     return `${s.cliente.nombre || ''} ${s.cliente.apellido || ''}`.trim() || '—'
   }
+  function tipoMascota(s) {
+    return s.mascota?.especies?.nombre || '—'
+  }
   function nombrePlan(s) {
     return s.plan?.nombre || '—'
   }
@@ -1643,7 +1646,7 @@ export default function Finanzas() {
                               <table className="w-full min-w-[500px]">
                                 <thead style={{ background: '#FAFAFA' }}>
                                   <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.06)' }}>
-                                    {['Fecha', 'Mascota', 'Valor servicio', 'Comisión', 'Estado pago', 'Descontada'].map(h => (
+                                    {['Fecha', 'Mascota', 'Tipo', 'Valor servicio', 'Comisión', 'Estado pago', 'Descontada'].map(h => (
                                       <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-4 py-2">{h}</th>
                                     ))}
                                   </tr>
@@ -1655,6 +1658,9 @@ export default function Finanzas() {
                                       <td className="px-4 py-3">
                                         <div className="font-semibold text-gray-900 leading-tight">{nombreMascota(s)}</div>
                                         <div className="text-[11px] text-gray-400">{nombreCliente(s)}</div>
+                                      </td>
+                                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">
+                                        <span className="mr-1">{petEmoji(tipoMascota(s))}</span>{tipoMascota(s)}
                                       </td>
                                       <td className="px-4 py-3 font-semibold text-gray-900 tabular-nums">{fmt(s.valor_total)}</td>
                                       <td className="px-4 py-3 font-bold text-[#d97706] tabular-nums">{fmt(s.comision_aliado)}</td>
