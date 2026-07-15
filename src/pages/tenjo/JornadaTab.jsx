@@ -43,13 +43,25 @@ const fmtHora = ts => ts
 const POR_RECIBIR = ['AUTORIZADA_SALIDA', 'EN_TRASLADO']
 
 // Evidencias obligatorias para iniciar el proceso, según el tipo de proceso.
-// Compostaje: 2 fotos del cubículo. Cremación (u otro individual): altar + horno.
-function slotsEvidenciaInicio(tipoProceso) {
-  if (tipoProceso === 'COMPOSTAJE_INDIVIDUAL')
-    return [
+// Compostaje: 2 fotos del cubículo (+ 3 de la toma de huella salvo "sin
+// recordatorios"). Cremación (u otro individual): altar + horno.
+function slotsEvidenciaInicio(tipoProceso, codigoPlan) {
+  if (tipoProceso === 'COMPOSTAJE_INDIVIDUAL') {
+    const slots = [
       { key: 'cubiculo_1', label: 'Cubículo — foto 1' },
       { key: 'cubiculo_2', label: 'Cubículo — foto 2' },
     ]
+    // La toma de huella aplica a todos los compostajes con recordatorios
+    // (los planes "sin recordatorios" no la llevan).
+    if (codigoPlan !== 'COMPETS_SIN_REC') {
+      slots.push(
+        { key: 'huella_frontal', label: 'Huella — frontal' },
+        { key: 'huella_lateral', label: 'Huella — de lado' },
+        { key: 'huella_medidas', label: 'Huella — con medidas' },
+      )
+    }
+    return slots
+  }
   return [
     { key: 'altar', label: 'Evidencia del altar' },
     { key: 'horno', label: 'Ingreso al horno' },
@@ -159,7 +171,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     const item = modalIniciar
     if (!item) return
     if (!respId) { await showAlert('Selecciona el responsable del proceso.', { title: 'Responsable requerido' }); return }
-    const slots = slotsEvidenciaInicio(item.servicios?.planes?.tipo_proceso)
+    const slots = slotsEvidenciaInicio(item.servicios?.planes?.tipo_proceso, item.servicios?.planes?.codigo)
     const faltan = slots.filter(s => !iniEvid[s.key])
     if (faltan.length) {
       await showAlert(`Carga las evidencias requeridas antes de iniciar: ${faltan.map(s => s.label).join(', ')}.`, { title: 'Evidencias requeridas' }); return
@@ -571,7 +583,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
 
       {/* ── Modal iniciar proceso ── */}
       {modalIniciar && (() => {
-        const slots = slotsEvidenciaInicio(modalIniciar.servicios?.planes?.tipo_proceso)
+        const slots = slotsEvidenciaInicio(modalIniciar.servicios?.planes?.tipo_proceso, modalIniciar.servicios?.planes?.codigo)
         const faltanEvid = slots.filter(s => !iniEvid[s.key]).length
         const puedeIniciar = !!respId && faltanEvid === 0 && !iniSubiendo
         return (
