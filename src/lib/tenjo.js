@@ -535,8 +535,9 @@ export function calcularListoProceso(item) {
   }
 
   const baseComp = soloFecha(item?.fecha_compostaje_inicio) || fechaProceso
+  const mesesComp = item?.meses_compostaje || MESES_COMPOST // 2 por defecto; el operario puede fijar 3
   const fechaListo = esCompostaje
-    ? sumarMeses(baseComp, MESES_COMPOST)
+    ? sumarMeses(baseComp, mesesComp)
     : sumarDias(fechaProceso, DIAS_CENIZAS)
 
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0)

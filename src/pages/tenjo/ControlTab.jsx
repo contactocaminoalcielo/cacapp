@@ -60,7 +60,7 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
 
   const cargar = useCallback(async () => {
     const { data, error } = await db.from('lotes_tenjo_items')
-      .select('id, estado, cubiculo_codigo, fecha_inicio_proceso, fecha_fin_proceso, fecha_compostaje_inicio, '
+      .select('id, estado, cubiculo_codigo, fecha_inicio_proceso, fecha_fin_proceso, fecha_compostaje_inicio, meses_compostaje, '
         + 'lotes_tenjo!lote_id(numero_lote, fecha_jornada), '
         + 'servicios!inner(planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
       .in('estado', ['EN_PROCESO', 'PROCESADO'])
@@ -214,7 +214,7 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
       <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
         <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
           <div className="font-semibold text-[15px] text-ink">Control de procesos</div>
-          <div className="text-[11px] text-ink3 mt-0.5">Cenizas listas a los 5 días de la cremación · compostaje listo a los 2 meses de ingresar al cubículo</div>
+          <div className="text-[11px] text-ink3 mt-0.5">Cenizas listas a los 5 días de la cremación · compostaje listo a los 2 o 3 meses de ingresar al cubículo (según el cubículo)</div>
         </div>
         {items.length === 0 ? (
           <div className="py-12 text-center text-ink3 text-sm">Sin procesos en curso ni en espera.</div>

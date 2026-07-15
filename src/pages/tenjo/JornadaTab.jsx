@@ -27,10 +27,10 @@ const fmtFechaLarga = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
   : '—'
 const ahoraISO = () => new Date().toISOString()
-// Fin estimado del compostaje = inicio + 2 meses calendario
-const finCompostaje = fechaStr => {
+// Fin estimado del compostaje = inicio + N meses calendario (2 o 3)
+const finCompostaje = (fechaStr, meses = 2) => {
   if (!fechaStr) return null
-  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + 2)
+  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + meses)
   return hoyLocalISO(d)
 }
 const fmtFechaCorta = f => f
@@ -68,7 +68,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [obsCierre,      setObsCierre]      = useState('')
   const [novCierre,      setNovCierre]      = useState('')
   const [modalCubiculo,  setModalCubiculo]  = useState(null) // item (compostaje a finalizar)
-  const [cubForm,        setCubForm]        = useState({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
+  const [cubForm,        setCubForm]        = useState({ cubiculo_codigo: '', fecha_compostaje_inicio: '', meses: 2 })
   const [modalNovedad,   setModalNovedad]   = useState(null) // item (reportar novedad / no llegó)
   const [novForm,        setNovForm]        = useState({ estado: 'NOVEDAD', novedad: '', recibidoPor: '' })
 
@@ -146,6 +146,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       fecha_fin_proceso: ahoraISO(),
       cubiculo_codigo: cubForm.cubiculo_codigo.trim(),
       fecha_compostaje_inicio: inicioComp,
+      meses_compostaje: cubForm.meses === 3 ? 3 : 2,
     }, false)
     // Conectar los flujos: salida del cuarto frío + traslado completado + avanzar servicio
     try {
@@ -156,7 +157,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       })
     } catch (e) { console.error('[reconciliar compostaje]', e?.message) }
     setModalCubiculo(null)
-    setCubForm({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
+    setCubForm({ cubiculo_codigo: '', fecha_compostaje_inicio: '', meses: 2 })
     await cargar(); onChanged?.()
   }
 
@@ -313,7 +314,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           )}
           {item.estado === 'PROCESADO' && esCompostaje && item.cubiculo_codigo && (
             <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
-              🌿 Cubículo {item.cubiculo_codigo}
+              🌿 Cubículo {item.cubiculo_codigo} · {item.meses_compostaje || 2} meses
             </div>
           )}
           {porRecibir && !noLlego && (
@@ -366,7 +367,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               onClick={async () => {
                 if (esCompostaje) {
                   // Compostaje: capturar el cubículo donde quedó la mascota
-                  setCubForm({ cubiculo_codigo: item.cubiculo_codigo || '', fecha_compostaje_inicio: today() })
+                  setCubForm({ cubiculo_codigo: item.cubiculo_codigo || '', fecha_compostaje_inicio: today(), meses: item.meses_compostaje || 2 })
                   setModalCubiculo(item)
                   return
                 }
@@ -601,7 +602,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           </>}>
           <div className="space-y-4">
             <div className="rounded-xl p-3 text-[12px]" style={{ background: '#F0FDF4', borderColor: '#86EFAC', border: '1px solid' }}>
-              Registra en qué cubículo quedó la mascota. El sistema calculará la fecha estimada de finalización del compostaje sumando <strong>2 meses</strong> a la fecha de ingreso.
+              Registra en qué cubículo quedó la mascota y cuánto durará el compostaje. El sistema calculará la fecha estimada de finalización sumando <strong>{cubForm.meses} meses</strong> a la fecha de ingreso.
             </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Código del cubículo *</label>
@@ -609,11 +610,23 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 onChange={e => setCubForm(p => ({ ...p, cubiculo_codigo: e.target.value }))} />
             </div>
             <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1.5">Duración del compostaje</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[2, 3].map(n => (
+                  <button key={n} type="button"
+                    onClick={() => setCubForm(p => ({ ...p, meses: n }))}
+                    className={`p-2.5 rounded-xl border text-[13px] font-semibold transition-all ${cubForm.meses === n ? 'border-green-500 bg-green-50 text-green-800' : 'border-gray-200 text-ink3'}`}>
+                    {n} meses
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Fecha de ingreso al cubículo</label>
               <Input type="date" max={today()} value={cubForm.fecha_compostaje_inicio}
                 onChange={e => setCubForm(p => ({ ...p, fecha_compostaje_inicio: e.target.value }))} />
               {cubForm.fecha_compostaje_inicio && (
-                <p className="text-[11px] text-ink3 mt-1">→ Compostaje listo estimado: <strong>{fmtFechaCorta(finCompostaje(cubForm.fecha_compostaje_inicio))}</strong></p>
+                <p className="text-[11px] text-ink3 mt-1">→ Compostaje listo estimado: <strong>{fmtFechaCorta(finCompostaje(cubForm.fecha_compostaje_inicio, cubForm.meses))}</strong></p>
               )}
             </div>
           </div>
