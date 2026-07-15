@@ -14,7 +14,7 @@ import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
   generarPropuestaLote, evaluarCandidato, mensajeSugerido,
   mensajeConfirmacionCliente, mensajeGrupoProceso, varianteProceso, VARIANTE_LABEL, TIPO_PROCESO_LABEL,
-  proximaJornada, proximasJornadas, esDiaPlanificacion, nombreDia,
+  proximaJornada, proximasJornadas, esDiaPlanificacion,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
 import {
@@ -327,7 +327,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     const msg = `${nAprobados} mascota${nAprobados !== 1 ? 's' : ''} quedará${nAprobados !== 1 ? 'n' : ''} autorizada${nAprobados !== 1 ? 's' : ''} para salida con traslado programado.`
       + (pendientes ? ` ${pendientes} sin decisión pasarán a REPROGRAMADAS.` : '')
       + ' La salida física se registra al iniciar el traslado.'
-    if (!await confirm(msg, { title: `¿Confirmar lote del ${nombreDia(fechaJornada)}?`, variant: 'warning', confirmLabel: 'Confirmar lote' })) return
+    if (!await confirm(msg, { title: `¿Confirmar lote del ${fmtFechaLarga(lote.fecha_jornada)}?`, variant: 'warning', confirmLabel: 'Confirmar lote' })) return
     setSaving(true)
     try {
       // Escritura crítica → backend propio (transacción + revalidación + lock)
