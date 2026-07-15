@@ -203,6 +203,8 @@ export default function Tenjo() {
   const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
   const [modalRetro,        setModalRetro]        = useState(null) // cuarto_frio row — registro retroactivo
   const [formRetro,         setFormRetro]         = useState({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
+  const [modalRecibir,      setModalRecibir]      = useState(null) // traslado individual a recibir en planta
+  const [formRecibir,       setFormRecibir]       = useState({ recibidoPor: '', novedad: '' })
   // El operario arranca en la Jornada (Planificación es de solo lectura para él)
   const [tab,               setTab]               = useState(personalData?.rol === 'OPERARIO' ? 'jornada' : 'planificacion')
   const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
@@ -340,19 +342,24 @@ export default function Tenjo() {
   }
 
   // Actualiza el estado del item de lote vinculado (si la migración 003 ya corrió)
-  async function actualizarItemLote(servicioId, estadoItem) {
+  async function actualizarItemLote(servicioId, estadoItem, extra = {}) {
     const { error } = await db.from('lotes_tenjo_items')
-      .update({ estado: estadoItem })
+      .update({ estado: estadoItem, ...extra })
       .eq('servicio_id', servicioId)
       .in('estado', ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA', 'EN_TRASLADO'])
     if (error && error.code !== '42P01') console.error('[tenjo items]', error.message)
   }
 
-  async function actualizarTraslado(id, estado, servicioId) {
+  async function actualizarTraslado(id, estado, servicioId, recepcion = null) {
     try {
       const { error } = await db.from('traslados_tenjo').update({
         estado,
-        ...(estado === 'COMPLETADO' && { fecha_completado: today() }),
+        ...(estado === 'COMPLETADO' && {
+          fecha_completado: today(),
+          fecha_recepcion:  new Date().toISOString(),
+          recibido_por:     recepcion?.recibidoPor || personalData?.id || null,
+          ...(recepcion?.novedad?.trim() && { recepcion_novedad: recepcion.novedad.trim() }),
+        }),
       }).eq('id', id)
       if (error) throw error
       if (estado === 'EN_CAMINO' && servicioId) {
@@ -374,7 +381,14 @@ export default function Tenjo() {
           tipo:       'SALIDA_TENJO',
           motivo:     'Traslado a Tenjo completado',
         })
-        await actualizarItemLote(servicioId, 'RECIBIDA')
+        // Sellar la recepción también en el item del lote (si la mascota venía en uno)
+        const conNovedad = !!recepcion?.novedad?.trim()
+        await actualizarItemLote(servicioId, 'RECIBIDA', {
+          recepcion_estado:  conNovedad ? 'NOVEDAD' : 'RECIBIDA',
+          fecha_recepcion:   new Date().toISOString(),
+          recibido_por:      recepcion?.recibidoPor || personalData?.id || null,
+          ...(conNovedad && { recepcion_novedad: recepcion.novedad.trim() }),
+        })
       }
       await cargar()
     } catch (e) {
@@ -610,9 +624,9 @@ export default function Tenjo() {
                           En camino
                         </Button>
                       )}
-                      {t.estado === 'EN_CAMINO' && (
-                        <Button size="sm" onClick={() => actualizarTraslado(t.id, 'COMPLETADO', t.servicio_id)}>
-                          Completado
+                      {['PROGRAMADO', 'EN_CAMINO'].includes(t.estado) && (
+                        <Button size="sm" onClick={() => { setModalRecibir(t); setFormRecibir({ recibidoPor: personalData?.id || '', novedad: '' }) }}>
+                          <CheckCircle2 size={13} /> Recibir en planta
                         </Button>
                       )}
                     </div>
@@ -1017,6 +1031,47 @@ export default function Tenjo() {
               <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
               <Textarea value={formCubiculo.notas}
                 onChange={e => setFormCubiculo(p => ({ ...p, notas: e.target.value }))} />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal recibir traslado individual en planta */}
+      {modalRecibir && (
+        <Modal open onClose={() => setModalRecibir(null)}
+          title={`Recibir en planta — ${modalRecibir.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setModalRecibir(null)}>Cancelar</Button>
+              <Button disabled={saving}
+                onClick={async () => {
+                  setSaving(true)
+                  try {
+                    await actualizarTraslado(modalRecibir.id, 'COMPLETADO', modalRecibir.servicio_id, formRecibir)
+                    setModalRecibir(null)
+                  } finally { setSaving(false) }
+                }}>
+                {saving ? 'Guardando…' : 'Confirmar recepción'}
+              </Button>
+            </>
+          }>
+          <div className="space-y-4">
+            <div className="rounded-xl p-3 text-[12px]" style={{ background: '#ECFEFF', borderColor: '#A5F3FC', border: '1px solid' }}>
+              Se sella la hora de llegada a la planta, la mascota sale del cuarto frío y el servicio pasa a <strong>EN PROCESO</strong>.
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Quién recibe</label>
+              <Select value={formRecibir.recibidoPor} onChange={e => setFormRecibir(p => ({ ...p, recibidoPor: e.target.value }))}>
+                <option value="">Yo ({personalData?.nombre || 'operario'})</option>
+                {personal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Novedad de recepción (opcional)</label>
+              <Textarea value={formRecibir.novedad}
+                onChange={e => setFormRecibir(p => ({ ...p, novedad: e.target.value }))}
+                placeholder="Ej: llegó con la caja húmeda…" />
             </div>
           </div>
         </Modal>

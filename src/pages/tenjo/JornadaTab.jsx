@@ -17,9 +17,10 @@ import { petEmoji, parsearErrorDB, today, hoyLocalISO } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
+  recibirItemLoteTenjo, RECEPCION_CFG,
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
-import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 const fmtFechaLarga = f => f
@@ -35,6 +36,11 @@ const finCompostaje = fechaStr => {
 const fmtFechaCorta = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
   : '—'
+const fmtHora = ts => ts
+  ? new Date(ts).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
+  : '—'
+// Un item sigue "por recibir" mientras no haya llegado a la planta
+const POR_RECIBIR = ['AUTORIZADA_SALIDA', 'EN_TRASLADO']
 
 function Chip({ cfg, fallback }) {
   return (
@@ -63,6 +69,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [novCierre,      setNovCierre]      = useState('')
   const [modalCubiculo,  setModalCubiculo]  = useState(null) // item (compostaje a finalizar)
   const [cubForm,        setCubForm]        = useState({ cubiculo_codigo: '', fecha_compostaje_inicio: '' })
+  const [modalNovedad,   setModalNovedad]   = useState(null) // item (reportar novedad / no llegó)
+  const [novForm,        setNovForm]        = useState({ estado: 'NOVEDAD', novedad: '', recibidoPor: '' })
 
   const cargar = useCallback(async () => {
     const { data: ls, error } = await db.from('lotes_tenjo')
@@ -152,6 +160,63 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     await cargar(); onChanged?.()
   }
 
+  // ── Recepción en planta ──
+  // Recibir una mascota (llegó bien). Sella hora + responsable, cierra custodia
+  // y completa el traslado; el item queda RECIBIDA (habilita "Iniciar proceso").
+  async function recibirItem(item) {
+    setSaving(true)
+    try {
+      await recibirItemLoteTenjo(item, { estado: 'RECIBIDA', personalId: personalData?.id })
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al recibir', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  // Recibir todas las mascotas pendientes de un lote de una sola vez
+  async function recibirTodas(lote) {
+    const porRecibir = (items[lote.id] || []).filter(
+      i => POR_RECIBIR.includes(i.estado) && i.recepcion_estado !== 'NO_LLEGO'
+    )
+    if (!porRecibir.length) return
+    if (!await confirm(
+      `Se recibirán ${porRecibir.length} mascotica${porRecibir.length !== 1 ? 's' : ''} en la planta. Se sellará la hora de llegada y saldrán del cuarto frío.`,
+      { title: '¿Recibir todas?', confirmLabel: 'Recibir todas', variant: 'warning' }
+    )) return
+    setSaving(true)
+    try {
+      for (const i of porRecibir) {
+        await recibirItemLoteTenjo(i, { estado: 'RECIBIDA', personalId: personalData?.id })
+      }
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al recibir', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  // Reportar novedad / no llegó (desde el modal)
+  async function guardarNovedadRecepcion() {
+    const item = modalNovedad
+    if (!item) return
+    if (novForm.estado === 'NO_LLEGO' && !novForm.novedad.trim()) {
+      await showAlert('Indica por qué no llegó a la planta.', { title: 'Motivo requerido' }); return
+    }
+    setSaving(true)
+    try {
+      await recibirItemLoteTenjo(item, {
+        estado:      novForm.estado,
+        novedad:     novForm.novedad,
+        recibidoPor: novForm.recibidoPor || personalData?.id,
+        personalId:  personalData?.id,
+      })
+      setModalNovedad(null)
+      setNovForm({ estado: 'NOVEDAD', novedad: '', recibidoPor: '' })
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error al registrar novedad', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
   function abrirChecklist(item) {
     setModalChecklist(item)
     setChkForm(item.checklist || {})
@@ -214,6 +279,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       ? validarItemCierre(item, plan?.codigo, item.servicios?.tipo_acompanamiento, config)
       : []
     const resp = personal?.find(p => p.id === item.responsable_proceso_id)
+    const recibidor = personal?.find(p => p.id === item.recibido_por)
+    const porRecibir = POR_RECIBIR.includes(item.estado)
+    const noLlego = item.recepcion_estado === 'NO_LLEGO'
+    const recepCfg = item.recepcion_estado ? RECEPCION_CFG[item.recepcion_estado] : null
     const nEvid = (item.evidencia_urls || []).length
     const esCompostaje = plan?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
     const rec = Array.isArray(item.servicios?.recogidas) ? item.servicios.recogidas[0] : item.servicios?.recogidas
@@ -228,6 +297,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-ink">{m?.nombre || '—'}</span>
             <Chip cfg={ITEM_ESTADO_CFG[item.estado]} fallback={item.estado} />
+            {recepCfg && item.recepcion_estado !== 'RECIBIDA' && <Chip cfg={recepCfg} fallback={item.recepcion_estado} />}
             <span className="text-[10px] text-ink3">{VARIANTE_LABEL[variante]}</span>
           </div>
           <div className="text-[11px] text-ink3 mt-0.5">
@@ -246,8 +316,21 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               🌿 Cubículo {item.cubiculo_codigo}
             </div>
           )}
-          {['AUTORIZADA_SALIDA', 'EN_TRASLADO'].includes(item.estado) && (
-            <div className="text-[10px] text-ink3 mt-0.5">Autorizada para Tenjo — si ya está en la planta, podés iniciar el proceso directamente.</div>
+          {porRecibir && !noLlego && (
+            <div className="text-[10px] text-ink3 mt-0.5">Autorizada para Tenjo — recíbela al llegar a la planta para poder iniciar el proceso.</div>
+          )}
+          {noLlego && (
+            <div className="text-[10px] mt-0.5 font-medium" style={{ color: '#991B1B' }}>
+              🚫 No llegó a la planta{item.recepcion_novedad ? ` — ${item.recepcion_novedad}` : ''}
+            </div>
+          )}
+          {item.fecha_recepcion && !noLlego && (
+            <div className="text-[10px] text-ink3 mt-0.5">
+              📦 Recibida {fmtHora(item.fecha_recepcion)}{recibidor ? ` · ${recibidor.nombre} ${recibidor.apellido}` : ''}
+              {item.recepcion_estado === 'NOVEDAD' && item.recepcion_novedad && (
+                <span className="text-amber-700"> · ⚠ {item.recepcion_novedad}</span>
+              )}
+            </div>
           )}
           {item.estado === 'PROCESADO' && faltantes.length > 0 && (
             <div className="mt-1">
@@ -261,7 +344,18 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           )}
         </div>
         <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
-          {['AUTORIZADA_SALIDA', 'EN_TRASLADO', 'RECIBIDA'].includes(item.estado) && (
+          {porRecibir && (
+            <>
+              <Button size="sm" disabled={saving} onClick={() => recibirItem(item)}>
+                <PackageCheck size={12} /> Recibir
+              </Button>
+              <Button size="sm" variant="secondary" disabled={saving}
+                onClick={() => { setModalNovedad(item); setNovForm({ estado: noLlego ? 'NO_LLEGO' : 'NOVEDAD', novedad: item.recepcion_novedad || '', recibidoPor: personalData?.id || '' }) }}>
+                <PackageX size={12} /> Novedad
+              </Button>
+            </>
+          )}
+          {item.estado === 'RECIBIDA' && (
             <Button size="sm" disabled={saving}
               onClick={() => { setModalIniciar(item); setRespId(item.responsable_proceso_id || personalData?.id || '') }}>
               <Play size={12} /> Iniciar proceso
@@ -313,6 +407,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       ) : lotes.map(lote => {
         const its = items[lote.id] || []
         const activos = its.filter(i => !['REPROGRAMADO', 'RETIRADO_DEL_LOTE', 'NO_EJECUTADO'].includes(i.estado))
+        const porRecibirLote = activos.filter(i => POR_RECIBIR.includes(i.estado) && i.recepcion_estado !== 'NO_LLEGO')
         const procesados = activos.filter(i => i.estado === 'PROCESADO')
         const listos = procesados.filter(i =>
           validarItemCierre(i, i.servicios?.planes?.codigo, i.servicios?.tipo_acompanamiento, config).length === 0
@@ -325,8 +420,14 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               </div>
               <Chip cfg={LOTE_ESTADO_CFG[lote.estado]} fallback={lote.estado} />
               <span className="text-[11px] text-ink3">
+                {porRecibirLote.length > 0 && <span className="text-cyan-700 font-semibold">{porRecibirLote.length} por recibir · </span>}
                 {procesados.length}/{activos.length} procesados · {listos} listos para cierre
               </span>
+              {porRecibirLote.length > 0 && (
+                <Button size="sm" disabled={saving} onClick={() => recibirTodas(lote)}>
+                  <Inbox size={12} /> Recibir todas ({porRecibirLote.length})
+                </Button>
+              )}
               {canPlan && (
                 <Button size="sm" variant="gold" disabled={saving}
                   onClick={() => { setModalCerrar(lote); setMotivos({}); setObsCierre(''); setNovCierre('') }}>
@@ -515,6 +616,57 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 <p className="text-[11px] text-ink3 mt-1">→ Compostaje listo estimado: <strong>{fmtFechaCorta(finCompostaje(cubForm.fecha_compostaje_inicio))}</strong></p>
               )}
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal reportar novedad / no llegó ── */}
+      {modalNovedad && (
+        <Modal open onClose={() => setModalNovedad(null)}
+          title={`Novedad de recepción — ${modalNovedad.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={<>
+            <Button variant="secondary" onClick={() => setModalNovedad(null)}>Cancelar</Button>
+            <Button onClick={guardarNovedadRecepcion} disabled={saving}
+              variant={novForm.estado === 'NO_LLEGO' ? 'danger' : 'primary'}>
+              {saving ? 'Guardando…' : novForm.estado === 'NO_LLEGO' ? 'Registrar que no llegó' : 'Recibir con novedad'}
+            </Button>
+          </>}>
+          <div className="space-y-4">
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1.5">¿Qué pasó?</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button"
+                  onClick={() => setNovForm(f => ({ ...f, estado: 'NOVEDAD' }))}
+                  className={`p-2.5 rounded-xl border text-[12px] font-semibold text-left transition-all ${novForm.estado === 'NOVEDAD' ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-gray-200 text-ink3'}`}>
+                  ⚠ Llegó con novedad
+                  <div className="text-[10px] font-normal text-ink3 mt-0.5">Se recibe igual y avanza</div>
+                </button>
+                <button type="button"
+                  onClick={() => setNovForm(f => ({ ...f, estado: 'NO_LLEGO' }))}
+                  className={`p-2.5 rounded-xl border text-[12px] font-semibold text-left transition-all ${novForm.estado === 'NO_LLEGO' ? 'border-red-400 bg-red-50 text-red-800' : 'border-gray-200 text-ink3'}`}>
+                  🚫 No llegó
+                  <div className="text-[10px] font-normal text-ink3 mt-0.5">No avanza; queda pendiente</div>
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">
+                {novForm.estado === 'NO_LLEGO' ? 'Motivo por el que no llegó *' : 'Detalle de la novedad'}
+              </label>
+              <Textarea value={novForm.novedad}
+                onChange={e => setNovForm(f => ({ ...f, novedad: e.target.value }))}
+                placeholder={novForm.estado === 'NO_LLEGO' ? 'Ej: no venía en el camión, se reprograma…' : 'Ej: llegó con la caja húmeda…'} />
+            </div>
+            {novForm.estado !== 'NO_LLEGO' && (
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Quién recibe</label>
+                <Select value={novForm.recibidoPor} onChange={e => setNovForm(f => ({ ...f, recibidoPor: e.target.value }))}>
+                  <option value="">Yo ({personalData?.nombre || 'operario'})</option>
+                  {(personal || []).map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido}</option>)}
+                </Select>
+              </div>
+            )}
           </div>
         </Modal>
       )}

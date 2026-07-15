@@ -629,7 +629,64 @@ export async function reconciliarServicioTenjo(servicioId, {
   }
 }
 
+/**
+ * Recepción en planta de un item de lote (flujo Jornada). Sella hora real de
+ * llegada + quién recibió y, si la mascota efectivamente llegó, cierra la
+ * custodia del cuarto frío (idempotente), completa el traslado activo y deja el
+ * item en RECIBIDA (compuerta para "Iniciar proceso").
+ *
+ * @param {object} item  fila de lotes_tenjo_items (necesita id y servicio_id)
+ * @param {object} opts
+ * @param {'RECIBIDA'|'NOVEDAD'|'NO_LLEGO'} opts.estado  resultado de la recepción
+ * @param {string?} opts.novedad     detalle de novedad / motivo de no llegada
+ * @param {string?} opts.recibidoPor operario que recibe (default: personalId)
+ * @param {string?} opts.personalId  para el log de salida del cuarto frío
+ */
+export async function recibirItemLoteTenjo(item, {
+  estado = 'RECIBIDA',
+  novedad = null,
+  recibidoPor = null,
+  personalId = null,
+} = {}) {
+  if (!item?.id) throw new Error('Item de lote inválido para recepción')
+  const noLlego  = estado === 'NO_LLEGO'
+  const quien    = recibidoPor || personalId || null
+  const ahora    = new Date().toISOString()
+
+  // 1. Sellar la recepción en el item. Si llegó, además pasa a RECIBIDA.
+  const cambios = {
+    recepcion_estado:  estado,
+    recepcion_novedad: novedad?.trim() || null,
+    fecha_recepcion:   ahora,
+    recibido_por:      quien,
+    decidido_por:      personalId || null,
+  }
+  if (!noLlego) cambios.estado = 'RECIBIDA'
+  const { error } = await db.from('lotes_tenjo_items').update(cambios).eq('id', item.id)
+  if (error) throw new Error(error.message)
+
+  if (noLlego) return // no llegó: no toca custodia ni traslado; queda pendiente
+
+  // 2. La mascota está físicamente en Tenjo → sale de la nevera (idempotente).
+  await registrarSalidaCuartoFrio(item.servicio_id, {
+    personalId, tipo: 'SALIDA_TENJO', motivo: 'Recibida en planta Tenjo',
+  })
+
+  // 3. Completar el traslado activo (transporte terminado) con datos de recepción.
+  await db.from('traslados_tenjo')
+    .update({ estado: 'COMPLETADO', fecha_completado: today(),
+              fecha_recepcion: ahora, recibido_por: quien })
+    .eq('servicio_id', item.servicio_id)
+    .in('estado', ['PROGRAMADO', 'EN_CAMINO'])
+}
+
 // ─── Etiquetas y colores para la UI ──────────────────────────────────────────
+export const RECEPCION_CFG = {
+  RECIBIDA: { label: 'Recibida',           bg: '#E0F2FE', text: '#0E7490' },
+  NOVEDAD:  { label: 'Recibida c/novedad', bg: '#FEF3C7', text: '#92400E' },
+  NO_LLEGO: { label: 'No llegó',           bg: '#FEE2E2', text: '#991B1B' },
+}
+
 export const CLASIF_CFG = {
   APTA:                 { label: 'Apta',                 bg: '#D1FAE5', text: '#065F46' },
   REQUIERE_VALIDACION:  { label: 'Requiere validación',  bg: '#FEF3C7', text: '#92400E' },
