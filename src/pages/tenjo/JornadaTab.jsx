@@ -534,10 +534,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                         <>
                           <Camera size={18} className="text-ink3" />
                           <span className="text-[10px] font-semibold text-ink2 leading-tight">{s.label}</span>
-                          <span className="text-[9px] text-ink3">Toca para tomar/subir</span>
+                          <span className="text-[9px] text-ink3">Cámara o galería</span>
                         </>
                       )}
-                      <input type="file" accept="image/*" capture="environment" className="hidden" disabled={subiendo}
+                      <input type="file" accept="image/*" className="hidden" disabled={subiendo}
                         onChange={e => { subirEvidenciaInicio(modalIniciar, s.key, e.target.files?.[0]); e.target.value = '' }} />
                     </label>
                   )
