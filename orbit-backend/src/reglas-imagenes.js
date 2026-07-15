@@ -7,6 +7,14 @@
 export const CONFIG_DEFAULTS_IMAGENES = {
   fecha_base:        'fecha_ingreso',
   planes_excluidos:  ['ANGEL', 'DESAMPARADO'],
+  // Planes "sin recordatorios" que AUN ASÍ entran al primer contacto (David 2026-07-15):
+  //  - foto_cofre: el cofre exclusivo lleva foto → el job adjunta el recordatorio
+  //    "Foto para el cofre" y el portal la pide como cualquier otra imagen.
+  //  - solo_entrega: no lleva foto, pero necesita coordinar la entrega física →
+  //    la solicitud se crea igual y el portal muestra solo los datos de entrega.
+  planes_foto_cofre:  ['EXCLUSIVO_PRESENCIAL_SIN_REC', 'EXCLUSIVO_VIDEOLLAMADA_SIN_REC'],
+  planes_solo_entrega: ['COMPETS_SIN_REC'],
+  recordatorio_cofre: 'Foto para el cofre',   // nombre del recordatorio de catálogo (migración 052)
   // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).
   estados_elegibles: ['EN_CUARTO_FRIO'],
   // Ventana en la que el PORTAL acepta cargas del cliente. Más amplia que la del

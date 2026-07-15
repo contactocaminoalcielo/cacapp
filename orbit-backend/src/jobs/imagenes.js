@@ -11,6 +11,11 @@
 //   - tiene ≥1 recordatorio activo que requiere imagen.
 //   - Planes ANGEL/DESAMPARADO excluidos, salvo que tengan un ADICIONAL que
 //     requiera imagen → entra como solo_adicional.
+//   - Planes "sin recordatorios" que igual entran (David 2026-07-15):
+//       · planes_foto_cofre (EXCLUSIVO_*_SIN_REC): se adjunta el recordatorio
+//         "Foto para el cofre" y entra a pedir esa foto.
+//       · planes_solo_entrega (COMPETS_SIN_REC): entra solo a pedir datos de
+//         entrega (el portal muestra 0 fotos + formulario de entrega).
 import { pool, log } from '../db.js'
 import { cargarConfigImagenes, construirEnlace } from '../reglas-imagenes.js'
 
@@ -31,6 +36,16 @@ export async function jobContactosImagenes() {
     const excluidos = Array.isArray(config.planes_excluidos) ? config.planes_excluidos : ['ANGEL', 'DESAMPARADO']
     const recuperar = config.recuperar_vencidos === true || config.recuperar_vencidos === 'true'
     const linea     = config.linea_default || '+573159891247'
+    // Planes SIN_REC que igual entran al primer contacto (David 2026-07-15).
+    const planesCofre       = Array.isArray(config.planes_foto_cofre) ? config.planes_foto_cofre : []
+    const planesSoloEntrega = Array.isArray(config.planes_solo_entrega) ? config.planes_solo_entrega : []
+    // Id del recordatorio "Foto para el cofre" (migración 052). Si no existe todavía,
+    // los planes de cofre no se pueden atender: se reporta y se omiten (no se rompe).
+    const { rows: cofreRows } = await client.query(
+      `SELECT id FROM public.recordatorios WHERE nombre = $1 LIMIT 1`,
+      [config.recordatorio_cofre || 'Foto para el cofre']
+    )
+    const cofreRecId = cofreRows[0]?.id || null
 
     // "Día anterior": fecha_ingreso < hoy. Con recuperar_vencidos también las más viejas
     // (si no, solo exactamente ayer).
@@ -64,17 +79,42 @@ export async function jobContactosImagenes() {
 
     let creados = 0
     for (const c of candidatos) {
-      // ¿Califica? Planes excluidos solo entran por adicional con imagen.
+      const esCofre       = planesCofre.includes(c.plan_codigo)
+      const esSoloEntrega = planesSoloEntrega.includes(c.plan_codigo)
+      // ¿Califica y cómo entra?
+      //  · plan_excluido (ANGEL/DESAMPARADO): solo por ADICIONAL con imagen.
+      //  · req_img_any: ruta normal (≥1 recordatorio con foto).
+      //  · esCofre (EXCLUSIVO_*_SIN_REC): se adjunta "Foto para el cofre".
+      //  · esSoloEntrega (COMPETS_SIN_REC): entra solo por datos de entrega.
       let soloAdicional = false
       if (c.plan_excluido) {
         if (!c.req_img_adicional) continue
         soloAdicional = true
+      } else if (c.req_img_any) {
+        // ruta normal
+      } else if (esCofre) {
+        if (!cofreRecId) { log('[imagenes/job] plan de cofre sin recordatorio (migración 052 pendiente):', c.servicio_id); continue }
+      } else if (esSoloEntrega) {
+        // entra sin fotos: el portal pedirá solo los datos de entrega
       } else {
-        if (!c.req_img_any) continue
+        continue   // sin recordatorios y no es un plan especial → nada que pedir
       }
 
       try {
         await client.query('BEGIN')
+        // Cofre: adjuntar "Foto para el cofre" (idempotente) para que fluya por el
+        // pipeline normal (portal → Producción → entrega). precio 0: ya va en el plan.
+        if (esCofre && cofreRecId) {
+          await client.query(
+            `INSERT INTO public.servicio_recordatorios
+               (servicio_id, recordatorio_id, cantidad, origen, estado, precio_cobrado)
+             SELECT $1, $2, 1, 'PLAN', 'PENDIENTE', 0
+             WHERE NOT EXISTS (
+               SELECT 1 FROM public.servicio_recordatorios
+               WHERE servicio_id = $1 AND recordatorio_id = $2 AND COALESCE(origen,'') <> 'REMOVIDO')`,
+            [c.servicio_id, cofreRecId]
+          )
+        }
         // Asegurar código seguro/único y persistirlo en el servicio.
         const { rows: cod } = await client.query(
           `UPDATE public.servicios

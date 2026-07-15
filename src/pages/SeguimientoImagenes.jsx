@@ -361,7 +361,10 @@ export default function SeguimientoImagenes() {
                     <Td className="text-ink3 text-[11px]">{fechaCorta(svc.fecha_ingreso)}</Td>
                     <Td>
                       <div className="flex flex-col gap-1">
-                        {(s.recordatorios_img || []).length === 0 && <span className="text-ink3 text-[11px]">-</span>}
+                        {(s.recordatorios_img || []).length === 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full w-fit"
+                            style={{ background: '#E8F3EB', color: '#1D6B3F' }}>Solo datos de entrega</span>
+                        )}
                         {(s.recordatorios_img || []).map((r, i) => (
                           <span key={i} className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full w-fit"
                             style={{ background: '#EEF3FB', color: '#2C5AA0' }}>
