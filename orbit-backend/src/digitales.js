@@ -476,10 +476,32 @@ export async function descartarPieza({ id }) {
 //   plantilla_memorial  → espera solo memorial:   {{1}} memorial
 // Cualquier otra combinación (p. ej. le quitaron el short) NO se envía
 // automático — queda el envío manual (decisión David 2026-07-09, opción a).
+// `texto` y `cubre` describen la plantilla YA APROBADA en Meta y deben editarse
+// a la par de ella (la API de GHL no expone el cuerpo, así que no hay forma de
+// derivarlos):
+//   texto → espejo del cuerpo aprobado, con {{n}} donde van los bodyParams. Es lo
+//           que se guarda como evidencia; sin él la evidencia miente (el cliente
+//           recibe la plantilla, no el texto que arma Orbit).
+//   cubre → ids de recordatorio que la plantilla entrega con enlace FIJO escrito
+//           en su cuerpo (audio, herramientas de duelo, tarjeta de oración…).
+//           Sin él esos digitales quedan PENDIENTE aunque el cliente ya los tenga.
 function plantillaCfg(v) {
-  return (v && typeof v === 'object' && typeof v.nombre === 'string' && v.nombre.trim())
-    ? { nombre: v.nombre.trim(), idioma: v.idioma || 'es_MX', categoria: v.categoria || 'UTILITY' }
-    : null
+  if (!(v && typeof v === 'object' && typeof v.nombre === 'string' && v.nombre.trim())) return null
+  return {
+    nombre: v.nombre.trim(),
+    idioma: v.idioma || 'es_MX',
+    categoria: v.categoria || 'UTILITY',
+    texto: typeof v.texto === 'string' && v.texto ? v.texto : null,
+    cubre: Array.isArray(v.cubre) ? v.cubre.filter(uuidOrNull) : [],
+  }
+}
+
+// Resuelve el espejo del cuerpo aprobado con los valores reales de {{1}}, {{2}}…
+function resolverTextoPlantilla(texto, bodyParams) {
+  return bodyParams.reduce(
+    (t, val, i) => t.replaceAll(`{{${i + 1}}}`, val ?? ''),
+    texto
+  )
 }
 
 function infoZolutium(cfg) {
@@ -493,11 +515,13 @@ function infoZolutium(cfg) {
   }
 }
 
-// Marca ENTREGADO en servicio_recordatorios los digitales cuyos enlaces se enviaron.
-async function marcarDigitalesEntregados(client, servicioId, tiposEnviados) {
+// Marca ENTREGADO en servicio_recordatorios los digitales cuyos enlaces se enviaron:
+// los de las piezas producidas (tiposEnviados) + los de enlace fijo que la plantilla
+// entrega en su propio cuerpo (recIdsFijos).
+async function marcarDigitalesEntregados(client, servicioId, tiposEnviados, recIdsFijos = []) {
   const cfg = await cargarConfigDigitales(client)
   const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
-  const recIds = tiposEnviados.map(t => mapa[t]).filter(Boolean)
+  const recIds = [...new Set([...tiposEnviados.map(t => mapa[t]), ...recIdsFijos].filter(Boolean))]
   if (!recIds.length) return
   await client.query(
     `UPDATE public.servicio_recordatorios
@@ -590,7 +614,11 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   }
 
   const enlaces = tipos.map(t => ({ tipo: t, url: urls[t] }))
-  const mensaje = construirMensajeCliente(cfg, svc.mascota, enlaces)
+  // La evidencia debe ser lo que el cliente REALMENTE recibe: el cuerpo de la
+  // plantilla aprobada (que trae los enlaces fijos), no el resumen que arma Orbit.
+  const mensaje = plantilla.texto
+    ? resolverTextoPlantilla(plantilla.texto, bodyParams)
+    : construirMensajeCliente(cfg, svc.mascota, enlaces)
 
   // 4) Envío (red) → luego evidencia atómica, mismo patrón que reportes grupales
   let envioOk = null, envioErr = null
@@ -640,7 +668,7 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
        exito ? 'ENVIADO' : 'ERROR', envioErr, plantilla.nombre,
        envioOk?.messageId || null, envioOk?.contactId || null]
     )
-    if (exito) await marcarDigitalesEntregados(client, servicioId, tipos)
+    if (exito) await marcarDigitalesEntregados(client, servicioId, tipos, plantilla.cubre)
     await client.query('COMMIT')
     if (!exito) return { status: 502, body: { error: `El envío falló: ${envioErr}` } }
     return { status: 200, body: { ok: true, envio: env[0], enlaces, plantilla: plantilla.nombre } }
