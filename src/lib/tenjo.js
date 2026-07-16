@@ -527,7 +527,7 @@ export function calcularListoProceso(item) {
   const esCompostaje = tipo === 'COMPOSTAJE_INDIVIDUAL'
   const fechaInicio  = soloFecha(item?.fecha_inicio_proceso)
   const fechaProceso = soloFecha(item?.fecha_fin_proceso) // fin = cremacion / fin de proceso
-  // Catálogo (migración 054) primero; el texto libre viejo solo como respaldo
+  // Catálogo (migración 055) primero; el texto libre viejo solo como respaldo
   // para los items anteriores que no se pudieron enlazar.
   const cubiculo     = item?.cubiculos
     ? etiquetaCubiculo(item.cubiculos)

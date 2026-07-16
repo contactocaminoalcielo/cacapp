@@ -109,7 +109,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [novCierre,      setNovCierre]      = useState('')
   const [modalCubiculo,  setModalCubiculo]  = useState(null) // item (compostaje a finalizar)
   const [cubForm,        setCubForm]        = useState({ cubiculo_id: '', fecha_compostaje_inicio: '', meses: 2 })
-  // Catálogo de cubículos + ocupación (migración 054). Única fuente de verdad:
+  // Catálogo de cubículos + ocupación (migración 055). Única fuente de verdad:
   // aquí no se vuelve a escribir texto libre, que fue lo que derivó a 8 grafías.
   const [cubiculos,      setCubiculos]      = useState([])
   const [ocupacion,      setOcupacion]      = useState({})
@@ -146,7 +146,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       setCubiculos(cubs); setOcupacion(ocu); setErrCubiculos(null)
     } catch (e) {
       setErrCubiculos(/does not exist|schema cache/i.test(e?.message || '')
-        ? 'Falta aplicar la migración 054 (catálogo de cubículos) en esta base de datos.'
+        ? 'Falta aplicar la migración 055 (catálogo de cubículos) en esta base de datos.'
         : mensajeErrorCubiculo(e))
     }
   }, [])

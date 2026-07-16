@@ -1,4 +1,4 @@
-// Cubículos de compostaje individual de la planta de Tenjo (migración 054).
+// Cubículos de compostaje individual de la planta de Tenjo (migración 055).
 //
 // Catálogo cerrado de 218 cubículos: zona (color físico) → talla (P/M/G) → número.
 // La OCUPACIÓN no es una columna de estado: se deriva de "existe un item que
@@ -80,7 +80,7 @@ export async function cargarCubiculos() {
 
 /**
  * Items con un `cubiculo_codigo` viejo que no se pudo enlazar al catálogo
- * (ej. "N-2"). La migración 054 los dejó con cubiculo_id NULL a propósito para
+ * (ej. "N-2"). La migración 055 los dejó con cubiculo_id NULL a propósito para
  * que un humano decida. La pestaña Cubículos los muestra para corregirlos.
  */
 export async function cargarCodigosHuerfanos() {

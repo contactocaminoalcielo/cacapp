@@ -1,4 +1,4 @@
--- 054_tenjo_cubiculos_catalogo.sql
+-- 055_tenjo_cubiculos_catalogo.sql
 -- Tenjo: catálogo oficial de cubículos de compostaje individual + asignación.
 --
 -- Problema: `lotes_tenjo_items.cubiculo_codigo` (migración 008) es TEXTO LIBRE.

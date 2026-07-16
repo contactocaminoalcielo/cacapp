@@ -20,8 +20,8 @@ import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import ControlTab from '@/pages/tenjo/ControlTab'
 import CubiculosTab from '@/pages/tenjo/CubiculosTab'
-import { addDiasHabiles, parsearErrorDB, petEmoji, today, hoyLocalISO } from '@/lib/utils'
-import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Leaf, AlertTriangle, Clock, History } from 'lucide-react'
+import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
+import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Clock, History } from 'lucide-react'
 
 function fmtFecha(s) {
   if (!s) return '-'
@@ -189,9 +189,6 @@ export default function Tenjo() {
   const [cenizasListas,     setCenizasListas]     = useState([])   // ≥ 5 días, listas para traslado de regreso
   const [cenizasPendientes, setCenizasPendientes] = useState([])   // traslado de regreso llegó, confirmar
   const [procesados,        setProcesados]        = useState([])
-  const [compostajes,       setCompostajes]       = useState([])
-  const [compostajesAlerta, setCompostajesAlerta] = useState([])   // ≤ 7 días para terminar
-  const [compostajesListos, setCompostajesListos] = useState([])   // ya cumplieron los 2 meses
   const [personal,          setPersonal]          = useState([])
   const [loading,           setLoading]           = useState(true)
   const [error,             setError]             = useState(null)
@@ -200,8 +197,6 @@ export default function Tenjo() {
   const [formTraslado,      setFormTraslado]      = useState({ fecha_programada: today(), tecnico_id: '', notas: '' })
   const [saving,            setSaving]            = useState(false)
   const [certIndModal,      setCertIndModal]      = useState(null)
-  const [modalCubiculo,     setModalCubiculo]     = useState(null) // seguimiento_compostaje para registrar cubículo
-  const [formCubiculo,      setFormCubiculo]      = useState({ fecha_inicio: today(), cubiculo_codigo: '', notas: '' })
   const [modalRetro,        setModalRetro]        = useState(null) // cuarto_frio row — registro retroactivo
   const [formRetro,         setFormRetro]         = useState({ fecha_proceso: today(), tecnico_id: '', notas: '', listo: true })
   const [modalRecibir,      setModalRecibir]      = useState(null) // traslado individual a recibir en planta
@@ -234,7 +229,7 @@ export default function Tenjo() {
   async function cargar() {
     try {
       setLoading(true)
-      const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: comp }, { data: per }, { data: procComp }] = await Promise.all([
+      const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: per }, { data: procComp }] = await Promise.all([
         db.from('traslados_tenjo')
           .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
           .in('estado', ['PROGRAMADO','EN_CAMINO'])
@@ -251,11 +246,6 @@ export default function Tenjo() {
           .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
           .eq('estado', 'REFRIGERADO')
           .gte('servicios.fecha_ingreso', FECHA_CORTE),
-        db.from('seguimiento_compostaje')
-          .select('id, cubiculo_codigo, fecha_inicio, fecha_fin_estimada, estado, planta_lista, planta_entregada, servicio_id, servicios!inner(estado, mascotas(nombre,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)), planes(nombre))')
-          .eq('estado', 'EN_PROCESO')
-          .gte('servicios.fecha_ingreso', FECHA_CORTE)
-          .order('fecha_inicio', { ascending: true }),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         // Individuales procesados (cenizas ya confirmadas) — para emitir certificados
         db.from('traslados_tenjo')
@@ -298,35 +288,10 @@ export default function Tenjo() {
           && !serviciosConTraslado.has(r.servicio_id)
       }))
 
-      // Compostajes: solo los que ya están físicamente en Tenjo (servicio en EN_PROCESO o más adelante)
-      const hoyComp = new Date(); hoyComp.setHours(0,0,0,0)
-      const compAll = (comp || [])
-        .filter(c => ['EN_PROCESO','EN_PRODUCCION','LISTO','EN_ENTREGA','ENTREGADO'].includes(c.servicios?.estado))
-        .map(c => ({
-          id:                 c.id,
-          cubiculo_codigo:    c.cubiculo_codigo,
-          fecha_inicio:       c.fecha_inicio,
-          fecha_fin_estimada: c.fecha_fin_estimada,
-          estado:             c.estado,
-          planta_lista:       c.planta_lista,
-          planta_entregada:   c.planta_entregada,
-          mascota:            c.servicios?.mascotas?.nombre,
-          cliente:            `${c.servicios?.mascotas?.clientes?.nombre || ''} ${c.servicios?.mascotas?.clientes?.apellido || ''}`.trim(),
-          especie:            c.servicios?.mascotas?.especies?.nombre,
-          dias_para_finalizar: c.fecha_fin_estimada
-            ? Math.floor((new Date(c.fecha_fin_estimada + 'T12:00:00') - hoyComp) / 86400000)
-            : null,
-        }))
-
-      setCompostajes(compAll.filter(c => (c.dias_para_finalizar ?? 999) > 7))
-      setCompostajesAlerta(compAll.filter(c => {
-        const d = c.dias_para_finalizar
-        return d != null && d > 0 && d <= 7
-      }))
-      setCompostajesListos(compAll.filter(c => {
-        const d = c.dias_para_finalizar
-        return d != null && d <= 0 && !c.planta_lista
-      }))
+      // El seguimiento de compostajes ya no vive aquí: la asignación de cubículo
+      // ocurre en Jornada (contra el catálogo `cubiculos`, migración 055), los
+      // plazos se ven en Control y la ocupación en el mapa de Cubículos.
+      // La tabla `seguimiento_compostaje` quedó sin uso (0/263 con planta_lista).
       setPersonal(per || [])
 
       // ── Planificación (Fase 1): config + candidatas desde v_candidatos_tenjo ──
@@ -418,44 +383,6 @@ export default function Tenjo() {
       await cargar()
       // Ofrecer generar certificado inmediatamente después de confirmar
       if (traslado) setCertIndModal(traslado)
-    } catch (e) {
-      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
-    }
-  }
-
-  async function registrarCubiculo() {
-    if (!modalCubiculo) return
-    if (!formCubiculo.fecha_inicio) {
-      await showAlert('Ingresa la fecha de inicio del compostaje.', { title: 'Campo requerido' }); return
-    }
-    setSaving(true)
-    try {
-      // fecha_fin_estimada = fecha_inicio + 2 meses
-      const fechaFin = new Date(formCubiculo.fecha_inicio + 'T12:00:00')
-      fechaFin.setMonth(fechaFin.getMonth() + 2)
-      const fechaFinStr = hoyLocalISO(fechaFin)
-
-      await db.from('seguimiento_compostaje').update({
-        fecha_inicio:       formCubiculo.fecha_inicio,
-        fecha_fin_estimada: fechaFinStr,
-        cubiculo_codigo:    formCubiculo.cubiculo_codigo || null,
-        notas:              formCubiculo.notas || null,
-      }).eq('id', modalCubiculo.id)
-
-      setModalCubiculo(null)
-      await cargar()
-    } catch (e) {
-      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function marcarPlantaLista(compostajeId) {
-    if (!await confirm('Se marcará que la planta del compostaje está lista para recoger.', { title: '¿Compostaje finalizado?', confirmLabel: 'Confirmar', variant: 'warning' })) return
-    try {
-      await db.from('seguimiento_compostaje').update({ planta_lista: true }).eq('id', compostajeId)
-      await cargar()
     } catch (e) {
       await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
     }
@@ -603,7 +530,7 @@ export default function Tenjo() {
           <StatCard label="Traslados programados" value={traslados.filter(t => t.estado === 'PROGRAMADO').length} valueColor="#3B6FBF" />
           <StatCard label="En camino" value={traslados.filter(t => t.estado === 'EN_CAMINO').length} valueColor="#9A5500" />
           <StatCard label="Cenizas listas para recoger" value={cenizasListas.length} valueColor={cenizasListas.length > 0 ? '#C03030' : '#9CA3AF'} />
-          <StatCard label="Compostajes activos" value={compostajes.length + compostajesAlerta.length + compostajesListos.length} valueColor="#1D8A55" />
+          <StatCard label="Aptas para traslado" value={aptosTraslado.length} valueColor="#1D8A55" />
         </div>
 
         {/* Traslados activos */}
@@ -794,117 +721,6 @@ export default function Tenjo() {
           )}
         </div>
 
-        {/* Compostajes: alerta 1 semana antes */}
-        {compostajesAlerta.length > 0 && (
-          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#F59E0B' }}>
-            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(245,158,11,0.3)' }}>
-              <AlertTriangle size={15} className="text-amber-500" />
-              <div className="font-semibold text-[15px] text-ink flex-1">Compostajes próximos a finalizar</div>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>
-                {compostajesAlerta.length} en alerta
-              </span>
-            </div>
-            <div className="p-5 space-y-3">
-              {compostajesAlerta.map(c => (
-                <div key={c.id} className="flex items-center gap-4 p-4 rounded-xl border"
-                  style={{ borderColor: 'rgba(245,158,11,0.25)', background: '#FFFBEB' }}>
-                  <span className="text-2xl">🌿</span>
-                  <div className="flex-1">
-                    <div className="font-semibold text-ink">{c.mascota}</div>
-                    <div className="text-[11px] text-ink3">{c.cliente} · Cubículo {c.cubiculo_codigo || '-'}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: '#92400E' }}>
-                      Finaliza el {fmtFecha(c.fecha_fin_estimada)}
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-[18px] font-bold" style={{ color: '#D97706' }}>{c.dias_para_finalizar}</div>
-                    <div className="text-[10px] text-amber-600">días restantes</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Compostajes: listos para traslado de planta */}
-        {compostajesListos.length > 0 && (
-          <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#059669' }}>
-            <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(5,150,105,0.2)' }}>
-              <Leaf size={15} className="text-green-600" />
-              <div className="font-semibold text-[15px] text-ink flex-1">Compostajes listos — solicitar traslado de planta</div>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#D1FAE5', color: '#065F46' }}>
-                {compostajesListos.length} listo{compostajesListos.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="p-5 space-y-3">
-              {compostajesListos.map(c => (
-                <div key={c.id} className="flex items-center gap-4 p-4 rounded-xl border"
-                  style={{ borderColor: 'rgba(5,150,105,0.2)', background: '#ECFDF5' }}>
-                  <span className="text-2xl">🌿</span>
-                  <div className="flex-1">
-                    <div className="font-semibold text-ink">{c.mascota}</div>
-                    <div className="text-[11px] text-ink3">{c.cliente} · Cubículo {c.cubiculo_codigo || '-'}</div>
-                    <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
-                      Finalizó el {fmtFecha(c.fecha_fin_estimada)} · {Math.abs(c.dias_para_finalizar)} día{Math.abs(c.dias_para_finalizar) !== 1 ? 's' : ''} completado{Math.abs(c.dias_para_finalizar) !== 1 ? 's' : ''}
-                    </div>
-                  </div>
-                  <Button size="sm" style={{ background: '#059669', color: 'white' }}
-                    onClick={() => marcarPlantaLista(c.id)}>
-                    <CheckCircle2 size={13} /> Planta lista para recoger
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Compostajes activos (sin alerta aún) */}
-        {compostajes.length > 0 && (
-          <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-            <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-              <div className="font-semibold text-[15px] text-ink">Compostajes activos</div>
-            </div>
-            <TableWrap>
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>Mascota</Th>
-                    <Th>Cliente</Th>
-                    <Th>Cubículo</Th>
-                    <Th>Inicio</Th>
-                    <Th>Fin estimado</Th>
-                    <Th>Días restantes</Th>
-                    <Th></Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {compostajes.map((c) => (
-                    <Tr key={c.id}>
-                      <Td><div className="flex items-center gap-2"><span>🌿</span><span className="font-semibold text-ink">{c.mascota}</span></div></Td>
-                      <Td className="text-ink2">{c.cliente}</Td>
-                      <Td className="font-mono text-[11px]">{c.cubiculo_codigo || '-'}</Td>
-                      <Td className="text-ink3">{c.fecha_inicio ? fmtFecha(c.fecha_inicio) : <span className="text-amber-600 font-semibold">Sin registrar</span>}</Td>
-                      <Td className="text-ink3">{c.fecha_fin_estimada ? fmtFecha(c.fecha_fin_estimada) : '-'}</Td>
-                      <Td>
-                        <span className="text-[11px] font-bold text-ink2">
-                          {c.dias_para_finalizar != null ? `${c.dias_para_finalizar} días` : '-'}
-                        </span>
-                      </Td>
-                      <Td>
-                        {!c.fecha_inicio && (
-                          <Button size="sm" variant="secondary"
-                            onClick={() => { setModalCubiculo(c); setFormCubiculo({ fecha_inicio: today(), cubiculo_codigo: c.cubiculo_codigo || '', notas: '' }) }}>
-                            <Plus size={12} /> Registrar entrada
-                          </Button>
-                        )}
-                      </Td>
-                    </Tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-          </div>
-        )}
 
         {/* Individuales procesados — certificados */}
         {procesados.length > 0 && (
@@ -1007,45 +823,6 @@ export default function Tenjo() {
               <Textarea value={formRetro.notas}
                 onChange={e => setFormRetro(p => ({ ...p, notas: e.target.value }))}
                 placeholder="Detalle del registro retroactivo…" />
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal registrar entrada al cubículo (compostaje) */}
-      {modalCubiculo && (
-        <Modal open onClose={() => setModalCubiculo(null)}
-          title={`Registrar entrada al cubículo — ${modalCubiculo.mascota}`}
-          maxWidth="max-w-md"
-          footer={
-            <>
-              <Button variant="secondary" onClick={() => setModalCubiculo(null)}>Cancelar</Button>
-              <Button onClick={registrarCubiculo} disabled={saving}>{saving ? 'Guardando...' : 'Registrar entrada'}</Button>
-            </>
-          }>
-          <div className="space-y-4">
-            <div className="rounded-xl p-3 text-[12px]" style={{ background: '#F0FDF4', borderColor: '#86EFAC', border: '1px solid' }}>
-              Al registrar la fecha de inicio el sistema calculará automáticamente la fecha de fin estimada sumando <strong>2 meses calendario</strong> y activará las alertas de seguimiento.
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Fecha de ingreso al cubículo *</label>
-              <Input type="date" value={formCubiculo.fecha_inicio}
-                onChange={e => setFormCubiculo(p => ({ ...p, fecha_inicio: e.target.value }))} />
-              {formCubiculo.fecha_inicio && (
-                <p className="text-[11px] text-ink3 mt-1">
-                  → Fin estimado: <strong>{(() => { const d = new Date(formCubiculo.fecha_inicio + 'T12:00:00'); d.setMonth(d.getMonth() + 2); return fmtFecha(hoyLocalISO(d)) })()} </strong>
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Código del cubículo</label>
-              <Input placeholder="Ej: C-03" value={formCubiculo.cubiculo_codigo}
-                onChange={e => setFormCubiculo(p => ({ ...p, cubiculo_codigo: e.target.value }))} />
-            </div>
-            <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Notas</label>
-              <Textarea value={formCubiculo.notas}
-                onChange={e => setFormCubiculo(p => ({ ...p, notas: e.target.value }))} />
             </div>
           </div>
         </Modal>

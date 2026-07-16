@@ -60,7 +60,7 @@ export default function CubiculosTab({ canPlan, personalData, onChanged }) {
       setHuerfanos(await cargarCodigosHuerfanos())
       setSinTabla(false)
     } catch (e) {
-      // La migración 054 aún no está aplicada en este entorno
+      // La migración 055 aún no está aplicada en este entorno
       if (/relation .*cubiculos.* does not exist|schema cache/i.test(e?.message || '')) setSinTabla(true)
       else await showAlert(parsearErrorDB(e), { title: 'Error al cargar cubículos', variant: 'danger' })
     } finally { setLoading(false) }
@@ -188,9 +188,9 @@ export default function CubiculosTab({ canPlan, personalData, onChanged }) {
   if (sinTabla) {
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">
-        <div className="font-bold mb-1 flex items-center gap-2"><AlertTriangle size={15} /> Falta aplicar la migración 054</div>
+        <div className="font-bold mb-1 flex items-center gap-2"><AlertTriangle size={15} /> Falta aplicar la migración 055</div>
         El catálogo de cubículos aún no existe en esta base de datos. Aplica
-        <code className="mx-1 px-1 rounded bg-amber-100">migrations/054_tenjo_cubiculos_catalogo.sql</code>
+        <code className="mx-1 px-1 rounded bg-amber-100">migrations/055_tenjo_cubiculos_catalogo.sql</code>
         y recarga.
       </div>
     )
@@ -211,7 +211,7 @@ export default function CubiculosTab({ canPlan, personalData, onChanged }) {
         <StatCard label="Fuera de servicio" value={stats.inactivos} valueColor={stats.inactivos > 0 ? '#6B7280' : '#9CA3AF'} />
       </div>
 
-      {/* Códigos viejos sin enlazar (migración 054) */}
+      {/* Códigos viejos sin enlazar (migración 055) */}
       {huerfanos.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
           <div className="text-[12px] font-bold text-amber-900 mb-2 flex items-center gap-2">
