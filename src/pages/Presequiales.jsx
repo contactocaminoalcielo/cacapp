@@ -414,6 +414,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
   const [filas, setFilas] = useState([])
   const [errorArchivo, setErrorArchivo] = useState('')
   const [importando, setImportando] = useState(false)
+  const [progreso, setProgreso] = useState({ actual: 0, total: 0 })
   const [resultado, setResultado] = useState(null)
 
   const filasConError = filas.filter(f => f.errores.length)
@@ -423,6 +424,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
     setArchivo(file || null)
     setFilas([])
     setResultado(null)
+    setProgreso({ actual: 0, total: 0 })
     setErrorArchivo('')
     if (!file) return
     try {
@@ -442,12 +444,14 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
   async function importar() {
     if (!puedeImportar) return
     setImportando(true)
+    setProgreso({ actual: 0, total: filas.length })
     setResultado(null)
     const errores = []
     let ok = 0
     const clientesCache = new Map()
 
-    for (const r of filas) {
+    try {
+      for (const [index, r] of filas.entries()) {
       try {
         let cliente = clientesCache.get(r.cedula_nit)
         if (!cliente) {
@@ -529,15 +533,20 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
           await db.from('afiliaciones').delete().eq('id', afiliacion.id)
           throw eContrato
         }
-        ok++
-      } catch (e) {
-        errores.push({ fila: r.fila, mensaje: e.message || 'Error desconocido' })
+          ok++
+        } catch (e) {
+          errores.push({ fila: r.fila, mensaje: e.message || 'Error desconocido' })
+        } finally {
+          setProgreso({ actual: index + 1, total: filas.length })
+        }
       }
+
+      setResultado({ ok, errores })
+    } finally {
+      setImportando(false)
     }
 
-    setResultado({ ok, errores })
-    if (ok > 0) await onImported()
-    setImportando(false)
+    if (ok > 0) onImported().catch(() => {})
   }
 
   return (
@@ -545,7 +554,9 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cerrar</Button>
         <Button onClick={importar} disabled={!puedeImportar}>
-          <Upload size={13} /> {importando ? 'Importando...' : 'Importar ' + filas.length + ' filas'}
+          <Upload size={13} /> {importando
+            ? `Importando ${progreso.actual}/${progreso.total}`
+            : 'Importar ' + filas.length + ' filas'}
         </Button>
       </>}>
       <div className="space-y-4">
