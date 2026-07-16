@@ -899,13 +899,22 @@ export default function Registro() {
 
       // Afiliación pre-exequial: cerrar el ciclo SOLO cuando el servicio existe
       // (marcar ACTIVADA antes de crear el servicio era el bug del módulo viejo).
+      // Un contrato cubre varias mascotas: se activa SOLO la que falleció; las
+      // hermanas siguen cubiertas. El contrato entero pasa a ACTIVADA nada más
+      // cuando ya no le queda ninguna mascota viva.
       const pre = location.state?.presequial
-      if (pre?.id && svcData?.[0]?.id) {
-        await db.from('afiliaciones').update({
+      if (pre?.afiliacion_mascota_id && svcData?.[0]?.id) {
+        await db.from('afiliacion_mascotas').update({
           estado:               'ACTIVADA',
           servicio_activado_id: svcData[0].id,
           fecha_activacion:     today(),
-        }).eq('id', pre.id)
+        }).eq('id', pre.afiliacion_mascota_id)
+
+        const { count: vivas } = await db.from('afiliacion_mascotas')
+          .select('id', { count: 'exact', head: true })
+          .eq('afiliacion_id', pre.id).eq('estado', 'VIGENTE')
+        if (!vivas) await db.from('afiliaciones').update({ estado: 'ACTIVADA' }).eq('id', pre.id)
+
         await db.from('mascotas').update({
           fallecida: true, fecha_fallecimiento: today(),
         }).eq('id_mascota', pre.mascota_id).eq('fallecida', false)

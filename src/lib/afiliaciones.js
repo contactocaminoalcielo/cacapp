@@ -113,10 +113,18 @@ export async function abrirArchivoStorage(storagePath, bucket = 'evidencias') {
   return true
 }
 
+// Total del contrato = precio unitario × nº de mascotas cubiertas.
+// `contrato.valor` es el precio POR MASCOTA (así lo guardan las 149 filas de
+// prod sin excepción); el total se calcula, no se guarda, para no tener dos
+// fuentes de la misma cifra que se desincronicen.
+export function totalContrato(contrato, nMascotas) {
+  return (parseFloat(contrato?.valor) || 0) * (nMascotas || 0)
+}
+
 // Contrato PDF provisional (jsPDF directo — NUNCA html2canvas con Tailwind v4).
 // David va a pasar los formatos reales por nivel (nuevo y renovación) para
 // replicarlos tal cual; mientras tanto este documento deja constancia formal.
-export async function generarContratoPdf({ contrato, afiliacion, cliente, mascota }) {
+export async function generarContratoPdf({ contrato, afiliacion, cliente, mascotas = [] }) {
   const { default: jsPDF } = await import('jspdf')
   const doc = new jsPDF({ unit: 'mm', format: 'letter' })
   const W = doc.internal.pageSize.getWidth()
@@ -140,12 +148,33 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
   linea('Titular:', `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim())
   linea('Cédula / NIT:', cliente?.cedula_nit)
   linea('WhatsApp:', cliente?.whatsapp)
-  linea('Mascota:', `${mascota?.nombre || ''}${mascota?.especies?.nombre ? ` (${mascota.especies.nombre})` : ''}`)
   linea('Fecha de inicio:', contrato.fecha_inicio)
   if (afiliacion.tipo === 'ANUAL') linea('Vence:', contrato.fecha_vencimiento)
-  linea('Valor:', fmt(contrato.valor))
   linea('Forma de pago:', afiliacion.tipo === 'VITALICIO' ? 'Pago único (vitalicio)' : 'Pago anual único')
-  y += 4
+  y += 5
+
+  // Un contrato cubre una o varias mascotas, cada una con su propio valor.
+  doc.setFont('helvetica', 'bold')
+  doc.text(mascotas.length === 1 ? 'MASCOTA CUBIERTA' : `MASCOTAS CUBIERTAS (${mascotas.length})`, 20, y)
+  y += 6
+  doc.setFontSize(9)
+  doc.text('Nombre', 22, y); doc.text('Especie', 75, y); doc.text('Raza', 115, y)
+  doc.text('Valor', W - 22, y, { align: 'right' })
+  y += 2; doc.line(20, y, W - 20, y); y += 5
+  doc.setFont('helvetica', 'normal')
+  for (const m of mascotas) {
+    doc.text(String(m?.nombre || '—'), 22, y)
+    doc.text(String(m?.especies?.nombre || '—'), 75, y)
+    doc.text(String(m?.raza || '—').slice(0, 22), 115, y)
+    doc.text(fmt(contrato.valor), W - 22, y, { align: 'right' })
+    y += 6
+  }
+  doc.line(20, y - 2, W - 20, y - 2); y += 2
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
+  doc.text(`TOTAL (${mascotas.length} × ${fmt(contrato.valor)})`, 22, y)
+  doc.text(fmt(totalContrato(contrato, mascotas.length)), W - 22, y, { align: 'right' })
+  y += 10
+  doc.setFont('helvetica', 'normal')
 
   doc.setFontSize(9); doc.setTextColor(90)
   const clausulas = afiliacion.tipo === 'ANUAL' && contrato.numero === 0
