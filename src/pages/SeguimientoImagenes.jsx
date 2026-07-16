@@ -42,6 +42,21 @@ const PUNTO = {
   PENDIENTE:{ bg: '#F3F4F6', color: '#9CA3AF', border: '#E5E7EB' },
 }
 
+// En qué contacto va la solicitud, en texto. Los puntos de colores ya lo dicen,
+// pero obligan a interpretar: esto se lee de un vistazo al barrer la tabla.
+// Se toma el MAYOR enviado, no el conteo: si el 2º se saltó (pausa, ventana), la
+// solicitud va igual en el 3º — contar diría "2 de 3" y engañaría.
+function etapaContacto(contactos = []) {
+  const enviados = contactos.filter(c => c.estado === 'ENVIADO').map(c => c.numero)
+  if (!enviados.length) return { texto: 'sin contactar', color: '#9CA3AF' }
+  const ultimo = Math.max(...enviados)
+  return {
+    texto: `va en el ${ultimo}º`,
+    // El 3º es el último aviso antes de cerrar por falta de respuesta → ámbar.
+    color: ultimo === 3 ? '#B45309' : '#4B5563',
+  }
+}
+
 function tituloContacto(c, numero) {
   if (!c) return `Contacto ${numero}: aún no enviado`
   const cuando = c.enviado_en ? new Date(c.enviado_en).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'
@@ -427,6 +442,15 @@ export default function SeguimientoImagenes() {
                                 </span>
                               )
                             })}
+                            {(() => {
+                              const et = etapaContacto(seg.contactos)
+                              return (
+                                <span className="text-[9px] font-bold whitespace-nowrap ml-0.5"
+                                  style={{ color: et.color }}>
+                                  {et.texto}
+                                </span>
+                              )
+                            })()}
                           </div>
                           {s.seguimiento_pausado ? (
                             <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-ink3">
