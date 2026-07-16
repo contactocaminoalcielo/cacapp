@@ -66,19 +66,22 @@ export function calcularCobroActivacion({ afiliacion, contratoVigente, config })
   if (contratoVigente.numero >= 1)
     return { cobro: 0, multiplicador: 0, motivo: 'Afiliación renovada — servicio cubierto, sin cláusula' }
 
-  // Primer contrato: cláusula por semestre desde fecha_inicio.
+  // Primer contrato: el contrato de papel lo define por DÍAS, no por meses —
+  // "$X desde su formalización hasta el día 180, y $Y desde el día 181 hasta la
+  // finalización del contrato" (Parágrafo 2). Contar meses corría la frontera
+  // hasta 3 días según el mes.
   const inicio = parseDate(contratoVigente.fecha_inicio)
   const hoy = parseDate(hoyLocalISO())
-  const meses = (hoy.getFullYear() - inicio.getFullYear()) * 12 + (hoy.getMonth() - inicio.getMonth())
-    - (hoy.getDate() < inicio.getDate() ? 1 : 0)
+  const dias = Math.round((hoy - inicio) / 86400000)
   const m1 = parseFloat(config?.multiplicador_semestre_1) || 5
   const m2 = parseFloat(config?.multiplicador_semestre_2) || 3
   const valor = parseFloat(contratoVigente.valor) || 0
-  const mult = meses < 6 ? m1 : m2
+  const primerTramo = dias <= 180
+  const mult = primerTramo ? m1 : m2
   return {
     cobro: Math.round(valor * mult),
     multiplicador: mult,
-    motivo: `Cláusula del primer año (${meses < 6 ? '1er' : '2do'} semestre): ${mult}× ${fmt(valor)}`,
+    motivo: `Cláusula del primer año (día ${dias}, ${primerTramo ? 'hasta el 180' : 'desde el 181'}): ${mult}× ${fmt(valor)}`,
   }
 }
 
