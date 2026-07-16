@@ -68,16 +68,38 @@ function normalizarAjuste(a) {
   }
 }
 
-// Foto representativa del servicio = primera imagen que envió el cliente.
-async function fotoDelServicio(client, servicioId) {
+// El cliente carga una foto por recordatorio: la del memorial es la del
+// recordatorio mapeado en recordatorios_tipo.MEMORIAL. Si ese recordatorio no
+// trae foto, se cae a la primera imagen que haya enviado.
+async function recordatorioMemorial(client) {
+  const cfg = await cargarConfigDigitales(client)
+  const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+  return uuidOrNull(mapa.MEMORIAL)
+}
+
+// Fragmento reutilizable: foto del servicio, priorizando la del memorial.
+// `pRec` es el placeholder ($1, $2…) que lleva el recordatorio del memorial.
+function fotoLateral(pRec) {
+  return `LEFT JOIN LATERAL (
+         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND (sr.imagen_cliente_url IS NOT NULL
+                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
+         ORDER BY (sr.recordatorio_id = ${pRec}::uuid) DESC NULLS LAST, sr.created_at ASC
+         LIMIT 1
+       ) f ON true`
+}
+
+async function fotoDelServicio(client, servicioId, recMemorial) {
   const { rows } = await client.query(
     `SELECT sr.imagen_cliente_url, sr.imagenes_cliente_urls
      FROM public.servicio_recordatorios sr
      WHERE sr.servicio_id = $1
        AND (sr.imagen_cliente_url IS NOT NULL
             OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
-     ORDER BY sr.created_at ASC`,
-    [servicioId]
+     ORDER BY (sr.recordatorio_id = $2::uuid) DESC NULLS LAST, sr.created_at ASC`,
+    [servicioId, uuidOrNull(recMemorial)]
   )
   for (const r of rows) {
     if (r.imagen_cliente_url) return r.imagen_cliente_url
@@ -137,6 +159,7 @@ export async function listarCandidatos() {
   try {
     const cfg = await cargarConfig(client)
     const excl = Array.isArray(cfg.planes_excluidos) ? cfg.planes_excluidos : []
+    const recMemorial = await recordatorioMemorial(client)
     const { rows } = await client.query(
       `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
@@ -150,22 +173,14 @@ export async function listarCandidatos() {
        LEFT JOIN public.planes p    ON p.id = s.plan_id
        LEFT JOIN public.piezas_digitales mem
          ON mem.servicio_id = s.id AND mem.tipo = 'MEMORIAL'
-       LEFT JOIN LATERAL (
-         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
-         FROM public.servicio_recordatorios sr
-         WHERE sr.servicio_id = s.id
-           AND (sr.imagen_cliente_url IS NOT NULL
-                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
-         ORDER BY sr.created_at ASC
-         LIMIT 1
-       ) f ON true
+       ${fotoLateral('$2')}
        WHERE s.fecha_imagenes_recibidas IS NOT NULL
          AND s.estado <> 'CANCELADO'
          AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
          AND (mem.id IS NULL OR mem.estado IN ('ERROR', 'DESCARTADO'))
        ORDER BY s.fecha_imagenes_recibidas DESC
        LIMIT 300`,
-      [excl]
+      [excl, recMemorial]
     )
     return rows
   } finally { client.release() }
@@ -194,15 +209,7 @@ export async function listarServicios() {
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
        LEFT JOIN public.planes p   ON p.id = s.plan_id
-       LEFT JOIN LATERAL (
-         SELECT COALESCE(sr.imagen_cliente_url, sr.imagenes_cliente_urls[1]) AS foto_url
-         FROM public.servicio_recordatorios sr
-         WHERE sr.servicio_id = s.id
-           AND (sr.imagen_cliente_url IS NOT NULL
-                OR COALESCE(array_length(sr.imagenes_cliente_urls, 1), 0) > 0)
-         ORDER BY sr.created_at ASC
-         LIMIT 1
-       ) f ON true
+       ${fotoLateral('$2')}
        LEFT JOIN LATERAL (
          SELECT array_agg(DISTINCT sr.recordatorio_id::text) AS rec_ids
          FROM public.servicio_recordatorios sr
@@ -217,7 +224,7 @@ export async function listarServicios() {
               OR EXISTS (SELECT 1 FROM public.piezas_digitales pd WHERE pd.servicio_id = s.id))
        ORDER BY s.fecha_imagenes_recibidas DESC
        LIMIT 200`,
-      [recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000']]
+      [recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000'], uuidOrNull(mapa.MEMORIAL)]
     )
 
     const ids = servicios.map(s => s.servicio_id)
@@ -304,7 +311,7 @@ export async function generarMemorial({ servicioId, personalId, formato: formato
     if (!svc.fecha_imagenes_recibidas) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'Aún no se han recibido las imágenes del cliente.' } } }
     if (svc.plan_codigo && excl.includes(svc.plan_codigo)) { await client.query('ROLLBACK'); return { status: 422, body: { error: `El plan ${svc.plan_codigo} no lleva memorial.` } } }
 
-    const foto = await fotoDelServicio(client, servicioId)
+    const foto = await fotoDelServicio(client, servicioId, await recordatorioMemorial(client))
     if (!foto) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'No hay una foto del cliente para este servicio.' } } }
 
     const frase = typeof cfg.frase === 'string' ? cfg.frase : CONFIG_DEFAULTS.frase
