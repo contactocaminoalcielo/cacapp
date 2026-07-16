@@ -8,6 +8,7 @@ import { Select } from '@/components/ui/select'
 import { db } from '@/lib/supabase'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
+import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
@@ -1088,7 +1089,7 @@ export default function Kanban() {
         .catch(() => {})
     }
 
-    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }] = await Promise.all([
+    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }] = await Promise.all([
       db.from('servicios')
         .select('punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, comision_aliado, comision_descontada, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at')
         .eq('id', s.servicio_id).maybeSingle(),
@@ -1106,9 +1107,13 @@ export default function Kanban() {
       db.from('cuarto_frio')
         .select('foto_ingreso_url, foto_pesaje_url, peso_kg')
         .eq('servicio_id', s.servicio_id).maybeSingle(),
+      // Contactos de WhatsApp pidiendo las fotos (1 manual + 2 automáticos)
+      db.from('solicitud_imagenes_contactos')
+        .select('numero, estado')
+        .eq('servicio_id', s.servicio_id),
     ])
 
-    setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf })
+    setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf, contactos: cts || [] })
     setRecordatorios(recs || [])
     setNovedades(novs || [])
     setNuevoComentario('')
@@ -2546,6 +2551,15 @@ export default function Kanban() {
               {selected.fecha_imagenes_recibidas && selected.estado === 'EN_PROCESO' && (
                 <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">
                   <Camera size={11} /> Imágenes recibidas
+                </span>
+              )}
+              {/* Solo si YA se le escribió alguna vez: en un servicio que aún no
+                  entró al flujo de fotos, un "sin contactar" sería ruido. */}
+              {!selected.fecha_imagenes_recibidas && detalle?.contactos?.length > 0 && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-gray-100"
+                  style={{ color: etapaContacto(detalle.contactos).color }}
+                  title="Contactos por WhatsApp pidiéndole las fotos al cliente">
+                  <Camera size={11} /> Fotos: {etapaContacto(detalle.contactos).texto}
                 </span>
               )}
               <span className="text-[11px] text-gray-400">Ingreso: <strong className="text-gray-700">{detalle?.created_at ? fmtDateTime(detalle.created_at) : (selected.fecha_ingreso ? parseDate(selected.fecha_ingreso)?.toLocaleDateString('es-CO') : '—')}</strong></span>

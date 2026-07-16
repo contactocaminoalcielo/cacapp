@@ -11,8 +11,9 @@ import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
+import { cargarEtapasContacto } from '@/lib/imagenes'
 import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
-import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search } from 'lucide-react'
+import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
@@ -242,7 +243,7 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
@@ -288,6 +289,7 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
       {tarjetas.map(([sId, { servicio, items, fotos_ok }]) => {
         const mascota = servicio?.mascotas
         const plan    = servicio?.planes
+        const etapa   = etapas[sId]
         const fmtCorta    = d => d?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
         const limite      = parseDate(servicio?.fecha_limite_entrega)
         const diasAlLimite = limite ? Math.round((limite - parseDate(today())) / 86400000) : null
@@ -354,6 +356,17 @@ function VistaPorServicio({ recordatorios, personal, maquinas, filtroEstado, fil
                     <Clock size={9} /> Sin fotos
                   </span>
               }
+              {/* "Sin fotos" deja la pregunta obvia en el aire: ¿ya le insistimos?
+                  La etapa la responde aquí mismo, sin ir a otro módulo. */}
+              {!fotos_ok && etapa && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  title={etapa.numero
+                    ? `Ya se le enviaron ${etapa.numero} contacto(s) por WhatsApp pidiendo las fotos`
+                    : 'Todavía no se le ha escrito pidiendo las fotos'}
+                  style={{ background: '#F3F4F6', color: etapa.color }}>
+                  <MessageCircle size={9} /> {etapa.texto}
+                </span>
+              )}
               {!fotos_ok && listosProd > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                   style={{ background: '#ECFDF5', color: '#065F46' }}>
@@ -824,6 +837,7 @@ export default function Produccion() {
   const { personalData } = useAuth()
   const esAdmin = personalData?.rol === 'ADMIN' || personalData?.rol === 'COORDINADOR'
   const [recordatorios, setRecordatorios] = useState([])
+  const [etapas,        setEtapas]        = useState({})   // servicio_id → etapa de contacto
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])
   const [loading,       setLoading]       = useState(true)
@@ -891,6 +905,15 @@ export default function Produccion() {
       setRecordatorios(recs || [])
       setPersonal(per || [])
       setMaquinas(maq || [])
+      // En qué contacto va cada servicio que AÚN espera fotos. Solo se piden los
+      // que no han cargado: para el resto la etiqueta no aplica y seria ruido.
+      // Va aparte (no en el join) porque los contactos cuelgan del servicio, no
+      // del recordatorio, y el join los duplicaría por cada ítem de la tarjeta.
+      cargarEtapasContacto(
+        (recs || [])
+          .filter(r => !r.servicios?.fecha_imagenes_recibidas)
+          .map(r => r.servicios?.id)
+      ).then(setEtapas).catch(() => {})   // la etiqueta es informativa: si falla, el tablero sigue
       // Sincronizar servicios cuyo estado no refleja el estado real de sus ítems
       await autoCorregirEstados(recs || [])
     } catch (e) {
@@ -1082,7 +1105,7 @@ export default function Produccion() {
         {/* Contenido según vista */}
         {vista === 'servicio' && (
           <VistaPorServicio
-            recordatorios={recordatorios} personal={personal} maquinas={maquinas}
+            recordatorios={recordatorios} personal={personal} maquinas={maquinas} etapas={etapas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}

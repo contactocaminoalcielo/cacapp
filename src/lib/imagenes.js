@@ -22,6 +22,52 @@ export function requiereImagen(rec) {
   return !!rec && rec.requiere_imagen === true && rec.solo_nombre !== true && (rec.max_fotos || 0) > 0
 }
 
+// ─── Etapa de contacto (compartida por Seguimiento, Producción, Ficha y Kanban) ──
+// Vive aquí y no en cada página para que las cuatro digan lo MISMO: si esta regla
+// se duplica, un módulo acaba contradiciendo al otro sobre el mismo cliente.
+
+// Se toma el MAYOR contacto enviado, no el conteo: si el 2º se saltó (pausa, o el
+// servicio salió de la ventana del portal), la solicitud va igual en el 3º —
+// contar diría "2 de 3" y engañaría.
+export function etapaContacto(contactos = []) {
+  const enviados = contactos.filter(c => c.estado === 'ENVIADO').map(c => c.numero)
+  if (!enviados.length) return { numero: 0, texto: 'sin contactar', color: '#9CA3AF' }
+  const ultimo = Math.max(...enviados)
+  return {
+    numero: ultimo,
+    texto: `va en el ${ultimo}º`,
+    // El 3º es el último aviso antes de cerrar por falta de respuesta → ámbar.
+    color: ultimo === 3 ? '#B45309' : '#4B5563',
+  }
+}
+
+/**
+ * Etapa de contacto por servicio: { servicio_id → etapaContacto() }.
+ * `fotosOk` (servicios.fecha_imagenes_recibidas) manda sobre todo: si el cliente
+ * ya cargó, no hay nada que perseguir y la etiqueta sobra — quien llama decide.
+ *
+ * ⚠️ Trocear SIEMPRE: `.in()` con cientos de IDs arma una URL que nginx corta con
+ * 414, y supabase-js NO lanza — la etiqueta simplemente "desaparecería" sin error.
+ */
+export async function cargarEtapasContacto(servicioIds = []) {
+  const ids = [...new Set(servicioIds.filter(Boolean))]
+  const mapa = {}
+  if (!ids.length) return mapa
+
+  const LOTE = 80
+  for (let i = 0; i < ids.length; i += LOTE) {
+    const { data, error } = await db
+      .from('solicitud_imagenes_contactos')
+      .select('servicio_id, numero, estado')
+      .in('servicio_id', ids.slice(i, i + LOTE))
+    if (error) throw error
+    for (const c of data || []) (mapa[c.servicio_id] ||= []).push(c)
+  }
+  return Object.fromEntries(
+    Object.entries(mapa).map(([sid, cs]) => [sid, etapaContacto(cs)])
+  )
+}
+
 // ─── Lectura: solicitudes + servicio + mascota + cliente + plan + recordatorios ──
 export async function obtenerSolicitudes() {
   const { data, error } = await db

@@ -9,6 +9,7 @@ import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import {
   ESTADO_SOLICITUD, obtenerSolicitudes, enviarSolicitud, reintentarSolicitud,
   cancelarSolicitud, prepararContactos, obtenerSeguimiento, forzarContacto, pausarSeguimiento,
+  etapaContacto,
 } from '@/lib/imagenes'
 import {
   MessageCircle, RefreshCw, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
@@ -40,21 +41,6 @@ const PUNTO = {
   ERROR:    { bg: '#FEE8E8', color: '#C03030', border: '#FCA5A5' },
   ENVIANDO: { bg: '#EEF3FB', color: '#3B6FBF', border: '#C5D8F5' },
   PENDIENTE:{ bg: '#F3F4F6', color: '#9CA3AF', border: '#E5E7EB' },
-}
-
-// En qué contacto va la solicitud, en texto. Los puntos de colores ya lo dicen,
-// pero obligan a interpretar: esto se lee de un vistazo al barrer la tabla.
-// Se toma el MAYOR enviado, no el conteo: si el 2º se saltó (pausa, ventana), la
-// solicitud va igual en el 3º — contar diría "2 de 3" y engañaría.
-function etapaContacto(contactos = []) {
-  const enviados = contactos.filter(c => c.estado === 'ENVIADO').map(c => c.numero)
-  if (!enviados.length) return { texto: 'sin contactar', color: '#9CA3AF' }
-  const ultimo = Math.max(...enviados)
-  return {
-    texto: `va en el ${ultimo}º`,
-    // El 3º es el último aviso antes de cerrar por falta de respuesta → ámbar.
-    color: ultimo === 3 ? '#B45309' : '#4B5563',
-  }
 }
 
 function tituloContacto(c, numero) {

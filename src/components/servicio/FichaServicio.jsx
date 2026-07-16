@@ -3,6 +3,7 @@ import { Modal } from '@/components/ui/dialog'
 import { db } from '@/lib/supabase'
 import { fmt, parseDate, parsearErrorDB, petEmoji, fmtDateTime } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
+import { etapaContacto } from '@/lib/imagenes'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import {
@@ -55,6 +56,7 @@ export default function FichaServicio({ servicioId, onClose }) {
   const [entrega, setEntrega]   = useState(null)
   const [items, setItems]       = useState([])
   const [novedades, setNovedades] = useState([])
+  const [contactos, setContactos] = useState([])
 
   useEffect(() => {
     if (!servicioId) return
@@ -64,7 +66,7 @@ export default function FichaServicio({ servicioId, onClose }) {
       try {
         // La consulta del servicio es la única obligatoria; las demás son
         // best-effort (si una falla, la ficha se muestra sin esa sección)
-        const [svcRes, rgRes, cfRes, enRes, itRes, nvRes] = await Promise.all([
+        const [svcRes, rgRes, cfRes, enRes, itRes, nvRes, ctRes] = await Promise.all([
           db.from('servicios')
             .select(`*,
               mascotas:mascota_id(*, especies(nombre), clientes:cliente_id(*)),
@@ -86,6 +88,10 @@ export default function FichaServicio({ servicioId, onClose }) {
           db.from('novedades_servicio')
             .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
             .eq('servicio_id', servicioId).order('created_at', { ascending: true }),
+          // Contactos de WhatsApp pidiendo las fotos (1 manual + 2 automáticos)
+          db.from('solicitud_imagenes_contactos')
+            .select('numero, estado')
+            .eq('servicio_id', servicioId),
         ])
         if (svcRes.error) throw svcRes.error
         if (!activo) return
@@ -94,6 +100,7 @@ export default function FichaServicio({ servicioId, onClose }) {
         setCf((cfRes.data || [])[0] || null)
         setItems(itRes.data || [])
         setNovedades(nvRes.data || [])
+        setContactos(ctRes.data || [])
         // Nombre del mensajero en query aparte (evita depender del hint de FK)
         const ent = (enRes.data || [])[0] || null
         if (ent?.mensajero_id) {
@@ -224,6 +231,12 @@ export default function FichaServicio({ servicioId, onClose }) {
               <Dato label="Registrado el">{svc?.created_at ? fmtDateTime(svc.created_at) : null}</Dato>
               <Dato label="Límite entrega">{svc?.fecha_limite_entrega ? fmtD(svc.fecha_limite_entrega) : null}</Dato>
               <Dato label="Código fotos">{svc?.codigo_fotos}</Dato>
+              {/* Si ya cargó, la etapa de contacto sobra: no hay nada que perseguir. */}
+              <Dato label="Fotos del cliente">
+                {svc?.fecha_imagenes_recibidas
+                  ? `recibidas ${fmtD(svc.fecha_imagenes_recibidas)}`
+                  : `sin recibir · ${etapaContacto(contactos).texto}`}
+              </Dato>
               {svc?.notas && <div className="text-[11px] text-gray-500 italic mt-1.5">"{svc.notas}"</div>}
             </Box>
 
