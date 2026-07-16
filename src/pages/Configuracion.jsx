@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -1115,7 +1115,6 @@ function TabPlanes() {
                   <option value="individual">Individual</option>
                   <option value="grupal">Grupal</option>
                   <option value="especial">Especial</option>
-                  <option value="presequial">Presequial</option>
                 </Select>
               </div>
               <div><label className={LABEL}>Días de entrega</label><Input type="number" min="1" value={form.dias_entrega_prometidos || ''} onChange={e => setForm(p => ({ ...p, dias_entrega_prometidos: e.target.value }))} /></div>
@@ -2837,6 +2836,118 @@ function TabPagoTecnico() {
   )
 }
 
+// ─── AFILIACIONES PRE-EXEQUIALES ─────────────────────────────────────────────
+// Precios por tipo+nivel y knobs del módulo (config_operativa, módulo AFILIACIONES).
+// El precio se congela en cada contrato al firmar; cambiarlo aquí solo afecta
+// afiliaciones y renovaciones futuras.
+function TabAfiliaciones() {
+  const NIVELES_AF = ['BRONCE', 'PLATA', 'ORO', 'DIAMANTE']
+  const [rows, setRows]     = useState(null)   // { clave → valor }
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [ok, setOk]           = useState(false)
+  const [error, setError]     = useState('')
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('config_operativa')
+      .select('clave, valor').eq('modulo', 'AFILIACIONES')
+    const map = {}
+    for (const r of data || []) map[r.clave] = r.valor
+    setRows({
+      precios: map.precios || { ANUAL: {}, VITALICIO: {} },
+      dias_gracia: map.dias_gracia ?? 15,
+      dias_aviso_renovacion: map.dias_aviso_renovacion ?? 30,
+      multiplicador_semestre_1: map.multiplicador_semestre_1 ?? 5,
+      multiplicador_semestre_2: map.multiplicador_semestre_2 ?? 3,
+    })
+    setLoading(false)
+  }
+
+  function setPrecio(tipo, nivel, v) {
+    setRows(p => ({ ...p, precios: { ...p.precios, [tipo]: { ...p.precios[tipo], [nivel]: v } } }))
+  }
+
+  async function guardar() {
+    setSaving(true); setOk(false); setError('')
+    try {
+      const precios = {}
+      for (const tipo of ['ANUAL', 'VITALICIO']) {
+        precios[tipo] = {}
+        for (const n of NIVELES_AF) precios[tipo][n] = parseFloat(rows.precios?.[tipo]?.[n]) || 0
+      }
+      const updates = [
+        ['precios', precios],
+        ['dias_gracia', parseInt(rows.dias_gracia) || 15],
+        ['dias_aviso_renovacion', parseInt(rows.dias_aviso_renovacion) || 30],
+        ['multiplicador_semestre_1', parseFloat(rows.multiplicador_semestre_1) || 5],
+        ['multiplicador_semestre_2', parseFloat(rows.multiplicador_semestre_2) || 3],
+      ]
+      for (const [clave, valor] of updates) {
+        const { error: e } = await db.from('config_operativa')
+          .upsert({ modulo: 'AFILIACIONES', clave, valor }, { onConflict: 'modulo,clave' })
+        if (e) throw e
+      }
+      setOk(true); setTimeout(() => setOk(false), 2500)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading || !rows) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /></div>
+
+  const INPUT_LBL = 'text-[11px] font-bold text-gray-500 block mb-1'
+  return (
+    <div className="max-w-3xl">
+      <h3 className="text-[14px] font-bold text-gray-800 mb-1">Precios de afiliación</h3>
+      <p className="text-[12px] text-gray-500 mb-4">Valor fijo por nivel (no varía por peso). El contrato congela el precio al firmar; las renovaciones toman el precio vigente aquí.</p>
+      {['ANUAL', 'VITALICIO'].map(tipo => (
+        <div key={tipo} className="mb-5">
+          <div className="text-[12px] font-bold text-gray-700 mb-2">{tipo === 'ANUAL' ? 'Anual (pago cada año)' : 'Vitalicio (un solo pago)'}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {NIVELES_AF.map(n => (
+              <div key={n}>
+                <label className={INPUT_LBL}>{n}</label>
+                <Input type="number" min="0" value={rows.precios?.[tipo]?.[n] ?? ''}
+                  onChange={e => setPrecio(tipo, n, e.target.value)} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <h3 className="text-[14px] font-bold text-gray-800 mb-1 mt-7">Reglas</h3>
+      <p className="text-[12px] text-gray-500 mb-4">La cláusula aplica SOLO durante el primer contrato anual: fallece en el 1er semestre → multiplicador 1; en el 2do → multiplicador 2. Desde la primera renovación (y en vitalicio) el servicio queda cubierto.</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div><label className={INPUT_LBL}>Días de gracia</label>
+          <Input type="number" min="0" value={rows.dias_gracia}
+            onChange={e => setRows(p => ({ ...p, dias_gracia: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Tras vencer, antes de pasar a CANCELADA</p></div>
+        <div><label className={INPUT_LBL}>Días de aviso</label>
+          <Input type="number" min="0" value={rows.dias_aviso_renovacion}
+            onChange={e => setRows(p => ({ ...p, dias_aviso_renovacion: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Anticipación en "Por vencer"</p></div>
+        <div><label className={INPUT_LBL}>Multiplicador 1er sem.</label>
+          <Input type="number" min="0" value={rows.multiplicador_semestre_1}
+            onChange={e => setRows(p => ({ ...p, multiplicador_semestre_1: e.target.value }))} /></div>
+        <div><label className={INPUT_LBL}>Multiplicador 2do sem.</label>
+          <Input type="number" min="0" value={rows.multiplicador_semestre_2}
+            onChange={e => setRows(p => ({ ...p, multiplicador_semestre_2: e.target.value }))} /></div>
+      </div>
+
+      {error && <div className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{error}</div>}
+      <div className="flex items-center gap-3 mt-5">
+        <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
+        {ok && <span className="flex items-center gap-1 text-[12px] font-semibold text-green-700"><CheckCircle size={14} /> Guardado</span>}
+      </div>
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -2887,6 +2998,9 @@ export default function Configuracion() {
             <TabsTrigger value="pago-tecnico">
               <Tag size={13} className="mr-1.5" /> Pago técnico
             </TabsTrigger>
+            <TabsTrigger value="afiliaciones">
+              <Heart size={13} className="mr-1.5" /> Afiliaciones
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -2903,6 +3017,7 @@ export default function Configuracion() {
           <TabsContent value="festivos"><TabFestivos /></TabsContent>
           <TabsContent value="reconocimientos"><TabReconocimientos /></TabsContent>
           <TabsContent value="pago-tecnico"><TabPagoTecnico /></TabsContent>
+          <TabsContent value="afiliaciones"><TabAfiliaciones /></TabsContent>
         </Tabs>
       </div>
     </div>

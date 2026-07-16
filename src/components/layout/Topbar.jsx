@@ -18,7 +18,7 @@ const PAGE_META = {
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/reportes':     { title: 'Reportes',               sub: 'Análisis operacional y financiero' },
-  '/presequiales': { title: 'Planes presequiales',    sub: 'Afiliaciones anticipadas' },
+  '/presequiales': { title: 'Afiliaciones pre-exequiales', sub: 'Anuales y vitalicias · contratos y renovaciones' },
   '/configuracion':  { title: 'Configuración',        sub: 'Planes, recordatorios y catálogos' },
   '/lotes-grupales': { title: 'Lotes Grupales',       sub: 'Cremación y compostaje grupal' },
   '/finanzas':       { title: 'Finanzas',             sub: 'Cartera, comisiones y pagos' },

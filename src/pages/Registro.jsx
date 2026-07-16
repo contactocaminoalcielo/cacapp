@@ -430,6 +430,12 @@ export default function Registro() {
       if (pl) {
         setPlanSeleccionado(pl)
       }
+      // Afiliación pre-exequial: el cliente NO paga el plan — paga la cláusula
+      // del primer año (5×/3× la afiliación) o $0 si está cubierto. El transporte
+      // se suma como siempre. Ver src/lib/afiliaciones.js.
+      if (pre.valor_plan_override !== undefined && pre.valor_plan_override !== null) {
+        setPrecioSeleccionado(pre.valor_plan_override)
+      }
     }
   }
 
@@ -891,6 +897,20 @@ export default function Registro() {
         )
       }
 
+      // Afiliación pre-exequial: cerrar el ciclo SOLO cuando el servicio existe
+      // (marcar ACTIVADA antes de crear el servicio era el bug del módulo viejo).
+      const pre = location.state?.presequial
+      if (pre?.id && svcData?.[0]?.id) {
+        await db.from('afiliaciones').update({
+          estado:               'ACTIVADA',
+          servicio_activado_id: svcData[0].id,
+          fecha_activacion:     today(),
+        }).eq('id', pre.id)
+        await db.from('mascotas').update({
+          fallecida: true, fecha_fallecimiento: today(),
+        }).eq('id_mascota', pre.mascota_id).eq('fallecida', false)
+      }
+
       // Eutanasia combinada (Caso 2/3): entidad propia vinculada al servicio.
       // cobro_conjunto=true → su valor ya está sumado en valor_total, pero se
       // conserva aparte en `eutanasias.valor` para reportes/cuenta separada.
@@ -995,7 +1015,13 @@ export default function Registro() {
           <div className="flex items-center gap-2 mb-4 px-4 py-2.5 rounded-xl text-[13px] font-medium"
             style={{ background: '#EDE9FE', border: '1px solid #C4B5FD', color: '#5B21B6' }}>
             <Star size={14} />
-            Activando plan presequial — cliente, mascota y plan precargados
+            <span>
+              Activando afiliación pre-exequial {location.state.presequial.nivel} — cliente, mascota y plan precargados.
+              {location.state.presequial.valor_plan_override !== undefined && (
+                <> Cobro del plan: <strong>{fmt(location.state.presequial.valor_plan_override)}</strong>
+                {location.state.presequial.motivo ? ` (${location.state.presequial.motivo})` : ''}. No re-selecciones el precio del plan.</>
+              )}
+            </span>
           </div>
         )}
 

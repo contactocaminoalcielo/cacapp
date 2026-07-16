@@ -1340,7 +1340,6 @@ function TabServicios({ canEdit }) {
                   <option value="individual">Individual</option>
                   <option value="grupal">Grupal</option>
                   <option value="especial">Especial</option>
-                  <option value="presequial">Presequial</option>
                 </Select>
               </div>
               <div>

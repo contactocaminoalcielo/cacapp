@@ -12,6 +12,7 @@ import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupal
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
+import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
@@ -90,6 +91,16 @@ app.post('/jobs/seguimiento-imagenes', requireJob, async (req, res) => {
     res.json(await jobSeguimientoImagenes({ dryRun: req.query.dry === '1' }))
   } catch (e) {
     log('[seguimiento-imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Job: vencimientos de afiliaciones pre-exequiales (VENCIDA / CANCELADA) ──
+app.post('/jobs/afiliaciones', requireJob, async (_req, res) => {
+  try {
+    res.json(await jobAfiliaciones())
+  } catch (e) {
+    log('[afiliaciones] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
