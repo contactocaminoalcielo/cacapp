@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
-import { db } from '@/lib/supabase'
+import { db, dbIn } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { fmt, parsearErrorDB, parseDate, today, petEmoji } from '@/lib/utils'
@@ -142,53 +142,35 @@ export default function Finanzas() {
     const aliadoIds = [...new Set(base.map(s => s.aliado_origen_id).filter(Boolean))]
     const planIds = [...new Set(base.map(s => s.plan_id).filter(Boolean))]
     const tecnicoIds = [...new Set(base.map(s => s.tecnico_id).filter(Boolean))]
-    const empty = { data: [] }
-
-    const [mascotasRes, aliadosRes, planesRes, personalRes, recibosRes, compsRes, recsComprobanteRes] = await Promise.all([
-      mascotaIds.length
-        ? db.from('mascotas').select('id_mascota, nombre, cliente_id, especies(nombre)').in('id_mascota', mascotaIds)
-        : Promise.resolve(empty),
-      aliadoIds.length
-        ? db.from('aliados').select('id_aliado, nombre, modalidad_comision, saldo_comision').in('id_aliado', aliadoIds)
-        : Promise.resolve(empty),
-      planIds.length
-        ? db.from('planes').select('id, nombre, codigo').in('id', planIds)
-        : Promise.resolve(empty),
-      tecnicoIds.length
-        ? db.from('personal').select('id, nombre, apellido').in('id', tecnicoIds)
-        : Promise.resolve(empty),
-      incluirRecibos && idsSvc.length
-        ? db.from('recibos_tecnico')
-            .select('id, servicio_id, tipo, fecha_emision, hora_emision, valor_cobrado, medios_pago, numero_recibo')
-            .in('servicio_id', idsSvc)
-            .eq('tipo', 'CLIENTE')
-            .order('created_at', { ascending: false })
-        : Promise.resolve(empty),
-      incluirComprobantes && idsSvc.length
-        ? db.from('recibo_comprobantes').select('servicio_id').in('servicio_id', idsSvc)
-        : Promise.resolve(empty),
-      incluirComprobantes && idsSvc.length
-        ? db.from('recibos_tecnico').select('servicio_id, medios_pago').in('servicio_id', idsSvc)
-        : Promise.resolve(empty),
+    const [mascotas, aliados, planes, personal, recibos, comps, recsComprobante] = await Promise.all([
+      dbIn('mascotas', 'id_mascota, nombre, cliente_id, especies(nombre)', 'id_mascota', mascotaIds),
+      dbIn('aliados', 'id_aliado, nombre, modalidad_comision, saldo_comision', 'id_aliado', aliadoIds),
+      dbIn('planes', 'id, nombre, codigo', 'id', planIds),
+      dbIn('personal', 'id, nombre, apellido', 'id', tecnicoIds),
+      incluirRecibos
+        ? dbIn('recibos_tecnico',
+            'id, servicio_id, tipo, fecha_emision, hora_emision, valor_cobrado, medios_pago, numero_recibo',
+            'servicio_id', idsSvc,
+            q => q.eq('tipo', 'CLIENTE').order('created_at', { ascending: false }))
+        : [],
+      incluirComprobantes ? dbIn('recibo_comprobantes', 'servicio_id', 'servicio_id', idsSvc) : [],
+      incluirComprobantes ? dbIn('recibos_tecnico', 'servicio_id, medios_pago', 'servicio_id', idsSvc) : [],
     ])
 
-    const mascotaMap = Object.fromEntries((mascotasRes.data || []).map(m => [m.id_mascota, m]))
+    const mascotaMap = Object.fromEntries(mascotas.map(m => [m.id_mascota, m]))
     const clienteIds = [...new Set(Object.values(mascotaMap).map(m => m.cliente_id).filter(Boolean))]
-    let clienteMap = {}
-    if (clienteIds.length) {
-      const { data: clientes } = await db.from('clientes').select('id_cliente, nombre, apellido, whatsapp').in('id_cliente', clienteIds)
-      clienteMap = Object.fromEntries((clientes || []).map(c => [c.id_cliente, c]))
-    }
+    const clientes = await dbIn('clientes', 'id_cliente, nombre, apellido, whatsapp', 'id_cliente', clienteIds)
+    const clienteMap = Object.fromEntries(clientes.map(c => [c.id_cliente, c]))
 
-    const aliadoMap = Object.fromEntries((aliadosRes.data || []).map(a => [a.id_aliado, a]))
-    const planMap = Object.fromEntries((planesRes.data || []).map(p => [p.id, p]))
-    const tecnicoMap = Object.fromEntries((personalRes.data || []).map(p => [p.id, p]))
+    const aliadoMap = Object.fromEntries(aliados.map(a => [a.id_aliado, a]))
+    const planMap = Object.fromEntries(planes.map(p => [p.id, p]))
+    const tecnicoMap = Object.fromEntries(personal.map(p => [p.id, p]))
     const reciboMap = {}
-    ;(recibosRes.data || []).forEach(r => { if (!reciboMap[r.servicio_id]) reciboMap[r.servicio_id] = r })
+    ;(recibos || []).forEach(r => { if (!reciboMap[r.servicio_id]) reciboMap[r.servicio_id] = r })
 
     const comprobantes = new Set()
-    ;(compsRes.data || []).forEach(c => comprobantes.add(c.servicio_id))
-    ;(recsComprobanteRes.data || []).forEach(r => {
+    ;(comps || []).forEach(c => comprobantes.add(c.servicio_id))
+    ;(recsComprobante || []).forEach(r => {
       const tiene = (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(mp => mp?.comprobanteUrl)
       if (tiene) comprobantes.add(r.servicio_id)
     })
@@ -571,9 +553,14 @@ export default function Finanzas() {
       .map(it => it.servicio_id))]
     let comprobantesCuadre = comprobantesSet
     if (idsDigitalCuadre.some(id => !comprobantesCuadre.has(id))) {
-      const { comprobantes } = await enriquecerServicios(idsDigitalCuadre.map(id => ({ id })), { incluirComprobantes: true })
-      comprobantesCuadre = new Set([...comprobantesCuadre, ...comprobantes])
-      setComprobantesSet(comprobantesCuadre)
+      // Solo alimenta el aviso de abajo: si falla, se cierra igual con lo que haya.
+      try {
+        const { comprobantes } = await enriquecerServicios(idsDigitalCuadre.map(id => ({ id })), { incluirComprobantes: true })
+        comprobantesCuadre = new Set([...comprobantesCuadre, ...comprobantes])
+        setComprobantesSet(comprobantesCuadre)
+      } catch (err) {
+        console.error('[Finanzas] No se pudieron verificar los comprobantes del cuadre:', err)
+      }
     }
     const faltanComprobante = cuadreItems.filter(it =>
       !it.es_cancelado && Number(it.digital) > 0 && !comprobantesCuadre.has(it.servicio_id))
@@ -998,28 +985,19 @@ export default function Finanzas() {
 
       // Mascotas
       const mascIds = [...new Set(clasificados.map(r => r.servicios?.mascota_id).filter(Boolean))]
-      let mascMap = {}
-      if (mascIds.length) {
-        const { data: ms } = await db.from('mascotas').select('id_mascota, nombre, cliente_id').in('id_mascota', mascIds)
-        mascMap = Object.fromEntries((ms || []).map(m => [m.id_mascota, m]))
-        const cliIds = [...new Set(Object.values(mascMap).map(m => m.cliente_id).filter(Boolean))]
-        if (cliIds.length) {
-          const { data: cs } = await db.from('clientes').select('id_cliente, nombre, apellido').in('id_cliente', cliIds)
-          const cliMap = Object.fromEntries((cs || []).map(c => [c.id_cliente, c]))
-          Object.values(mascMap).forEach(m => { m.cliente = cliMap[m.cliente_id] || null })
-        }
-      }
+      const ms = await dbIn('mascotas', 'id_mascota, nombre, cliente_id', 'id_mascota', mascIds)
+      const mascMap = Object.fromEntries(ms.map(m => [m.id_mascota, m]))
+      const cliIds = [...new Set(ms.map(m => m.cliente_id).filter(Boolean))]
+      const cs = await dbIn('clientes', 'id_cliente, nombre, apellido', 'id_cliente', cliIds)
+      const cliMap = Object.fromEntries(cs.map(c => [c.id_cliente, c]))
+      Object.values(mascMap).forEach(m => { m.cliente = cliMap[m.cliente_id] || null })
 
       // Última novedad NOTA por servicio
       const svcIds = [...new Set(clasificados.map(r => r.servicio_id).filter(Boolean))]
-      let novMap = {}
-      if (svcIds.length) {
-        const { data: novs } = await db.from('novedades_servicio')
-          .select('servicio_id, descripcion, created_at, tipo_novedad')
-          .in('servicio_id', svcIds)
-          .order('created_at', { ascending: false })
-        ;(novs || []).forEach(n => { if (!novMap[n.servicio_id]) novMap[n.servicio_id] = n })
-      }
+      const novs = await dbIn('novedades_servicio', 'servicio_id, descripcion, created_at, tipo_novedad',
+        'servicio_id', svcIds, q => q.order('created_at', { ascending: false }))
+      const novMap = {}
+      ;(novs || []).forEach(n => { if (!novMap[n.servicio_id]) novMap[n.servicio_id] = n })
 
       const enriched = clasificados.map(r => {
         const masc = mascMap[r.servicios?.mascota_id] || null

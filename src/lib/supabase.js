@@ -14,6 +14,22 @@ export async function dbGet(table, select = '*', filters = {}, order = null) {
   return data || []
 }
 
+// SELECT ... WHERE col IN (ids) troceado en lotes.
+// Con ~90 uuids la URL pasa de 4 KB y el upstream la rechaza con 502 (no 414):
+// supabase-js NO lanza, devuelve data:null, y quien ignore el error se queda con
+// la columna vacía sin señal de nada. Lotes de 60 uuids ≈ 2.8 KB, con margen
+// para el resto del querystring. `tweak` agrega filtros/order al lote.
+export async function dbIn(table, select, col, ids, tweak = q => q) {
+  const unicos = [...new Set((ids || []).filter(Boolean))]
+  const out = []
+  for (let i = 0; i < unicos.length; i += 60) {
+    const { data, error } = await tweak(db.from(table).select(select).in(col, unicos.slice(i, i + 60)))
+    if (error) throw new Error(error.message)
+    out.push(...(data || []))
+  }
+  return out
+}
+
 export async function dbInsert(table, body) {
   const { data, error } = await db.from(table).insert(body).select()
   if (error) throw new Error(error.message)
