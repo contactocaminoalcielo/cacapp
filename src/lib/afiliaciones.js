@@ -116,6 +116,77 @@ export async function abrirArchivoStorage(storagePath, bucket = 'evidencias') {
   return true
 }
 
+// ─── Piezas de texto del contrato de papel ──────────────────────────────────
+// El contrato escribe los valores en letras y en números: "tiene un valor de
+// treinta y cinco mil pesos ($ 35.000)".
+const LETRAS_U = ['', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez',
+  'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve',
+  'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis',
+  'veintisiete', 'veintiocho', 'veintinueve']
+const LETRAS_D = ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa']
+const LETRAS_C = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos',
+  'seiscientos', 'setecientos', 'ochocientos', 'novecientos']
+
+function letrasMenorMil(n) {
+  if (n === 0) return ''
+  if (n === 100) return 'cien'
+  const c = Math.floor(n / 100), r = n % 100
+  let s = c ? LETRAS_C[c] : ''
+  if (r) {
+    if (s) s += ' '
+    if (r < 30) s += LETRAS_U[r]
+    else {
+      const d = Math.floor(r / 10), u = r % 10
+      s += LETRAS_D[d] + (u ? ' y ' + LETRAS_U[u] : '')
+    }
+  }
+  return s
+}
+
+export function numeroALetras(n) {
+  const x = Math.round(Math.abs(Number(n) || 0))
+  if (x === 0) return 'cero'
+  const millones = Math.floor(x / 1000000)
+  const miles = Math.floor((x % 1000000) / 1000)
+  const unidades = x % 1000
+  const partes = []
+  if (millones) partes.push(millones === 1 ? 'un millón' : letrasMenorMil(millones) + ' millones')
+  if (miles) partes.push(miles === 1 ? 'mil' : letrasMenorMil(miles).replace(/uno$/, 'ún') + ' mil')
+  if (unidades) partes.push(letrasMenorMil(unidades))
+  return partes.join(' ')
+}
+
+const MESES_LARGOS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+// "03 de julio de 2026", como lo escribe el contrato
+export function fechaLarga(fechaISO) {
+  if (!fechaISO) return '—'
+  const f = parseDate(fechaISO)
+  return `${String(f.getDate()).padStart(2, '0')} de ${MESES_LARGOS[f.getMonth()]} de ${f.getFullYear()}`
+}
+
+// Cédula con puntos de miles, como la escribe el contrato (39.703.706)
+export function formatCedula(v) {
+  const d = String(v || '').replace(/\D/g, '')
+  return d ? d.replace(/\B(?=(\d{3})+(?!\d))/g, '.') : (v || '—')
+}
+
+// Edad vigente a una fecha: la declarada + los años que han pasado desde que se
+// declaró (migración 056). El cliente da años, no fecha de nacimiento.
+export function edadALaFecha(mascota, fechaISO) {
+  if (mascota?.edad_anios == null || !mascota?.edad_declarada_en) return null
+  const desde = parseDate(mascota.edad_declarada_en)
+  const hasta = parseDate(fechaISO || hoyLocalISO())
+  // Por calendario, NO dividiendo días entre 365.25: con un bisiesto de por
+  // medio, 2 años exactos son 730 días y 730/365.25 = 1.99 → truncaba a 1 y la
+  // mascota rejuvenecía un año.
+  let anios = hasta.getFullYear() - desde.getFullYear()
+  const m = hasta.getMonth() - desde.getMonth()
+  if (m < 0 || (m === 0 && hasta.getDate() < desde.getDate())) anios--
+  return mascota.edad_anios + Math.max(0, anios)
+}
+
 // Total del contrato = precio unitario × nº de mascotas cubiertas.
 // `contrato.valor` es el precio POR MASCOTA (así lo guardan las 149 filas de
 // prod sin excepción); el total se calcula, no se guarda, para no tener dos
@@ -124,75 +195,233 @@ export function totalContrato(contrato, nMascotas) {
   return (parseFloat(contrato?.valor) || 0) * (nMascotas || 0)
 }
 
-// Contrato PDF provisional (jsPDF directo — NUNCA html2canvas con Tailwind v4).
-// David va a pasar los formatos reales por nivel (nuevo y renovación) para
-// replicarlos tal cual; mientras tanto este documento deja constancia formal.
-export async function generarContratoPdf({ contrato, afiliacion, cliente, mascotas = [] }) {
+// ─── Contrato de papel, calcado ──────────────────────────────────────────────
+// Réplica del formato real que usa Camino al Cielo (Versión 2.818), a partir de
+// los 12 contratos firmados que pasó David: encabezado con el nº y "12 MESES",
+// título del plan, el párrafo del TOMADOR, la tabla de mascotas
+// (RAZA | EDAD AÑOS | PESO | NOMBRE | ESPECIE) y los seis puntos numerados.
+// jsPDF directo — NUNCA html2canvas con Tailwind v4 (oklch lo rompe).
+//
+// Diferencias entre variantes, tal como están en los originales:
+//   · ANUAL nuevo       → Parágrafo 2 con los valores de activación (5×/3×),
+//                          Parágrafo 3 (renovable), Segunda = vigencia 365 días.
+//   · ANUAL renovación  → idéntico pero la activación va en $0 ("no tendrá
+//                          activación si hay continuidad en la renovación").
+//   · VITALICIO         → Parágrafo 2 sin carencia, SIN Parágrafo 3, y la
+//                          Segunda dice "hasta requerir la utilización".
+//
+// Los originales traen erratas de copiar/pegar que NO se replican: el vitalicio
+// de Hugo dice "12 MESES" y titula "DIAMANTE VITALISIO" siendo un BRONCE, y el
+// template de BRONCE lista los planes como "Bronce, Plata, Oro y Plata".
+const EMPRESA = {
+  razon:    'MARTEN´S INVERSIONES S.A.S',
+  nit:      'NIT 901.792.844-5',
+  whatsapp: 'WhatsApp: 3193585508',
+  telefono: 'Teléfono: 3222187087-3107802868',
+  version:  'Versión: 2.818',
+}
+
+export async function generarContratoPdf({ contrato, afiliacion, cliente, mascotas = [], config = null }) {
   const { default: jsPDF } = await import('jspdf')
   const doc = new jsPDF({ unit: 'mm', format: 'letter' })
   const W = doc.internal.pageSize.getWidth()
-  let y = 22
+  const H = doc.internal.pageSize.getHeight()
+  const L = 20, R = W - 20, ANCHO = R - L
+  let y = 0
 
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(15)
-  doc.text('CAMINO AL CIELO', W / 2, y, { align: 'center' }); y += 7
-  doc.setFontSize(11)
-  const titulo = afiliacion.tipo === 'VITALICIO'
-    ? `CONTRATO DE AFILIACIÓN PRE-EXEQUIAL VITALICIA — PLAN ${afiliacion.nivel}`
-    : `CONTRATO DE AFILIACIÓN PRE-EXEQUIAL ANUAL — PLAN ${afiliacion.nivel}${contrato.numero >= 1 ? ` (RENOVACIÓN Nº ${contrato.numero})` : ''}`
-  doc.text(titulo, W / 2, y, { align: 'center' }); y += 6
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(10)
-  doc.text(`CONTRATO #${contrato.numero_contrato}`, W / 2, y, { align: 'center' }); y += 12
-
-  const linea = (label, valor) => {
-    doc.setFont('helvetica', 'bold');   doc.text(label, 20, y)
-    doc.setFont('helvetica', 'normal'); doc.text(String(valor ?? '—'), 75, y)
-    y += 7
+  const salto = alto => { if (y + alto > H - 18) { doc.addPage(); y = 20 } }
+  // Cuerpo justificado, como el original
+  const parrafo = (txt, { size = 8.4, gap = 2.2 } = {}) => {
+    doc.setFontSize(size); doc.setFont('helvetica', 'normal')
+    const lineas = doc.splitTextToSize(txt, ANCHO)
+    const alto = lineas.length * 3.6
+    salto(alto)
+    doc.text(lineas, L, y, { align: 'justify', maxWidth: ANCHO })
+    y += alto + gap
   }
-  linea('Titular:', `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim())
-  linea('Cédula / NIT:', cliente?.cedula_nit)
-  linea('WhatsApp:', cliente?.whatsapp)
-  linea('Fecha de inicio:', contrato.fecha_inicio)
-  if (afiliacion.tipo === 'ANUAL') linea('Vence:', contrato.fecha_vencimiento)
-  linea('Forma de pago:', afiliacion.tipo === 'VITALICIO' ? 'Pago único (vitalicio)' : 'Pago anual único')
-  y += 5
 
-  // Un contrato cubre una o varias mascotas, cada una con su propio valor.
-  doc.setFont('helvetica', 'bold')
-  doc.text(mascotas.length === 1 ? 'MASCOTA CUBIERTA' : `MASCOTAS CUBIERTAS (${mascotas.length})`, 20, y)
-  y += 6
+  const vitalicio  = afiliacion.tipo === 'VITALICIO'
+  const renovacion = !vitalicio && contrato.numero >= 1
+  const nivel      = afiliacion.nivel
+  const nivelTxt   = vitalicio ? nivel + ' VITALICIO' : nivel
+  const valor      = parseFloat(contrato.valor) || 0
+  const m1 = parseFloat(config?.multiplicador_semestre_1) || 5
+  const m2 = parseFloat(config?.multiplicador_semestre_2) || 3
+  const recargo = parseFloat(config?.recargo_municipios) || 30000
+  const miles = n => new Intl.NumberFormat('es-CO').format(Math.round(n))
+  const pesos = n => numeroALetras(n) + ' pesos ($ ' + miles(n) + ')'
+
+  // ── Encabezado ──
+  y = 16
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12)
+  doc.text('CONTRATO #' + (contrato.numero_contrato || '—'), W / 2, y, { align: 'center' })
+  if (!vitalicio) {
+    y += 5; doc.setFontSize(8); doc.setFont('helvetica', 'normal')
+    doc.text('12 MESES', R, y, { align: 'right' })
+  }
+  y += 8
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5)
+  const titulo = 'CONTRATO DE SERVICIO PLAN PRE EXEQUIAL ' + nivelTxt + ' “POR SIEMPRE EN MI CORAZÓN”'
+  const tLineas = doc.splitTextToSize(titulo, ANCHO - 10)
+  doc.text(tLineas, W / 2, y, { align: 'center' }); y += tLineas.length * 5 + 1
   doc.setFontSize(9)
-  doc.text('Nombre', 22, y); doc.text('Especie', 75, y); doc.text('Raza', 115, y)
-  doc.text('Valor', W - 22, y, { align: 'right' })
-  y += 2; doc.line(20, y, W - 20, y); y += 5
+  doc.text('CAMINO AL CIELO – FUNERARIA PARA MASCOTAS', W / 2, y, { align: 'center' }); y += 4
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7)
+  doc.text(EMPRESA.version, R, y, { align: 'right' }); y += 6
+
+  // ── Condiciones del contrato / TOMADOR ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.4)
+  doc.text('CONDICIONES DEL CONTRATO:', L, y); y += 4
+  const nombreTomador = (String(cliente?.nombre || '') + ' ' + String(cliente?.apellido || '')).trim().toUpperCase()
+  const unaSola = mascotas.length === 1
+  parrafo(
+    'El presente contrato se celebra entre ' + EMPRESA.razon + ' con su marca Camino al Cielo y ' + nombreTomador +
+    ' identificado con cedula de ciudadanía número ' + formatCedula(cliente?.cedula_nit) + ' ahora en adelante EL ' +
+    'TOMADOR. Previo a recepción de este contrato ha manifestado que desea recibir el servicio de Plan Pre Exequial ' +
+    nivelTxt + ' que ofrece ' + EMPRESA.razon + ' con su marca Camino al cielo, para ' +
+    (unaSola ? 'la mascota' : 'las mascotas') + ':',
+    { gap: 3.5 })
+
+  // ── Tabla de mascotas ──
+  const COLS = [
+    { t: 'RAZA:',      x: L,       w: 42 },
+    { t: 'EDAD AÑOS:', x: L + 44,  w: 22 },
+    { t: 'PESO:',      x: L + 68,  w: 18 },
+    { t: 'NOMBRE:',    x: L + 88,  w: 48 },
+    { t: 'ESPECIE:',   x: L + 138, w: 30 },
+  ]
+  salto(8 + mascotas.length * 5)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8)
+  for (const c of COLS) doc.text(c.t, c.x, y)
+  y += 4.5
   doc.setFont('helvetica', 'normal')
   for (const m of mascotas) {
-    doc.text(String(m?.nombre || '—'), 22, y)
-    doc.text(String(m?.especies?.nombre || '—'), 75, y)
-    doc.text(String(m?.raza || '—').slice(0, 22), 115, y)
-    doc.text(fmt(contrato.valor), W - 22, y, { align: 'right' })
-    y += 6
+    salto(6)
+    const edad = edadALaFecha(m, contrato.fecha_inicio)
+    const celdas = [
+      String(m?.raza || '—').toUpperCase(),
+      edad == null ? '—' : edad + ' AÑOS',
+      m?.peso_kg ? m.peso_kg + ' KG' : '—',
+      String(m?.nombre || '—').toUpperCase(),
+      String(m?.especies?.nombre || '—').toUpperCase(),
+    ]
+    let extra = 0
+    celdas.forEach((v, i) => {
+      const ls = doc.splitTextToSize(v, COLS[i].w)
+      doc.text(ls, COLS[i].x, y)
+      extra = Math.max(extra, (ls.length - 1) * 3.4)
+    })
+    y += 5 + extra
   }
-  doc.line(20, y - 2, W - 20, y - 2); y += 2
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
-  doc.text(`TOTAL (${mascotas.length} × ${fmt(contrato.valor)})`, 22, y)
-  doc.text(fmt(totalContrato(contrato, mascotas.length)), W - 22, y, { align: 'right' })
-  y += 10
+  y += 2.5
+
+  // ── Condiciones generales ──
+  parrafo(
+    'CONDICIONES GENERALES: Primera. Los servicios que ofrece ' + EMPRESA.razon + ' con su marca Camino al Cielo son ' +
+    'aplicados únicamente luego cancelar el servicio solicitado y su respectiva activación. Los servicios vigentes son: ' +
+    'Plan Pre-Exequial Bronce, Plan Pre-Exequial Plata, plan pre-exequial Oro y Plan Pre-exequial Diamante. En todo caso ' +
+    'para efectos de consulta de cada uno de los servicios, estos se encuentran descritos en www.caminoalcielo.com.co. ' +
+    'Los planes y su contenido están sujetos a modificación sin previo aviso por parte de ' + EMPRESA.razon +
+    ' con su marca Camino al Cielo.')
+
+  parrafo(
+    'Parágrafo 1: El TOMADOR reconoce expresamente que la contraprestación que recibe a cambio del pago es y será ' +
+    'siempre en especie, mediante la prestación del servicio funerario a su mascota. Por esa razón renuncia expresamente ' +
+    'a cualquier reclamación en dinero, por servicios no prestados o prestados sólo parcialmente. Tampoco podrá ' +
+    'renunciar el Tomador a la prestación del servicio, con la intención de que le sea pagada alguna suma de dinero en ' +
+    'contraprestación o como compensación.')
+
+  if (vitalicio) {
+    parrafo(
+      'Parágrafo 2: La afiliación al Plan Pre Exequial ' + nivelTxt + ' tiene un valor de ' + pesos(valor) +
+      ' por mascota, no tiene tiempos de carencia, por lo cual se puede solicitar y utilizar a partir de la ' +
+      'formalización del contrato.')
+    parrafo(
+      'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene vigencia desde el: ' +
+      fechaLarga(contrato.fecha_inicio) + ' hasta requerir la utilización del mismo.')
+  } else {
+    // En la renovación la activación va en $0: "no tendrá activación si hay
+    // continuidad en la renovación" (Parágrafo 3 del original).
+    const act1 = renovacion ? 0 : valor * m1
+    const act2 = renovacion ? 0 : valor * m2
+    parrafo(
+      'Parágrafo 2: La afiliación al Plan Pre Exequial ' + nivel + ' tiene un valor de ' + pesos(valor) +
+      ' por mascota y su activación por cada mascota tiene un valor de ' + pesos(act1) +
+      ' desde su formalización hasta el día 180, y un valor de ' + pesos(act2) +
+      ' desde el día 181 hasta la finalización del contrato.')
+    parrafo(
+      'Parágrafo 3: El presente contrato es renovable siempre y cuando el TOMADOR cancele de nuevo la afiliación ' +
+      nivel + ' antes de transcurridos 365 días desde la formalización del mismo, y este no tendrá activación si hay ' +
+      'continuidad en la renovación.')
+    parrafo(
+      'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene una vigencia de 365 días luego de su ' +
+      'formalización, para efectos de este contrato en particular su vigencia es desde el ' +
+      fechaLarga(contrato.fecha_inicio) + ', hasta el ' + fechaLarga(contrato.fecha_vencimiento) + '.')
+  }
+
+  parrafo(
+    'Tercera. – VERACIDAD DE LA INFORMACIÓN – EL TOMADOR al celebrar el contrato por la sola aceptación de sus ' +
+    'condiciones, se entiende prestado el juramento de que la mascota para la que se compra el plan Pre Exequial está ' +
+    'viva al momento de pagar. En caso de información falsa, siendo estos motivos de exclusión, quedará anulado el ' +
+    'contrato; el prestador del servicio queda exonerado de prestarlo y El TOMADOR perderá las sumas de dinero que ' +
+    'hubiese pagado, lo cual se acepta expresamente.')
+
+  parrafo(
+    'Cuarta. – RECOGIDA DE LA MASCOTA – La recogida de la mascota por el valor del servicio anual se realiza única y ' +
+    'exclusivamente en BOGOTA, D. C. entre las 7:00 am y 6:00 pm de Domingo a Domingo, sin embargo, en municipios ' +
+    'aledaños a la ciudad: (Funza, Mosquera, entre otros): se garantiza el servicio con un recargo adicional a: ' +
+    miles(recargo) + ' pesos. La recogida de la mascota está sujeta al volumen de rutas programadas al momento de ' +
+    'solicitar el servicio.')
+
+  parrafo('Quinta. – OBLIGACIONES DE LAS PARTES:', { gap: 1.5 })
+  const sangria = txt => {
+    doc.setFontSize(8.4); doc.setFont('helvetica', 'normal')
+    const ls = doc.splitTextToSize(txt, ANCHO - 10)
+    const alto = ls.length * 3.6
+    salto(alto)
+    doc.text(ls, L + 10, y, { align: 'justify', maxWidth: ANCHO - 10 })
+    y += alto + 2.2
+  }
+  sangria(
+    'A. OBLIGACIONES DEL TOMADOR: 1. EL TOMADOR se obliga, a suministrar sus datos y los de su mascota de una forma ' +
+    'veraz y oportuna; el hecho de incurrir en falsedad exonerará en todo a ' + EMPRESA.razon + ' con su marca Camino ' +
+    'al Cielo, del cumplimiento del presente contrato y de cualquier otra obligación que pudiera resultar desde el ' +
+    'momento en que se incurra en dicha falsedad y sin necesidad de dar aviso al TOMADOR. 2. Igualmente EL TOMADOR se ' +
+    'obliga a cancelar el valor del servicio antes de recibirlo. 3. A mantener actualizada su información personal ' +
+    'para efectos de ser contactado por ' + EMPRESA.razon + ' con su marca Camino al Cielo.')
+  sangria(
+    'B. OBLIGACIONES DE ' + EMPRESA.razon + ' con su marca Camino al Cielo: está obligado a prestar el servicio de ' +
+    'funeraria para mascotas en cualquier servicio vigente solicitado y pagado por EL TOMADOR y el manejo confidencial ' +
+    'de los datos suministrados. Igualmente se obliga realizar su labor dando un trato digno hacia EL TOMADOR y su ' +
+    'mascota fallecida.')
+
+  parrafo(
+    'Sexta. – Aceptación de las condiciones del contrato por parte del TOMADOR: El tomador reconoce y acepta haber ' +
+    'conocido con anterioridad a la adquisición del servicio los términos y condiciones bajo los cuales se ejecutan ' +
+    'los servicios vigentes de funeraria para mascotas que ofrece ' + EMPRESA.razon + ' con su marca Camino al Cielo.',
+    { gap: 6 })
+
+  // ── Firmas: TOMADOR a la izquierda, Camino al Cielo a la derecha ──
+  const XD = W / 2 + 6
+  salto(30)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.4)
+  doc.text('EL TOMADOR:', L, y); doc.text('Camino al Cielo', XD, y)
+  y += 4.5
   doc.setFont('helvetica', 'normal')
-
-  doc.setFontSize(9); doc.setTextColor(90)
-  const clausulas = afiliacion.tipo === 'ANUAL' && contrato.numero === 0
-    ? 'Cláusula del primer año: si la mascota fallece durante el primer semestre de este contrato, el servicio se cobra a 5 veces el valor de la afiliación; durante el segundo semestre, a 3 veces. Estas cláusulas se suspenden a partir de la primera renovación.'
-    : afiliacion.tipo === 'ANUAL'
-      ? 'Contrato de renovación: el servicio queda cubierto sin cláusulas semestrales. Aplican únicamente recargos de transporte fuera de Bogotá según tarifas vigentes.'
-      : 'Afiliación vitalicia: la mascota queda cubierta de por vida desde la firma. Aplican únicamente recargos de transporte fuera de Bogotá según tarifas vigentes.'
-  const parr = doc.splitTextToSize(clausulas, W - 40)
-  doc.text(parr, 20, y); y += parr.length * 4.5 + 14
-  doc.setTextColor(0)
-
-  doc.line(20, y, 90, y);  doc.line(W - 90, y, W - 20, y); y += 5
-  doc.setFontSize(9)
-  doc.text('Firma del titular', 20, y)
-  doc.text('Camino al Cielo', W - 90, y)
+  const izq = [
+    nombreTomador,
+    'C.C: ' + formatCedula(cliente?.cedula_nit),
+    'CEL: ' + ([cliente?.whatsapp, cliente?.telefono].filter(Boolean).join('/') || '—'),
+    'EMAIL: ' + (cliente?.email || '—'),
+  ]
+  const der = [EMPRESA.razon, '', EMPRESA.nit, EMPRESA.whatsapp, EMPRESA.telefono]
+  // Cada celda va como string, NO como arreglo: jsPDF le corre la línea base a
+  // los arreglos y el nombre del tomador dejaba de alinear con la razón social.
+  for (let i = 0; i < Math.max(izq.length, der.length); i++) {
+    if (izq[i]) doc.text(String(izq[i]), L, y)
+    if (der[i]) doc.text(String(der[i]), XD, y)
+    y += 4
+  }
 
   return doc
 }

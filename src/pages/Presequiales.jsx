@@ -15,6 +15,7 @@ import { fmt, waLink, today, parseDate, petEmoji } from '@/lib/utils'
 import {
   NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, calcularCobroActivacion,
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf, totalContrato,
+  edadALaFecha,
 } from '@/lib/afiliaciones'
 import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X } from 'lucide-react'
 
@@ -78,7 +79,7 @@ const diasPara = fechaISO => {
 
 const COLUMNAS_IMPORTACION = [
   'cliente_nombre', 'cliente_apellido', 'cedula_nit', 'whatsapp', 'telefono', 'email', 'direccion', 'ciudad',
-  'mascota_nombre', 'especie', 'raza', 'sexo', 'tamano', 'peso_kg',
+  'mascota_nombre', 'especie', 'raza', 'sexo', 'tamano', 'peso_kg', 'edad_anios',
   'tipo_afiliacion', 'nivel', 'fecha_inicio', 'valor', 'metodo_pago', 'fecha_pago', 'notas',
 ]
 // `cliente_apellido` es obligatorio: clientes.apellido es NOT NULL en la DB y
@@ -165,11 +166,15 @@ function validarFilasImportacion(rows, especies) {
     if (r.fecha_pago && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_pago)) errores.push('Fecha pago debe ser AAAA-MM-DD')
     if (!(valor > 0)) errores.push('Valor debe ser mayor que cero')
     if (/,| y /i.test(r.mascota_nombre || '')) errores.push('Una mascota por fila (varias mascotas = varias filas con los mismos datos de contrato)')
+    const edad = parseInt(r.edad_anios)
+    const edadOk = Number.isFinite(edad) && edad >= 0 && edad <= 40
+    if (r.edad_anios && !edadOk) errores.push('Edad debe ser un número de años entre 0 y 40')
     return {
       ...r, fila: index + 2, errores, tipo, nivel, metodo,
       sexo: sexo === 'HEMBRA' ? 'Hembra' : 'Macho',
       tamano: { MINI: 'Mini', PEQUENO: 'Pequeño', MEDIANO: 'Mediano', GRANDE: 'Grande', GIGANTE: 'Gigante' }[tamano],
       especie_id: especie?.id, valor_num: valor,
+      edad_num: edadOk ? edad : null,
     }
   })
 }
@@ -218,7 +223,7 @@ export default function Presequiales() {
             clientes(id_cliente,nombre,apellido,whatsapp,telefono,cedula_nit,direccion,ciudad),
             afiliacion_contratos(*),
             afiliacion_mascotas(id,estado,fecha_activacion,servicio_activado_id,created_at,
-              mascotas(id_mascota,nombre,raza,fallecida,especies(nombre)))`)
+              mascotas(id_mascota,nombre,raza,peso_kg,fallecida,edad_anios,edad_declarada_en,especies(nombre)))`)
           .order('created_at', { ascending: false }),
         db.from('planes').select('id,codigo,nombre').eq('activo', true),
         db.from('especies').select('id,nombre').order('nombre'),
@@ -575,6 +580,10 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
                 peso_kg: parseNumeroImportacion(fila.peso_kg) || 0,
                 cliente_id: cliente.id_cliente,
                 fallecida: false,
+                // La edad va impresa en el contrato; se guarda con la fecha en
+                // que se declaró para poder envejecerla después (migración 056).
+                edad_anios: fila.edad_num ?? null,
+                edad_declarada_en: fila.edad_num == null ? null : r.fecha_inicio,
               }).select('id_mascota,nombre').single()
               if (error) throw error
               mascota = creada
@@ -746,7 +755,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
 }
 
 // ─── Nueva afiliación: buscar-o-crear cliente + N mascotas + primer contrato ──
-const MASCOTA_VACIA = () => ({ key: crypto.randomUUID(), nombre: '', especie_id: '', raza: '', sexo: 'Macho', tamano: 'Pequeño', peso_kg: '' })
+const MASCOTA_VACIA = () => ({ key: crypto.randomUUID(), nombre: '', especie_id: '', raza: '', sexo: 'Macho', tamano: 'Pequeño', peso_kg: '', edad: '' })
 
 function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved }) {
   const { alert: showAlert } = useConfirm()
@@ -764,6 +773,9 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [mascotasCliente, setMascotasCliente] = useState([])
   const [seleccionadas, setSeleccionadas] = useState([])   // ids de mascotas existentes
   const [nuevas, setNuevas] = useState([])                 // formularios de mascota nueva
+  // Edad en años por mascota existente: el contrato la imprime y el cliente la
+  // da en años, no como fecha de nacimiento (migración 056).
+  const [edades, setEdades] = useState({})
 
   // plan + pago
   const [tipo, setTipo]   = useState('ANUAL')
@@ -799,11 +811,16 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 
   async function elegirCliente(c) {
     setCliente(c); setClienteNuevo(false); setResultados([]); setClienteBusqueda('')
-    setSeleccionadas([]); setNuevas([])
+    setSeleccionadas([]); setNuevas([]); setEdades({})
     const { data } = await db.from('mascotas')
-      .select('id_mascota,nombre,fallecida,peso_kg,especies(nombre)')
+      .select('id_mascota,nombre,fallecida,peso_kg,edad_anios,edad_declarada_en,especies(nombre)')
       .eq('cliente_id', c.id_cliente).order('nombre')
     setMascotasCliente(data || [])
+    // Precarga la edad que ya conocemos, envejecida a hoy
+    setEdades(Object.fromEntries((data || [])
+      .map(m => [m.id_mascota, edadALaFecha(m)])
+      .filter(([, e]) => e != null)
+      .map(([id, e]) => [id, String(e)])))
   }
 
   const nuevasValidas = nuevas.filter(m => m.nombre.trim())
@@ -835,6 +852,15 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         clienteId = data.id_cliente
       }
 
+      // La edad se guarda con la fecha en que se declaró para que no se pudra:
+      // la vigente = edad_anios + años transcurridos (migración 056).
+      const edadCols = anios => {
+        const n = parseInt(anios)
+        return Number.isFinite(n) && n >= 0
+          ? { edad_anios: n, edad_declarada_en: fechaInicio }
+          : { edad_anios: null, edad_declarada_en: null }
+      }
+
       const mascotaIds = [...seleccionadas]
       for (const m of nuevasValidas) {
         const { data, error } = await db.from('mascotas').insert({
@@ -844,9 +870,16 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           sexo: m.sexo, tamano: m.tamano,
           peso_kg: parseFloat(m.peso_kg) || 0,
           cliente_id: clienteId, fallecida: false,
+          ...edadCols(m.edad),
         }).select('id_mascota').single()
         if (error) throw error
         mascotaIds.push(data.id_mascota)
+      }
+
+      // Mascotas ya registradas: refrescar la edad que digitó el coordinador
+      for (const id of seleccionadas) {
+        const cols = edadCols(edades[id])
+        if (cols.edad_anios != null) await db.from('mascotas').update(cols).eq('id_mascota', id)
       }
 
       const { data: afil, error: e1 } = await db.from('afiliaciones').insert({
@@ -976,14 +1009,25 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
               {vivasCliente.map(m => {
                 const marcada = seleccionadas.includes(m.id_mascota)
                 return (
-                  <button key={m.id_mascota}
-                    onClick={() => setSeleccionadas(p => marcada ? p.filter(x => x !== m.id_mascota) : [...p, m.id_mascota])}
-                    className={`w-full text-left px-3 py-2 rounded-lg border-2 flex items-center justify-between transition-all ${marcada ? 'border-primary-dark bg-green-light' : 'border-transparent bg-surface2 hover:bg-surface3'}`}>
-                    <span className="font-semibold text-ink text-[13px]">
-                      {petEmoji(m.especies?.nombre)} {m.nombre} <span className="text-ink3 font-normal">({m.especies?.nombre || 'sin especie'})</span>
-                    </span>
-                    {marcada && <CheckCircle2 size={15} className="text-primary-dark" />}
-                  </button>
+                  <div key={m.id_mascota}
+                    className={`w-full px-3 py-2 rounded-lg border-2 flex items-center gap-2 transition-all ${marcada ? 'border-primary-dark bg-green-light' : 'border-transparent bg-surface2 hover:bg-surface3'}`}>
+                    <button className="flex-1 text-left flex items-center gap-2"
+                      onClick={() => setSeleccionadas(p => marcada ? p.filter(x => x !== m.id_mascota) : [...p, m.id_mascota])}>
+                      <CheckCircle2 size={15} className={marcada ? 'text-primary-dark' : 'text-ink3/30'} />
+                      <span className="font-semibold text-ink text-[13px]">
+                        {petEmoji(m.especies?.nombre)} {m.nombre} <span className="text-ink3 font-normal">({m.especies?.nombre || 'sin especie'})</span>
+                      </span>
+                    </button>
+                    {/* La edad va impresa en el contrato */}
+                    {marcada && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] font-bold text-ink3">Edad</span>
+                        <Input type="number" min="0" max="40" value={edades[m.id_mascota] ?? ''}
+                          onChange={e => setEdades(p => ({ ...p, [m.id_mascota]: e.target.value }))}
+                          className="w-16 h-7 text-[12px]" placeholder="años" />
+                      </div>
+                    )}
+                  </div>
                 )
               })}
             </div>
@@ -1010,6 +1054,9 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
                   </Select></div>
                 <div><label className={LABEL}>Raza</label>
                   <Input value={m.raza} onChange={e => setNuevas(p => p.map(x => x.key === m.key ? { ...x, raza: e.target.value } : x))} /></div>
+                <div><label className={LABEL}>Edad (años)</label>
+                  <Input type="number" min="0" max="40" value={m.edad}
+                    onChange={e => setNuevas(p => p.map(x => x.key === m.key ? { ...x, edad: e.target.value } : x))} /></div>
                 <div><label className={LABEL}>Sexo</label>
                   <Select value={m.sexo} onChange={e => setNuevas(p => p.map(x => x.key === m.key ? { ...x, sexo: e.target.value } : x))}>
                     <option>Macho</option><option>Hembra</option>
@@ -1127,7 +1174,7 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
     try {
       const doc = await generarContratoPdf({
         contrato, afiliacion: a, cliente: a.clientes,
-        mascotas: mascotas.map(am => am.mascotas),
+        mascotas: mascotas.map(am => am.mascotas), config,
       })
       const nombre = `Contrato_${contrato.numero_contrato}.pdf`
       // El PDF queda SIEMPRE en storage además de descargarse
