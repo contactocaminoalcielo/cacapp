@@ -3,6 +3,7 @@ import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
+import FichaServicio from '@/components/servicio/FichaServicio'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { petEmoji, parseDate } from '@/lib/utils'
 import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
@@ -26,6 +27,25 @@ const FILTROS = [
 ]
 
 const ENVIABLE = new Set(['POR_VALIDAR', 'ERROR'])
+
+const FILTROS_COLUMNA_INICIALES = {
+  cliente: '', plan: '', whatsapp: '', ingreso: '', recordatorio: '', codigo: '', estado: '', contacto: '',
+}
+
+function normalizar(v) {
+  return String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+}
+
+function FiltroColumna({ label, value, onChange, placeholder = 'Filtrar…', type = 'text', options = [] }) {
+  const base = 'mt-2 h-8 w-full min-w-[112px] rounded-lg border border-gray-200 bg-white px-2 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none transition-colors focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/15'
+  if (type === 'select') return (
+    <select aria-label={'Filtrar por ' + label} value={value} onChange={e => onChange(e.target.value)} className={base + ' cursor-pointer'}>
+      <option value="">Todos</option>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  )
+  return <input aria-label={'Filtrar por ' + label} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={base} />
+}
 
 function fechaCorta(v) {
   // fecha_ingreso es DATE ("YYYY-MM-DD"): parseDate lo interpreta como mediodía
@@ -64,6 +84,8 @@ export default function SeguimientoImagenes() {
   const [sel,      setSel]      = useState(() => new Set())
   const [copiado,  setCopiado]  = useState(null)
   const [info,     setInfo]     = useState(null)   // banner informativo (p.ej. plantilla pendiente)
+  const [filtrosColumna, setFiltrosColumna] = useState(FILTROS_COLUMNA_INICIALES)
+  const [detalleServicioId, setDetalleServicioId] = useState(null)
 
   useEffect(() => { cargar() }, [])
 
@@ -89,8 +111,43 @@ export default function SeguimientoImagenes() {
     return c
   }, [solicitudes])
 
-  const filtradas = filtro === 'todos' ? solicitudes : solicitudes.filter(s => s.estado === filtro)
+  const filtradasPorEstado = filtro === 'todos' ? solicitudes : solicitudes.filter(s => s.estado === filtro)
+  const filtradas = useMemo(() => filtradasPorEstado.filter(s => {
+    const svc = s.servicios || {}
+    const m = svc.mascotas || {}
+    const c = m.clientes || {}
+    const seg = seguimiento[s.id] || {}
+    const contacto = s.seguimiento_pausado
+      ? 'pausado'
+      : s.estado === 'SIN_RESPUESTA'
+        ? 'llamar'
+        : etapaContacto(seg.contactos).texto
+    const campos = {
+      cliente: [c.nombre, c.apellido, m.nombre].filter(Boolean).join(' '),
+      plan: [svc.planes?.nombre, svc.planes?.codigo].filter(Boolean).join(' '),
+      whatsapp: s.whatsapp_destino || c.whatsapp || '',
+      ingreso: fechaCorta(svc.fecha_ingreso),
+      recordatorio: (s.recordatorios_img || []).length
+        ? (s.recordatorios_img || []).map(r => r.nombre + ' ' + r.cantidad).join(' ')
+        : 'solo datos de entrega',
+      codigo: [s.codigo, s.enlace].filter(Boolean).join(' '),
+      estado: s.estado,
+      contacto,
+    }
+    return Object.entries(filtrosColumna).every(([key, value]) => !value || normalizar(campos[key]).includes(normalizar(value)))
+  }), [filtradasPorEstado, filtrosColumna, seguimiento])
   const seleccionables = filtradas.filter(s => ENVIABLE.has(s.estado))
+
+  const hayFiltrosColumna = Object.values(filtrosColumna).some(Boolean)
+  function cambiarFiltroColumna(key, value) {
+    setFiltrosColumna(prev => ({ ...prev, [key]: value }))
+    setSel(new Set())
+  }
+
+  function abrirDetalleFila(event, servicioId) {
+    if (event.target.closest('button, input, select, a')) return
+    setDetalleServicioId(servicioId)
+  }
 
   function toggleSel(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -304,25 +361,38 @@ export default function SeguimientoImagenes() {
           )}
         </div>
 
+        <div className="flex items-center justify-between gap-3 -mt-3 text-[11px] text-ink3">
+          <span>{filtradas.length} de {filtradasPorEstado.length} solicitudes visibles</span>
+          <div className="flex items-center gap-3">
+            {hayFiltrosColumna && (
+              <button onClick={() => setFiltrosColumna(FILTROS_COLUMNA_INICIALES)}
+                className="h-9 px-3 rounded-lg border border-gray-200 text-[12px] font-semibold text-ink2 hover:bg-surface2 transition-colors">
+                Limpiar filtros
+              </button>
+            )}
+            <span className="hidden sm:inline">Haz clic en una fila para abrir la ficha completa</span>
+          </div>
+        </div>
+
         {/* Tabla */}
-        <TableWrap>
-          <Table>
-            <thead>
+        <TableWrap className="max-h-[calc(100vh-11rem)] min-h-[320px] overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm [scrollbar-gutter:stable_both-edges]">
+          <Table className="min-w-[1520px]">
+            <thead className="sticky top-0 z-20 shadow-[0_1px_0_rgba(0,0,0,0.08)]">
               <tr>
                 <Th className="w-8">
                   {seleccionables.length > 0 && (
                     <input type="checkbox" checked={todosSelMarcado} onChange={toggleTodos} className="cursor-pointer" />
                   )}
                 </Th>
-                <Th>Cliente / Mascota</Th>
-                <Th>Plan</Th>
-                <Th>WhatsApp</Th>
-                <Th>Ingreso</Th>
-                <Th>Recordatorios con imagen</Th>
-                <Th>Código / Enlace</Th>
-                <Th>Estado</Th>
-                <Th>Contactos</Th>
-                <Th>Acciones</Th>
+                <Th className="min-w-[210px]">Cliente / Mascota<FiltroColumna label="cliente o mascota" value={filtrosColumna.cliente} onChange={v => cambiarFiltroColumna('cliente', v)} placeholder="Cliente o mascota" /></Th>
+                <Th className="min-w-[160px]">Plan<FiltroColumna label="plan" value={filtrosColumna.plan} onChange={v => cambiarFiltroColumna('plan', v)} placeholder="Plan" /></Th>
+                <Th className="min-w-[155px]">WhatsApp<FiltroColumna label="WhatsApp" value={filtrosColumna.whatsapp} onChange={v => cambiarFiltroColumna('whatsapp', v)} placeholder="Número" /></Th>
+                <Th className="min-w-[135px]">Ingreso<FiltroColumna label="fecha de ingreso" value={filtrosColumna.ingreso} onChange={v => cambiarFiltroColumna('ingreso', v)} placeholder="Fecha" /></Th>
+                <Th className="min-w-[210px]">Recordatorios con imagen<FiltroColumna label="recordatorio" value={filtrosColumna.recordatorio} onChange={v => cambiarFiltroColumna('recordatorio', v)} placeholder="Recordatorio" /></Th>
+                <Th className="min-w-[160px]">Código / Enlace<FiltroColumna label="código o enlace" value={filtrosColumna.codigo} onChange={v => cambiarFiltroColumna('codigo', v)} placeholder="Código" /></Th>
+                <Th className="min-w-[150px]">Estado<FiltroColumna type="select" label="estado" value={filtrosColumna.estado} onChange={v => cambiarFiltroColumna('estado', v)} options={FILTROS.filter(f => f.key !== 'todos').map(f => ({ value: f.key, label: f.label }))} /></Th>
+                <Th className="min-w-[150px]">Contactos<FiltroColumna label="contactos" value={filtrosColumna.contacto} onChange={v => cambiarFiltroColumna('contacto', v)} placeholder="Ej. pausado" /></Th>
+                <Th className="min-w-[190px]">Acciones<div className="mt-2 h-8" /></Th>
               </tr>
             </thead>
             <tbody>
@@ -339,7 +409,16 @@ export default function SeguimientoImagenes() {
                 // viva (enviada, sin carga del cliente) y no esté pausada.
                 const puedeAdelantar = s.estado === 'ENVIADO' && !s.seguimiento_pausado && seg.proximo && wa
                 return (
-                  <Tr key={s.id}>
+                  <Tr key={s.id}
+                    onClick={e => abrirDetalleFila(e, svc.id)}
+                    onKeyDown={e => {
+                      if (e.currentTarget === e.target && (e.key === 'Enter' || e.key === ' ')) {
+                        e.preventDefault(); setDetalleServicioId(svc.id)
+                      }
+                    }}
+                    tabIndex={0} role="button"
+                    aria-label={'Abrir ficha completa de ' + (m?.nombre || 'la mascota')}
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1A5CD8]">
                     <Td>
                       {enviable && (
                         <input type="checkbox" checked={sel.has(s.id)} onChange={() => toggleSel(s.id)} className="cursor-pointer" />
@@ -512,6 +591,9 @@ export default function SeguimientoImagenes() {
           </Table>
         </TableWrap>
       </div>
+      {detalleServicioId && (
+        <FichaServicio servicioId={detalleServicioId} onClose={() => setDetalleServicioId(null)} />
+      )}
     </div>
   )
 }

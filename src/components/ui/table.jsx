@@ -45,7 +45,7 @@ export function Td({ children, className, ...props }) {
   )
 }
 
-export function Tr({ children, onClick, className }) {
+export function Tr({ children, onClick, className, ...props }) {
   return (
     <tr
       onClick={onClick}
@@ -54,6 +54,7 @@ export function Tr({ children, onClick, className }) {
         onClick ? 'cursor-pointer hover:bg-gray-50/80' : '',
         className
       )}
+      {...props}
     >
       {children}
     </tr>
