@@ -357,14 +357,17 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, filt
                   </span>
               }
               {/* "Sin fotos" deja la pregunta obvia en el aire: ¿ya le insistimos?
-                  La etapa la responde aquí mismo, sin ir a otro módulo. */}
-              {!fotos_ok && etapa && (
+                  Se responde AQUÍ, sin ir a otro módulo.
+                  Se pinta siempre que las fotos estén frenando producción, incluso
+                  sin contactos: "sin contactar" ES la respuesta, y su ausencia no
+                  se distinguiría de una etiqueta que no cargó. */}
+              {!fotos_ok && bloqueados > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                  title={etapa.numero
+                  title={etapa?.numero
                     ? `Ya se le enviaron ${etapa.numero} contacto(s) por WhatsApp pidiendo las fotos`
                     : 'Todavía no se le ha escrito pidiendo las fotos'}
-                  style={{ background: '#F3F4F6', color: etapa.color }}>
-                  <MessageCircle size={9} /> {etapa.texto}
+                  style={{ background: '#F3F4F6', color: etapa?.color || '#9CA3AF' }}>
+                  <MessageCircle size={9} /> {etapa?.texto || 'sin contactar'}
                 </span>
               )}
               {!fotos_ok && listosProd > 0 && (
