@@ -14,7 +14,7 @@ import {
 } from '@/lib/imagenes'
 import {
   MessageCircle, RefreshCw, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
-  Pause, Play, PhoneCall, Clock,
+  Pause, Play, PhoneCall, Clock, Filter,
 } from 'lucide-react'
 
 const FILTROS = [
@@ -37,7 +37,7 @@ function normalizar(v) {
 }
 
 function FiltroColumna({ label, value, onChange, placeholder = 'Filtrar…', type = 'text', options = [] }) {
-  const base = 'mt-2 h-8 w-full min-w-[112px] rounded-lg border border-gray-200 bg-white px-2 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none transition-colors focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/15'
+  const base = 'h-9 w-full rounded-lg border border-gray-200 bg-white px-2.5 text-[12px] font-medium normal-case tracking-normal text-gray-700 outline-none transition-colors focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/15'
   if (type === 'select') return (
     <select aria-label={'Filtrar por ' + label} value={value} onChange={e => onChange(e.target.value)} className={base + ' cursor-pointer'}>
       <option value="">Todos</option>
@@ -47,6 +47,28 @@ function FiltroColumna({ label, value, onChange, placeholder = 'Filtrar…', typ
   return <input aria-label={'Filtrar por ' + label} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={base} />
 }
 
+function EncabezadoFiltrable({ label, filterKey, value, onChange, placeholder, type, options }) {
+  return (
+    <details name="filtros-imagenes" className="group relative">
+      <summary aria-label={'Filtrar por ' + label}
+        className={'flex h-8 cursor-pointer list-none items-center justify-between gap-2 rounded-lg px-1 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/30 [&::-webkit-details-marker]:hidden ' + (value ? 'bg-blue-50 text-[#1A5CD8]' : 'hover:bg-white')}>
+        <span>{label}</span>
+        <span className={'relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ' + (value ? 'text-[#1A5CD8]' : 'text-gray-400 group-hover:text-gray-700')}>
+          <Filter size={14} />
+          {value && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[#1A5CD8]" />}
+        </span>
+      </summary>
+      <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-60 rounded-xl border border-gray-200 bg-white p-3 shadow-xl"
+        onClick={e => e.stopPropagation()}>
+        <div className="mb-2 flex items-center justify-between gap-2 normal-case tracking-normal">
+          <span className="text-[11px] font-bold text-gray-700">Filtrar por {label.toLowerCase()}</span>
+          {value && <button type="button" onClick={() => onChange(filterKey, '')} className="text-[10px] font-semibold text-[#1A5CD8] hover:underline">Limpiar</button>}
+        </div>
+        <FiltroColumna label={label} value={value} onChange={v => onChange(filterKey, v)} placeholder={placeholder} type={type} options={options} />
+      </div>
+    </details>
+  )
+}
 function fechaCorta(v) {
   // fecha_ingreso es DATE ("YYYY-MM-DD"): parseDate lo interpreta como mediodía
   // LOCAL, no medianoche UTC, para no restar un día en Colombia (UTC-5).
@@ -384,15 +406,21 @@ export default function SeguimientoImagenes() {
                     <input type="checkbox" checked={todosSelMarcado} onChange={toggleTodos} className="cursor-pointer" />
                   )}
                 </Th>
-                <Th className="min-w-[210px]">Cliente / Mascota<FiltroColumna label="cliente o mascota" value={filtrosColumna.cliente} onChange={v => cambiarFiltroColumna('cliente', v)} placeholder="Cliente o mascota" /></Th>
-                <Th className="min-w-[160px]">Plan<FiltroColumna label="plan" value={filtrosColumna.plan} onChange={v => cambiarFiltroColumna('plan', v)} placeholder="Plan" /></Th>
-                <Th className="min-w-[155px]">WhatsApp<FiltroColumna label="WhatsApp" value={filtrosColumna.whatsapp} onChange={v => cambiarFiltroColumna('whatsapp', v)} placeholder="Número" /></Th>
-                <Th className="min-w-[135px]">Ingreso<FiltroColumna label="fecha de ingreso" value={filtrosColumna.ingreso} onChange={v => cambiarFiltroColumna('ingreso', v)} placeholder="Fecha" /></Th>
-                <Th className="min-w-[210px]">Recordatorios con imagen<FiltroColumna label="recordatorio" value={filtrosColumna.recordatorio} onChange={v => cambiarFiltroColumna('recordatorio', v)} placeholder="Recordatorio" /></Th>
-                <Th className="min-w-[160px]">Código / Enlace<FiltroColumna label="código o enlace" value={filtrosColumna.codigo} onChange={v => cambiarFiltroColumna('codigo', v)} placeholder="Código" /></Th>
-                <Th className="min-w-[150px]">Estado<FiltroColumna type="select" label="estado" value={filtrosColumna.estado} onChange={v => cambiarFiltroColumna('estado', v)} options={FILTROS.filter(f => f.key !== 'todos').map(f => ({ value: f.key, label: f.label }))} /></Th>
-                <Th className="min-w-[150px]">Contactos<FiltroColumna label="contactos" value={filtrosColumna.contacto} onChange={v => cambiarFiltroColumna('contacto', v)} placeholder="Ej. pausado" /></Th>
-                <Th className="min-w-[190px]">Acciones<div className="mt-2 h-8" /></Th>
+                {[
+                  { key: 'cliente', label: 'Cliente / Mascota', width: 'min-w-[210px]', placeholder: 'Cliente o mascota' },
+                  { key: 'plan', label: 'Plan', width: 'min-w-[160px]', placeholder: 'Plan' },
+                  { key: 'whatsapp', label: 'WhatsApp', width: 'min-w-[155px]', placeholder: 'Número' },
+                  { key: 'ingreso', label: 'Ingreso', width: 'min-w-[135px]', placeholder: 'Fecha' },
+                  { key: 'recordatorio', label: 'Recordatorios con imagen', width: 'min-w-[210px]', placeholder: 'Recordatorio' },
+                  { key: 'codigo', label: 'Código / Enlace', width: 'min-w-[160px]', placeholder: 'Código' },
+                  { key: 'estado', label: 'Estado', width: 'min-w-[150px]', type: 'select', options: FILTROS.filter(f => f.key !== 'todos').map(f => ({ value: f.key, label: f.label })) },
+                  { key: 'contacto', label: 'Contactos', width: 'min-w-[150px]', placeholder: 'Ej. pausado' },
+                ].map(col => (
+                  <Th key={col.key} className={col.width + ' overflow-visible'}>
+                    <EncabezadoFiltrable {...col} filterKey={col.key} value={filtrosColumna[col.key]} onChange={cambiarFiltroColumna} />
+                  </Th>
+                ))}
+                <Th className="min-w-[190px]">Acciones</Th>
               </tr>
             </thead>
             <tbody>
