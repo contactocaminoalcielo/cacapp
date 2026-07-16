@@ -195,8 +195,42 @@ subida automática.
     `consultarEstadoMensajeGHL()` (`whatsapp.js`); si Meta rechazó, el envío se
     persiste como `ERROR` con el motivo y NO marca ENTREGADO.
 
-  ⚠️ La plantilla `envio_digitales` quedó con ~29 chars de margen: si se alarga
-  su texto en Meta, vuelve a desbordar. Validar longitud antes de editarla.
+  ⚠️ La plantilla `envio_digitales` quedó con ~17 chars de margen (cuerpo 970 +
+  URL del reel = 1007/1024): si se alarga su texto en Meta, vuelve a desbordar.
+  Validar longitud antes de editarla.
+
+  **Enlaces fijos y evidencia (migración 055, 2026-07-16):** el módulo solo
+  conoce MEMORIAL/VIDEO/SHORT, pero `envio_digitales` **entrega tres
+  recordatorios más con enlace fijo escrito en su propio cuerpo**: Audio de
+  despedida, Herramientas de superación de duelo y Tarjeta de oración (los
+  enlaces viven en Meta, no en Orbit — decisión David 2026-07-16). Eso causaba
+  dos síntomas con la misma raíz:
+  - *La evidencia mentía*: `digitales_envios.mensaje` guardaba el resumen que
+    arma `construirMensajeCliente` con las piezas de `piezas_digitales`, o sea
+    solo `• Memorial: <url>`. El cliente **sí** recibía la plantilla completa
+    (comprobado: la ventana de 24 h estaba cerrada y el mensaje quedó
+    `delivered`, cosa que Meta solo hace con plantilla), pero en Orbit y en
+    Zolutium se leía como si se hubiera enviado solo el memorial.
+  - *Los fijos nunca se marcaban `ENTREGADO`*: ~80 servicios por recordatorio
+    quedaron `PENDIENTE` en Producción y en el certificado de entrega pese a
+    estar entregados.
+
+  El jsonb de cada plantilla en `config_operativa` ahora la describe:
+  - `texto` — espejo del cuerpo aprobado con `{{n}}`; es lo que se guarda como
+    evidencia (resuelto con los `bodyParams`). Sin él se cae al resumen viejo.
+  - `cubre` — ids de recordatorio de enlace fijo que la plantilla entrega; el
+    backend los marca `ENTREGADO` junto al memorial. El memorial NO va aquí: es
+    `{{1}}`, variable, y ya se marca por `recordatorios_tipo`.
+
+  ⚠️ **`texto` y `cubre` no se pueden derivar**: la API de GHL no expone el
+  cuerpo de la plantilla (401 en `/businesses/templates`). Si se edita la
+  plantilla en Meta, hay que editarlos aquí a la par o la evidencia vuelve a
+  divergir. `envio_digitales_individual` aún no los tiene → conserva el
+  comportamiento viejo hasta que se cargue su texto.
+
+  Nota: `Día de amor y milagrino` lo llevan ECO_GRUPAL/BASICO/BRONCE pero la
+  plantilla no lo menciona → queda fuera de `cubre` y sigue `PENDIENTE` a
+  propósito (David 2026-07-16).
 - El envío manual wa.me sigue disponible como alternativa (y único camino en
   combinaciones mixtas). También se permite envío parcial manual y reenvío
   (queda otro registro en el historial).
