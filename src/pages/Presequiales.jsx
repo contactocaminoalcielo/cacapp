@@ -62,7 +62,7 @@ const COLUMNAS_IMPORTACION = [
   'tipo_afiliacion', 'nivel', 'fecha_inicio', 'valor', 'metodo_pago', 'fecha_pago', 'notas',
 ]
 const COLUMNAS_REQUERIDAS = [
-  'cliente_nombre', 'cedula_nit', 'whatsapp', 'mascota_nombre', 'especie',
+  'cliente_nombre', 'cedula_nit', 'whatsapp', 'mascota_nombre',
   'tipo_afiliacion', 'nivel', 'fecha_inicio', 'valor',
 ]
 const TIPOS_IMPORTACION = new Set(['ANUAL', 'VITALICIO'])
@@ -138,7 +138,7 @@ function validarFilasImportacion(rows, especies) {
     if (!METODOS_IMPORTACION.has(metodo)) errores.push('Método de pago no válido')
     if (!SEXOS_IMPORTACION.has(sexo)) errores.push('Sexo debe ser Macho o Hembra')
     if (!TAMANOS_IMPORTACION.has(tamano)) errores.push('Tamaño no válido')
-    if (r.especie && !especie) errores.push('Especie no existe en el catálogo')
+
     if (r.fecha_inicio && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_inicio)) errores.push('Fecha inicio debe ser AAAA-MM-DD')
     if (r.fecha_pago && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_pago)) errores.push('Fecha pago debe ser AAAA-MM-DD')
     if (!(valor > 0)) errores.push('Valor debe ser mayor que cero')
@@ -481,7 +481,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
         if (!mascota) {
           const { data: creada, error } = await db.from('mascotas').insert({
             nombre: r.mascota_nombre.trim(),
-            especie_id: r.especie_id,
+            especie_id: r.especie_id || null,
             raza: r.raza?.trim() || null,
             sexo: r.sexo,
             tamano: r.tamano,
@@ -567,7 +567,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
 
         <div className="rounded-xl bg-blue-50 px-4 py-3 text-[11px] text-blue-900">
           <strong>Valores controlados:</strong> tipo ANUAL/VITALICIO · nivel BRONCE/PLATA/ORO/DIAMANTE ·
-          sexo Macho/Hembra · fechas AAAA-MM-DD. La especie debe existir en Configuración.
+          sexo Macho/Hembra · fechas AAAA-MM-DD. Especie y peso son opcionales.
         </div>
 
         {errorArchivo && (
@@ -593,7 +593,7 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
                     <tr key={r.fila} className="border-t border-gray-100">
                       <td className="px-3 py-2 font-mono text-gray-500">{r.fila}</td>
                       <td>{r.cliente_nombre} {r.cliente_apellido}<div className="text-[9px] text-gray-400">{r.cedula_nit}</div></td>
-                      <td>{r.mascota_nombre}<div className="text-[9px] text-gray-400">{r.especie}</div></td>
+                      <td>{r.mascota_nombre}<div className="text-[9px] text-gray-400">{r.especie || 'Sin especie'}</div></td>
                       <td>{r.tipo} · {r.nivel}<div className="text-[9px] text-gray-400">{fmt(r.valor_num || 0)}</div></td>
                       <td className="pr-3">
                         {r.errores.length
