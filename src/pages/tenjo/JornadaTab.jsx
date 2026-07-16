@@ -20,6 +20,10 @@ import {
   recibirItemLoteTenjo, RECEPCION_CFG, TIPO_PROCESO_LABEL,
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
+import {
+  cargarCubiculos, sugerirTalla, etiquetaCubiculo, mensajeErrorCubiculo, tallaLbl,
+} from '@/lib/cubiculos'
+import MapaCubiculos, { LeyendaCubiculos } from '@/pages/tenjo/MapaCubiculos'
 import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox, Phone, MessageCircle, Info, Check, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -104,7 +108,12 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [obsCierre,      setObsCierre]      = useState('')
   const [novCierre,      setNovCierre]      = useState('')
   const [modalCubiculo,  setModalCubiculo]  = useState(null) // item (compostaje a finalizar)
-  const [cubForm,        setCubForm]        = useState({ cubiculo_codigo: '', fecha_compostaje_inicio: '', meses: 2 })
+  const [cubForm,        setCubForm]        = useState({ cubiculo_id: '', fecha_compostaje_inicio: '', meses: 2 })
+  // Catálogo de cubículos + ocupación (migración 054). Única fuente de verdad:
+  // aquí no se vuelve a escribir texto libre, que fue lo que derivó a 8 grafías.
+  const [cubiculos,      setCubiculos]      = useState([])
+  const [ocupacion,      setOcupacion]      = useState({})
+  const [errCubiculos,   setErrCubiculos]   = useState(null)
   const [modalNovedad,   setModalNovedad]   = useState(null) // item (reportar novedad / no llegó)
   const [novForm,        setNovForm]        = useState({ estado: 'NOVEDAD', novedad: '', recibidoPor: '' })
 
@@ -118,7 +127,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     const map = {}
     for (const l of (ls || [])) {
       const { data: its } = await db.from('lotes_tenjo_items')
-        .select('*, servicios!inner(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)))')
+        .select('*, cubiculos(id, codigo, zona, talla, numero), servicios!inner(tipo_acompanamiento, notas, recogidas(notas, contacto_telefono), planes(nombre, codigo, tipo_proceso), mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)))')
         .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .eq('lote_id', l.id)
         .order('created_at', { ascending: true })
@@ -128,6 +137,19 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
+
+  // Catálogo de cubículos + ocupación. Se refresca al abrir el selector para no
+  // ofrecer un cubículo que otro operario acabó de ocupar.
+  const cargarMapa = useCallback(async () => {
+    try {
+      const { cubiculos: cubs, ocupacion: ocu } = await cargarCubiculos()
+      setCubiculos(cubs); setOcupacion(ocu); setErrCubiculos(null)
+    } catch (e) {
+      setErrCubiculos(/does not exist|schema cache/i.test(e?.message || '')
+        ? 'Falta aplicar la migración 054 (catálogo de cubículos) en esta base de datos.'
+        : mensajeErrorCubiculo(e))
+    }
+  }, [])
 
   // Al cargar por primera vez, si hay varios lotes deja abierto solo el primero
   // (menos scroll). No pisa los toggles posteriores del usuario.
@@ -204,17 +226,29 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   async function finalizarCompostaje() {
     const item = modalCubiculo
     if (!item) return
-    if (!cubForm.cubiculo_codigo.trim()) {
-      await showAlert('Indica el código del cubículo donde quedó la mascota.', { title: 'Cubículo requerido' }); return
+    if (!cubForm.cubiculo_id) {
+      await showAlert('Selecciona en el mapa el cubículo donde quedó la mascota.', { title: 'Cubículo requerido' }); return
     }
     const inicioComp = cubForm.fecha_compostaje_inicio || today()
-    await updateItem(item, {
-      estado: 'PROCESADO',
-      fecha_fin_proceso: ahoraISO(),
-      cubiculo_codigo: cubForm.cubiculo_codigo.trim(),
-      fecha_compostaje_inicio: inicioComp,
-      meses_compostaje: cubForm.meses === 3 ? 3 : 2,
-    }, false)
+    // El índice único `uq_cubiculo_ocupado` rechaza a nivel de DB un cubículo ya
+    // ocupado (carrera entre dos operarios). Se traduce a lenguaje de planta.
+    try {
+      const { error } = await db.from('lotes_tenjo_items').update({
+        estado: 'PROCESADO',
+        fecha_fin_proceso: ahoraISO(),
+        cubiculo_id: cubForm.cubiculo_id,
+        cubiculo_liberado_en: null,
+        cubiculo_liberado_por: null,
+        fecha_compostaje_inicio: inicioComp,
+        meses_compostaje: cubForm.meses === 3 ? 3 : 2,
+        decidido_por: personalData?.id || null,
+      }).eq('id', item.id)
+      if (error) throw error
+    } catch (e) {
+      await showAlert(mensajeErrorCubiculo(e), { title: 'No se pudo asignar el cubículo', variant: 'danger' })
+      await cargarMapa()
+      return
+    }
     // Conectar los flujos: salida del cuarto frío + traslado completado + avanzar servicio
     try {
       await reconciliarServicioTenjo(item.servicio_id, {
@@ -224,8 +258,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       })
     } catch (e) { console.error('[reconciliar compostaje]', e?.message) }
     setModalCubiculo(null)
-    setCubForm({ cubiculo_codigo: '', fecha_compostaje_inicio: '', meses: 2 })
-    await cargar(); onChanged?.()
+    setCubForm({ cubiculo_id: '', fecha_compostaje_inicio: '', meses: 2 })
+    await cargar(); await cargarMapa(); onChanged?.()
   }
 
   // ── Recepción en planta ──
@@ -382,9 +416,9 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
           {observaciones && (
             <div className="text-[11px] text-ink2 mt-0.5 italic">📝 {observaciones}</div>
           )}
-          {item.estado === 'PROCESADO' && esCompostaje && item.cubiculo_codigo && (
+          {item.estado === 'PROCESADO' && esCompostaje && (item.cubiculos || item.cubiculo_codigo) && (
             <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
-              🌿 Cubículo {item.cubiculo_codigo} · {item.meses_compostaje || 2} meses
+              🌿 Cubículo {item.cubiculos ? etiquetaCubiculo(item.cubiculos) : item.cubiculo_codigo} · {item.meses_compostaje || 2} meses
             </div>
           )}
           {porRecibir && !noLlego && (
@@ -437,8 +471,9 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               onClick={async () => {
                 if (esCompostaje) {
                   // Compostaje: capturar el cubículo donde quedó la mascota
-                  setCubForm({ cubiculo_codigo: item.cubiculo_codigo || '', fecha_compostaje_inicio: today(), meses: item.meses_compostaje || 2 })
+                  setCubForm({ cubiculo_id: item.cubiculo_id || '', fecha_compostaje_inicio: today(), meses: item.meses_compostaje || 2 })
                   setModalCubiculo(item)
+                  await cargarMapa()
                   return
                 }
                 // Cremación (u otros): la finalización registra la fecha de cremación
@@ -769,23 +804,49 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       })()}
 
       {/* ── Modal registrar cubículo (finalizar compostaje) ── */}
-      {modalCubiculo && (
+      {modalCubiculo && (() => {
+        const pesoMascota  = modalCubiculo.servicios?.mascotas?.peso_kg
+        const tallaSugerida = sugerirTalla(pesoMascota)
+        const cubElegido    = cubiculos.find(c => c.id === cubForm.cubiculo_id)
+        return (
         <Modal open onClose={() => setModalCubiculo(null)}
           title={`Finalizar compostaje — ${modalCubiculo.servicios?.mascotas?.nombre || ''}`}
-          maxWidth="max-w-md"
+          maxWidth="max-w-4xl"
           footer={<>
             <Button variant="secondary" onClick={() => setModalCubiculo(null)}>Cancelar</Button>
-            <Button onClick={finalizarCompostaje} disabled={saving}>{saving ? 'Guardando…' : 'Finalizar y registrar cubículo'}</Button>
+            <Button onClick={finalizarCompostaje} disabled={saving || !cubForm.cubiculo_id}>
+              {saving ? 'Guardando…' : cubElegido ? `Finalizar en ${etiquetaCubiculo(cubElegido)}` : 'Selecciona un cubículo'}
+            </Button>
           </>}>
           <div className="space-y-4">
             <div className="rounded-xl p-3 text-[12px]" style={{ background: '#F0FDF4', borderColor: '#86EFAC', border: '1px solid' }}>
-              Registra en qué cubículo quedó la mascota y cuánto durará el compostaje. El sistema calculará la fecha estimada de finalización sumando <strong>{cubForm.meses} meses</strong> a la fecha de ingreso.
+              Toca en el mapa el cubículo donde quedó la mascota. Los cubículos ocupados no se pueden elegir.
+              {tallaSugerida && (
+                <> Por su peso ({pesoMascota} kg) la talla sugerida es <strong>{tallaLbl(tallaSugerida)}</strong>, pero puedes elegir cualquiera.</>
+              )}
             </div>
-            <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-1">Código del cubículo *</label>
-              <Input placeholder="Ej: C-03" value={cubForm.cubiculo_codigo}
-                onChange={e => setCubForm(p => ({ ...p, cubiculo_codigo: e.target.value }))} />
-            </div>
+
+            {errCubiculos ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[12px] text-amber-900">
+                <div className="font-bold mb-0.5 flex items-center gap-1.5"><AlertTriangle size={14} /> No se pudo cargar el mapa</div>
+                {errCubiculos}
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-ink3">Cubículo *</label>
+                  <LeyendaCubiculos />
+                </div>
+                <div className="max-h-[42vh] overflow-y-auto pr-1">
+                  <MapaCubiculos cubiculos={cubiculos} ocupacion={ocupacion} soloLibres
+                    tallaSugerida={tallaSugerida}
+                    seleccionado={cubForm.cubiculo_id}
+                    onSelect={c => setCubForm(p => ({ ...p, cubiculo_id: c.id }))} />
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1.5">Duración del compostaje</label>
               <div className="grid grid-cols-2 gap-2">
@@ -806,9 +867,11 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 <p className="text-[11px] text-ink3 mt-1">→ Compostaje listo estimado: <strong>{fmtFechaCorta(finCompostaje(cubForm.fecha_compostaje_inicio, cubForm.meses))}</strong></p>
               )}
             </div>
+            </div>
           </div>
         </Modal>
-      )}
+        )
+      })()}
 
       {/* ── Modal reportar novedad / no llegó ── */}
       {modalNovedad && (
@@ -920,7 +983,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
                 <Fila label="Tipo de proceso" value={TIPO_PROCESO_LABEL[plan?.tipo_proceso] || plan?.tipo_proceso} />
                 <Fila label="Acompañamiento" value={VARIANTE_LABEL[varianteProceso(plan?.codigo, item.servicios?.tipo_acompanamiento)]} />
                 <Fila label="Estado en el lote" value={ITEM_ESTADO_CFG[item.estado]?.label || item.estado} />
-                {item.cubiculo_codigo && <Fila label="Cubículo" value={`${item.cubiculo_codigo} · ${item.meses_compostaje || 2} meses`} />}
+                {(item.cubiculos || item.cubiculo_codigo) && (
+                  <Fila label="Cubículo"
+                    value={`${item.cubiculos ? etiquetaCubiculo(item.cubiculos) : `${item.cubiculo_codigo} (código viejo)`} · ${item.meses_compostaje || 2} meses`} />
+                )}
                 {item.fecha_recepcion && (
                   <Fila label="Recibida" value={`${fmtHora(item.fecha_recepcion)}${recibidor ? ` · ${recibidor.nombre}` : ''}`} />
                 )}

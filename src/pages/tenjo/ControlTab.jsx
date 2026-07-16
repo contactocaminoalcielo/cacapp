@@ -13,6 +13,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { calcularListoProceso, reconciliarServicioTenjo } from '@/lib/tenjo'
+import { etiquetaCubiculo, zonaCfg } from '@/lib/cubiculos'
 import { petEmoji, parsearErrorDB } from '@/lib/utils'
 import { Flame, Leaf, Wrench, CheckCircle2, AlertTriangle } from 'lucide-react'
 import SetupNotice from './SetupNotice'
@@ -61,6 +62,7 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
   const cargar = useCallback(async () => {
     const { data, error } = await db.from('lotes_tenjo_items')
       .select('id, estado, cubiculo_codigo, fecha_inicio_proceso, fecha_fin_proceso, fecha_compostaje_inicio, meses_compostaje, '
+        + 'cubiculos(id, codigo, zona, talla, numero), '
         + 'lotes_tenjo!lote_id(numero_lote, fecha_jornada), '
         + 'servicios!inner(planes(nombre, tipo_proceso), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
       .in('estado', ['EN_PROCESO', 'PROCESADO'])
@@ -254,7 +256,16 @@ export default function ControlTab({ canPlan = false, personalData = null }) {
                           {calc.esCompostaje ? 'Compostaje' : 'Cremación'}
                         </span>
                       </Td>
-                      <Td className="font-mono text-[11px]">{r.cubiculo_codigo || '—'}</Td>
+                      <Td className="text-[11px]">
+                        {r.cubiculos ? (
+                          <span className="inline-flex items-center gap-1.5 font-medium">
+                            <span className="h-2 w-2 rounded-full shrink-0" style={{ background: zonaCfg(r.cubiculos.zona).color }} />
+                            {etiquetaCubiculo(r.cubiculos)}
+                          </span>
+                        ) : r.cubiculo_codigo ? (
+                          <span className="font-mono text-ink3" title="Código viejo, sin enlazar al catálogo">{r.cubiculo_codigo}</span>
+                        ) : '—'}
+                      </Td>
                       <Td className="text-ink3 text-[11px]">{fmtFechaHora(r.fecha_inicio_proceso)}</Td>
                       <Td className="text-ink3 text-[11px]">{fmtFechaHora(r.fecha_fin_proceso)}</Td>
                       <Td className="text-ink2 text-[11px] font-medium">{fmtFecha(calc.fechaListo)}</Td>

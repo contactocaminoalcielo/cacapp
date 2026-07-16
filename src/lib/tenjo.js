@@ -5,6 +5,7 @@
 import { db } from '@/lib/supabase'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { today, hoyLocalISO } from '@/lib/utils'
+import { etiquetaCubiculo } from '@/lib/cubiculos'
 
 // ─── Configuración (defaults de respaldo; la fuente es config_operativa) ─────
 export const CONFIG_DEFAULTS = {
@@ -526,7 +527,11 @@ export function calcularListoProceso(item) {
   const esCompostaje = tipo === 'COMPOSTAJE_INDIVIDUAL'
   const fechaInicio  = soloFecha(item?.fecha_inicio_proceso)
   const fechaProceso = soloFecha(item?.fecha_fin_proceso) // fin = cremacion / fin de proceso
-  const cubiculo     = item?.cubiculo_codigo || null
+  // Catálogo (migración 054) primero; el texto libre viejo solo como respaldo
+  // para los items anteriores que no se pudieron enlazar.
+  const cubiculo     = item?.cubiculos
+    ? etiquetaCubiculo(item.cubiculos)
+    : (item?.cubiculo_codigo || null)
 
   // Aun no finaliza el proceso → en proceso, sin plazo todavia
   if (!fechaProceso) {
