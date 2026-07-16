@@ -1,24 +1,46 @@
-# Instalado como /etc/cron.d/orbit-backend (root). El cron corre en UTC;
-# Bogotá = UTC-5 sin DST. Los jobs se disparan a diario y cada uno decide
-# si aplica según config_operativa (dias_planificacion).
-# 06:00 Bogotá = 11:00 UTC → propuesta de lote (solo actúa lun/mié/vie)
-# 06:30 Bogotá = 11:30 UTC → motor de alertas (todos los días)
+# Instalado como /etc/cron.d/orbit-backend (root, 0644).
+#
+# EL RELOJ (leer antes de tocar una hora)
+# --------------------------------------
+# cron hereda la zona del SISTEMA, no UTC. Hasta el 2026-07-16 el VPS estaba en
+# Europe/Berlin y esta cabecera afirmaba "el cron corre en UTC": era FALSO. Todo
+# corria 2h antes de lo escrito (el job de las "15:00 UTC" salia 13:00 UTC =
+# 08:00 Bogota) y en octubre Berlin pasa a CET y se habria corrido otra hora mas,
+# solo, sin que nadie tocara nada.
+#
+# El host se paso a America/Bogota, que NO tiene horario de verano:
+#   → las horas de abajo SON hora de Bogota y no se desvian nunca.
+#
+# CRON_TZ no es opcion: este cron (3.0pl1-137) no lo soporta — no existe ni la
+# cadena en el binario (`strings /usr/sbin/cron | grep -i tz` → vacio).
+# Si alguien devuelve el host a otra zona, ESTO se rompe en silencio: ningun job
+# falla, solo ocurren a deshora y nadie se entera.
+#
+# --max-time 300: sin el, un backend colgado deja el curl esperando PARA SIEMPRE
+# y el job del dia se pierde mudo (paso el 2026-07-16).
+#
+# Cada job decide si aplica (dias_planificacion, dias habiles, festivos). Todos
+# idempotentes: correrlos dos veces el mismo dia no duplica nada.
 
-# orbit-backend — jobs Tenjo (06:00/06:30 Bogota = 11:00/11:30 UTC)
-0 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/generar-propuesta >> /var/log/orbit-backend-cron.log 2>&1
-30 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/alertas >> /var/log/orbit-backend-cron.log 2>&1
+# Jobs Tenjo — propuesta de lote (solo actua lun/mie/vie; lo decide el job) y alertas.
+0 6 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/generar-propuesta >> /var/log/orbit-backend-cron.log 2>&1
+30 6 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/alertas >> /var/log/orbit-backend-cron.log 2>&1
 
 # Reportes Grupales (Fase 5) — sincroniza reportes, marca vencidos y genera alertas.
-# 06:45 Bogota = 11:45 UTC (todos los dias). Idempotente.
-45 11 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/grupales >> /var/log/orbit-backend-cron.log 2>&1
+45 6 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/grupales >> /var/log/orbit-backend-cron.log 2>&1
 
 # Solicitud de imagenes — prepara los contactos del dia (NO envia; una persona valida).
-# 10:00 Bogota = 15:00 UTC (todos los dias). Idempotente; recupera vencidos no procesados.
-0 15 * * * root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+# Recupera vencidos no procesados.
+0 10 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1
 
 # Seguimiento de imagenes — 2o contacto (+3 dias habiles) y 3er contacto (+15) desde
 # el envio del 1o; cierra SIN_RESPUESTA + alerta tras el 3o. SOLO dias habiles (L-V):
-# el cron no conoce los festivos de Colombia, pero el job SI (fn_sumar_dias_habiles);
-# en festivo simplemente no habra nada vencido. 10:30 Bogota = 15:30 UTC.
+# el cron no conoce los festivos de Colombia, pero el job SI (fn_es_dia_habil), asi
+# que en festivo simplemente no escribe a nadie.
 # Idempotente: el indice unico (solicitud_id, numero) impide duplicar un contacto.
-30 15 * * 1-5 root curl -s -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/seguimiento-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+30 10 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/seguimiento-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+
+# Afiliaciones pre-exequiales — marca VENCIDA (vencio el contrato vigente) y
+# CANCELADA (paso la gracia). Idempotente.
+# NO instalado en prod todavia: el modulo de pre-exequiales aun no se despliega.
+0 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/afiliaciones >> /var/log/orbit-backend-cron.log 2>&1
