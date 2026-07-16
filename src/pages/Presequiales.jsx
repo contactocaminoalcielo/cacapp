@@ -16,7 +16,7 @@ import {
   NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, calcularCobroActivacion,
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf,
 } from '@/lib/afiliaciones'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw } from 'lucide-react'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2 } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -56,6 +56,100 @@ const diasPara = fechaISO => {
   return Math.round((parseDate(fechaISO) - parseDate(today())) / 86400000)
 }
 
+const COLUMNAS_IMPORTACION = [
+  'cliente_nombre', 'cliente_apellido', 'cedula_nit', 'whatsapp', 'email', 'direccion', 'ciudad',
+  'mascota_nombre', 'especie', 'raza', 'sexo', 'tamano', 'peso_kg',
+  'tipo_afiliacion', 'nivel', 'fecha_inicio', 'valor', 'metodo_pago', 'fecha_pago', 'notas',
+]
+const COLUMNAS_REQUERIDAS = [
+  'cliente_nombre', 'cedula_nit', 'whatsapp', 'mascota_nombre', 'especie',
+  'tipo_afiliacion', 'nivel', 'fecha_inicio', 'valor',
+]
+const TIPOS_IMPORTACION = new Set(['ANUAL', 'VITALICIO'])
+const NIVELES_IMPORTACION = new Set(['BRONCE', 'PLATA', 'ORO', 'DIAMANTE'])
+const METODOS_IMPORTACION = new Set(['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'OTRO'])
+const SEXOS_IMPORTACION = new Set(['MACHO', 'HEMBRA'])
+const TAMANOS_IMPORTACION = new Set(['MINI', 'PEQUENO', 'MEDIANO', 'GRANDE', 'GIGANTE'])
+
+function normalizarImportacion(v) {
+  return String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase()
+}
+
+function encabezadoImportacion(v) {
+  return normalizarImportacion(v).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+}
+
+function parseNumeroImportacion(v) {
+  let x = String(v ?? '').replace(/[$\s]/g, '')
+  if (x.includes('.') && x.includes(',')) x = x.replace(/\./g, '').replace(',', '.')
+  else if (x.includes(',')) x = x.replace(',', '.')
+  else if (/^\d{1,3}(\.\d{3})+$/.test(x)) x = x.replace(/\./g, '')
+  return Number(x)
+}
+
+function parseArchivoDelimitado(texto) {
+  const limpio = String(texto || '').replace(/^\uFEFF/, '')
+  const primera = limpio.split(/\r?\n/).find(Boolean) || ''
+  const candidatos = [',', ';', '\t']
+  const separador = candidatos
+    .map(c => ({ c, n: primera.split(c).length }))
+    .sort((a, b) => b.n - a.n)[0].c
+  const matriz = []
+  let fila = [], campo = '', comillas = false
+  for (let i = 0; i < limpio.length; i++) {
+    const ch = limpio[i]
+    if (ch === '"') {
+      if (comillas && limpio[i + 1] === '"') { campo += '"'; i++ } else comillas = !comillas
+    } else if (ch === separador && !comillas) {
+      fila.push(campo); campo = ''
+    } else if ((ch === '\n' || ch === '\r') && !comillas) {
+      if (ch === '\r' && limpio[i + 1] === '\n') i++
+      fila.push(campo); campo = ''
+      if (fila.some(v => String(v).trim())) matriz.push(fila)
+      fila = []
+    } else {
+      campo += ch
+    }
+  }
+  fila.push(campo)
+  if (fila.some(v => String(v).trim())) matriz.push(fila)
+  if (!matriz.length) return { headers: [], rows: [] }
+  const headers = matriz[0].map(encabezadoImportacion)
+  const rows = matriz.slice(1).map(cols =>
+    Object.fromEntries(headers.map((h, i) => [h, String(cols[i] ?? '').trim()]))
+  )
+  return { headers, rows }
+}
+
+function validarFilasImportacion(rows, especies) {
+  const especiesMap = new Map(especies.map(e => [normalizarImportacion(e.nombre), e]))
+  return rows.map((r, index) => {
+    const errores = []
+    for (const col of COLUMNAS_REQUERIDAS) if (!r[col]) errores.push('Falta ' + col)
+    const tipo = normalizarImportacion(r.tipo_afiliacion)
+    const nivel = normalizarImportacion(r.nivel)
+    const metodo = normalizarImportacion(r.metodo_pago || 'EFECTIVO')
+    const sexo = normalizarImportacion(r.sexo || 'MACHO')
+    const tamano = normalizarImportacion(r.tamano || 'PEQUENO')
+    const especie = especiesMap.get(normalizarImportacion(r.especie))
+    const valor = parseNumeroImportacion(r.valor)
+    if (r.tipo_afiliacion && !TIPOS_IMPORTACION.has(tipo)) errores.push('Tipo debe ser ANUAL o VITALICIO')
+    if (r.nivel && !NIVELES_IMPORTACION.has(nivel)) errores.push('Nivel no válido')
+    if (!METODOS_IMPORTACION.has(metodo)) errores.push('Método de pago no válido')
+    if (!SEXOS_IMPORTACION.has(sexo)) errores.push('Sexo debe ser Macho o Hembra')
+    if (!TAMANOS_IMPORTACION.has(tamano)) errores.push('Tamaño no válido')
+    if (r.especie && !especie) errores.push('Especie no existe en el catálogo')
+    if (r.fecha_inicio && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_inicio)) errores.push('Fecha inicio debe ser AAAA-MM-DD')
+    if (r.fecha_pago && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_pago)) errores.push('Fecha pago debe ser AAAA-MM-DD')
+    if (!(valor > 0)) errores.push('Valor debe ser mayor que cero')
+    return {
+      ...r, fila: index + 2, errores, tipo, nivel, metodo,
+      sexo: sexo === 'HEMBRA' ? 'Hembra' : 'Macho',
+      tamano: { MINI: 'Mini', PEQUENO: 'Pequeño', MEDIANO: 'Mediano', GRANDE: 'Grande', GIGANTE: 'Gigante' }[tamano],
+      especie_id: especie?.id, valor_num: valor,
+    }
+  })
+}
 export default function Presequiales() {
   const navigate = useNavigate()
   const { confirm } = useConfirm()
@@ -71,6 +165,7 @@ export default function Presequiales() {
   const [busqueda, setBusqueda] = useState('')
 
   const [modalNueva, setModalNueva]   = useState(false)
+  const [modalImportar, setModalImportar] = useState(false)
   const [ficha, setFicha]             = useState(null)   // afiliación abierta
   const [modalRenovar, setModalRenovar] = useState(null)
   const [modalActivar, setModalActivar] = useState(null)
@@ -140,6 +235,7 @@ export default function Presequiales() {
     <div>
       <Topbar actions={
         <>
+          <Button size="sm" variant="secondary" onClick={() => setModalImportar(true)}><Upload size={14} /> Importar</Button>
           <Button size="sm" onClick={() => setModalNueva(true)}><Plus size={14} /> Nueva afiliación</Button>
           <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
             <RefreshCw size={15} />
@@ -238,6 +334,11 @@ export default function Presequiales() {
         </TableWrap>
       </div>
 
+      {modalImportar && (
+        <ModalImportarAfiliaciones especies={especies} personalData={personalData}
+          onClose={() => setModalImportar(false)} onImported={cargar} />
+      )}
+
       {modalNueva && (
         <ModalNuevaAfiliacion config={config} especies={especies} personalData={personalData}
           onClose={() => setModalNueva(false)}
@@ -298,6 +399,229 @@ function mensajeRenovacion(a, ct, config) {
     `Renovarla por un año más tiene un valor de ${fmt(precio)} y mantiene a ${a.mascotas?.nombre} con su servicio cubierto.\n\n¿Deseas renovarla?`
 }
 
+function descargarPlantillaImportacion() {
+  const contenido = '\uFEFF' + COLUMNAS_IMPORTACION.join(';') + '\r\n'
+  const url = URL.createObjectURL(new Blob([contenido], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'plantilla_pre_exequiales.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported }) {
+  const [archivo, setArchivo] = useState(null)
+  const [filas, setFilas] = useState([])
+  const [errorArchivo, setErrorArchivo] = useState('')
+  const [importando, setImportando] = useState(false)
+  const [resultado, setResultado] = useState(null)
+
+  const filasConError = filas.filter(f => f.errores.length)
+  const puedeImportar = filas.length > 0 && filasConError.length === 0 && !importando
+
+  async function seleccionarArchivo(file) {
+    setArchivo(file || null)
+    setFilas([])
+    setResultado(null)
+    setErrorArchivo('')
+    if (!file) return
+    try {
+      const parsed = parseArchivoDelimitado(await file.text())
+      const faltantes = COLUMNAS_REQUERIDAS.filter(c => !parsed.headers.includes(c))
+      if (faltantes.length) {
+        setErrorArchivo('Faltan columnas obligatorias: ' + faltantes.join(', '))
+        return
+      }
+      setFilas(validarFilasImportacion(parsed.rows, especies))
+      if (!parsed.rows.length) setErrorArchivo('El archivo no contiene filas para importar.')
+    } catch (e) {
+      setErrorArchivo(e.message || 'No se pudo leer el archivo.')
+    }
+  }
+
+  async function importar() {
+    if (!puedeImportar) return
+    setImportando(true)
+    setResultado(null)
+    const errores = []
+    let ok = 0
+    const clientesCache = new Map()
+
+    for (const r of filas) {
+      try {
+        let cliente = clientesCache.get(r.cedula_nit)
+        if (!cliente) {
+          const { data: existente, error: eCliente } = await db.from('clientes')
+            .select('id_cliente,nombre,apellido,cedula_nit,whatsapp')
+            .eq('cedula_nit', r.cedula_nit).maybeSingle()
+          if (eCliente) throw eCliente
+          cliente = existente
+          if (!cliente) {
+            const { data: creado, error } = await db.from('clientes').insert({
+              nombre: r.cliente_nombre.trim(),
+              apellido: r.cliente_apellido?.trim() || null,
+              cedula_nit: r.cedula_nit.trim(),
+              whatsapp: r.whatsapp.trim(),
+              email: r.email?.trim() || null,
+              direccion: r.direccion?.trim() || null,
+              ciudad: r.ciudad?.trim() || 'Bogotá',
+              tipo_cliente: 'NORMAL',
+            }).select('id_cliente,nombre,apellido,cedula_nit,whatsapp').single()
+            if (error) throw error
+            cliente = creado
+          }
+          clientesCache.set(r.cedula_nit, cliente)
+        }
+
+        const { data: mascotasExistentes, error: eMascota } = await db.from('mascotas')
+          .select('id_mascota,nombre').eq('cliente_id', cliente.id_cliente)
+          .ilike('nombre', r.mascota_nombre.trim()).limit(1)
+        if (eMascota) throw eMascota
+        let mascota = (mascotasExistentes || [])[0]
+        if (!mascota) {
+          const { data: creada, error } = await db.from('mascotas').insert({
+            nombre: r.mascota_nombre.trim(),
+            especie_id: r.especie_id,
+            raza: r.raza?.trim() || null,
+            sexo: r.sexo,
+            tamano: r.tamano,
+            peso_kg: parseNumeroImportacion(r.peso_kg) || 0,
+            cliente_id: cliente.id_cliente,
+            fallecida: false,
+          }).select('id_mascota,nombre').single()
+          if (error) throw error
+          mascota = creada
+        }
+
+        const { data: activa, error: eActiva } = await db.from('afiliaciones')
+          .select('id').eq('mascota_id', mascota.id_mascota)
+          .in('estado', ['VIGENTE', 'VENCIDA']).limit(1)
+        if (eActiva) throw eActiva
+        if ((activa || []).length) throw new Error('La mascota ya tiene una afiliación vigente o vencida.')
+
+        const { data: afiliacion, error: eAfiliacion } = await db.from('afiliaciones').insert({
+          tipo: r.tipo,
+          nivel: r.nivel,
+          cliente_id: cliente.id_cliente,
+          mascota_id: mascota.id_mascota,
+          estado: 'VIGENTE',
+          notas: r.notas?.trim() || null,
+          creado_por: personalData?.id || null,
+        }).select('id').single()
+        if (eAfiliacion) throw eAfiliacion
+
+        const numeroContrato = generarNumeroContrato({
+          fechaInicio: r.fecha_inicio, cliente, nivel: r.nivel, tipo: r.tipo, numero: 0,
+        })
+        const { error: eContrato } = await db.from('afiliacion_contratos').insert({
+          afiliacion_id: afiliacion.id,
+          numero: 0,
+          numero_contrato: numeroContrato,
+          fecha_inicio: r.fecha_inicio,
+          fecha_vencimiento: r.tipo === 'ANUAL' ? sumarUnAnio(r.fecha_inicio) : null,
+          valor: r.valor_num,
+          metodo_pago: r.metodo,
+          fecha_pago: r.fecha_pago || null,
+          comprobantes: [],
+          creado_por: personalData?.id || null,
+        })
+        if (eContrato) {
+          await db.from('afiliaciones').delete().eq('id', afiliacion.id)
+          throw eContrato
+        }
+        ok++
+      } catch (e) {
+        errores.push({ fila: r.fila, mensaje: e.message || 'Error desconocido' })
+      }
+    }
+
+    setResultado({ ok, errores })
+    if (ok > 0) await onImported()
+    setImportando(false)
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Importar afiliaciones Pre-Exequiales" maxWidth="max-w-4xl"
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+        <Button onClick={importar} disabled={!puedeImportar}>
+          <Upload size={13} /> {importando ? 'Importando...' : 'Importar ' + filas.length + ' filas'}
+        </Button>
+      </>}>
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <label className="flex-1 cursor-pointer rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-center transition-colors hover:border-[#1A5CD8]/40 hover:bg-blue-50/40 focus-within:ring-2 focus-within:ring-[#1A5CD8]/20">
+            <FileSpreadsheet size={22} className="mx-auto mb-2 text-[#1A5CD8]" />
+            <span className="block text-[13px] font-bold text-gray-800">{archivo?.name || 'Seleccionar archivo CSV'}</span>
+            <span className="block text-[11px] text-gray-500 mt-1">Compatible con CSV de Excel, separado por coma, punto y coma o tabulación</span>
+            <input type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" className="sr-only"
+              onChange={e => seleccionarArchivo(e.target.files?.[0] || null)} />
+          </label>
+          <button type="button" onClick={descargarPlantillaImportacion}
+            className="sm:w-52 rounded-xl border border-gray-200 bg-white px-4 py-4 text-left transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/20">
+            <Download size={18} className="mb-2 text-gray-600" />
+            <span className="block text-[12px] font-bold text-gray-800">Descargar plantilla</span>
+            <span className="block text-[10px] text-gray-500 mt-1">Incluye las 20 columnas en el orden correcto</span>
+          </button>
+        </div>
+
+        <div className="rounded-xl bg-blue-50 px-4 py-3 text-[11px] text-blue-900">
+          <strong>Valores controlados:</strong> tipo ANUAL/VITALICIO · nivel BRONCE/PLATA/ORO/DIAMANTE ·
+          sexo Macho/Hembra · fechas AAAA-MM-DD. La especie debe existir en Configuración.
+        </div>
+
+        {errorArchivo && (
+          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[12px] text-red-700">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {errorArchivo}
+          </div>
+        )}
+
+        {filas.length > 0 && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="rounded-full bg-gray-100 px-2.5 py-1 font-semibold text-gray-700">{filas.length} filas</span>
+              <span className="rounded-full bg-green-100 px-2.5 py-1 font-semibold text-green-700">{filas.length - filasConError.length} válidas</span>
+              {filasConError.length > 0 && <span className="rounded-full bg-red-100 px-2.5 py-1 font-semibold text-red-700">{filasConError.length} con errores</span>}
+            </div>
+            <div className="max-h-72 overflow-auto rounded-xl border border-gray-200">
+              <table className="w-full min-w-[720px] border-collapse text-[11px]">
+                <thead className="sticky top-0 bg-gray-50 text-left text-gray-500">
+                  <tr><th className="px-3 py-2">Fila</th><th>Cliente</th><th>Mascota</th><th>Plan</th><th>Validación</th></tr>
+                </thead>
+                <tbody>
+                  {filas.map(r => (
+                    <tr key={r.fila} className="border-t border-gray-100">
+                      <td className="px-3 py-2 font-mono text-gray-500">{r.fila}</td>
+                      <td>{r.cliente_nombre} {r.cliente_apellido}<div className="text-[9px] text-gray-400">{r.cedula_nit}</div></td>
+                      <td>{r.mascota_nombre}<div className="text-[9px] text-gray-400">{r.especie}</div></td>
+                      <td>{r.tipo} · {r.nivel}<div className="text-[9px] text-gray-400">{fmt(r.valor_num || 0)}</div></td>
+                      <td className="pr-3">
+                        {r.errores.length
+                          ? <span className="text-red-600">{r.errores.join(' · ')}</span>
+                          : <span className="inline-flex items-center gap-1 font-semibold text-green-700"><CheckCircle2 size={12} /> Lista</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {resultado && (
+          <div className={'rounded-xl border px-4 py-3 text-[12px] ' + (resultado.errores.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-green-200 bg-green-50 text-green-800')}>
+            <div className="font-bold">Importadas correctamente: {resultado.ok}</div>
+            {resultado.errores.length > 0 && (
+              <div className="mt-1 max-h-28 overflow-auto">
+                {resultado.errores.map(e => <div key={e.fila}>Fila {e.fila}: {e.mensaje}</div>)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
 // ─── Nueva afiliación: buscar-o-crear cliente y mascota + primer contrato ────
 function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved }) {
   const { alert: showAlert } = useConfirm()

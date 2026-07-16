@@ -39,7 +39,7 @@ const ALL_NAV_GROUPS = [
       { path: '/gestion',      label: 'Gestión',         icon: Users },
       { path: '/nps',          label: 'NPS & Postventa',  icon: Star,  badge: 'nps' },
       { path: '/digitales',    label: 'Digitales',        icon: Film },
-      { path: '/presequiales', label: 'Presequiales',     icon: Heart },
+      { path: '/presequiales', label: 'Pre-Exequiales',     icon: Heart },
     ],
   },
   {

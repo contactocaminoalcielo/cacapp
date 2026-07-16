@@ -90,7 +90,7 @@ export default function Nps() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
           <StatCard label="Pendientes hoy" value={pendientesHoy} valueColor="#C03030" />
           <StatCard label="NPS promedio" value={npsPromedio} sub="Escala 1-5" valueColor="#1D8A55" />
-          <StatCard label="Presequiales aceptados" value={presequialesAceptados} valueColor="#9A5500" />
+          <StatCard label="Pre-Exequiales aceptados" value={presequialesAceptados} valueColor="#9A5500" />
           <StatCard label="Total contactos" value={seguimientos.length} />
         </div>
 
@@ -220,7 +220,7 @@ export default function Nps() {
               <div className="flex items-center gap-2">
                 <input type="checkbox" id="presec" checked={form.oferta_presequial_aceptada}
                   onChange={e => setForm(p => ({ ...p, oferta_presequial_aceptada: e.target.checked }))} className="w-4 h-4 accent-primary-dark" />
-                <label htmlFor="presec" className="text-[12px] font-medium text-ink2">¿Aceptó oferta presequial?</label>
+                <label htmlFor="presec" className="text-[12px] font-medium text-ink2">¿Aceptó oferta pre-exequial?</label>
               </div>
             )}
           </div>
