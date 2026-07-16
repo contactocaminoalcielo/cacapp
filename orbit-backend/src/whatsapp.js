@@ -147,13 +147,17 @@ export async function enviarPlantillaGHL({
  * Mismo contrato real de Zolutium/GHL que enviarPlantillaGHL, pero sin header de
  * documento y con los placeholders.body que reciba quien llama.
  *
- * @param bodyParams  array posicional resuelto [{{1}},{{2}},...]
- * @param mensaje     texto ya resuelto (lo que verá el cliente)
+ * @param bodyParams   array posicional resuelto del CUERPO [{{1}},{{2}},...]
+ * @param headerParams array posicional resuelto del ENCABEZADO (vacío si la
+ *                     plantilla no tiene header con variable; algunas HSM sí lo
+ *                     tienen — p.ej. el 3er contacto de imágenes lleva la mascota
+ *                     en el header y Meta rechaza si no se le pasa: #132000).
+ * @param mensaje      texto ya resuelto (lo que verá el cliente)
  * @returns {{ messageId, contactId }}
  */
 export async function enviarPlantillaGenerica({
   telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
-  mensaje, bodyParams = [], fromNumber,
+  mensaje, bodyParams = [], headerParams = [], fromNumber,
 }) {
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
@@ -201,7 +205,7 @@ export async function enviarPlantillaGenerica({
     whatsapp: {
       type: 'template',
       template: { name: plantillaNombre, lang: idioma, category },
-      placeholders: { header: [], body: bodyParams, buttons: [] },
+      placeholders: { header: headerParams, body: bodyParams, buttons: [] },
     },
   }
   if (fromNumber) body.fromNumber = fromNumber

@@ -64,11 +64,16 @@ export function plantillaContacto(config, numero) {
   const raw = config[`plantilla_contacto_${numero}`]
   const p = typeof raw === 'string' ? safeJson(raw) : raw
   if (!p || !p.nombre) return null
-  const vars = Array.isArray(p.vars) ? p.vars.filter(v => TOKENS_PLANTILLA.includes(v)) : ['mascota', 'enlace']
+  const soloTokens = arr => (Array.isArray(arr) ? arr.filter(v => TOKENS_PLANTILLA.includes(v)) : [])
+  const vars = Array.isArray(p.vars) ? soloTokens(p.vars) : ['mascota', 'enlace']
   return {
     nombre:    p.nombre,
     idioma:    p.idioma    || config.plantilla_idioma    || 'es_MX',
     categoria: p.categoria || config.plantilla_categoria || 'UTILITY',
+    // Variables del ENCABEZADO (vacío si la plantilla no tiene header con var).
+    // El 3er contacto (alerta_fin_de_contacto_individuales) lleva el nombre del
+    // propietario aquí y el enlace en el cuerpo (confirmado con David 2026-07-16).
+    headerVars: soloTokens(p.header_vars),
     vars,
   }
 }

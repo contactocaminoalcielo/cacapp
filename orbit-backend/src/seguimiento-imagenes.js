@@ -128,16 +128,18 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
       return { enviado: false, motivo: 'ya_contactado' }
     }
 
-    const bodyParams = resolverBodyParams(plantilla.vars, {
+    const datosVars = {
       cliente_nombre: sol.cliente_nombre, propietario: sol.propietario,
       mascota: sol.mascota, enlace, codigo,
-    })
+    }
+    const headerParams = resolverBodyParams(plantilla.headerVars, datosVars)
+    const bodyParams   = resolverBodyParams(plantilla.vars, datosVars)
     const mensaje = mensajeRecordatorio({
       nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace, numero: n,
     })
 
     reserva = { id: res[0].id, destino, propietario: sol.propietario, mascota: sol.mascota,
-                servicioId: sol.servicio_id, plantilla, bodyParams, mensaje }
+                servicioId: sol.servicio_id, plantilla, headerParams, bodyParams, mensaje }
 
     await client.query('COMMIT')   // la reserva queda firme ANTES de tocar la red
   } catch (e) {
@@ -149,7 +151,7 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
 
   // ── Fase 2 (red): enviar por Zolutium y verificar contra Meta ──────────────
   // Guardia #132005: plantilla + parámetros > 1024 chars → Meta rechaza async.
-  const largo = reserva.mensaje.length + reserva.bodyParams.join('').length
+  const largo = reserva.mensaje.length + reserva.bodyParams.join('').length + reserva.headerParams.join('').length
   if (largo > LIMITE_META_CHARS) {
     await marcarContacto(reserva.id, {
       estado: 'ERROR',
@@ -167,7 +169,8 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
       idioma:   reserva.plantilla.idioma,
       category: reserva.plantilla.categoria,
       mensaje:  reserva.mensaje,
-      bodyParams: reserva.bodyParams,
+      bodyParams:   reserva.bodyParams,
+      headerParams: reserva.headerParams,
       // Sin fromNumber: GHL lo IGNORA para números WABA y rutea por el canal por
       // defecto de la cuenta (la línea se fija en la configuración de Zolutium).
     })

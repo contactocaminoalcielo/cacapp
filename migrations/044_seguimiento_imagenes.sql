@@ -141,27 +141,36 @@ INSERT INTO public.config_operativa (modulo, clave, valor, descripcion) VALUES
  ('SOLICITUDES_IMAGENES','dias_cierre','3','Días hábiles tras el 3er contacto sin respuesta → SIN_RESPUESTA + alerta'),
  ('SOLICITUDES_IMAGENES','arranque_desde','null','Fecha de corte: no perseguir contactos 1 anteriores. null = recuperar también el backlog (escalonado por max_envios_por_corrida)'),
  ('SOLICITUDES_IMAGENES','max_envios_por_corrida','20','Tope de mensajes por corrida del job (protege la línea WABA y escalona el backlog)'),
- -- DESARMADAS a propósito (null = el job NO envía; deja el contacto programado y
- -- lo reporta). Las plantillas aprobadas hoy NO llevan el enlace, y sin enlace el
- -- cliente no tiene por dónde cargar: cada portal es único (/#/fotos/CODIGO).
- -- Se arman con el UPDATE de abajo cuando Meta apruebe la variable del enlace.
+ -- Nacen DESARMADAS (null = el job NO envía; deja el contacto programado y lo
+ -- reporta). Se arman con el UPDATE de abajo, que es el acto que enciende la
+ -- automatización. Los valores reales están ARMADOS en prod desde 2026-07-16.
  ('SOLICITUDES_IMAGENES','plantilla_contacto_2','null',
-  '2º contacto — armar con: servicio_recordarimg · vars {{1}} mascota, {{2}} enlace'),
+  '2º contacto — armar con: solicitud_imagenes_cliente · cuerpo {{1}} mascota, {{2}} enlace'),
  ('SOLICITUDES_IMAGENES','plantilla_contacto_3','null',
-  '3er contacto — armar con: alerta_fin_de_contacto_individuales · vars {{1}} propietario, {{2}} mascota, {{3}} enlace')
+  '3er contacto — armar con: alerta_fin_de_contacto_individuales · encabezado {{1}} propietario · cuerpo {{1}} mascota, {{2}} enlace')
 ON CONFLICT (modulo, clave) DO NOTHING;
 
 -- ============================================================================
--- CÓMO SE ARMA — ejecutar SOLO cuando Meta apruebe las plantillas CON la variable
--- del enlace. `vars` debe ser el orden EXACTO de las variables del cuerpo aprobado
--- (tokens válidos: nombre | propietario | mascota | enlace | codigo).
+-- CÓMO SE ARMA — estos son los valores APLICADOS en producción el 2026-07-16,
+-- cada uno validado con un envío real verificado contra Meta ('delivered').
+--
+-- ⚠️ NO inventar el nombre ni la forma de una plantilla: `nombre`, `idioma`,
+--    `header_vars` y `vars` deben calcarse de la plantilla aprobada en Meta.
+--    Un nombre inexistente da #132001 y un número de variables distinto da
+--    #132000 — y GHL responde 201 igual, así que el rechazo SOLO se ve en la
+--    verificación post-envío. Este módulo perdió una tarde por un nombre
+--    (`servicio_recordarimg`) que nunca existió y se arrastró en un comentario.
+--
+-- El 2º contacto REUSA la plantilla del contacto 1 (mismo texto: es una
+-- re-pregunta del mismo favor). Si algún día se aprueba una propia con texto de
+-- insistencia, se cambia aquí y basta — sin tocar código ni redesplegar.
 --
 --   UPDATE public.config_operativa
---      SET valor = '{"nombre":"servicio_recordarimg","idioma":"es_MX","categoria":"UTILITY","vars":["mascota","enlace"]}'
+--      SET valor = '{"nombre":"solicitud_imagenes_cliente","idioma":"es_MX","categoria":"UTILITY","vars":["mascota","enlace"]}'
 --    WHERE modulo='SOLICITUDES_IMAGENES' AND clave='plantilla_contacto_2';
 --
 --   UPDATE public.config_operativa
---      SET valor = '{"nombre":"alerta_fin_de_contacto_individuales","idioma":"es_MX","categoria":"UTILITY","vars":["propietario","mascota","enlace"]}'
+--      SET valor = '{"nombre":"alerta_fin_de_contacto_individuales","idioma":"es_MX","categoria":"UTILITY","header_vars":["propietario"],"vars":["mascota","enlace"]}'
 --    WHERE modulo='SOLICITUDES_IMAGENES' AND clave='plantilla_contacto_3';
 --
 -- Apagar todo (kill-switch):
