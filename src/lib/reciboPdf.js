@@ -19,18 +19,22 @@ export const EMPRESA = {
   factura: 'Si desea factura electrónica comuníquese al 319 358 5508',
 }
 
-// Arma los campos del recibo a partir del servicio (mismo modelo que el módulo
-// Recibos y el recibo que envía el técnico).
+const fmtFechaISO = iso => iso
+  ? new Date(iso + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  : ''
+
+// Arma los campos del recibo a partir del SERVICIO (reconstrucción: útil para
+// reimprimir desde el módulo Recibos). No es el snapshot exacto del técnico.
 export function buildReciboData(svc, pesoConfirmado) {
   const mascota = svc.mascotas
   const cliente = mascota?.clientes
   const saldo   = Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0))
   const numero  = `CAC-${svc.fecha_ingreso?.slice(0,4) || new Date().getFullYear()}${svc.fecha_ingreso?.slice(5,7) || String(new Date().getMonth()+1).padStart(2,'0')}-${svc.id.slice(0,6).toUpperCase()}`
-  const fecha   = svc.fecha_ingreso
-    ? new Date(svc.fecha_ingreso + 'T12:00:00').toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
-    : new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
   return {
-    numero, fecha, saldo,
+    numero, saldo,
+    tipo:           'CLIENTE',
+    fecha:          fmtFechaISO(svc.fecha_ingreso) || new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' }),
+    hora:           '',
     mascota_nombre: mascota?.nombre || '',
     especie:        mascota?.especies?.nombre || '',
     peso:           pesoConfirmado || mascota?.peso_kg || '',
@@ -40,18 +44,53 @@ export function buildReciboData(svc, pesoConfirmado) {
     telefono:       cliente?.telefono || cliente?.telefono2 || cliente?.whatsapp || '',
     direccion:      svc.direccion_recogida || '',
     servicio:       svc.planes?.nombre || '',
-    valor_total:              svc.valor_total  || 0,
-    valor_pagado:             svc.valor_pagado || 0,
-    metodo_pago:              svc.metodo_pago  || '',
-    tecnico:                  svc.tecnico ? `${svc.tecnico.nombre} ${svc.tecnico.apellido}` : '',
-    estado_pago:              svc.estado_pago,
-    descuento_adicional:      svc.descuento_adicional || 0,
+    valor_total:    svc.valor_total  || 0,
+    valor_pagado:   svc.valor_pagado || 0,
+    metodo_pago:    svc.metodo_pago  || '',
+    medios:         null,
+    pago_pendiente: false,
+    tecnico:        svc.tecnico ? `${svc.tecnico.nombre} ${svc.tecnico.apellido}` : '',
+    descuento_adicional:        svc.descuento_adicional || 0,
     descuento_adicional_motivo: svc.descuento_adicional_motivo || '',
   }
 }
 
-// Campos del servicio que necesita buildReciboData. Reutilizado por el módulo
-// Recibos y por la generación al vuelo desde el cuadre.
+// Arma los campos desde el RECIBO REAL que guardó el técnico (recibos_tecnico):
+// número, fecha/hora de emisión, valor cobrado y desglose de medios exactos, más
+// el snapshot del formulario en datos_form (mascota, propietario, plan, etc.).
+export function buildReciboDataDesdeRecibo(recibo) {
+  const d = recibo.datos_form || {}
+  const medios = (Array.isArray(recibo.medios_pago) ? recibo.medios_pago : [])
+    .filter(m => Number(m.monto) > 0)
+  const valorTotal  = Number(recibo.valor_total)   || Number(d.valor_servicio) || 0
+  const valorPagado = Number(recibo.valor_cobrado) || Number(d.total_recibido) || 0
+  return {
+    numero:         recibo.numero_recibo || d.numero_recibo || '',
+    tipo:           recibo.tipo || 'CLIENTE',
+    fecha:          fmtFechaISO(recibo.fecha_emision) || d.fecha || '',
+    hora:           recibo.hora_emision ? String(recibo.hora_emision).slice(0, 5) : (d.hora || ''),
+    mascota_nombre: d.mascota_nombre || '',
+    especie:        d.especie || '',
+    peso:           d.peso || '',
+    veterinaria:    d.veterinaria || '',
+    propietario:    d.propietario || '',
+    email:          d.email || '',
+    telefono:       d.telefono || '',
+    direccion:      d.casa || '',
+    servicio:       d.servicio || '',
+    valor_total:    valorTotal,
+    valor_pagado:   valorPagado,
+    metodo_pago:    '',
+    medios,
+    pago_pendiente: String(d.pago_pendiente) === 'true' || d.pago_pendiente === true,
+    tecnico:        '',
+    saldo:          Math.max(0, valorTotal - valorPagado),
+    descuento_adicional:        0,
+    descuento_adicional_motivo: '',
+  }
+}
+
+// Campos del servicio que necesita buildReciboData (reconstrucción / respaldo).
 export const SELECT_RECIBO_SVC = `
   id, valor_total, valor_pagado, estado_pago, metodo_pago,
   descuento_adicional, descuento_adicional_motivo,
@@ -66,13 +105,13 @@ export const SELECT_RECIBO_SVC = `
   tecnico:tecnico_id(id, nombre, apellido)
 `
 
-// Genera el PDF del recibo. `abrir:true` devuelve un object URL (para abrirlo en
-// una pestaña) en vez de descargarlo con pdf.save().
-export async function generarReciboPDF(svc, pesoConfirmado, { abrir = false } = {}) {
-  const r = buildReciboData(svc, pesoConfirmado)
+// Dibuja el PDF a partir del objeto de datos `r` (venga del recibo real o del
+// servicio). `abrir:true` devuelve un object URL en vez de descargar.
+export async function renderReciboPDF(r, { abrir = false } = {}) {
   const { default: jsPDF } = await import('jspdf')
   const pdf = new jsPDF('p', 'mm', 'a4')
   const W = 210, M = 15, CW = W - M * 2
+  const esVet = r.tipo === 'VETERINARIA'
 
   const t     = (text, x, y, opts = {}) => pdf.text(String(text ?? ''), x, y, opts)
   const sec   = (label, y) => {
@@ -102,16 +141,27 @@ export async function generarReciboPDF(svc, pesoConfirmado, { abrir = false } = 
   t(`NIT ${EMPRESA.nit}  ·  ${EMPRESA.direccion}`, W / 2, 24, { align: 'center' })
   t(`${EMPRESA.telefono}  ·  ${EMPRESA.email}  ·  ${EMPRESA.web}`, W / 2, 29.5, { align: 'center' })
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(196, 168, 122)
-  t('RECIBO DE SERVICIO', W / 2, 34, { align: 'center' })
+  t(esVet ? 'RECIBO VETERINARIA / ALIADO' : 'RECIBO DE SERVICIO', W / 2, 34, { align: 'center' })
 
   // Número y fecha
   pdf.setFillColor(244, 247, 244); pdf.rect(0, 36, W, 11, 'F')
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(31, 90, 50)
-  t(`No. ${r.numero}`, M, 43.5)
+  t(`No. ${r.numero}${esVet ? '-VET' : ''}`, M, 43.5)
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(80, 80, 80)
-  t(`Fecha: ${r.fecha}`, W - M, 43.5, { align: 'right' })
+  t(`Fecha: ${r.fecha}${r.hora ? `  Hora: ${r.hora}` : ''}`, W - M, 43.5, { align: 'right' })
 
   let y = 52
+
+  // Banner de pago pendiente (recibo generado sin cobro)
+  if (r.pago_pendiente) {
+    pdf.setFillColor(254, 243, 199); pdf.setDrawColor(251, 191, 36)
+    pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 12, 'FD')
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(146, 64, 14)
+    t('PAGO PENDIENTE', W / 2, y + 5, { align: 'center' })
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(180, 100, 20)
+    t('El cliente liquidará el valor del servicio posteriormente', W / 2, y + 9.5, { align: 'center' })
+    y += 16
+  }
 
   // Mascota
   y = sec('DATOS DE LA MASCOTA', y)
@@ -134,7 +184,7 @@ export async function generarReciboPDF(svc, pesoConfirmado, { abrir = false } = 
   y = hr(y)
 
   // Servicio
-  y = sec('SERVICIO CONTRATADO', y)
+  y = sec('SERVICIO Y PAGO', y)
   y = Math.max(field('Plan / Servicio', r.servicio, M, y, CW), y + 10)
   if (r.descuento_adicional > 0) {
     const label = `Descuento${r.descuento_adicional_motivo ? ': ' + r.descuento_adicional_motivo : ' adicional'}`
@@ -166,7 +216,19 @@ export async function generarReciboPDF(svc, pesoConfirmado, { abrir = false } = 
     drawBox('Total recibido',     r.valor_pagado, M + bw + 4, y, [29,138,85])
   }
   y += 18
-  if (r.metodo_pago) {
+  // Desglose real de medios de pago (efectivo/Nequi/…) si viene del recibo real;
+  // si no, la cadena metodo_pago del servicio.
+  if (r.medios && r.medios.length) {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(140, 110, 60)
+    t('MEDIOS DE PAGO', M, y); y += 4.5
+    r.medios.forEach(mp => {
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(60, 60, 60)
+      t(String(mp.metodo || '').toUpperCase() + (mp.referencia ? ` · Ref. ${mp.referencia}` : ''), M, y)
+      pdf.setFont('helvetica', 'bold'); pdf.setTextColor(31, 90, 50)
+      t(fmt(Number(mp.monto) || 0), W - M, y, { align: 'right' })
+      y += 5
+    })
+  } else if (r.metodo_pago) {
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100,100,100)
     t(`Método de pago: ${r.metodo_pago}`, M, y); y += 5
   }
@@ -206,21 +268,49 @@ export async function generarReciboPDF(svc, pesoConfirmado, { abrir = false } = 
   return null
 }
 
-// Genera el recibo AL VUELO desde la DB y lo abre en una pestaña nueva. Se usa
-// como respaldo cuando el servicio no tiene un PDF guardado en storage (los
-// recibos previos al 9-jul solo lo tienen si el técnico los envió por WhatsApp).
-// Devuelve false si no se pudo (servicio inexistente o error).
+// Genera el recibo desde el SERVICIO (reconstrucción). Lo usa el módulo Recibos.
+export async function generarReciboPDF(svc, pesoConfirmado, opts = {}) {
+  return renderReciboPDF(buildReciboData(svc, pesoConfirmado), opts)
+}
+
+// Elige el recibo que "cuenta" del servicio (regla migración 027, priorizando el
+// documento CLIENTE): el CLIENTE con dinero más reciente; si no hay, el CLIENTE
+// más reciente; si tampoco, cualquiera con dinero; en último caso, el más reciente.
+function elegirReciboReal(recs) {
+  const ordenados = [...(recs || [])].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  const cli = ordenados.filter(r => r.tipo === 'CLIENTE')
+  return cli.find(r => (r.valor_cobrado || 0) > 0) || cli[0]
+    || ordenados.find(r => (r.valor_cobrado || 0) > 0) || ordenados[0] || null
+}
+
+// Abre en una pestaña nueva el recibo de un servicio: si el técnico guardó un
+// recibo (recibos_tecnico), reproduce ESE (número, fecha, valor cobrado y medios
+// reales); si no existe ninguno, reconstruye desde el servicio como respaldo.
+// Devuelve false si no se pudo generar.
 export async function abrirReciboPDFServicio(servicioId) {
   if (!servicioId) return false
   const w = window.open('', '_blank')
   try {
-    const { data: svc, error } = await db.from('servicios')
-      .select(SELECT_RECIBO_SVC).eq('id', servicioId).single()
-    if (error || !svc) { if (w) w.close(); return false }
-    // El peso confirmado en báscula (si lo hay) prevalece sobre el de la mascota.
-    const { data: cf } = await db.from('cuarto_frio')
-      .select('peso_kg').eq('servicio_id', servicioId).maybeSingle()
-    const url = await generarReciboPDF(svc, cf?.peso_kg || null, { abrir: true })
+    const { data: recs } = await db.from('recibos_tecnico')
+      .select('numero_recibo, tipo, fecha_emision, hora_emision, valor_total, valor_cobrado, medios_pago, datos_form, created_at')
+      .eq('servicio_id', servicioId)
+      .order('created_at', { ascending: false })
+
+    let r = null
+    const real = elegirReciboReal(recs)
+    if (real) {
+      r = buildReciboDataDesdeRecibo(real)
+    } else {
+      // Respaldo: no hay recibo guardado → reconstruir desde el servicio.
+      const { data: svc } = await db.from('servicios')
+        .select(SELECT_RECIBO_SVC).eq('id', servicioId).single()
+      if (!svc) { if (w) w.close(); return false }
+      const { data: cf } = await db.from('cuarto_frio')
+        .select('peso_kg').eq('servicio_id', servicioId).maybeSingle()
+      r = buildReciboData(svc, cf?.peso_kg || null)
+    }
+
+    const url = await renderReciboPDF(r, { abrir: true })
     if (!url) { if (w) w.close(); return false }
     if (w) w.location = url
     else window.open(url, '_blank', 'noopener')
