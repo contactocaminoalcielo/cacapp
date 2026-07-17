@@ -311,7 +311,8 @@ export default function Finanzas() {
 
   // ── Cuadre con técnicos: generar / cerrar / PDF ─────────────────────────────
   const cuadreCerrado = cuadreData?.estado === 'CERRADO'
-  const esAdmin = personalData?.rol === 'ADMIN' || Number(personalData?.rol_principal_id) === 6
+  const puedeGestionarMedios = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+    || [1, 6].includes(Number(personalData?.rol_principal_id))
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
@@ -879,10 +880,11 @@ export default function Finanzas() {
 
   // Reclasificar el reparto de medios de una fila (efectivo↔digital) sin mover
   // el total. Caso: cobró y registró EFECTIVO pero le pagaron por Nequi a la
-  // empresa. Solo ADMIN, solo BORRADOR, motivo obligatorio (migración 060).
+  // empresa. ADMIN o COORDINADOR, solo BORRADOR, motivo obligatorio (migración 062).
   async function guardarMediosItem(item, { medios, motivo }) {
     const suma = medios.reduce((a, m) => a + (Number(m.monto) || 0), 0)
-    const total = Number(item.total_cobrado) || 0
+    const total = Number(item.total_cobrado)
+      || (Number(item.efectivo) || 0) + (Number(item.digital) || 0)
     if (Math.round(suma) !== Math.round(total)) {
       await showAlert(`Los medios suman ${fmt(suma)} pero la fila tiene recogido ${fmt(total)}. Para cambiar el total usa "Modificar valor recogido".`, { title: 'No cuadra el total' })
       return false
@@ -2297,7 +2299,8 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {fmt(it.efectivo)}
-                                      {esAdmin && !cuadreCerrado && !it.es_cancelado && Number(it.total_cobrado) > 0 && (
+                                      {puedeGestionarMedios && !cuadreCerrado && !it.es_cancelado
+                                        && (Number(it.efectivo) > 0 || Number(it.digital) > 0) && (
                                         <button type="button" onClick={() => setMediosItem(it)}
                                           className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-2 text-[10px] font-bold text-[#1A5CD8] hover:bg-[#DBEAFE] transition-colors whitespace-nowrap"
                                           title="Reclasificar medio de pago (efectivo ↔ digital)">
@@ -2603,7 +2606,7 @@ export default function Finanzas() {
       {detalleItem && <MascotaDetalleModal item={detalleItem} explicacion={explicacionItem(detalleItem)} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
-      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={esAdmin} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
+      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={puedeGestionarMedios} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
 
       {/* ── Modal confirmar entrega del dinero (cuadre cerrado) ──────────── */}
       {entregaModal && cuadreData && (
@@ -3376,13 +3379,14 @@ function ValorRecogidoModal({ item, onClose, onSave }) {
   )
 }
 
-// ── Modal: reclasificar medios de pago de una fila (solo ADMIN) ───────────────
+// ── Modal: reclasificar medios de pago de una fila (ADMIN/COORDINADOR) ────────
 // Cambia CÓMO se repartió lo cobrado entre efectivo y digital, SIN mover el
 // total. Caso típico: se registró EFECTIVO pero pagaron por Nequi a la empresa.
 // El recibo no se toca; la corrección vive en el cuadre con motivo (migración 060).
 const METODOS_MEDIO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
 function MediosItemModal({ item, onClose, onSave }) {
-  const total = Number(item.total_cobrado) || 0
+  const total = Number(item.total_cobrado)
+    || (Number(item.efectivo) || 0) + (Number(item.digital) || 0)
   const inicial = () => {
     const src = Array.isArray(item.medios_pago) ? item.medios_pago.filter(m => Number(m.monto) > 0) : []
     if (src.length) return src.map(m => ({ metodo: String(m.metodo || 'EFECTIVO').toUpperCase(), monto: String(Math.round(Number(m.monto) || 0)) }))

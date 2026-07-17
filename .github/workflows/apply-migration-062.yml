@@ -1,0 +1,68 @@
+name: Aplicar migracion 062 permisos medios en cuadres
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-migration-062.yml"
+      - "migrations/062_cuadre_medios_coordinador.sql"
+
+jobs:
+  apply-migration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar migracion al VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "migrations/062_cuadre_medios_coordinador.sql"
+          target:   "/tmp/orbit-migration-062"
+          strip_components: 1
+          rm:       true
+
+      - name: Ejecutar y verificar migracion en Contabo
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/supabase/docker
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-062/062_cuadre_medios_coordinador.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            DECLARE
+              v_def text;
+            BEGIN
+              SELECT pg_get_functiondef(p.oid)
+                INTO v_def
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public'
+                AND p.proname = 'set_cuadre_item_medios'
+                AND pg_get_function_identity_arguments(p.oid) = 'p_item_id uuid, p_medios jsonb, p_actor_id uuid, p_motivo text';
+
+              IF v_def IS NULL THEN
+                RAISE EXCEPTION 'La RPC public.set_cuadre_item_medios no existe';
+              END IF;
+              IF position('COALESCE(v_rol, 0) NOT IN (1, 6)' in v_def) = 0 THEN
+                RAISE EXCEPTION 'La RPC no permite ADMIN y COORDINADOR';
+              END IF;
+              IF position('COALESCE(v_rol, 0) <> 6' in v_def) > 0 THEN
+                RAISE EXCEPTION 'La RPC conserva la restriccion anterior solo ADMIN';
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 062 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar rest; la migracion ya envio NOTIFY pgrst."
