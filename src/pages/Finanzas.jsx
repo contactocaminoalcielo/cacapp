@@ -412,7 +412,11 @@ export default function Finanzas() {
     return lista.map(it => ({
       ...it,
       fecha_registro_servicio: fechas[it.servicio_id] || null,
-    }))
+    })).sort((a, b) => {
+      const fechaA = a.fecha_registro_servicio || a.fecha || ''
+      const fechaB = b.fecha_registro_servicio || b.fecha || ''
+      return fechaA.localeCompare(fechaB) || String(a.hora || '').localeCompare(String(b.hora || ''))
+    })
   }
 
   async function abrirCuadre(hdr) {
