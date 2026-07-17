@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Component } from 'react'
-import { db } from '@/lib/supabase'
+import { db, dbIn } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -3746,13 +3746,17 @@ function ReciboTab({ tecnico }) {
       const ids = (svcs || []).map(s => s.id)
       const porSvc = {}
       if (ids.length) {
-        // Query separado + merge client-side (el join inverso falla en silencio)
-        const { data: recs } = await db.from('recibos_tecnico')
-          .select('id, servicio_id, tipo, numero_recibo, valor_cobrado, medios_pago, datos_form, created_at')
-          .in('servicio_id', ids)
-          .order('created_at', { ascending: true })
-        ;(recs || []).forEach(r => {
-          (porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
+        // Query separado + merge client-side (el join inverso falla en silencio).
+        // EN LOTES: con cientos de ids la URL de .in() pasa de ~4 KB y el upstream
+        // la corta sin lanzar (502) → sin recibos, TODO caería en "por generar".
+        const recs = await dbIn(
+          'recibos_tecnico',
+          'id, servicio_id, tipo, numero_recibo, valor_cobrado, medios_pago, datos_form, created_at',
+          'servicio_id', ids,
+          q => q.order('created_at', { ascending: true }),
+        )
+        recs.forEach(r => {
+          ;(porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
         })
       }
       setItems((svcs || []).map(svc => ({
