@@ -1434,6 +1434,9 @@ function TabHistorialServicios({ canEdit }) {
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
+  // La búsqueda pega al SERVIDOR (no solo a la página cargada): sin esto, buscar
+  // una mascota de junio no la encontraba porque solo estaban los ~100 más nuevos.
+  const [busquedaDebounced, setBusquedaDebounced] = useState('')
 
   useEffect(() => {
     Promise.all([
@@ -1465,19 +1468,29 @@ function TabHistorialServicios({ canEdit }) {
 
   async function cargar(offsetInicial = 0) {
     setLoading(true)
-    const q = buildQuery(
+    const buscando = busqueda.trim().length > 0
+    let q = buildQuery(
       db.from('servicios')
         .select(SELECT_HISTORIAL, { count: 'exact' })
         .order('fecha_ingreso', { ascending: false })
-        .range(offsetInicial, offsetInicial + PAGE_SIZE - 1)
     )
+    // Con búsqueda cargamos TODO el histórico filtrado (hasta 5000) para que el
+    // filtro por cliente/mascota/plan cubra junio y no solo la página visible.
+    // Sin búsqueda, paginamos de a PAGE_SIZE con "Cargar más".
+    q = buscando ? q.limit(5000) : q.range(offsetInicial, offsetInicial + PAGE_SIZE - 1)
     const { data: d, count } = await q
-    setData(prev => offsetInicial === 0 ? (d || []) : [...prev, ...(d || [])])
+    setData(prev => (buscando || offsetInicial === 0) ? (d || []) : [...prev, ...(d || [])])
     setTotal(count || 0)
     setLoading(false)
   }
 
-  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, desde, hasta])
+  // Debounce de la búsqueda: dispara la recarga al servidor sin pegar en cada tecla.
+  useEffect(() => {
+    const t = setTimeout(() => setBusquedaDebounced(busqueda.trim()), 350)
+    return () => clearTimeout(t)
+  }, [busqueda])
+
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, desde, hasta, busquedaDebounced])
 
   async function exportarCSV() {
     setExporting(true)

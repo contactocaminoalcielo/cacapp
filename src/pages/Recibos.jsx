@@ -406,7 +406,7 @@ export default function Recibos() {
           planes:plan_id(nombre, codigo),
           aliados:aliado_origen_id(nombre),
           tecnico:tecnico_id(id, nombre, apellido)
-        `).gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false }).limit(500),
+        `).gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false }).limit(3000),
         db.from('personal').select('id, nombre, apellido').eq('activo', true).order('nombre'),
       ])
       if (e1) throw e1
