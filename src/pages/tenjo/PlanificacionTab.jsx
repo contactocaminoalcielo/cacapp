@@ -13,7 +13,8 @@ import { orbitApi } from '@/lib/orbitApi'
 import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
 import {
   generarPropuestaLote, evaluarCandidato, mensajeSugerido,
-  mensajeConfirmacionCliente, mensajeGrupoProceso, varianteProceso, VARIANTE_LABEL, TIPO_PROCESO_LABEL,
+  mensajeConfirmacionCliente, mensajeGrupoProceso, mensajeGrupoVisitas, cargarVisitasTenjo,
+  varianteProceso, VARIANTE_LABEL, TIPO_PROCESO_LABEL,
   proximaJornada, proximasJornadas, esDiaPlanificacion,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
@@ -58,6 +59,7 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const [horaAsist,        setHoraAsist]        = useState('')
   const [modalGrupo,       setModalGrupo]        = useState(false)
   const [copiado,          setCopiado]           = useState(false)
+  const [visitasJornada,   setVisitasJornada]    = useState([]) // visitas programadas el día de la jornada
 
   const fechaJornada = proximaJornada(config)
   const porServicio  = Object.fromEntries((candidatas || []).map(c => [c.servicio_id, c]))
@@ -103,6 +105,18 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   useEffect(() => { cargarLista() }, [cargarLista])
   useEffect(() => { cargarItems(loteSel) }, [loteSel, cargarItems])
 
+  // Visitas programadas para el día de la jornada: se anexan al mensaje del
+  // grupo para que salgan junto con los procesos (migración 059; si la tabla
+  // aún no existe, el mensaje sale sin visitas).
+  useEffect(() => {
+    let vivo = true
+    if (!lote?.fecha_jornada) { setVisitasJornada([]); return }
+    cargarVisitasTenjo({ fecha: lote.fecha_jornada })
+      .then(v => { if (vivo) setVisitasJornada(v) })
+      .catch(() => { if (vivo) setVisitasJornada([]) })
+    return () => { vivo = false }
+  }, [lote?.fecha_jornada])
+
   if (candidatas === null || sinTabla) return <SetupNotice />
   if (lotesList === undefined) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando planificación…</span></div>
 
@@ -143,7 +157,9 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const grupoText = mensajeGrupoProceso({
     fechaLarga: fmtFechaLarga(lote?.fecha_jornada),
     mascotas:   autorizadas.map(datosMascota),
-  })
+  }) + (visitasJornada.length
+    ? '\n\n' + mensajeGrupoVisitas({ fechaLarga: fmtFechaLarga(lote?.fecha_jornada), visitas: visitasJornada })
+    : '')
 
   // Candidatas que aún no están en el lote (para agregar manualmente)
   const agregables = (candidatas || []).filter(c => !c.item_activo_id && !c.traslado_activo
@@ -849,7 +865,10 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
           footer={<Button variant="secondary" onClick={() => setModalGrupo(false)}>Cerrar</Button>}>
           <div className="space-y-4">
             <p className="text-[12px] text-ink2">
-              Mensaje con las mascoticas a procesar en la jornada. Usa <strong>Reenviar</strong> para
+              Mensaje con las mascoticas a procesar en la jornada
+              {visitasJornada.length > 0 && (
+                <> — incluye <strong>{visitasJornada.length} visita{visitasJornada.length !== 1 ? 's' : ''} programada{visitasJornada.length !== 1 ? 's' : ''}</strong> ese día</>
+              )}. Usa <strong>Reenviar</strong> para
               abrir WhatsApp y elegir el grupo, o <strong>Copiar</strong> para pegarlo donde quieras.
             </p>
             <Textarea rows={12} value={grupoText} readOnly className="font-mono text-[12px]" />

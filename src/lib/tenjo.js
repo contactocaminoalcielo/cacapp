@@ -4,7 +4,7 @@
 // Tenjo LEE la custodia vía v_candidatos_tenjo; nunca administra neveras.
 import { db } from '@/lib/supabase'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
-import { today, hoyLocalISO } from '@/lib/utils'
+import { today, hoyLocalISO, petEmoji } from '@/lib/utils'
 import { etiquetaCubiculo } from '@/lib/cubiculos'
 
 // ─── Configuración (defaults de respaldo; la fuente es config_operativa) ─────
@@ -495,6 +495,108 @@ export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
   })
   return `🐾 *Procesos individuales — ${fechaLarga || 'próxima jornada'}*\n`
     + `${mascotas.length} mascotica${mascotas.length !== 1 ? 's' : ''} a proceso:\n\n`
+    + lineas.join('\n\n')
+}
+
+// ─── Visitas a la planta (migración 059) ─────────────────────────────────────
+// El coordinador agenda; el operario ve la agenda del día con el cubículo
+// actual de la mascota y marca la visita como realizada. El cubículo NUNCA se
+// guarda en la visita: se deriva de lotes_tenjo_items (ocupación activa), el
+// mismo principio del mapa de cubículos.
+
+export const VISITA_ESTADO_CFG = {
+  PROGRAMADA: { label: 'Programada', bg: '#DBEAFE', text: '#1E40AF' },
+  REALIZADA:  { label: 'Realizada',  bg: '#D1FAE5', text: '#065F46' },
+  CANCELADA:  { label: 'Cancelada',  bg: '#F3F4F6', text: '#6B7280' },
+}
+
+/** "14:30:00" (columna time) → "2:30 p. m." */
+export function fmtHoraVisita(h) {
+  if (!h) return null
+  const [hh, mm] = String(h).split(':').map(Number)
+  if (Number.isNaN(hh)) return h
+  const h12 = hh % 12 || 12
+  return `${h12}:${String(mm || 0).padStart(2, '0')} ${hh >= 12 ? 'p. m.' : 'a. m.'}`
+}
+
+/**
+ * Carga visitas con los datos de la mascota y el cubículo FÍSICO actual
+ * (derivado de la ocupación activa en lotes_tenjo_items — nunca guardado).
+ * @param {object} opts
+ * @param {string?} opts.fecha  solo las PROGRAMADAS de ese día (agenda del operario / mensaje del grupo)
+ * @returns visitas con `cubiculo` (fila de cubiculos) anexado, o null si no está en cubículo
+ */
+export async function cargarVisitasTenjo({ fecha = null } = {}) {
+  let q = db.from('visitas_tenjo')
+    .select('*, servicios(estado, mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, codigo, tipo_proceso), recogidas(contacto_telefono)), realizador:realizada_por(nombre, apellido)')
+    .order('fecha_visita', { ascending: true })
+    .order('hora_visita', { ascending: true, nullsFirst: false })
+  if (fecha) q = q.eq('fecha_visita', fecha).eq('estado', 'PROGRAMADA')
+  const { data, error } = await q
+  if (error) throw error
+  const visitas = data || []
+
+  const ids = [...new Set(visitas.map(v => v.servicio_id))]
+  if (ids.length) {
+    const { data: items } = await db.from('lotes_tenjo_items')
+      .select('servicio_id, meses_compostaje, fecha_compostaje_inicio, cubiculos(zona, talla, numero)')
+      .in('servicio_id', ids)
+      .not('cubiculo_id', 'is', null)
+      .is('cubiculo_liberado_en', null)
+    const porServicio = {}
+    for (const it of (items || [])) porServicio[it.servicio_id] = it
+    visitas.forEach(v => { v.cubiculo = porServicio[v.servicio_id]?.cubiculos || null })
+  }
+  return visitas
+}
+
+export async function crearVisitaTenjo({ servicioId, fecha, hora, novedades, personalId }) {
+  const { error } = await db.from('visitas_tenjo').insert({
+    servicio_id:  servicioId,
+    fecha_visita: fecha,
+    hora_visita:  hora || null,
+    novedades:    novedades?.trim() || null,
+    estado:       'PROGRAMADA',
+    creado_por:   personalId || null,
+  })
+  if (error) throw error
+}
+
+/** Cierra una visita: REALIZADA (sella hora + quién) o CANCELADA. */
+export async function marcarVisitaTenjo(visitaId, { estado, novedad = null, personalId = null } = {}) {
+  const cambios = { estado }
+  if (novedad?.trim()) cambios.novedad_cierre = novedad.trim()
+  if (estado === 'REALIZADA') {
+    cambios.realizada_en  = new Date().toISOString()
+    cambios.realizada_por = personalId || null
+  }
+  const { error } = await db.from('visitas_tenjo').update(cambios).eq('id', visitaId)
+  if (error) throw error
+}
+
+/**
+ * Mensaje para el grupo operativo con las visitas programadas de un día.
+ * Recibe visitas de cargarVisitasTenjo (con `cubiculo` anexado). Se envía solo
+ * o anexado al mensaje de procesos de la jornada (Planificación).
+ */
+export function mensajeGrupoVisitas({ fechaLarga, visitas = [] } = {}) {
+  const lineas = visitas.map(v => {
+    const m   = v.servicios?.mascotas
+    const cl  = m?.clientes
+    const rec = Array.isArray(v.servicios?.recogidas) ? v.servicios.recogidas[0] : v.servicios?.recogidas
+    const cliente  = cl ? `${cl.nombre || ''} ${cl.apellido || ''}`.trim() : null
+    const contacto = cl?.whatsapp || rec?.contacto_telefono || null
+    const hora     = fmtHoraVisita(v.hora_visita)
+    const proceso  = TIPO_PROCESO_LABEL[v.servicios?.planes?.tipo_proceso] || v.servicios?.planes?.nombre || null
+    return `${petEmoji(m?.especies?.nombre) || '🐾'} *${m?.nombre || '—'}*${m?.especies?.nombre ? ` (${m.especies.nombre})` : ''}`
+      + `\n   🕐 Hora: ${hora || 'por confirmar'}`
+      + (cliente ? `\n   Cliente: ${cliente}` : '')
+      + (v.cubiculo ? `\n   🌿 Cubículo: ${etiquetaCubiculo(v.cubiculo)}` : (proceso ? `\n   ${proceso}` : ''))
+      + (contacto ? `\n   📞 Contacto: ${contacto}` : '')
+      + `\n   📝 Nov: ${v.novedades || ''}`
+  })
+  return `🚶 *Visitas programadas — ${fechaLarga || 'próxima jornada'}*\n`
+    + `${visitas.length} visita${visitas.length !== 1 ? 's' : ''} agendada${visitas.length !== 1 ? 's' : ''}:\n\n`
     + lineas.join('\n\n')
 }
 

@@ -20,6 +20,7 @@ import JornadaTab from '@/pages/tenjo/JornadaTab'
 import CandidatasTab from '@/pages/tenjo/CandidatasTab'
 import ControlTab from '@/pages/tenjo/ControlTab'
 import CubiculosTab from '@/pages/tenjo/CubiculosTab'
+import VisitasTab from '@/pages/tenjo/VisitasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Clock, History } from 'lucide-react'
 
@@ -213,7 +214,7 @@ export default function Tenjo() {
   // Pestañas que puede ver cada rol. El PRODUCTOR queda limitado a Jornada y Operación.
   const tabsVisibles = esProductor
     ? ['jornada', 'operacion']
-    : ['planificacion', 'jornada', 'candidatas', 'control', 'cubiculos', 'operacion']
+    : ['planificacion', 'jornada', 'candidatas', 'control', 'cubiculos', 'visitas', 'operacion']
 
   useEffect(() => {
     cargar()
@@ -482,6 +483,7 @@ export default function Tenjo() {
             )}
             {tabsVisibles.includes('control') && <TabsTrigger value="control">📊 Control</TabsTrigger>}
             {tabsVisibles.includes('cubiculos') && <TabsTrigger value="cubiculos">🗺️ Cubículos</TabsTrigger>}
+            {tabsVisibles.includes('visitas') && <TabsTrigger value="visitas">🚶 Visitas</TabsTrigger>}
             {tabsVisibles.includes('operacion') && <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>}
           </TabsList>
 
@@ -521,6 +523,10 @@ export default function Tenjo() {
 
           <TabsContent value="cubiculos">
             <CubiculosTab canPlan={canPlan} personalData={personalData} onChanged={cargar} />
+          </TabsContent>
+
+          <TabsContent value="visitas">
+            <VisitasTab canPlan={canPlan} personalData={personalData} onChanged={cargar} />
           </TabsContent>
 
           <TabsContent value="operacion">

@@ -18,6 +18,7 @@ import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
   recibirItemLoteTenjo, RECEPCION_CFG, TIPO_PROCESO_LABEL,
+  cargarVisitasTenjo, marcarVisitaTenjo, fmtHoraVisita,
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import {
@@ -116,8 +117,13 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
   const [errCubiculos,   setErrCubiculos]   = useState(null)
   const [modalNovedad,   setModalNovedad]   = useState(null) // item (reportar novedad / no llegó)
   const [novForm,        setNovForm]        = useState({ estado: 'NOVEDAD', novedad: '', recibidoPor: '' })
+  // Visitas de clientes programadas para HOY (migración 059) — el operario las
+  // ve al entrar, con el cubículo donde está cada mascota.
+  const [visitasHoy,     setVisitasHoy]     = useState([])
 
   const cargar = useCallback(async () => {
+    try { setVisitasHoy(await cargarVisitasTenjo({ fecha: today() })) }
+    catch { setVisitasHoy([]) } // tabla aún sin migrar: la Jornada sigue funcionando
     const { data: ls, error } = await db.from('lotes_tenjo')
       .select('*')
       .in('estado', ['CONFIRMADO', 'EN_EJECUCION'])
@@ -319,6 +325,20 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     } finally { setSaving(false) }
   }
 
+  // Marcar una visita de hoy como realizada (cierre rápido desde la Jornada;
+  // el detalle y las novedades de cierre viven en la pestaña Visitas).
+  async function marcarVisitaHoy(v) {
+    const nombre = v.servicios?.mascotas?.nombre || 'la mascota'
+    if (!await confirm(`Se marcará como realizada la visita de ${nombre}.`, { title: '¿Visita realizada?', confirmLabel: 'Realizada' })) return
+    setSaving(true)
+    try {
+      await marcarVisitaTenjo(v.id, { estado: 'REALIZADA', personalId: personalData?.id })
+      await cargar()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
   function abrirChecklist(item) {
     setModalChecklist(item)
     setChkForm(item.checklist || {})
@@ -512,6 +532,57 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
 
   return (
     <div className="space-y-5">
+      {/* ── Visitas de clientes programadas para hoy ── */}
+      {visitasHoy.length > 0 && (
+        <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C4B5FD' }}>
+          <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(196,181,253,0.4)' }}>
+            <span className="text-lg">🚶</span>
+            <div className="font-semibold text-[15px] text-ink flex-1">Visitas de clientes hoy</div>
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#EDE9FE', color: '#5B21B6' }}>
+              {visitasHoy.length}
+            </span>
+          </div>
+          <div className="p-4 space-y-2.5">
+            {visitasHoy.map(v => {
+              const vm = v.servicios?.mascotas
+              const vRec = Array.isArray(v.servicios?.recogidas) ? v.servicios.recogidas[0] : v.servicios?.recogidas
+              const vContacto = vm?.clientes?.whatsapp || vRec?.contacto_telefono || null
+              return (
+                <div key={v.id} className="flex items-start gap-3 p-3.5 rounded-xl border"
+                  style={{ borderColor: 'rgba(196,181,253,0.35)', background: '#FBFAFF' }}>
+                  <span className="text-2xl">{petEmoji(vm?.especies?.nombre)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-ink">{vm?.nombre || '—'}</span>
+                      <span className="text-[11px] font-bold" style={{ color: '#5B21B6' }}>
+                        🕐 {fmtHoraVisita(v.hora_visita) || 'hora por confirmar'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-ink3 mt-0.5">
+                      {vm?.clientes?.nombre} {vm?.clientes?.apellido}
+                      {vContacto && ` · 📞 ${vContacto}`}
+                    </div>
+                    {v.cubiculo ? (
+                      <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
+                        🌿 Está en el cubículo <strong>{etiquetaCubiculo(v.cubiculo)}</strong>
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-ink3 mt-0.5">Sin cubículo activo (cremación o aún sin asignar)</div>
+                    )}
+                    {v.novedades && (
+                      <div className="text-[11px] text-ink2 mt-0.5 italic">📝 {v.novedades}</div>
+                    )}
+                  </div>
+                  <Button size="sm" disabled={saving} onClick={() => marcarVisitaHoy(v)}>
+                    <CheckCircle2 size={12} /> Realizada
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Filtros de la jornada ── */}
       {lotes.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
