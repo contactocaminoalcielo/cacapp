@@ -311,6 +311,7 @@ export default function Finanzas() {
 
   // ── Cuadre con técnicos: generar / cerrar / PDF ─────────────────────────────
   const cuadreCerrado = cuadreData?.estado === 'CERRADO'
+  const esAdmin = personalData?.rol === 'ADMIN' || Number(personalData?.rol_principal_id) === 6
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
@@ -2296,11 +2297,11 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {fmt(it.efectivo)}
-                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && Number(it.total_cobrado) > 0 && (
+                                      {esAdmin && !cuadreCerrado && !it.es_cancelado && Number(it.total_cobrado) > 0 && (
                                         <button type="button" onClick={() => setMediosItem(it)}
-                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
+                                          className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-2 text-[10px] font-bold text-[#1A5CD8] hover:bg-[#DBEAFE] transition-colors whitespace-nowrap"
                                           title="Reclasificar medio de pago (efectivo ↔ digital)">
-                                          <ArrowLeftRight size={11} />
+                                          <ArrowLeftRight size={12} /> Cambiar método
                                         </button>
                                       )}
                                     </div>
@@ -2602,7 +2603,7 @@ export default function Finanzas() {
       {detalleItem && <MascotaDetalleModal item={detalleItem} explicacion={explicacionItem(detalleItem)} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
-      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={personalData?.rol === 'ADMIN'} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
+      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={esAdmin} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
 
       {/* ── Modal confirmar entrega del dinero (cuadre cerrado) ──────────── */}
       {entregaModal && cuadreData && (
