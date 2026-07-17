@@ -2923,7 +2923,7 @@ function BitacoraTab({ tecnico }) {
             <div className="text-[26px] font-extrabold tabular-nums leading-tight mt-0.5">{fmt(totMes.cobrado)}</div>
             <div className="text-[11px] text-white/70 mt-1">
               Efectivo {fmt(totMes.efectivo)} · Digital {fmt(totMes.cobrado - totMes.efectivo)}
-              {totMes.ganado > 0 && <> · Reconocido a ti {fmt(totMes.ganado)}</>}
+              {totMes.ganado > 0 && <> · Transporte {fmt(totMes.ganado)}</>}
             </div>
             <div className="text-[10px] text-white/50 mt-0.5">{todas.length} servicio{todas.length !== 1 ? 's' : ''}</div>
             {hayAjustes && (
@@ -2948,7 +2948,7 @@ function BitacoraTab({ tecnico }) {
               <table className="w-full min-w-[600px]">
                 <thead>
                   <tr style={{ background: '#F9FAFB' }}>
-                    {['Fecha', 'Hora', 'Mascota', 'Ciudad', 'Cobrado', 'Medio', 'Ganado', ''].map((h, i) => (
+                    {['Fecha', 'Hora', 'Mascota', 'Ciudad', 'Total recibido', 'Medio', 'Ganado', ''].map((h, i) => (
                       <th key={i} className="text-left text-[10px] font-bold text-gray-500 uppercase tracking-wide px-2.5 py-2 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
