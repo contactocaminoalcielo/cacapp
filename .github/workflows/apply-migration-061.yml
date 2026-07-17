@@ -1,0 +1,68 @@
+name: Aplicar migracion 061 fecha de registro en cuadres
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-migration-061.yml"
+      - "migrations/061_cuadre_filtrar_fecha_registro.sql"
+
+jobs:
+  apply-migration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar migracion al VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "migrations/061_cuadre_filtrar_fecha_registro.sql"
+          target:   "/tmp/orbit-migration-061"
+          strip_components: 1
+          rm:       true
+
+      - name: Ejecutar y verificar migracion en Contabo
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/supabase/docker
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-061/061_cuadre_filtrar_fecha_registro.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            DECLARE
+              v_def text;
+            BEGIN
+              SELECT pg_get_functiondef(p.oid)
+                INTO v_def
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public'
+                AND p.proname = 'generar_cuadre_tecnico'
+                AND pg_get_function_identity_arguments(p.oid) = 'p_tecnico_id uuid, p_desde date, p_hasta date, p_actor_id uuid, p_ajustes_manuales numeric, p_ajustes_motivo text';
+
+              IF v_def IS NULL THEN
+                RAISE EXCEPTION 'La RPC public.generar_cuadre_tecnico no existe';
+              END IF;
+              IF position('s.fecha_ingreso BETWEEN p_desde AND p_hasta' in v_def) = 0 THEN
+                RAISE EXCEPTION 'La RPC no quedo filtrando recibos por fecha_ingreso';
+              END IF;
+              IF position('r.fecha_emision BETWEEN p_desde AND p_hasta' in v_def) > 0 THEN
+                RAISE EXCEPTION 'La RPC conserva el filtro anterior por fecha_emision';
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 061 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar rest; la migracion ya envio NOTIFY pgrst."
