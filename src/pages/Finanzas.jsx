@@ -396,20 +396,40 @@ export default function Finanzas() {
     } catch { /* la comparación es opcional; si falla, el cuadre sigue igual */ }
   }
 
+  // La fecha contable del item corresponde al recibo. Para mostrar el servicio
+  // usamos su fecha de registro sin alterar periodos, recargos ni snapshots.
+  async function conFechaRegistroServicio(items) {
+    const lista = items || []
+    const ids = [...new Set(lista.map(it => it.servicio_id).filter(Boolean))]
+    if (!ids.length) return lista
+    const fechas = {}
+    for (let i = 0; i < ids.length; i += 80) {
+      const { data, error } = await db.from('servicios')
+        .select('id, fecha_ingreso').in('id', ids.slice(i, i + 80))
+      if (error) throw error
+      for (const servicio of (data || [])) fechas[servicio.id] = servicio.fecha_ingreso
+    }
+    return lista.map(it => ({
+      ...it,
+      fecha_registro_servicio: fechas[it.servicio_id] || null,
+    }))
+  }
+
   async function abrirCuadre(hdr) {
     setCuadreLoading(true); setCuadreError('')
     try {
       const { data: items, error } = await db
         .from('cuadre_items').select('*').eq('cuadre_id', hdr.id).order('fecha').order('hora')
       if (error) throw error
+      const itemsConFechaRegistro = await conFechaRegistroServicio(items)
       setCuadreTec(hdr.tecnico_id)
       setCuadreDesde(hdr.fecha_desde)
       setCuadreHasta(hdr.fecha_hasta)
       setCuadreAjustes(Number(hdr.ajustes_manuales) ? String(hdr.ajustes_manuales) : '')
       setCuadreAjusteMot(hdr.ajustes_motivo || '')
-      setCuadreData(hdr); setCuadreItems(items || [])
+      setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setIaAnalisis(null)
-      cargarAjustesTecnico(items || [], hdr.tecnico_id)
+      cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
       cargarSaldosAFavor(hdr)
       cargarEntregaNombre(hdr)
     } catch (err) {
@@ -522,9 +542,10 @@ export default function Finanzas() {
         db.from('cuadres_tecnico').select('*').eq('id', cid).single(),
         db.from('cuadre_items').select('*').eq('cuadre_id', cid).order('fecha').order('hora'),
       ])
-      setCuadreData(hdr); setCuadreItems(items || [])
+      const itemsConFechaRegistro = await conFechaRegistroServicio(items)
+      setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setEntregaPorNombre(null); setIaAnalisis(null)
-      cargarAjustesTecnico(items || [], hdr.tecnico_id)
+      cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
       cargarSaldosAFavor(hdr)
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
@@ -2106,7 +2127,7 @@ export default function Finanzas() {
                           <table className="w-full min-w-[1480px]">
                             <thead className="sticky top-0 z-10" style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
+                                {['Fecha de registro', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
                                   <th key={h}
                                     title={h === 'Comisión' ? 'Solo informativo: ya está descontada del total a cobrar, no se suma'
                                       : h === 'Total a cobrar' ? 'Neto que paga el cliente: transporte a municipios incluido y comisión descontada'
@@ -2128,7 +2149,7 @@ export default function Finanzas() {
                                 return (
                                 <tr key={it.id} className={`text-[13px] border-b transition-colors ${alertaGestion ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
                                   style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alertaGestion ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
-                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
+                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha_registro_servicio || it.fecha)}</td>
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-center gap-1">
                                       <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
@@ -3505,7 +3526,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     pdf.setFont('helvetica', 'normal')
     let x = M + 1.5
     const vals = [
-      fechaCorta(it.fecha),
+      fechaCorta(it.fecha_registro_servicio || it.fecha),
       (it.mascota_nombre || '—').slice(0, 18),
       (it.ciudad || '—').slice(0, 11),
       (it.veterinaria || '—').slice(0, 18),
