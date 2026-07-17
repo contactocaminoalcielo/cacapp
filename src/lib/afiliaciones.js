@@ -107,6 +107,22 @@ export async function subirComprobanteAfiliacion(afiliacionId, file) {
   return { bucket: 'evidencias', storage_path: path, mime_type: file.type || null, uploaded_at: new Date().toISOString() }
 }
 
+// Enlace firmado del PDF del contrato. TTL largo (30 días) para compartirlo por
+// WhatsApp; para el envío por email basta uno corto (el backend lo descarga ya).
+export async function urlFirmadaContrato(pdfPath, ttlSec = 30 * 24 * 3600) {
+  const { data, error } = await db.storage.from('evidencias').createSignedUrl(pdfPath, ttlSec)
+  if (error || !data?.signedUrl) throw new Error('No se pudo generar el enlace del PDF: ' + (error?.message || 'sin URL'))
+  return data.signedUrl
+}
+
+export function mensajeContratoWa({ contrato, afiliacion, url }) {
+  const nombre = afiliacion?.clientes?.nombre
+  return `Hola${nombre ? ` ${nombre}` : ''} 👋 Te escribimos de Camino al Cielo 🌈\n\n` +
+    `Te compartimos el contrato Nº ${contrato.numero_contrato} de tu afiliación pre-exequial ` +
+    `${afiliacion?.nivel || ''}${afiliacion?.tipo === 'VITALICIO' ? ' vitalicia' : ''}. Puedes descargarlo aquí:\n${url}\n\n` +
+    `El enlace estará disponible por 30 días. Cualquier duda, con gusto te ayudamos 🐾`
+}
+
 export async function abrirArchivoStorage(storagePath, bucket = 'evidencias') {
   const w = window.open('', '_blank')
   const { data } = await db.storage.from(bucket).createSignedUrl(storagePath, 600)

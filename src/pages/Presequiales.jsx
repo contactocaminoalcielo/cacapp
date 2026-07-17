@@ -15,9 +15,10 @@ import { fmt, waLink, today, parseDate, petEmoji } from '@/lib/utils'
 import {
   NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, calcularCobroActivacion,
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf, totalContrato,
-  edadALaFecha,
+  edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
 } from '@/lib/afiliaciones'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X } from 'lucide-react'
+import { orbitApi } from '@/lib/orbitApi'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -220,7 +221,7 @@ export default function Presequiales() {
         cargarConfigAfiliaciones(),
         db.from('afiliaciones')
           .select(`*,
-            clientes(id_cliente,nombre,apellido,whatsapp,telefono,cedula_nit,direccion,ciudad),
+            clientes(id_cliente,nombre,apellido,whatsapp,telefono,email,cedula_nit,direccion,ciudad),
             afiliacion_contratos(*),
             afiliacion_mascotas(id,estado,fecha_activacion,servicio_activado_id,created_at,
               mascotas(id_mascota,nombre,raza,peso_kg,fallecida,edad_anios,edad_declarada_en,especies(nombre)))`)
@@ -1148,6 +1149,10 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
   const { alert: showAlert } = useConfirm()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
   const [pdfGen, setPdfGen] = useState(null)
+  const [enviandoWa, setEnviandoWa] = useState(null)
+  const [enviandoEmail, setEnviandoEmail] = useState(null)
+  const [emailPara, setEmailPara] = useState(null)  // id del contrato con el form de correo abierto
+  const [emailDestino, setEmailDestino] = useState('')
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
   const mascotas = mascotasDe(a)
@@ -1169,26 +1174,80 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
     }
   }
 
+  // Genera el PDF y lo deja en storage (upsert); devuelve doc + path para que
+  // descargar/WA/email compartan la misma pieza y nunca envíen un PDF viejo.
+  async function asegurarPdfEnStorage(contrato) {
+    const doc = await generarContratoPdf({
+      contrato, afiliacion: a, cliente: a.clientes,
+      mascotas: mascotas.map(am => am.mascotas), config,
+    })
+    const nombre = `Contrato_${contrato.numero_contrato}.pdf`
+    const blob = doc.output('blob')
+    const path = `afiliaciones/${a.id}/${nombre}`
+    await db.storage.from('evidencias').upload(path, blob, { upsert: true, contentType: 'application/pdf' })
+    if (contrato.pdf_path !== path)
+      await db.from('afiliacion_contratos').update({ pdf_path: path }).eq('id', contrato.id)
+    return { doc, path, nombre }
+  }
+
   async function pdfContrato(contrato) {
     setPdfGen(contrato.id)
     try {
-      const doc = await generarContratoPdf({
-        contrato, afiliacion: a, cliente: a.clientes,
-        mascotas: mascotas.map(am => am.mascotas), config,
-      })
-      const nombre = `Contrato_${contrato.numero_contrato}.pdf`
-      // El PDF queda SIEMPRE en storage además de descargarse
-      const blob = doc.output('blob')
-      const path = `afiliaciones/${a.id}/${nombre}`
-      await db.storage.from('evidencias').upload(path, blob, { upsert: true, contentType: 'application/pdf' })
-      if (contrato.pdf_path !== path)
-        await db.from('afiliacion_contratos').update({ pdf_path: path }).eq('id', contrato.id)
+      const { doc, nombre } = await asegurarPdfEnStorage(contrato)
       doc.save(nombre)
       await onChanged()
     } catch (e) {
       await showAlert(e.message, { title: 'Error generando el PDF' })
     } finally {
       setPdfGen(null)
+    }
+  }
+
+  async function enviarPorWa(contrato) {
+    if (!a.clientes?.whatsapp) {
+      await showAlert('El cliente no tiene WhatsApp registrado.', { title: 'Sin número' })
+      return
+    }
+    setEnviandoWa(contrato.id)
+    // La ventana se abre ANTES de los await: si se abre después, el bloqueador
+    // de popups del navegador se la come (mismo patrón de abrirArchivoStorage).
+    const w = window.open('', '_blank')
+    try {
+      const { path } = await asegurarPdfEnStorage(contrato)
+      const url = await urlFirmadaContrato(path)
+      const link = waLink(a.clientes.whatsapp, mensajeContratoWa({ contrato, afiliacion: a, url }))
+      if (w) w.location = link
+      else window.open(link, '_blank', 'noopener')
+      await db.from('afiliacion_contratos').update({ enviado_wa_at: new Date().toISOString() }).eq('id', contrato.id)
+      await onChanged()
+    } catch (e) {
+      if (w) w.close()
+      await showAlert(e.message, { title: 'Error enviando por WhatsApp' })
+    } finally {
+      setEnviandoWa(null)
+    }
+  }
+
+  async function enviarPorEmail(contrato) {
+    const destino = emailDestino.trim().toLowerCase()
+    if (!destino) return
+    setEnviandoEmail(contrato.id)
+    try {
+      const { path } = await asegurarPdfEnStorage(contrato)
+      // Enlace corto: el backend solo lo usa para descargar el PDF ya mismo
+      const url = await urlFirmadaContrato(path, 600)
+      await orbitApi(`/afiliaciones/contratos/${contrato.id}/enviar-email`, {
+        method: 'POST', body: { email: destino, signed_url: url },
+      })
+      // El correo digitado queda en la ficha del cliente para la próxima vez
+      if (destino !== (a.clientes?.email || '').toLowerCase() && a.clientes?.id_cliente)
+        await db.from('clientes').update({ email: destino }).eq('id_cliente', a.clientes.id_cliente)
+      setEmailPara(null)
+      await onChanged()
+    } catch (e) {
+      await showAlert(e.message, { title: 'Error enviando el correo' })
+    } finally {
+      setEnviandoEmail(null)
     }
   }
 
@@ -1271,8 +1330,38 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
                 <Button size="sm" variant="ghost" onClick={() => pdfContrato(c)} disabled={pdfGen === c.id}>
                   <FileText size={12} /> {pdfGen === c.id ? '...' : 'PDF'}
                 </Button>
+                <Button size="sm" variant="ghost" onClick={() => enviarPorWa(c)}
+                  disabled={enviandoWa === c.id} title="Compartir el PDF por WhatsApp (wa.me)">
+                  <MessageCircle size={12} /> {enviandoWa === c.id ? '...' : 'WA'}
+                </Button>
+                <Button size="sm" variant="ghost"
+                  onClick={() => {
+                    if (emailPara === c.id) { setEmailPara(null); return }
+                    setEmailDestino(a.clientes?.email || '')
+                    setEmailPara(c.id)
+                  }}
+                  title="Enviar el PDF adjunto por correo">
+                  <Mail size={12} /> Correo
+                </Button>
               </div>
             </div>
+            {emailPara === c.id && (
+              <form className="flex items-center gap-2 mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}
+                onSubmit={e => { e.preventDefault(); enviarPorEmail(c) }}>
+                <Input type="email" required placeholder="correo@delcliente.com" className="flex-1"
+                  value={emailDestino} onChange={e => setEmailDestino(e.target.value)} autoFocus />
+                <Button size="sm" type="submit" disabled={enviandoEmail === c.id || !emailDestino.trim()}>
+                  {enviandoEmail === c.id ? 'Enviando...' : 'Enviar'}
+                </Button>
+              </form>
+            )}
+            {(c.enviado_wa_at || c.enviado_email_at) && (
+              <div className="text-[10px] text-ink3 mt-1.5">
+                {c.enviado_wa_at && <>Compartido por WhatsApp el {new Date(c.enviado_wa_at).toLocaleDateString('es-CO')}</>}
+                {c.enviado_wa_at && c.enviado_email_at && ' · '}
+                {c.enviado_email_at && <>Enviado a {c.enviado_email_a} el {new Date(c.enviado_email_at).toLocaleDateString('es-CO')}</>}
+              </div>
+            )}
           </div>
         ))}
         {contratos.length === 0 && <p className="text-[12px] text-ink3">Sin contratos — esto no debería pasar.</p>}

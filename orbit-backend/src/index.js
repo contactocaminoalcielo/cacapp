@@ -13,6 +13,7 @@ import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
+import { enviarContratoEmail } from './afiliaciones-envio.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
@@ -101,6 +102,21 @@ app.post('/jobs/afiliaciones', requireJob, async (_req, res) => {
     res.json(await jobAfiliaciones())
   } catch (e) {
     log('[afiliaciones] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Afiliaciones: enviar el contrato PDF por correo (SMTP del hosting) ──
+app.post('/afiliaciones/contratos/:id/enviar-email', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await enviarContratoEmail({
+      contratoId: req.params.id,
+      email: req.body?.email,
+      signedUrl: req.body?.signed_url,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[afiliaciones/enviar-email] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
