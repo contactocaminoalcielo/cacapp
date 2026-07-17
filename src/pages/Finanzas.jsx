@@ -311,7 +311,7 @@ export default function Finanzas() {
 
   // ── Cuadre con técnicos: generar / cerrar / PDF ─────────────────────────────
   const cuadreCerrado = cuadreData?.estado === 'CERRADO'
-  const puedeGestionarMedios = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+  const puedeEditarCuadre = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
     || [1, 6].includes(Number(personalData?.rol_principal_id))
 
   function nombreTecnicoSel(id = cuadreTec) {
@@ -2273,7 +2273,7 @@ export default function Finanzas() {
                                       {it.total_cobrado > 0 ? fmt(it.total_cobrado)
                                         : (it.es_cancelado ? '—'
                                           : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">no cobró</span>)}
-                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && (
+                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_cancelado && (
                                         <button type="button" onClick={() => setValorRecogidoItem(it)}
                                           className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
                                           title="Modificar valor recogido">
@@ -2299,7 +2299,7 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {fmt(it.efectivo)}
-                                      {puedeGestionarMedios && !cuadreCerrado && !it.es_cancelado
+                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_cancelado
                                         && (Number(it.efectivo) > 0 || Number(it.digital) > 0) && (
                                         <button type="button" onClick={() => setMediosItem(it)}
                                           className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-2 text-[10px] font-bold text-[#1A5CD8] hover:bg-[#DBEAFE] transition-colors whitespace-nowrap"
@@ -2350,7 +2350,7 @@ export default function Finanzas() {
                                           </div>
                                         </div>
                                       ) : <span className="text-gray-400 tabular-nums">—</span>}
-                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && (
+                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_cancelado && (
                                         <button type="button" onClick={() => setRecargoManualItem(it)}
                                           className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:text-[#d97706] hover:bg-amber-50 transition-colors"
                                           title="Modificar recargo">
@@ -2606,7 +2606,7 @@ export default function Finanzas() {
       {detalleItem && <MascotaDetalleModal item={detalleItem} explicacion={explicacionItem(detalleItem)} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
-      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={puedeGestionarMedios} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
+      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={puedeEditarCuadre} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
 
       {/* ── Modal confirmar entrega del dinero (cuadre cerrado) ──────────── */}
       {entregaModal && cuadreData && (
