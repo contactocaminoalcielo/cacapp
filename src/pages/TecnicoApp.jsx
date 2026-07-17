@@ -3228,10 +3228,10 @@ function AjusteModal({ fila, tecnico, onClose, onSaved }) {
         {/* Lo automático (referencia, no editable) */}
         <div className="rounded-xl bg-gray-50 border px-3 py-2.5 my-3 space-y-1" style={{ borderColor: '#E5E7EB' }}>
           <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Lo que dice el sistema</div>
-          <Real label="Cobrado" val={fila.cobrado > 0 ? fmt(fila.cobrado) : '—'} />
+          <Real label="Total recibido" val={fila.cobrado > 0 ? fmt(fila.cobrado) : '—'} />
           <Real label="Efectivo" val={fmt(fila.efectivo)} />
           <Real label="Digital"  val={fmt(fila.cobrado - fila.efectivo)} />
-          <Real label="Reconocido a ti" val={fila.ganado != null ? fmt(fila.ganado) : '—'} />
+          <Real label="Transporte" val={fila.ganado != null ? fmt(fila.ganado) : '—'} />
         </div>
 
         {/* Lo que dice el técnico (deja en blanco lo que no discutes) */}
@@ -3239,10 +3239,10 @@ function AjusteModal({ fila, tecnico, onClose, onSaved }) {
           ¿Tú qué dices? · deja en blanco lo que esté bien
         </div>
         <div className="space-y-2.5">
-          <CampoNum label="Cobrado"          value={cobrado}    onChange={setCobrado} />
+          <CampoNum label="Total recibido"   value={cobrado}    onChange={setCobrado} />
           <CampoNum label="De eso, efectivo" value={efectivo}   onChange={setEfectivo} />
           <CampoNum label="De eso, digital"  value={digital}    onChange={setDigital} />
-          <CampoNum label="Reconocido a ti"  value={reconocido} onChange={setReconocido} />
+          <CampoNum label="Transporte"       value={reconocido} onChange={setReconocido} />
           <div>
             <label className="text-[11px] font-bold text-gray-500">Nota — por qué {cambio ? '(obligatoria)' : ''}</label>
             <textarea value={nota} onChange={e => setNota(e.target.value)} rows={2}
