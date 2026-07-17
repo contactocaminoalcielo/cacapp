@@ -89,9 +89,18 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
   ])
   if (!svcsActivos?.length || !planesData?.length) return []
 
+  // Servicios nacidos de una afiliación pre-exequial: el cliente paga la
+  // cláusula del contrato (o $0 si está cubierto), NO el precio del plan por
+  // peso — el recálculo no aplica.
+  const { data: activaciones } = await db.from('afiliacion_mascotas')
+    .select('servicio_activado_id')
+    .in('servicio_activado_id', svcsActivos.map(s => s.id))
+  const deAfiliacion = new Set((activaciones || []).map(a => a.servicio_activado_id))
+
   const cambios = []
   for (const svc of svcsActivos) {
     if (!svc.plan_id) continue
+    if (deAfiliacion.has(svc.id)) continue
 
     const nuevoPrecioBase = await calcularPrecioPara(planesData, svc.plan_id, pesoNuevo, especieId)
     if (!nuevoPrecioBase) continue

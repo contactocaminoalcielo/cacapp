@@ -268,6 +268,9 @@ export default function Registro() {
   const [planSeleccionado, setPlanSeleccionado]     = useState(borrador?.planSeleccionado ?? null)
   const [preciosPorPlan, setPreciosPorPlan]         = useState({})
   const [precioSeleccionado, setPrecioSeleccionado] = useState(borrador?.precioSeleccionado ?? null)
+  // Afiliación pre-exequial: el cobro viene de la cláusula del contrato, no del
+  // precio del plan por peso — mientras exista, ningún recálculo lo puede pisar.
+  const valorAfiliacion = location.state?.presequial?.valor_plan_override ?? null
   const [cargandoPrecios, setCargandoPrecios]       = useState(false)
   const [tipoAcomp, setTipoAcomp]                   = useState(borrador?.tipoAcomp ?? 'EVIDENCIA')
   const [canalEntrada, setCanalEntrada]             = useState(borrador?.canalEntrada ?? 'DIRECTO')
@@ -564,18 +567,20 @@ export default function Registro() {
   useEffect(() => {
     if (paso === 2 && pesoKg > 0) {
       cargarPreciosTodosPlanes(pesoKg, especieId).then(map => {
+        if (valorAfiliacion !== null) return
         if (planSeleccionado && map[planSeleccionado.id] !== undefined) {
           setPrecioSeleccionado(map[planSeleccionado.id])
         }
       })
     } else if (paso === 2 && pesoKg <= 0) {
       setPreciosPorPlan({})
-      setPrecioSeleccionado(null)
+      if (valorAfiliacion === null) setPrecioSeleccionado(null)
     }
   }, [paso, pesoKg, especieId])
 
   // sincronizar precio cuando cambia el plan
   useEffect(() => {
+    if (valorAfiliacion !== null) { setPrecioSeleccionado(valorAfiliacion); return }
     if (planSeleccionado && preciosPorPlan[planSeleccionado.id] !== undefined) {
       setPrecioSeleccionado(preciosPorPlan[planSeleccionado.id])
     } else if (planSeleccionado) {
@@ -1028,7 +1033,7 @@ export default function Registro() {
               Activando afiliación pre-exequial {location.state.presequial.nivel} — cliente, mascota y plan precargados.
               {location.state.presequial.valor_plan_override !== undefined && (
                 <> Cobro del plan: <strong>{fmt(location.state.presequial.valor_plan_override)}</strong>
-                {location.state.presequial.motivo ? ` (${location.state.presequial.motivo})` : ''}. No re-selecciones el precio del plan.</>
+                {location.state.presequial.motivo ? ` (${location.state.presequial.motivo})` : ''}. El precio queda fijado por la afiliación aunque cambie el plan o el peso.</>
               )}
             </span>
           </div>
