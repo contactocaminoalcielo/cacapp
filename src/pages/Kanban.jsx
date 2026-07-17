@@ -20,10 +20,12 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
+  ImageUp, History,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
+import { ModalReemplazarFoto, ModalHistorialFotos } from '@/components/imagenes/FotosDelCliente'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 
 // ── Descarga directa de imágenes ──────────────────────────────────────────────
@@ -423,6 +425,9 @@ export default function Kanban() {
   const [detalle, setDetalle]             = useState(null)
   const [recordatorios, setRecordatorios] = useState([])
   const [descargandoTodas, setDescargandoTodas] = useState(false)
+  // Reemplazo de una foto del cliente por una de mejor calidad (migración 058)
+  const [reemplazoFoto, setReemplazoFoto] = useState(null)
+  const [histFotos, setHistFotos]         = useState(false)
   const [saving, setSaving]               = useState(false)
   const [guardando, setGuardando]         = useState(false)
   const [mensajeros, setMensajeros]       = useState([])
@@ -1839,6 +1844,20 @@ export default function Kanban() {
       return urls.map((url, i) => ({ url, nombre: r.recordatorios?.nombre || 'Foto', idx: i, total: urls.length, recId: r.id }))
     })
 
+  // Refresca la galería sin recargar el servicio entero. Espeja la regla de la DB
+  // (migración 058): imagen_cliente_url se recalcula desde el array — si aquí se
+  // desviara, el Kanban mostraría una foto y Digitales usaría otra.
+  function handleFotoCambiada(srId, posicion, url) {
+    setRecordatorios(prev => prev.map(r => {
+      if (r.id !== srId) return r
+      const base = r.imagenes_cliente_urls?.length ? r.imagenes_cliente_urls
+                 : r.imagen_cliente_url ? [r.imagen_cliente_url] : []
+      const urls = [...base]
+      urls[posicion - 1] = url
+      return { ...r, imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] }
+    }))
+  }
+
   async function descargarTodasImagenes() {
     if (descargandoTodas || !imagenesDelCliente.length) return
     setDescargandoTodas(true)
@@ -2677,15 +2696,25 @@ export default function Kanban() {
                   <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#7C3AED' }}>
                     <Images size={12} /> Imágenes del cliente ({imagenesDelCliente.length})
                   </div>
-                  <button
-                    onClick={descargarTodasImagenes}
-                    disabled={descargandoTodas}
-                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg text-white transition-opacity disabled:opacity-60 flex-shrink-0"
-                    style={{ background: '#7C3AED' }}
-                    title="Descargar todas las imágenes"
-                  >
-                    <Download size={11} /> {descargandoTodas ? 'Descargando…' : 'Descargar todas'}
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => setHistFotos(true)}
+                      className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors"
+                      style={{ background: '#F3E8FF', color: '#7C3AED' }}
+                      title="Ver qué fotos se han cambiado y quién lo hizo"
+                    >
+                      <History size={11} /> Historial
+                    </button>
+                    <button
+                      onClick={descargarTodasImagenes}
+                      disabled={descargandoTodas}
+                      className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg text-white transition-opacity disabled:opacity-60"
+                      style={{ background: '#7C3AED' }}
+                      title="Descargar todas las imágenes"
+                    >
+                      <Download size={11} /> {descargandoTodas ? 'Descargando…' : 'Descargar todas'}
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {imagenesDelCliente.map((img, i) => (
@@ -2710,6 +2739,16 @@ export default function Kanban() {
                           className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
                         >
                           <Download size={13} className="text-gray-700" />
+                        </button>
+                        <button
+                          onClick={() => setReemplazoFoto({
+                            srId: img.recId, servicioId: selected.servicio_id,
+                            posicion: img.idx + 1, urlActual: img.url,
+                          })}
+                          title="Cambiar por una de mejor calidad"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
+                        >
+                          <ImageUp size={13} className="text-gray-700" />
                         </button>
                       </div>
                       <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate leading-tight pointer-events-none" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
@@ -3472,6 +3511,18 @@ export default function Kanban() {
           onClose={() => setModalEntrega(null)}
           onGuardado={() => { setModalEntrega(null); cargar() }}
         />
+      )}
+
+      {/* Reemplazo de una foto del cliente por una de mejor calidad (migración 058) */}
+      {reemplazoFoto && (
+        <ModalReemplazarFoto
+          ctx={reemplazoFoto}
+          onClose={() => setReemplazoFoto(null)}
+          onHecho={(posicion, url) => handleFotoCambiada(reemplazoFoto.srId, posicion, url)}
+        />
+      )}
+      {histFotos && selected && (
+        <ModalHistorialFotos servicioId={selected.servicio_id} onClose={() => setHistFotos(false)} />
       )}
 
       {/* ── Modal revisión / conversión de solicitud ─────────────────────── */}

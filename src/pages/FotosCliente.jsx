@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { db } from '@/lib/supabase'
-import { compressImage } from '@/lib/imageUtils'
+import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 import { portalDatos, portalRecibir } from '@/lib/imagenes'
 import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus } from 'lucide-react'
 
@@ -11,7 +11,7 @@ const G_MID  = '#C5DEC9'
 const BG     = '#F4F7F4'
 const BORD   = '#D8E5D8'
 
-const MIMES_OK = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
+const MIMES_OK = MIMES_IMAGEN_OK
 
 // Límite de palabras por tipo de campo de texto (evita leyendas larguísimas).
 // Devuelve 0 si el campo no tiene límite.
@@ -31,23 +31,6 @@ const slide = {
   enter:  d => ({ x: d > 0 ? '60%' : '-60%', opacity: 0 }),
   center: { x: 0, opacity: 1, transition: { type: 'spring', stiffness: 300, damping: 34 } },
   exit:   d => ({ x: d > 0 ? '-60%' : '60%', opacity: 0, transition: { duration: 0.2 } }),
-}
-
-// ── Validación de MIME REAL por magic bytes (no por extensión) ───────────────
-async function sniffMime(file) {
-  try {
-    const buf = new Uint8Array(await file.slice(0, 16).arrayBuffer())
-    const hex = [...buf].map(b => b.toString(16).padStart(2, '0')).join('')
-    if (hex.startsWith('ffd8ff'))     return 'image/jpeg'
-    if (hex.startsWith('89504e47'))   return 'image/png'
-    if (hex.startsWith('52494646') && hex.substr(16, 8) === '57454250') return 'image/webp'
-    const ascii = String.fromCharCode(...buf)
-    if (ascii.substr(4, 4) === 'ftyp') {
-      const brand = ascii.substr(8, 4)
-      if (['heic', 'heix', 'hevc', 'heif', 'mif1', 'msf1'].includes(brand)) return 'image/heic'
-    }
-    return file.type || 'application/octet-stream'
-  } catch { return file.type || 'application/octet-stream' }
 }
 
 function itemListo(item, fotos, textos) {
@@ -170,10 +153,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
     const maxBytes = (limites.max_mb || 8) * 1024 * 1024
     if (blob.size > maxBytes)
       throw new Error(`La imagen supera ${limites.max_mb} MB. Intenta con otra foto.`)
-    const ext  = blob.type === 'image/jpeg' ? 'jpg'
-               : mime === 'image/png' ? 'png'
-               : mime === 'image/webp' ? 'webp'
-               : 'heic'
+    const ext  = extDeMime(blob.type === 'image/jpeg' ? 'image/jpeg' : mime)
     const path = `${servicio.id}/${srId}/${crypto.randomUUID()}.${ext}`   // único → no sobrescribe
     const { error } = await db.storage.from('fotos-clientes')
       .upload(path, blob, { upsert: false, contentType: blob.type || mime })

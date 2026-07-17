@@ -5,6 +5,7 @@
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 import { FECHA_CORTE } from '@/lib/constants'
+import { sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 
 export const ESTADO_SOLICITUD = {
   POR_VALIDAR:   { label: 'Por validar',   color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
@@ -135,6 +136,66 @@ export function forzarContacto(solicitudId, numero) {
 /** Saca (o devuelve) un caso de la cadencia automática. */
 export function pausarSeguimiento(solicitudId, pausado) {
   return orbitApi('/imagenes/pausar-seguimiento', { method: 'POST', body: { solicitud_id: solicitudId, pausado } })
+}
+
+// ─── Reemplazo de una foto por otra de mejor calidad (Producción y Kanban) ───
+// El portal comprime a 1200px/JPEG82 (imageUtils.compressImage) para no reventar
+// la RAM de un Android. Cuando esa foto no da para producir, el equipo sube una
+// mejor. La original NO se pierde: queda en produccion_imagen_log y su archivo
+// sigue en el bucket (ruta nueva por uuid, sin upsert ni delete).
+
+export const MAX_MB_REEMPLAZO = 25
+
+/**
+ * Sube la foto de reemplazo al bucket y devuelve su URL pública.
+ *
+ * ⚠️ NO pasa por compressImage a propósito: el objetivo es MÁS calidad, y
+ * comprimir aquí la devolvería a los mismos 1200px que causaron el problema.
+ * Se sube el archivo tal cual, validando el tipo real por magic bytes.
+ * Esto corre en el escritorio de Producción, no en el Android del cliente, así
+ * que el riesgo de OOM del portal no aplica: nunca se decodifica la imagen.
+ */
+export async function subirImagenReemplazo(servicioId, srId, file) {
+  const mime = await sniffMime(file)
+  if (!MIMES_IMAGEN_OK.includes(mime))
+    throw new Error('Ese archivo no es una foto válida. Usa JPG, PNG, WEBP o HEIC.')
+  if (file.size > MAX_MB_REEMPLAZO * 1024 * 1024)
+    throw new Error(`La imagen supera ${MAX_MB_REEMPLAZO} MB. Usa una un poco más liviana.`)
+
+  const path = `${servicioId}/${srId}/mejora-${crypto.randomUUID()}.${extDeMime(mime)}`
+  const { error } = await db.storage.from('fotos-clientes')
+    .upload(path, file, { upsert: false, contentType: mime })
+  if (error) {
+    console.error('[reemplazo] upload falló:', error?.message || error, { path })
+    throw new Error('No se pudo subir la imagen. Revisa la conexión e intenta de nuevo.')
+  }
+  const { data: { publicUrl } } = db.storage.from('fotos-clientes').getPublicUrl(path)
+  return publicUrl
+}
+
+/**
+ * Cambia la foto de `posicion` (1-based) por `urlNueva` y deja constancia.
+ * Todo ocurre dentro de la función de DB: no hay reemplazo sin log.
+ */
+export async function reemplazarImagen({ srId, posicion, urlNueva, motivo }) {
+  const { data, error } = await db.rpc('reemplazar_imagen_recordatorio', {
+    p_sr_id:     srId,
+    p_posicion:  posicion,
+    p_url_nueva: urlNueva,
+    p_motivo:    motivo || null,
+  })
+  if (error) throw new Error(error.message || 'No se pudo reemplazar la imagen')
+  return data
+}
+
+/** Historial de reemplazos de un servicio (el más reciente primero). */
+export async function historialImagenes(servicioId) {
+  const { data, error } = await db.from('produccion_imagen_log')
+    .select('*')
+    .eq('servicio_id', servicioId)
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return data || []
 }
 
 // ─── Portal público (sin JWT; el código de acceso es el secreto) ─────────────

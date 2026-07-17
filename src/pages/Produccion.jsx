@@ -15,6 +15,7 @@ import { cargarEtapasContacto } from '@/lib/imagenes'
 import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
+import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
@@ -95,6 +96,25 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
   const [maquina,  setMaquina]  = useState(item.maquina_id || rec?.maquina_id || '')
   const [notas,    setNotas]    = useState(item.notas || '')
   const [saving,   setSaving]   = useState(false)
+  // Copia local de las fotos: al reemplazar una, el modal debe mostrarla ya, sin
+  // esperar a que se recargue la página.
+  const [fotos, setFotos] = useState({
+    imagen_cliente_url:    item.imagen_cliente_url,
+    imagenes_cliente_urls: item.imagenes_cliente_urls,
+  })
+
+  // Espeja la regla de la DB (migración 058): la columna singular se recalcula
+  // desde el array. Si aquí se desviara, la pantalla mostraría una foto y
+  // Digitales usaría otra.
+  function handleFotoCambiada(_srId, posicion, url) {
+    const base = fotos.imagenes_cliente_urls?.length ? fotos.imagenes_cliente_urls
+               : fotos.imagen_cliente_url ? [fotos.imagen_cliente_url] : []
+    const urls = [...base]
+    urls[posicion - 1] = url
+    const next = { imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] }
+    setFotos(next)
+    onSaved({ ...item, ...next })
+  }
 
   async function guardar() {
     setSaving(true)
@@ -169,6 +189,17 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
             </span>
           )}
         </div>
+
+        {/* Fotos del cliente + reemplazo por una de mejor calidad */}
+        {reqImg && fotos_ok && (
+          <div className="rounded-xl border border-gray-200 p-3">
+            <FotosDelCliente
+              recordatorios={[{ ...item, ...fotos }]}
+              servicioId={item.servicio_id}
+              onCambiada={handleFotoCambiada}
+            />
+          </div>
+        )}
 
         {/* Estado */}
         <div>
