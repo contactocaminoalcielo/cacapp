@@ -15,6 +15,7 @@ import {
   HelpCircle, Sparkles, Pencil, ArrowLeftRight,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
+import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -363,7 +364,7 @@ export default function Finanzas() {
         .from('cuadres_tecnico')
         .select('*, personal:tecnico_id ( nombre, apellido )')
         .order('created_at', { ascending: false })
-        .limit(30)
+        .limit(60)
       setHistorialCuadres(data || [])
     } catch (err) {
       console.error('[Finanzas] Error cargando historial de cuadres:', err)
@@ -2222,8 +2223,12 @@ export default function Finanzas() {
                                       {it.servicio_id && !it.sin_recibo && (
                                         <button type="button"
                                           onClick={async () => {
-                                            if (!await abrirPdfReciboServicio(it.servicio_id))
-                                              await showAlert('Este servicio no tiene PDF de recibo subido. Los recibos anteriores al 9 de julio solo lo tienen si el técnico los envió por WhatsApp.', { title: 'Sin PDF' })
+                                            // 1) el PDF real que el técnico envió por WhatsApp (si existe);
+                                            // 2) si no, se genera al vuelo desde los datos del recibo — así
+                                            // los de junio (sin PDF guardado) también se pueden ver.
+                                            if (await abrirPdfReciboServicio(it.servicio_id)) return
+                                            if (await abrirReciboPDFServicio(it.servicio_id)) return
+                                            await showAlert('No se pudo generar el recibo de este servicio.', { title: 'Sin recibo' })
                                           }}
                                           className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0B1D4F] hover:bg-gray-100 transition-colors flex-shrink-0"
                                           title="Ver PDF del recibo">
@@ -2530,7 +2535,7 @@ export default function Finanzas() {
                               const tec = it.cuadres_tecnico?.personal
                               return (
                                 <tr key={it.id} className="text-[13px] border-b hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
-                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha)}</td>
+                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha_registro_servicio || it.fecha)}</td>
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-center gap-1">
                                       <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
@@ -2539,8 +2544,12 @@ export default function Finanzas() {
                                       {it.servicio_id && (
                                         <button type="button"
                                           onClick={async () => {
-                                            if (!await abrirPdfReciboServicio(it.servicio_id))
-                                              await showAlert('Este servicio no tiene PDF de recibo subido. Los recibos anteriores al 9 de julio solo lo tienen si el técnico los envió por WhatsApp.', { title: 'Sin PDF' })
+                                            // 1) el PDF real que el técnico envió por WhatsApp (si existe);
+                                            // 2) si no, se genera al vuelo desde los datos del recibo — así
+                                            // los de junio (sin PDF guardado) también se pueden ver.
+                                            if (await abrirPdfReciboServicio(it.servicio_id)) return
+                                            if (await abrirReciboPDFServicio(it.servicio_id)) return
+                                            await showAlert('No se pudo generar el recibo de este servicio.', { title: 'Sin recibo' })
                                           }}
                                           className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0B1D4F] hover:bg-gray-100 transition-colors flex-shrink-0"
                                           title="Ver PDF del recibo">
