@@ -378,6 +378,35 @@ export default function Finanzas() {
     if (tab === 'tecnicos' && historialCuadres === null && !histLoading) cargarHistorial()
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Refresco en vivo del cuadre abierto ────────────────────────────────────
+  // Refleja SIN recargar la confirmación del técnico (que llega desde su app) y
+  // la confirmación de entrega del dinero. Polling ligero de UNA fila (el
+  // proyecto no amplía el Realtime de Supabase). Solo parchea los campos de
+  // confirmación/estado — NO los totales, para no pisar ediciones locales en curso.
+  useEffect(() => {
+    const id = cuadreData?.id
+    if (!id) return
+    // Nada que vigilar si ya está CERRADO y con la entrega confirmada.
+    if (cuadreData.estado === 'CERRADO' && cuadreData.entrega_confirmada_en) return
+    const campos = ['estado', 'tecnico_confirmado_en', 'tecnico_confirmado_monto', 'tecnico_observacion',
+      'entrega_confirmada_en', 'entrega_confirmada_por', 'entrega_confirmada_monto', 'entrega_notas']
+    let vivo = true
+    let lastSig = campos.map(k => String(cuadreData?.[k] ?? '')).join('|')
+    const tick = async () => {
+      const { data } = await db.from('cuadres_tecnico')
+        .select(campos.join(', ')).eq('id', id).maybeSingle()
+      if (!vivo || !data) return
+      const sig = campos.map(k => String(data[k] ?? '')).join('|')
+      if (sig === lastSig) return
+      lastSig = sig
+      const patch = Object.fromEntries(campos.map(k => [k, data[k]]))
+      setCuadreData(prev => (prev && prev.id === id) ? { ...prev, ...patch } : prev)
+      setHistorialCuadres(prev => prev ? prev.map(c => c.id === id ? { ...c, ...patch } : c) : prev)
+    }
+    const iv = setInterval(tick, 12000)
+    return () => { vivo = false; clearInterval(iv) }
+  }, [cuadreData?.id, cuadreData?.estado, cuadreData?.entrega_confirmada_en]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Abre un cuadre del historial en la vista normal: carga cabecera + items en
   // los mismos estados que generarCuadre, así el PDF, el read-only de CERRADO y
   // el "Actualizar cuadre" de BORRADOR funcionan sin código aparte.
