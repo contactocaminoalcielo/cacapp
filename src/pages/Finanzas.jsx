@@ -12,7 +12,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle, Sparkles, Pencil,
+  HelpCircle, Sparkles, Pencil, ArrowLeftRight,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
@@ -111,6 +111,7 @@ export default function Finanzas() {
   const [comprobanteItem, setComprobanteItem] = useState(null)   // cuadre_item → ver comprobante
   const [obsItem,         setObsItem]         = useState(null)   // cuadre_item → editar observaciones
   const [valorRecogidoItem, setValorRecogidoItem] = useState(null) // cuadre_item → editar valor recogido
+  const [mediosItem, setMediosItem] = useState(null)               // cuadre_item → reclasificar medios (efectivo↔digital)
   const [recargoManualItem, setRecargoManualItem] = useState(null) // cuadre_item → editar recargo
   const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
   const [histLoading,     setHistLoading]     = useState(false)
@@ -870,6 +871,59 @@ export default function Finanzas() {
       return true
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al ajustar valor recogido' })
+      return false
+    }
+  }
+
+
+  // Reclasificar el reparto de medios de una fila (efectivo↔digital) sin mover
+  // el total. Caso: cobró y registró EFECTIVO pero le pagaron por Nequi a la
+  // empresa. Solo ADMIN, solo BORRADOR, motivo obligatorio (migración 060).
+  async function guardarMediosItem(item, { medios, motivo }) {
+    const suma = medios.reduce((a, m) => a + (Number(m.monto) || 0), 0)
+    const total = Number(item.total_cobrado) || 0
+    if (Math.round(suma) !== Math.round(total)) {
+      await showAlert(`Los medios suman ${fmt(suma)} pero la fila tiene recogido ${fmt(total)}. Para cambiar el total usa "Modificar valor recogido".`, { title: 'No cuadra el total' })
+      return false
+    }
+    try {
+      const { data, error } = await db.rpc('set_cuadre_item_medios', {
+        p_item_id:  item.id,
+        p_medios:   medios.map(m => ({ metodo: m.metodo, monto: Number(m.monto) || 0 })),
+        p_actor_id: personalData?.id || null,
+        p_motivo:   motivo || null,
+      })
+      if (error) throw error
+      const itemPatch = {
+        medios_pago: data.medios_pago,
+        medios_pago_original: data.medios_pago_original,
+        efectivo: data.efectivo,
+        digital: data.digital,
+        total_cobrado: data.total_cobrado,
+        medios_editado_en: data.medios_editado_en,
+        medios_editado_por: personalData?.id || null,
+        medios_motivo: data.medios_motivo,
+      }
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it))
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it).filter(enConciliacion)
+        : prev)
+      setCuadreData(prev => prev ? {
+        ...prev,
+        total_cobrado: data.total_cobrado_cuadre,
+        efectivo_recibido: data.efectivo_recibido,
+        digital_empresa: data.digital_empresa,
+        total_transporte: data.total_transporte,
+        total_recargos: data.total_recargos,
+        total_pago_servicio: data.total_pago_servicio,
+        total_cancelados: data.total_cancelados,
+        total_reconocido: data.total_reconocido,
+        dinero_a_entregar: data.dinero_a_entregar,
+        saldo_a_favor_tecnico: data.saldo_a_favor_tecnico,
+      } : prev)
+      return true
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al reclasificar medios' })
       return false
     }
   }
@@ -2239,14 +2293,30 @@ export default function Finanzas() {
                                       : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
                                       : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
                                   </td>
-                                  <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">{fmt(it.efectivo)}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">
+                                    <div className="flex items-center gap-1.5">
+                                      {fmt(it.efectivo)}
+                                      {personalData?.rol === 'ADMIN' && !cuadreCerrado && !it.es_cancelado && Number(it.total_cobrado) > 0 && (
+                                        <button type="button" onClick={() => setMediosItem(it)}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
+                                          title="Reclasificar medio de pago (efectivo ↔ digital)">
+                                          <ArrowLeftRight size={11} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    {it.medios_editado_en && (
+                                      <div className="text-[9px] font-bold text-[#1A5CD8] mt-0.5" title={it.medios_motivo || ''}>
+                                        reclasificado
+                                      </div>
+                                    )}
+                                  </td>
                                   <td className="px-3 py-2.5">
                                     {it.digital > 0 ? (
                                       <div className="flex flex-col gap-1">
                                         <span className="text-gray-600 font-medium tabular-nums">{fmt(it.digital)}</span>
                                         <div className="flex flex-wrap gap-1">
                                           {(it.medios_pago || []).filter(m => String(m.metodo).toUpperCase() !== 'EFECTIVO' && Number(m.monto) > 0).map((m, i) => (
-                                            <button key={i} onClick={() => setComprobanteItem(it)} title="Ver comprobante de pago"
+                                            <button key={i} onClick={() => setComprobanteItem(it)} title="Ver o subir comprobante de pago"
                                               className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#1E40AF] hover:bg-[#DBEAFE] inline-flex items-center gap-0.5 transition-colors">
                                               <FileText size={9} /> {m.metodo}
                                             </button>
@@ -2532,7 +2602,7 @@ export default function Finanzas() {
       {detalleItem && <MascotaDetalleModal item={detalleItem} explicacion={explicacionItem(detalleItem)} onClose={() => setDetalleItem(null)} />}
 
       {/* ── Modal comprobante de pago digital ────────────────────────────── */}
-      {comprobanteItem && <ComprobanteModal item={comprobanteItem} onClose={() => setComprobanteItem(null)} />}
+      {comprobanteItem && <ComprobanteModal item={comprobanteItem} editable={personalData?.rol === 'ADMIN'} actorId={personalData?.id || null} onClose={() => setComprobanteItem(null)} />}
 
       {/* ── Modal confirmar entrega del dinero (cuadre cerrado) ──────────── */}
       {entregaModal && cuadreData && (
@@ -2577,6 +2647,18 @@ export default function Finanzas() {
           onSave={async ({ recargo, motivo }) => {
             const ok = await guardarRecargoManual(recargoManualItem, { recargo, motivo })
             if (ok) setRecargoManualItem(null)
+          }}
+        />
+      )}
+
+      {/* ── Modal reclasificar medios (efectivo↔digital) por admin ─────────── */}
+      {mediosItem && (
+        <MediosItemModal
+          item={mediosItem}
+          onClose={() => setMediosItem(null)}
+          onSave={async ({ medios, motivo }) => {
+            const ok = await guardarMediosItem(mediosItem, { medios, motivo })
+            if (ok) setMediosItem(null)
           }}
         />
       )}
@@ -3007,10 +3089,12 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
 }
 
 // ── Modal: comprobante de pago digital (recibo_comprobantes → URL firmada) ─────
-function ComprobanteModal({ item, onClose }) {
+function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
   const [loading, setLoading] = useState(true)
   const [imgs, setImgs]       = useState([])
   const [error, setError]     = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
 
   useEffect(() => {
     let activo = true
@@ -3071,6 +3155,35 @@ function ComprobanteModal({ item, onClose }) {
     return () => { activo = false }
   }, [item])
 
+  async function subirDesdeAdmin(file) {
+    if (!file || !item.servicio_id) return
+    setUploading(true); setUploadError('')
+    let comprobante = null
+    try {
+      comprobante = await subirComprobantePago(item.servicio_id, file)
+      const { data: creado, error: insertError } = await db.from('recibo_comprobantes').insert({
+        servicio_id: item.servicio_id,
+        recibo_id: item.recibo_id || null,
+        bucket: comprobante.bucket,
+        storage_path: comprobante.storage_path,
+        mime_type: comprobante.mime_type,
+        estado: 'APROBADO',
+        uploaded_by: actorId,
+      }).select('id, bucket, storage_path, mime_type, estado').single()
+      if (insertError) {
+        await db.storage.from(comprobante.bucket).remove([comprobante.storage_path])
+        throw insertError
+      }
+      const { data: signed } = await db.storage.from(creado.bucket || 'evidencias')
+        .createSignedUrl(creado.storage_path, 300)
+      setImgs(prev => [...prev, { ...creado, url: signed?.signedUrl || '' }])
+    } catch (err) {
+      setUploadError(parsearErrorDB(err))
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const digitales = (item.medios_pago || []).filter(mp => String(mp.metodo).toUpperCase() !== 'EFECTIVO' && Number(mp.monto) > 0)
 
   return (
@@ -3091,6 +3204,18 @@ function ComprobanteModal({ item, onClose }) {
               <span key={i} className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1E40AF]">{mp.metodo} · {fmt(mp.monto)}</span>
             ))}
           </div>
+          {editable && item.servicio_id && (
+            <div className="rounded-xl border bg-gray-50 px-3 py-3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+              <label className={`flex min-h-11 items-center justify-center gap-2 rounded-xl border border-dashed px-3 py-2 text-[12px] font-semibold transition-colors ${uploading ? 'cursor-wait text-gray-400 bg-gray-100' : 'cursor-pointer text-[#1A5CD8] bg-white hover:bg-[#EFF6FF]'}`}
+                style={{ borderColor: 'rgba(26,92,216,0.28)' }}>
+                <Paperclip size={14} /> {uploading ? 'Subiendo comprobante…' : 'Subir comprobante desde Admin'}
+                <input type="file" accept="image/*,application/pdf" disabled={uploading} className="sr-only"
+                  onChange={async e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) await subirDesdeAdmin(file) }} />
+              </label>
+              <p className="mt-1.5 text-[10px] text-gray-400">Imagen o PDF · máximo 8 MB.</p>
+              {uploadError && <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700"><AlertCircle size={12} className="mt-0.5 flex-shrink-0" /> {uploadError}</div>}
+            </div>
+          )}
           {loading ? (
             <div className="py-12 text-center text-gray-400 text-[13px]">Cargando comprobante…</div>
           ) : error ? (
@@ -3240,6 +3365,109 @@ function ValorRecogidoModal({ item, onClose, onSave }) {
           <div className="flex justify-end gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
             <button onClick={async () => { setSaving(true); await onSave({ total: nuevo, motivo: motivo.trim() }); setSaving(false) }} disabled={saving || invalido}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: reclasificar medios de pago de una fila (solo ADMIN) ───────────────
+// Cambia CÓMO se repartió lo cobrado entre efectivo y digital, SIN mover el
+// total. Caso típico: se registró EFECTIVO pero pagaron por Nequi a la empresa.
+// El recibo no se toca; la corrección vive en el cuadre con motivo (migración 060).
+const METODOS_MEDIO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
+function MediosItemModal({ item, onClose, onSave }) {
+  const total = Number(item.total_cobrado) || 0
+  const inicial = () => {
+    const src = Array.isArray(item.medios_pago) ? item.medios_pago.filter(m => Number(m.monto) > 0) : []
+    if (src.length) return src.map(m => ({ metodo: String(m.metodo || 'EFECTIVO').toUpperCase(), monto: String(Math.round(Number(m.monto) || 0)) }))
+    const filas = []
+    if (Number(item.efectivo) > 0) filas.push({ metodo: 'EFECTIVO', monto: String(Math.round(Number(item.efectivo))) })
+    if (Number(item.digital)  > 0) filas.push({ metodo: 'OTRO',     monto: String(Math.round(Number(item.digital))) })
+    return filas.length ? filas : [{ metodo: 'EFECTIVO', monto: String(Math.round(total)) }]
+  }
+  const [filas, setFilas]   = useState(inicial)
+  const [motivo, setMotivo] = useState(item.medios_motivo || '')
+  const [saving, setSaving] = useState(false)
+
+  const suma = filas.reduce((a, f) => a + (Number(f.monto) || 0), 0)
+  const cuadra = Math.round(suma) === Math.round(total)
+  const efectivoNuevo = filas.filter(f => f.metodo === 'EFECTIVO').reduce((a, f) => a + (Number(f.monto) || 0), 0)
+  const digitalNuevo  = suma - efectivoNuevo
+  const invalido = !cuadra || !motivo.trim() || filas.some(f => !(Number(f.monto) > 0))
+
+  const setFila  = (i, patch) => setFilas(prev => prev.map((f, k) => k === i ? { ...f, ...patch } : f))
+  const addFila  = () => setFilas(prev => [...prev, { metodo: 'NEQUI', monto: '' }])
+  const delFila  = (i) => setFilas(prev => prev.length > 1 ? prev.filter((_, k) => k !== i) : prev)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <ArrowLeftRight size={16} className="text-[#1A5CD8]" />
+            <span className="text-[14px] font-bold text-gray-900">Reclasificar medio de pago</span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="text-[13px] font-bold text-gray-900">{item.mascota_nombre || 'Mascota'}</div>
+            <div className="text-[11px] text-gray-500">Total recogido (fijo): <strong>{fmt(total)}</strong> · el recibo del cliente no cambia</div>
+          </div>
+
+          <div className="rounded-xl bg-[#EFF6FF] border border-[#DBEAFE] px-3 py-2 text-[11px] text-[#1E40AF] leading-snug">
+            Cambia cómo se repartió lo cobrado entre efectivo y digital. Lo digital entra a la empresa y baja lo que el técnico debe entregar. No cambia el total.
+          </div>
+
+          <div className="space-y-2">
+            {filas.map((f, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <select value={f.metodo} onChange={e => setFila(i, { metodo: e.target.value })}
+                  className="flex-1 px-2.5 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] bg-white"
+                  style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                  {METODOS_MEDIO.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <div className="relative w-[130px]">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-gray-400 font-semibold select-none">$</span>
+                  <input type="number" min={0} step={1000} value={f.monto}
+                    onChange={e => setFila(i, { monto: e.target.value })}
+                    className="w-full pl-6 pr-2 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8]"
+                    style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+                </div>
+                <button type="button" onClick={() => delFila(i)} disabled={filas.length <= 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent">
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={addFila} className="text-[12px] font-semibold text-[#1A5CD8] hover:underline">+ Agregar medio</button>
+          </div>
+
+          <div className="flex items-center justify-between text-[12px] rounded-xl bg-gray-50 border px-3 py-2" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+            <span className="text-gray-600">Efectivo <strong className="text-[#16a34a]">{fmt(efectivoNuevo)}</strong> · Digital <strong className="text-[#1E40AF]">{fmt(digitalNuevo)}</strong></span>
+            {cuadra
+              ? <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={12} /> {fmt(suma)}</span>
+              : <span className="text-red-600 font-semibold">suman {fmt(suma)} ≠ {fmt(total)}</span>}
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Motivo</label>
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={2}
+              placeholder="Ej: le dijeron efectivo pero pagó por Nequi a la cuenta de la empresa"
+              className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] resize-none"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button onClick={async () => { setSaving(true); await onSave({ medios: filas.map(f => ({ metodo: f.metodo, monto: Number(f.monto) || 0 })), motivo: motivo.trim() }); setSaving(false) }}
+              disabled={saving || invalido}
               className="flex items-center gap-1.5 px-4 py-2 bg-[#1A5CD8] hover:bg-[#1550C0] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
               {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
             </button>
