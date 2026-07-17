@@ -10,6 +10,7 @@ import {
   AlertCircle, X, Snowflake, Weight, MessageSquare, Send,
   FileText, ChevronDown, ChevronUp, History, Download, Pen,
   Plus, Trash2, Upload as UploadIcon, Receipt, Wallet, Search,
+  Calendar,
 } from 'lucide-react'
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
@@ -1543,6 +1544,11 @@ export default function TecnicoApp() {
   }, [tab])
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
+  // Filtro de fechas de las colas activas (vacío = todo; no oculta trabajo por defecto)
+  const [recDesde, setRecDesde]   = useState('')
+  const [recHasta, setRecHasta]   = useState('')
+  const [entDesde, setEntDesde]   = useState('')
+  const [entHasta, setEntHasta]   = useState('')
   const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
   const [cuadresPend, setCuadresPend] = useState(0) // cuadres BORRADOR sin firmar (badge + aviso)
   const [loading, setLoading]     = useState(false)
@@ -2171,6 +2177,11 @@ export default function TecnicoApp() {
     { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: cuadresPend,           color: '#16a34a' },
   ]
 
+  // Filtro de fechas de las colas activas (cliente). Sin fecha no se oculta nada.
+  const enRango = (f, d, h) => !f || ((!d || f >= d) && (!h || f <= h))
+  const recogidasFiltradas = recogidas.filter(s => enRango(s.fecha_ingreso, recDesde, recHasta))
+  const entregasFiltradas  = entregas.filter(e => enRango(e.fecha_programada || e.servicios?.fecha_ingreso, entDesde, entHasta))
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
 
@@ -2281,25 +2292,39 @@ export default function TecnicoApp() {
             <div className="spinner" /><span className="text-sm">Cargando…</span>
           </div>
         ) : tab === 'recogidas' ? (
-          recogidas.length === 0
-            ? <EmptyState icon="🚐" texto="Sin recogidas asignadas" sub="Cuando el coordinador te asigne una recogida, aparecerá aquí." />
-            : <RecogidaList
-                recogidas={recogidas} tecnico={tecnico}
-                neverasList={neverasActivas}
-                onIniciar={iniciarRecogida}
-                onConfirmarLlegada={confirmarLlegadaRecogida}
-                onCompletar={completarRecogida}
-                onCuartoFrio={confirmarCuartoFrio}
-                onDeclinar={declinarRecogida}
-                onReportarProblema={reportarProblemaRuta}
-              />
+          <div className="space-y-3">
+            {recogidas.length > 0 && (
+              <FiltroFechas desde={recDesde} hasta={recHasta} setDesde={setRecDesde} setHasta={setRecHasta} />
+            )}
+            {recogidasFiltradas.length === 0
+              ? <EmptyState icon="🚐"
+                  texto={recogidas.length ? 'Sin recogidas en ese rango' : 'Sin recogidas asignadas'}
+                  sub={recogidas.length ? 'Ajusta o quita el filtro de fechas para ver las demás.' : 'Cuando el coordinador te asigne una recogida, aparecerá aquí.'} />
+              : <RecogidaList
+                  recogidas={recogidasFiltradas} tecnico={tecnico}
+                  neverasList={neverasActivas}
+                  onIniciar={iniciarRecogida}
+                  onConfirmarLlegada={confirmarLlegadaRecogida}
+                  onCompletar={completarRecogida}
+                  onCuartoFrio={confirmarCuartoFrio}
+                  onDeclinar={declinarRecogida}
+                  onReportarProblema={reportarProblemaRuta}
+                />}
+          </div>
         ) : tab === 'entregas' ? (
-          entregas.length === 0
-            ? <EmptyState icon="📦" texto="Sin entregas asignadas" sub="Cuando te asignen una entrega, aparecerá aquí." />
-            : entregas.map(e => (
+          <div className="space-y-3">
+            {entregas.length > 0 && (
+              <FiltroFechas desde={entDesde} hasta={entHasta} setDesde={setEntDesde} setHasta={setEntHasta} />
+            )}
+            {entregasFiltradas.length === 0
+              ? <EmptyState icon="📦"
+                  texto={entregas.length ? 'Sin entregas en ese rango' : 'Sin entregas asignadas'}
+                  sub={entregas.length ? 'Ajusta o quita el filtro de fechas para ver las demás.' : 'Cuando te asignen una entrega, aparecerá aquí.'} />
+              : entregasFiltradas.map(e => (
                 <CardEntrega key={e.id} ent={e} tecnico={tecnico}
                   onAceptar={aceptarEntrega} onCompletar={completarEntrega} />
-              ))
+              ))}
+          </div>
         ) : tab === 'cuarto_frio' ? (
           <div className="space-y-4">
 
@@ -2735,8 +2760,14 @@ function CuadresList({ tecnico }) {
 // Igual a la planilla de papel: día a día qué recogió, a qué hora, cuánto
 // cobró y por qué medio, qué quedó sin cobrar y qué le reconoce el cuadre.
 function BitacoraTab({ tecnico }) {
-  const hoyMes = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
-  const [mes, setMes]   = useState(hoyMes)
+  const hoyMes   = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+  const iniMes   = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}-01`                                   // m: 0-based
+  const finDeMes = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`
+  // Rango del mes actual por defecto; el técnico lo mueve con ‹ › (mes a mes) o
+  // fija un rango libre con el filtro de fechas. Antes era solo un selector de
+  // mes → junio quedaba a un clic pero no se podía cruzar meses.
+  const [desde, setDesde] = useState(() => { const d = new Date(); return iniMes(d.getFullYear(), d.getMonth()) })
+  const [hasta, setHasta] = useState(() => { const d = new Date(); return finDeMes(d.getFullYear(), d.getMonth()) })
   const [dias, setDias] = useState(null)   // null = cargando; [] = sin datos
   const [error, setError] = useState('')
   const [ajusteFila, setAjusteFila] = useState(null)   // fila abierta en el modal de ajuste
@@ -2747,9 +2778,9 @@ function BitacoraTab({ tecnico }) {
     setModo(m)
     try { localStorage.setItem('orbit_bitacora_modo', m) } catch { /* privado/incógnito */ }
   }
-  const cargaRef = useRef(0)               // descarta respuestas de un mes ya abandonado
+  const cargaRef = useRef(0)               // descarta respuestas de un rango ya abandonado
 
-  useEffect(() => { cargar() }, [tecnico?.id, mes]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { cargar() }, [tecnico?.id, desde, hasta]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // PostgREST revienta con cientos de ids en la URL (414) → lotes de 80.
   async function enLotes(ids, fetchLote) {
@@ -2766,14 +2797,14 @@ function BitacoraTab({ tecnico }) {
     const miCarga = ++cargaRef.current
     setDias(null); setError('')
     try {
-      const [y, m] = mes.split('-').map(Number)
-      const desde = `${mes}-01`
-      const hasta = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+      // Piso siempre en el corte (9-jun); "Todo" (rango vacío) baja hasta ahí.
+      const dFloor = desde && desde > FECHA_CORTE ? desde : FECHA_CORTE
+      const hCeil  = hasta || hoyLocalISO()
 
-      // 1. Servicios del técnico en el mes (por servicio o por recogida suya)
+      // 1. Servicios del técnico en el rango (por servicio o por recogida suya)
       const [{ data: porServicio }, { data: porRecogida }] = await Promise.all([
-        db.from('servicios').select('id').eq('tecnico_id', tecnico.id).gte('fecha_ingreso', desde).lte('fecha_ingreso', hasta).gte('fecha_ingreso', FECHA_CORTE),
-        db.from('recogidas').select('servicio_id').eq('tecnico_id', tecnico.id).gte('fecha_programada', desde).lte('fecha_programada', hasta),
+        db.from('servicios').select('id').eq('tecnico_id', tecnico.id).gte('fecha_ingreso', dFloor).lte('fecha_ingreso', hCeil),
+        db.from('recogidas').select('servicio_id').eq('tecnico_id', tecnico.id).gte('fecha_programada', dFloor).lte('fecha_programada', hCeil),
       ])
       const ids = [...new Set([...(porServicio || []).map(s => s.id), ...(porRecogida || []).map(r => r.servicio_id)])].filter(Boolean)
       if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
@@ -2867,13 +2898,24 @@ function BitacoraTab({ tecnico }) {
   }
 
   function moverMes(delta) {
-    const [y, m] = mes.split('-').map(Number)
-    const d = new Date(y, m - 1 + delta, 1)
-    setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    const [y, m] = (desde || hoyLocalISO()).split('-').map(Number)
+    const d = new Date(y, (m - 1) + delta, 1)
+    setDesde(iniMes(d.getFullYear(), d.getMonth()))
+    setHasta(finDeMes(d.getFullYear(), d.getMonth()))
   }
 
-  const [yy, mm] = mes.split('-').map(Number)
-  const nombreMes = new Date(yy, mm - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' })
+  // Etiqueta: nombre del mes si el rango es un mes calendario completo; si no, "d → d".
+  const fCorta = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'
+  const nombreMes = (() => {
+    if (!desde && !hasta) return 'Todo el histórico'
+    if (!desde) return `Hasta ${fCorta(hasta)}`
+    if (!hasta) return `Desde ${fCorta(desde)}`
+    const [y, m] = desde.split('-').map(Number)
+    if (desde === iniMes(y, m - 1) && hasta === finDeMes(y, m - 1)) {
+      return new Date(y, m - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' })
+    }
+    return `${fCorta(desde)} → ${fCorta(hasta)}`
+  })()
   const fechaDia = d => new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: '2-digit', month: 'short' })
   const todas = (dias || []).flatMap(d => d.filas)
   // Valores efectivos "según el técnico": la sugerencia si existe, si no lo automático.
@@ -2892,13 +2934,14 @@ function BitacoraTab({ tecnico }) {
 
   return (
     <div className="space-y-3">
-      {/* Selector de mes + modo de vista */}
+      {/* Salto rápido de mes + rango libre de fechas */}
       <div className="flex items-center justify-between bg-white rounded-2xl border px-2 py-1.5" style={{ borderColor: '#E5E7EB' }}>
         <button onClick={() => moverMes(-1)} className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95" style={{ background: '#F3F4F6' }}>‹</button>
         <span className="text-[13px] font-bold text-gray-800 capitalize">{nombreMes}</span>
-        <button onClick={() => moverMes(1)} disabled={mes >= hoyMes()}
+        <button onClick={() => moverMes(1)} disabled={!desde || desde.slice(0, 7) >= hoyMes()}
           className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-500 active:scale-95 disabled:opacity-30" style={{ background: '#F3F4F6' }}>›</button>
       </div>
+      <FiltroFechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
       <div className="flex justify-end gap-1">
         {[['dias', 'Por días'], ['tabla', 'Tabla']].map(([k, l]) => (
           <button key={k} onClick={() => cambiarModo(k)}
@@ -2914,7 +2957,7 @@ function BitacoraTab({ tecnico }) {
       ) : error ? (
         <div className="text-center py-10 text-red-500 text-sm px-4">{error}</div>
       ) : !dias.length ? (
-        <EmptyState icon="📒" texto="Sin servicios este mes" sub="Aquí verás día a día lo que recoges, lo que cobras y lo que te reconoce el cuadre — como tu planilla, pero automática." />
+        <EmptyState icon="📒" texto="Sin servicios en el periodo" sub="Aquí verás día a día lo que recoges, lo que cobras y lo que te reconoce el cuadre — como tu planilla, pero automática. Cambia el rango de fechas para ver otros meses." />
       ) : (
         <>
           {/* Totales del mes */}
@@ -3254,6 +3297,61 @@ function EmptyState({ icon, texto, sub }) {
       <div style={{ fontSize: 52 }} className="mb-4">{icon}</div>
       <p className="font-semibold text-gray-700 text-base mb-1">{texto}</p>
       <p className="text-gray-400 text-xs leading-relaxed">{sub}</p>
+    </div>
+  )
+}
+
+// ─── Filtro de rango de fechas (compartido por todas las pestañas del técnico) ─
+// Controlado: el padre guarda desde/hasta (ISO 'YYYY-MM-DD'; '' = sin límite en
+// ese extremo). "Todo" limpia el rango → cada pestaña baja hasta FECHA_CORTE
+// (9-jun). Nace para que los servicios de junio dejen de quedar ocultos tras el
+// tope de "solo los más recientes".
+function FiltroFechas({ desde, hasta, setDesde, setHasta, className = '' }) {
+  const hoy = hoyLocalISO()
+  const esteMes = () => {
+    const d = new Date()
+    setDesde(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`)
+    setHasta(hoy)
+  }
+  const mesPasado = () => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1)
+    const y = d.getFullYear(), m = d.getMonth()
+    const p = `${y}-${String(m + 1).padStart(2, '0')}`
+    setDesde(`${p}-01`)
+    setHasta(`${p}-${String(new Date(y, m + 1, 0).getDate()).padStart(2, '0')}`)
+  }
+  const limpiar = () => { setDesde(''); setHasta('') }
+  const activo = !!(desde || hasta)
+  return (
+    <div className={`bg-white rounded-2xl border px-3 py-2.5 ${className}`} style={{ borderColor: activo ? '#93C5FD' : '#E5E7EB' }}>
+      <div className="flex items-center gap-2">
+        <Calendar size={16} className="text-gray-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Desde</div>
+          <input type="date" value={desde || ''} max={hasta || hoy} onChange={e => setDesde(e.target.value)}
+            className="w-full text-[12.5px] font-semibold text-gray-800 bg-transparent outline-none" />
+        </div>
+        <div className="w-px h-8 bg-gray-100 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Hasta</div>
+          <input type="date" value={hasta || ''} min={desde || undefined} max={hoy} onChange={e => setHasta(e.target.value)}
+            className="w-full text-[12.5px] font-semibold text-gray-800 bg-transparent outline-none" />
+        </div>
+        {activo && (
+          <button onClick={limpiar} title="Quitar filtro"
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-gray-400 active:scale-95 flex-shrink-0" style={{ background: '#F3F4F6' }}>
+            <X size={15} />
+          </button>
+        )}
+      </div>
+      <div className="flex gap-1.5 mt-2">
+        {[['Este mes', esteMes], ['Mes pasado', mesPasado], ['Todo', limpiar]].map(([l, fn]) => (
+          <button key={l} onClick={fn}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-gray-500 active:scale-95" style={{ background: '#F3F4F6' }}>
+            {l}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -3619,13 +3717,18 @@ function ReciboTab({ tecnico }) {
   const [svcData,     setSvcData]     = useState(null)
   const [reciboExistente, setReciboExistente] = useState(null)
   const [loading,     setLoading]     = useState(false)
+  const [desde,       setDesde]       = useState('')   // filtro de rango (vacío = desde el corte)
+  const [hasta,       setHasta]       = useState('')
   const restauradoRef                 = useRef(false)
 
   const cargarLista = useCallback(async () => {
     if (!tecnico?.id) return
     setCargando(true); setListErr('')
     try {
-      const { data: svcs, error } = await db.from('servicios')
+      // El piso siempre es el corte (9-jun); el filtro solo lo sube. El tope de
+      // 60 escondía junio ("solo desde los más recientes") → lo subimos a 500 y
+      // dejamos que el rango de fechas acote.
+      let q = db.from('servicios')
         .select(`
           id, estado, estado_pago, valor_total, valor_pagado, fecha_ingreso,
           mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
@@ -3634,9 +3737,11 @@ function ReciboTab({ tecnico }) {
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ESTADOS_RECOGIDO)
-        .gte('fecha_ingreso', FECHA_CORTE)
+        .gte('fecha_ingreso', desde && desde > FECHA_CORTE ? desde : FECHA_CORTE)
+      if (hasta) q = q.lte('fecha_ingreso', hasta)
+      const { data: svcs, error } = await q
         .order('fecha_ingreso', { ascending: false })
-        .limit(60)
+        .limit(500)
       if (error) throw error
       const ids = (svcs || []).map(s => s.id)
       const porSvc = {}
@@ -3658,7 +3763,7 @@ function ReciboTab({ tecnico }) {
     } catch (e) {
       setListErr(e.message || 'Error al cargar la lista de recibos')
     } finally { setCargando(false) }
-  }, [tecnico?.id])
+  }, [tecnico?.id, desde, hasta])
 
   useEffect(() => { cargarLista() }, [cargarLista])
 
@@ -3757,6 +3862,8 @@ function ReciboTab({ tecnico }) {
           )}
         </div>
 
+        <FiltroFechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} className="mb-3" />
+
         {listErr && (
           <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
             style={{ background: '#FEE2E2', color: '#991B1B' }}>
@@ -3767,8 +3874,9 @@ function ReciboTab({ tecnico }) {
         {cargando && items.length === 0 ? (
           <div className="flex justify-center py-10"><div className="spinner" /></div>
         ) : items.length === 0 ? (
-          <EmptyState icon="📄" texto="Sin servicios recogidos"
-            sub="Cuando completes una recogida, el servicio aparecerá aquí para generar su recibo." />
+          <EmptyState icon="📄"
+            texto={(desde || hasta) ? 'Sin servicios en ese rango' : 'Sin servicios recogidos'}
+            sub={(desde || hasta) ? 'Ajusta o quita el filtro de fechas (por ejemplo "Todo") para ver junio y meses anteriores.' : 'Cuando completes una recogida, el servicio aparecerá aquí para generar su recibo.'} />
         ) : (
           <>
             {!hayPendientes && !q && (
@@ -3963,6 +4071,8 @@ function ComprobanteTab({ tecnico, onCount }) {
   const [cargando, setCargando] = useState(true)
   const [listErr, setListErr]   = useState('')
   const [busqueda, setBusqueda] = useState('')
+  const [desde,    setDesde]    = useState('')   // filtro de rango (vacío = desde el corte)
+  const [hasta,    setHasta]    = useState('')
 
   const cargar = useCallback(async () => {
     if (!tecnico?.id) return
@@ -3973,13 +4083,15 @@ function ComprobanteTab({ tecnico, onCount }) {
       // cuando el técnico pasaba de 80 acumulados, y la pestaña decía "Al día".
       // El corte se aplica en la FUENTE (no al hidratar mascota/plan más abajo):
       // si se filtrara allí, el recibo previo al corte igual entraría a la lista
-      // pero sin mascota ni plan.
-      const { data: recs, error } = await db.from('recibos_tecnico')
+      // pero sin mascota ni plan. El rango del técnico sube el piso sobre el corte.
+      let q = db.from('recibos_tecnico')
         .select('id, servicio_id, numero_recibo, medios_pago, created_at, servicios!inner(fecha_ingreso)')
         .eq('tecnico_id', tecnico.id)
-        .gte('servicios.fecha_ingreso', FECHA_CORTE)
+        .gte('servicios.fecha_ingreso', desde && desde > FECHA_CORTE ? desde : FECHA_CORTE)
+      if (hasta) q = q.lte('servicios.fecha_ingreso', hasta)
+      const { data: recs, error } = await q
         .order('created_at', { ascending: false })
-        .limit(200)
+        .limit(500)
       if (error) throw error
       // Un item por recibo que tenga al menos un medio DIGITAL con monto > 0
       const recibos = (recs || []).filter(r =>
@@ -4023,7 +4135,7 @@ function ComprobanteTab({ tecnico, onCount }) {
     } catch (e) {
       setListErr(e.message || 'Error al cargar comprobantes')
     } finally { setCargando(false) }
-  }, [tecnico?.id, onCount])
+  }, [tecnico?.id, onCount, desde, hasta])
 
   useEffect(() => { cargar() }, [cargar])
 
@@ -4132,6 +4244,8 @@ function ComprobanteTab({ tecnico, onCount }) {
         <span className="text-base">💡</span>
         <span>Subí acá el comprobante de cada pago digital. Es una pantalla simple — no se reinicia como el recibo.</span>
       </div>
+
+      <FiltroFechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} className="mb-3" />
 
       {listErr && (
         <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3" style={{ background: '#FEE2E2', color: '#991B1B' }}>
