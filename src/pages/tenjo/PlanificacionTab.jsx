@@ -76,7 +76,10 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     setLotesList(list)
     setLoteSel(prev => {
       if (prev && list.some(l => l.id === prev)) return prev
-      const prox      = list.find(l => l.fecha_jornada === fechaJornada)
+      // Con varios lotes por jornada (migración 065), preferir el borrador de la
+      // próxima jornada; si ya cerró, el lote de esa fecha; si no, cualquier borrador.
+      const prox      = list.find(l => l.fecha_jornada === fechaJornada && ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
+                     || list.find(l => l.fecha_jornada === fechaJornada)
       const editLote  = list.find(l => ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
       return prox?.id || editLote?.id || list[0]?.id || null
     })
@@ -122,6 +125,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
 
   const editable    = lote && ['PROPUESTO', 'EN_REVISION'].includes(lote.estado)
   const gestionable = canPlan && lote && !['CERRADO', 'CANCELADO'].includes(lote.estado)
+  // ¿Ya hay un borrador (PROPUESTO/EN_REVISION) para la próxima jornada? Si no,
+  // se puede generar uno nuevo aunque el lote visible ya esté cerrado — así se
+  // arma un 2º lote para la misma jornada (migración 065).
+  const hayBorradorProxJornada = Array.isArray(lotesList)
+    && lotesList.some(l => l.fecha_jornada === fechaJornada && ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
   const activos  = items.filter(i => ITEMS_ACTIVOS.includes(i.estado))
   const fuera    = items.filter(i => !ITEMS_ACTIVOS.includes(i.estado))
 
@@ -181,8 +189,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
       const { lote: l, agregadas } = await generarPropuestaLote({
         config, candidatas, personalId: personalData?.id, generadoPor: 'MANUAL',
       })
-      await cargarLote(); onChanged?.()
-      if (l && agregadas === 0 && !lote) {
+      const eraNuevo = l && l.id !== loteSelRef.current
+      await cargarLista()
+      if (l?.id) { setLoteSel(l.id); await cargarItems(l.id) }
+      onChanged?.()
+      if (l && agregadas === 0 && (!lote || eraNuevo)) {
         await showAlert('Lote creado sin candidatas nuevas para proponer.', { title: 'Propuesta generada' })
       }
     } catch (e) {
@@ -548,9 +559,9 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             </p>
           </div>
           <div className="flex gap-2 flex-shrink-0">
-            {canPlan && editable !== false && (!lote || editable) && (
+            {canPlan && (editable || !hayBorradorProxJornada) && (
               <Button variant="secondary" disabled={saving} onClick={generar}>
-                <RefreshCw size={13} /> {lote ? 'Actualizar propuesta' : 'Generar propuesta'}
+                <RefreshCw size={13} /> {editable ? 'Actualizar propuesta' : 'Generar propuesta'}
               </Button>
             )}
             {canPlan && lote && editable && nAprobados > 0 && (

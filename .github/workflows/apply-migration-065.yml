@@ -1,0 +1,63 @@
+name: Aplicar migracion 065 multi lote por jornada Tenjo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-migration-065.yml"
+      - "migrations/065_tenjo_multi_lote_jornada.sql"
+
+jobs:
+  apply-migration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar migracion al VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "migrations/065_tenjo_multi_lote_jornada.sql"
+          target:   "/tmp/orbit-migration-065"
+          strip_components: 1
+          rm:       true
+
+      - name: Ejecutar y verificar migracion en Contabo
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/supabase/docker
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-065/065_tenjo_multi_lote_jornada.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            DECLARE v_def text;
+            BEGIN
+              SELECT indexdef INTO v_def FROM pg_indexes
+               WHERE schemaname = 'public' AND indexname = 'uq_lote_tenjo_jornada';
+
+              IF v_def IS NULL THEN
+                RAISE EXCEPTION 'No existe el indice uq_lote_tenjo_jornada';
+              END IF;
+              -- Debe cubrir los estados planificables (borrador) y NO el predicado viejo
+              IF position('EN_REVISION' in v_def) = 0 OR position('PROPUESTO' in v_def) = 0 THEN
+                RAISE EXCEPTION 'El indice no cubre los estados planificables: %', v_def;
+              END IF;
+              IF position('CANCELADO' in v_def) > 0 THEN
+                RAISE EXCEPTION 'El indice conserva el predicado viejo (<> CANCELADO): %', v_def;
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 065 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar rest; la migracion ya envio NOTIFY pgrst."

@@ -2,7 +2,7 @@
 // El cron lo dispara a diario; el job decide según config_operativa si hoy
 // es día de planificación (lun/mié/vie por defecto). Transaccional.
 import { pool, log } from '../db.js'
-import { cargarConfig, proximaJornada, numeroLote, evaluarCandidato } from '../reglas.js'
+import { cargarConfig, proximaJornada, evaluarCandidato } from '../reglas.js'
 
 export async function generarPropuesta({ force = false } = {}) {
   const client = await pool.connect()
@@ -19,18 +19,28 @@ export async function generarPropuesta({ force = false } = {}) {
 
     await client.query('BEGIN')
 
-    // Lote de la jornada (el índice único parcial evita duplicados)
+    // Lote EN PLANEACIÓN de la jornada. El índice único parcial (migración 065)
+    // solo cubre PROPUESTO/EN_REVISION, así que ON CONFLICT DO NOTHING evita un
+    // segundo borrador pero permite un lote nuevo cuando el anterior ya cerró.
+    // El numero_lote lleva sufijo -N según cuántos lotes no cancelados ya haya
+    // ese día (el 1º queda sin sufijo).
     const ins = await client.query(
       `INSERT INTO public.lotes_tenjo (numero_lote, fecha_jornada, estado, generado_por)
-       VALUES ($1, $2, 'PROPUESTO', 'SISTEMA')
-       ON CONFLICT (fecha_jornada) WHERE estado <> 'CANCELADO' DO NOTHING
+       SELECT 'TJ-' || replace($1::text, '-', '')
+                || CASE WHEN c.cnt = 0 THEN '' ELSE '-' || (c.cnt + 1)::text END,
+              $1, 'PROPUESTO', 'SISTEMA'
+         FROM (SELECT count(*)::int AS cnt FROM public.lotes_tenjo
+               WHERE fecha_jornada = $1 AND estado <> 'CANCELADO') c
+       ON CONFLICT (fecha_jornada) WHERE estado IN ('PROPUESTO', 'EN_REVISION') DO NOTHING
        RETURNING *`,
-      [numeroLote(fechaJornada), fechaJornada]
+      [fechaJornada]
     )
     let lote = ins.rows[0]
     if (!lote) {
       const { rows } = await client.query(
-        `SELECT * FROM public.lotes_tenjo WHERE fecha_jornada = $1 AND estado <> 'CANCELADO'`,
+        `SELECT * FROM public.lotes_tenjo
+          WHERE fecha_jornada = $1 AND estado IN ('PROPUESTO', 'EN_REVISION')
+          LIMIT 1`,
         [fechaJornada]
       )
       lote = rows[0]
