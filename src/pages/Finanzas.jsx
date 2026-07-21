@@ -3829,11 +3829,18 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
 
   y += 4
   if (y > H - 90) { pdf.addPage(); y = 16 }
-  // Totales
+  // Totales — la etiqueta arranca más a la izquierda y se envuelve con su propio
+  // ancho (jsPDF no lo hace solo) para que NO se monte sobre el valor.
+  const totLabelX = W - M - 120   // 167: etiqueta con más aire, alineada a la izquierda
+  const totLabelW = 88            // ancho máx del texto de la etiqueta antes del valor
+  const totValX   = W - M         // 287: valor alineado a la derecha
   const fila = (label, val, bold) => {
     pdf.setFont('helvetica', bold ? 'bold' : 'normal'); pdf.setFontSize(bold ? 10 : 9)
     pdf.setTextColor(bold ? 20 : 80, bold ? 20 : 80, bold ? 20 : 80)
-    t(label, W - M - 60, y); t(fmt(val), W - M, y, { align: 'right' }); y += bold ? 7 : 5.5
+    const lines = pdf.splitTextToSize(String(label ?? ''), totLabelW)
+    pdf.text(lines, totLabelX, y)                       // etiqueta (posible multilínea)
+    t(fmt(val), totValX, y, { align: 'right' })         // valor alineado a la 1ª línea
+    y += (bold ? 7 : 5.5) + (lines.length - 1) * (bold ? 5 : 4.5)
   }
   const totalACobrar = items.reduce((a, it) => {
     if (it.es_cancelado) return a
@@ -3855,7 +3862,8 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   }, 0)
   if (totalFalta > 0) {
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(180, 90, 0)
-    t('Falta por cobrar (conciliación)', W - M - 60, y); t(fmt(totalFalta), W - M, y, { align: 'right' }); y += 5.5
+    pdf.text(pdf.splitTextToSize('Falta por cobrar (conciliación)', totLabelW), totLabelX, y)
+    t(fmt(totalFalta), totValX, y, { align: 'right' }); y += 5.5
   }
   fila('Efectivo recibido (técnico)', c.efectivo_recibido)
   fila('Digital directo a empresa', c.digital_empresa)
@@ -3873,8 +3881,8 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   t(fmt(c.dinero_a_entregar), W - M - 2, y + 3, { align: 'right' }); y += 14
   if (Number(c.saldo_a_favor_tecnico) > 0) {
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(180, 40, 40)
-    t('Saldo a favor del técnico (empresa le debe):', W - M - 70, y)
-    t(fmt(c.saldo_a_favor_tecnico), W - M, y, { align: 'right' }); y += 8
+    pdf.text(pdf.splitTextToSize('Saldo a favor del técnico (empresa le debe):', totLabelW), totLabelX, y)
+    t(fmt(c.saldo_a_favor_tecnico), totValX, y, { align: 'right' }); y += 8
   }
 
   // Firma
