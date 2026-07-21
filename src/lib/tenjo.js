@@ -631,8 +631,14 @@ const sumarDias = (fechaStr, n) => {
   const d = new Date(fechaStr + 'T12:00:00'); d.setDate(d.getDate() + n)
   return hoyLocalISO(d)
 }
+// Suma meses; admite medios meses (p. ej. 2.5): los meses enteros con setMonth
+// y la fracción como días (medio mes ≈ 15 días).
 const sumarMeses = (fechaStr, n) => {
-  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + n)
+  const d = new Date(fechaStr + 'T12:00:00')
+  const enteros = Math.trunc(n)
+  d.setMonth(d.getMonth() + enteros)
+  const frac = n - enteros
+  if (frac) d.setDate(d.getDate() + Math.round(frac * 30))
   return hoyLocalISO(d)
 }
 
@@ -660,7 +666,7 @@ export function calcularListoProceso(item) {
   }
 
   const baseComp = soloFecha(item?.fecha_compostaje_inicio) || fechaProceso
-  const mesesComp = item?.meses_compostaje || MESES_COMPOST // 2 por defecto; el operario puede fijar 3
+  const mesesComp = Number(item?.meses_compostaje) || MESES_COMPOST // 2 por defecto; el operario puede fijar 2.5 o 3
   const fechaListo = esCompostaje
     ? sumarMeses(baseComp, mesesComp)
     : sumarDias(fechaProceso, DIAS_CENIZAS)

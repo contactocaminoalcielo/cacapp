@@ -25,10 +25,16 @@ const fmtFecha = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
   : '—'
 
-// Fin estimado del compostaje = ingreso al cubículo + N meses
+// Fin estimado del compostaje = ingreso al cubículo + N meses (2, 2.5 o 3).
+// Admite medios meses: enteros con setMonth y la fracción como días (½ mes ≈ 15 días).
 function finCompostaje(fechaStr, meses = 2) {
   if (!fechaStr) return null
-  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + (meses || 2))
+  const n = Number(meses) || 2
+  const d = new Date(fechaStr + 'T12:00:00')
+  const enteros = Math.trunc(n)
+  d.setMonth(d.getMonth() + enteros)
+  const frac = n - enteros
+  if (frac) d.setDate(d.getDate() + Math.round(frac * 30))
   return hoyLocalISO(d)
 }
 

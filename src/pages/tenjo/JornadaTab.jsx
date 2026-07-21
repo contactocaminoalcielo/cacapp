@@ -32,10 +32,16 @@ const fmtFechaLarga = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
   : '—'
 const ahoraISO = () => new Date().toISOString()
-// Fin estimado del compostaje = inicio + N meses calendario (2 o 3)
+// Fin estimado del compostaje = inicio + N meses calendario (2, 2.5 o 3).
+// Admite medios meses: enteros con setMonth y la fracción como días (½ mes ≈ 15 días).
 const finCompostaje = (fechaStr, meses = 2) => {
   if (!fechaStr) return null
-  const d = new Date(fechaStr + 'T12:00:00'); d.setMonth(d.getMonth() + meses)
+  const n = Number(meses) || 2
+  const d = new Date(fechaStr + 'T12:00:00')
+  const enteros = Math.trunc(n)
+  d.setMonth(d.getMonth() + enteros)
+  const frac = n - enteros
+  if (frac) d.setDate(d.getDate() + Math.round(frac * 30))
   return hoyLocalISO(d)
 }
 const fmtFechaCorta = f => f
@@ -246,7 +252,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
         cubiculo_liberado_en: null,
         cubiculo_liberado_por: null,
         fecha_compostaje_inicio: inicioComp,
-        meses_compostaje: cubForm.meses === 3 ? 3 : 2,
+        meses_compostaje: [2, 2.5, 3].includes(cubForm.meses) ? cubForm.meses : 2,
         decidido_por: personalData?.id || null,
       }).eq('id', item.id)
       if (error) throw error
@@ -491,7 +497,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
               onClick={async () => {
                 if (esCompostaje) {
                   // Compostaje: capturar el cubículo donde quedó la mascota
-                  setCubForm({ cubiculo_id: item.cubiculo_id || '', fecha_compostaje_inicio: today(), meses: item.meses_compostaje || 2 })
+                  setCubForm({ cubiculo_id: item.cubiculo_id || '', fecha_compostaje_inicio: today(), meses: Number(item.meses_compostaje) || 2 })
                   setModalCubiculo(item)
                   await cargarMapa()
                   return
@@ -920,8 +926,8 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1.5">Duración del compostaje</label>
-              <div className="grid grid-cols-2 gap-2">
-                {[2, 3].map(n => (
+              <div className="grid grid-cols-3 gap-2">
+                {[2, 2.5, 3].map(n => (
                   <button key={n} type="button"
                     onClick={() => setCubForm(p => ({ ...p, meses: n }))}
                     className={`p-2.5 rounded-xl border text-[13px] font-semibold transition-all ${cubForm.meses === n ? 'border-green-500 bg-green-50 text-green-800' : 'border-gray-200 text-ink3'}`}>

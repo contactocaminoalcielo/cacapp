@@ -1,0 +1,64 @@
+name: Aplicar migracion 066 compostaje 2.5 meses Tenjo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-migration-066.yml"
+      - "migrations/066_tenjo_compostaje_2_5_meses.sql"
+
+jobs:
+  apply-migration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar migracion al VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "migrations/066_tenjo_compostaje_2_5_meses.sql"
+          target:   "/tmp/orbit-migration-066"
+          strip_components: 1
+          rm:       true
+
+      - name: Ejecutar y verificar migracion en Contabo
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/supabase/docker
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 -f - < /tmp/orbit-migration-066/066_tenjo_compostaje_2_5_meses.sql
+
+            docker compose exec -T db psql -U postgres -d postgres --pset pager=off -v ON_ERROR_STOP=1 <<'SQL'
+            DO $$
+            DECLARE v_def text; v_tipo text;
+            BEGIN
+              SELECT pg_get_constraintdef(con.oid) INTO v_def
+              FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid
+              WHERE c.relname = 'lotes_tenjo_items'
+                AND con.conname = 'lotes_tenjo_items_meses_compostaje_check';
+
+              IF v_def IS NULL OR position('2.5' in v_def) = 0 THEN
+                RAISE EXCEPTION 'El CHECK no admite 2.5: %', v_def;
+              END IF;
+
+              SELECT data_type INTO v_tipo FROM information_schema.columns
+              WHERE table_name = 'lotes_tenjo_items' AND column_name = 'meses_compostaje';
+              IF v_tipo <> 'numeric' THEN
+                RAISE EXCEPTION 'La columna meses_compostaje no es numeric (es %)', v_tipo;
+              END IF;
+            END $$;
+
+            NOTIFY pgrst, 'reload schema';
+            SELECT 'OK: migracion 066 aplicada y verificada' AS status;
+            SQL
+
+            docker compose restart rest || echo "Aviso: no se pudo reiniciar rest; la migracion ya envio NOTIFY pgrst."
