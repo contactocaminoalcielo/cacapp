@@ -30,6 +30,8 @@ const TIPO_ICON = {
   TECNICO_DECLINA:       '❌',
   REASIGNACION_TECNICO:  '🔄',
   REASIGNACION_REMOVIDO: '📋',
+  CENIZAS_LISTAS:        '⚱️',
+  COMPOSTAJE_LISTO:      '🌿',
 }
 
 export default function Topbar({ actions }) {

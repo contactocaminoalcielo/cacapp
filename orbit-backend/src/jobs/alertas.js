@@ -105,7 +105,84 @@ export async function motorAlertas() {
       [vigentes]
     )
 
-    const resultado = { evaluadas: candidatas.length, alertas_vigentes: deseadas.length, creadas, auto_resueltas: resueltas }
+    // ── Cenizas / compostaje listos → notificar UNA sola vez ──
+    // Se avisa por `notificaciones` (la campana del Topbar; alertas_operativas no
+    // tiene UI) a COORDINADOR/ADMIN/OPERARIO cuando el plazo se cumple y el
+    // servicio sigue EN_PROCESO (aún sin avanzar a Producción). Reglas de plazo
+    // espejo de lib/tenjo.js: cremación = fin + 5 días; compostaje = inicio +
+    // meses_compostaje meses (½ mes ≈ 15 días, que es como Postgres expande
+    // `2.5 * interval '1 month'`). Dedup: no repite si ya hay una notificación
+    // de ese tipo para ese servicio → se informa una vez, no a diario.
+    const CORTE = '2026-06-09' // FECHA_CORTE (lib/constants.js): no avisar de datos ocultos
+    const listos = []
+
+    const { rows: cenizas } = await client.query(
+      `SELECT li.servicio_id, m.nombre AS mascota,
+              (li.fecha_fin_proceso::date + 5) AS fecha_listo
+       FROM public.lotes_tenjo_items li
+       JOIN public.servicios s ON s.id = li.servicio_id
+       JOIN public.planes pl ON pl.id = s.plan_id
+       LEFT JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+       WHERE li.estado = 'PROCESADO'
+         AND pl.tipo_proceso = 'CREMACION_INDIVIDUAL'
+         AND li.fecha_fin_proceso IS NOT NULL
+         AND s.estado = 'EN_PROCESO'
+         AND s.fecha_ingreso >= $1
+         AND (li.fecha_fin_proceso::date + 5) <= (now() AT TIME ZONE 'America/Bogota')::date`,
+      [CORTE]
+    )
+    for (const r of cenizas) {
+      listos.push({
+        tipo: 'CENIZAS_LISTAS', servicio_id: r.servicio_id,
+        titulo: 'Cenizas listas',
+        mensaje: `${r.mascota || 'Una mascota'}: las cenizas ya están listas (5 días desde la cremación, ${r.fecha_listo}). Se pueden preparar y avanzar a Producción.`,
+        datos: { servicio_id: r.servicio_id, mascota: r.mascota, fecha_listo: r.fecha_listo, proceso: 'CREMACION_INDIVIDUAL' },
+      })
+    }
+
+    const { rows: compost } = await client.query(
+      `SELECT li.servicio_id, m.nombre AS mascota, li.meses_compostaje,
+              (li.fecha_compostaje_inicio + li.meses_compostaje * interval '1 month')::date AS fecha_listo
+       FROM public.lotes_tenjo_items li
+       JOIN public.servicios s ON s.id = li.servicio_id
+       JOIN public.planes pl ON pl.id = s.plan_id
+       LEFT JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+       WHERE li.estado = 'PROCESADO'
+         AND pl.tipo_proceso = 'COMPOSTAJE_INDIVIDUAL'
+         AND li.fecha_compostaje_inicio IS NOT NULL
+         AND s.estado = 'EN_PROCESO'
+         AND s.fecha_ingreso >= $1
+         AND (li.fecha_compostaje_inicio + li.meses_compostaje * interval '1 month')::date <= (now() AT TIME ZONE 'America/Bogota')::date`,
+      [CORTE]
+    )
+    for (const r of compost) {
+      const meses = Number(r.meses_compostaje) || 2
+      listos.push({
+        tipo: 'COMPOSTAJE_LISTO', servicio_id: r.servicio_id,
+        titulo: 'Compostaje listo',
+        mensaje: `${r.mascota || 'Una mascota'}: el compostaje cumplió su tiempo (${meses} ${meses === 1 ? 'mes' : 'meses'}, ${r.fecha_listo}). Revisar el cubículo y avanzar a Producción.`,
+        datos: { servicio_id: r.servicio_id, mascota: r.mascota, fecha_listo: r.fecha_listo, meses, proceso: 'COMPOSTAJE_INDIVIDUAL' },
+      })
+    }
+
+    let notificados = 0
+    for (const a of listos) {
+      const r = await client.query(
+        `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, servicio_id, datos)
+         SELECT p.id, $1, $2, $3, $4, $5::jsonb
+         FROM public.personal p
+         JOIN public.roles_personal r ON r.id = p.rol_principal_id
+         WHERE r.nombre IN ('COORDINADOR','ADMIN','OPERARIO') AND p.activo
+           AND NOT EXISTS (
+             SELECT 1 FROM public.notificaciones n
+             WHERE n.para_personal_id = p.id AND n.tipo = $1 AND n.servicio_id = $4
+           )`,
+        [a.tipo, a.titulo, a.mensaje, a.servicio_id, JSON.stringify(a.datos)]
+      )
+      notificados += r.rowCount
+    }
+
+    const resultado = { evaluadas: candidatas.length, alertas_vigentes: deseadas.length, creadas, auto_resueltas: resueltas, listos: listos.length, notificados }
     log('[alertas]', JSON.stringify(resultado))
     return resultado
   } finally {
