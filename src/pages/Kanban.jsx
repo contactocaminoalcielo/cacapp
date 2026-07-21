@@ -1189,6 +1189,36 @@ export default function Kanban() {
     return calcularPrecioPara(planId, mascotaParaPlan?.peso_kg || 0, mascotaParaPlan?.especie_id || 0)
   }
 
+  // Comisión del aliado para un plan y su precio base (valor del plan), según la
+  // tarifa vigente de config_comisiones (VIP + volumen del mes). Misma lógica que
+  // el botón "recalcular por peso" y aplicarRecalculoPorPeso. Devuelve $ o null.
+  async function comisionParaPlan(aliadoId, planId, precioBase) {
+    if (!aliadoId || !planId || !(precioBase > 0)) return null
+    const hoy = new Date()
+    const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
+    // aliado va primero y separado: usarlo dentro del mismo destructuring del
+    // Promise.all lanza ReferenceError (TDZ).
+    const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', aliadoId).maybeSingle()
+    const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
+      db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', aliadoId).gte('fecha_ingreso', inicioMes),
+      db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
+    ])
+    const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+    const match = (filas || [])
+      .filter(c =>
+        (c.plan_id === planId || c.plan_id === null) &&
+        c.rango_min <= serviciosMes &&
+        (c.rango_max === null || c.rango_max >= serviciosMes)
+      )
+      .sort((a, b) => {
+        if (a.plan_id && !b.plan_id) return -1
+        if (!a.plan_id && b.plan_id) return 1
+        return b.rango_min - a.rango_min
+      })[0]
+    const pct = parseFloat(match?.porcentaje) || 0
+    return pct > 0 ? Math.round(precioBase * pct / 100) : null
+  }
+
   async function cambiarPlan() {
     if (!editPlanId || editPlanId === detalle?.plan_id || !selected) return
     const planAnterior = planPorId(detalle?.plan_id)?.nombre || 'plan anterior'
@@ -1199,7 +1229,7 @@ export default function Kanban() {
     const msg = [
       fuera ? `⚠️ Este servicio está fuera del plazo de cambio de plan (${parseDate(detalle.fecha_limite_cambio_plan)?.toLocaleDateString('es-CO')}).` : null,
       `Plan: "${planAnterior}" → "${planNuevo}"`,
-      precioFinal ? `Nuevo valor total: ${fmt(precioFinal)}` : null,
+      precioFinal ? `Nuevo valor del plan: ${fmt(precioFinal)} (la comisión del aliado se recalcula con el plan nuevo)` : null,
       'Se actualizarán los ítems de producción del servicio.',
     ].filter(Boolean).join('\n\n')
 
@@ -1207,7 +1237,25 @@ export default function Kanban() {
     setCambiandoPlan(true)
     try {
       const updates = { plan_id: editPlanId }
-      if (precioFinal) updates.valor_total = precioFinal
+      if (precioFinal) {
+        // Recalcular la comisión del aliado con el plan NUEVO (antes quedaba
+        // pegada la del plan viejo). El plan es la BASE comisionable.
+        const { data: sv } = await db.from('servicios')
+          .select('comision_descontada, comision_aliado, aliado_origen_id')
+          .eq('id', selected.servicio_id).maybeSingle()
+        const descontada = sv?.comision_descontada === true
+        let comisionNueva = null
+        if (sv?.aliado_origen_id && (sv?.comision_aliado ?? 0) > 0)
+          comisionNueva = await comisionParaPlan(sv.aliado_origen_id, editPlanId, precioFinal)
+        const comisionVigente = comisionNueva != null ? comisionNueva : (sv?.comision_aliado ?? 0)
+
+        // valor_total = precio del plan nuevo; NETO (precio − comisión) si la
+        // comisión se descuenta en el recibo (clínica aliada), BRUTO si no
+        // (domicilio: la comisión se cuadra aparte). Así el recibo reconstruye
+        // el bruto = valor_total + comision_aliado sin inflarse.
+        updates.valor_total = Math.round(precioFinal - (descontada ? comisionVigente : 0))
+        if (comisionNueva != null) updates.comision_aliado = comisionNueva
+      }
 
       const { error: svErr } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
       if (svErr) throw svErr
@@ -1268,14 +1316,20 @@ export default function Kanban() {
       setRecordatorios(recsNuevos || [])
       if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
 
-      // Update local state
+      // Update local state — reflejar el valor_total y la comisión ya calculados
+      // (updates.*), no `precioFinal` a secas, para no desincronizar con la DB.
       const upd = {
         plan: planNuevo,
-        ...(precioFinal ? { valor_total: precioFinal, saldo_pendiente: precioFinal - (selected.valor_pagado || 0) } : {}),
+        ...(precioFinal ? {
+          valor_total:     updates.valor_total,
+          saldo_pendiente: (updates.valor_total ?? 0) - (selected.valor_pagado || 0),
+          ...(updates.comision_aliado != null ? { comision_aliado: updates.comision_aliado } : {}),
+        } : {}),
       }
       setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
       setSelected(prev => ({ ...prev, ...upd }))
-      setDetalle(prev => ({ ...prev, plan_id: editPlanId }))
+      setDetalle(prev => ({ ...prev, plan_id: editPlanId,
+        ...(updates.comision_aliado != null ? { comision_aliado: updates.comision_aliado } : {}) }))
       setNuevoPrecio('')
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al cambiar plan' })
