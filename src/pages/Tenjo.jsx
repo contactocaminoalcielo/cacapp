@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
@@ -12,6 +12,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { EstadoBadge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
+import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/lib/tenjo'
@@ -192,6 +193,7 @@ export default function Tenjo() {
   const [procesados,        setProcesados]        = useState([])
   const [personal,          setPersonal]          = useState([])
   const [loading,           setLoading]           = useState(true)
+  const primeraCarga                              = useRef(true)
   const [error,             setError]             = useState(null)
   const [modalNuevo,        setModalNuevo]        = useState(false)
   const [mascotaParaTraslado, setMascotaParaTraslado] = useState(null)
@@ -218,18 +220,23 @@ export default function Tenjo() {
 
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('tenjo-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'traslados_tenjo' }, () => { cargar() })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cuarto_frio' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'traslados_tenjo' }, refrescar)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, refrescar)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cuarto_frio' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
 
+  // El spinner de pantalla completa solo se pinta en la PRIMERA carga: las
+  // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
+  // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
+  // la pagina entera y con ella cualquier modal abierto.
   async function cargar() {
     try {
-      setLoading(true)
+      if (primeraCarga.current) setLoading(true)
       const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: per }, { data: procComp }] = await Promise.all([
         db.from('traslados_tenjo')
           .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
@@ -309,8 +316,13 @@ export default function Tenjo() {
         sincronizarAlertasTenjo(cand || [], cfg).catch(() => {})
       }
     } catch (e) {
-      setError(e.message)
+      // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
+      // `if (error) return` borraria la pagina y el modal abierto): solo la
+      // primera carga, que no tiene nada que mostrar, muestra el error.
+      if (primeraCarga.current) setError(e.message)
+      else console.error('Refresco en segundo plano falló:', e)
     } finally {
+      primeraCarga.current = false
       setLoading(false)
     }
   }

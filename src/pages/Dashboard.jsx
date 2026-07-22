@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
@@ -6,6 +6,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, parseDate } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -43,20 +44,26 @@ export default function Dashboard() {
   const [alertas,   setAlertas]   = useState([])
   const [npsPromedio, setNpsPromedio] = useState(null)
   const [loading,   setLoading]   = useState(true)
+  const primeraCarga              = useRef(true)
   const [error,     setError]     = useState(null)
 
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('dashboard-servicios-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [esProductor])
 
+  // El spinner de pantalla completa solo se pinta en la PRIMERA carga: las
+  // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
+  // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
+  // la pagina entera y con ella cualquier modal abierto.
   async function cargar() {
     try {
-      setLoading(true)
+      if (primeraCarga.current) setLoading(true)
       const hoy = new Date()
       const primerMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
 
@@ -82,8 +89,13 @@ export default function Dashboard() {
         setNpsPromedio((nps.reduce((a, n) => a + n.nps, 0) / nps.length).toFixed(1))
       }
     } catch (e) {
-      setError(e.message)
+      // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
+      // `if (error) return` borraria la pagina y el modal abierto): solo la
+      // primera carga, que no tiene nada que mostrar, muestra el error.
+      if (primeraCarga.current) setError(e.message)
+      else console.error('Refresco en segundo plano falló:', e)
     } finally {
+      primeraCarga.current = false
       setLoading(false)
     }
   }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db } from '@/lib/supabase'
+import { agruparRefresco } from '@/lib/realtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
@@ -383,18 +384,23 @@ function TabClientes({ isAdmin }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','apellido','cedula_nit','whatsapp','email'])
 
+  const primeraCarga = useRef(true)
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('gestion-clientes-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'clientes' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clientes' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
+  // Solo la primera carga muestra "Cargando...": las recargas por realtime pasan
+  // en segundo plano para no vaciar la tabla bajo los pies del usuario.
   async function cargar() {
-    setLoading(true)
+    if (primeraCarga.current) setLoading(true)
     const { data: d } = await db.from('clientes').select('*').order('nombre')
     setData(d || [])
+    primeraCarga.current = false
     setLoading(false)
   }
   function abrir(item) {
@@ -509,22 +515,25 @@ function TabMascotas({ isAdmin, canEdit }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','raza'])
 
+  const primeraCarga = useRef(true)
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('gestion-mascotas-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'mascotas' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mascotas' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
   async function cargar() {
-    setLoading(true)
+    if (primeraCarga.current) setLoading(true)
     const [{ data: d }, { data: esp }] = await Promise.all([
       db.from('mascotas').select('*, especies(nombre), clientes(nombre,apellido)').order('nombre'),
       db.from('especies').select('*').order('nombre'),
     ])
     setData(d || [])
     setEspecies(esp || [])
+    primeraCarga.current = false
     setLoading(false)
   }
   function abrir(item) {
@@ -669,18 +678,21 @@ function TabAliados({ isAdmin, canEdit }) {
   const [modalImport, setModalImport] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','contacto_nombre','ciudad'])
 
+  const primeraCarga = useRef(true)
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('gestion-aliados-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'aliados' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'aliados' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
   async function cargar() {
-    setLoading(true)
+    if (primeraCarga.current) setLoading(true)
     const { data: d } = await db.from('aliados').select('*').order('nombre')
     setData(d || [])
+    primeraCarga.current = false
     setLoading(false)
   }
   function abrir(item) {
@@ -847,22 +859,25 @@ function TabPersonal({ isAdmin }) {
   const [saving, setSaving] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','apellido','cedula'])
 
+  const primeraCarga = useRef(true)
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('gestion-personal-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'personal' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personal' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
   async function cargar() {
-    setLoading(true)
+    if (primeraCarga.current) setLoading(true)
     const [{ data: d }, { data: r }] = await Promise.all([
       db.from('personal').select('*, roles_personal(nombre)').order('nombre'),
       db.from('roles_personal').select('*').order('nombre'),
     ])
     setData(d || [])
     setRoles(r || [])
+    primeraCarga.current = false
     setLoading(false)
   }
   function abrir(item) {

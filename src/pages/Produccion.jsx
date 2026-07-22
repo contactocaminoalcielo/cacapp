@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db } from '@/lib/supabase'
+import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
 import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
@@ -875,6 +876,7 @@ export default function Produccion() {
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])
   const [loading,       setLoading]       = useState(true)
+  const primeraCarga                      = useRef(true)
   const [error,         setError]         = useState(null)
   const [vista,         setVista]         = useState('servicio')
   const [filtroEstado,  setFiltroEstado]  = useState('pendientes')
@@ -887,15 +889,16 @@ export default function Produccion() {
 
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => {
+      cargar()
+      if (esAdmin) cargarLog()
+    })
     const canal = db
       .channel('produccion-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, () => {
-        cargar()
-        if (esAdmin) cargarLog()
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, refrescar)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [esAdmin])
 
   // Cargar la bitácora al abrir la pestaña (solo admin/coordinador)
@@ -915,9 +918,13 @@ export default function Produccion() {
     setLogLoading(false)
   }
 
+  // El spinner de pantalla completa solo se pinta en la PRIMERA carga: las
+  // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
+  // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
+  // la pagina entera y con ella cualquier modal abierto.
   async function cargar() {
     try {
-      setLoading(true)
+      if (primeraCarga.current) setLoading(true)
       const [{ data: recs }, { data: per }, { data: maq }] = await Promise.all([
         db.from('servicio_recordatorios')
           .select(`
@@ -951,8 +958,13 @@ export default function Produccion() {
       // Sincronizar servicios cuyo estado no refleja el estado real de sus ítems
       await autoCorregirEstados(recs || [])
     } catch (e) {
-      setError(e.message)
+      // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
+      // `if (error) return` borraria la pagina y el modal abierto): solo la
+      // primera carga, que no tiene nada que mostrar, muestra el error.
+      if (primeraCarga.current) setError(e.message)
+      else console.error('Refresco en segundo plano falló:', e)
     } finally {
+      primeraCarga.current = false
       setLoading(false)
     }
   }

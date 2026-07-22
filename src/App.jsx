@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig, esRolValido } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
+import AvisoNuevaVersion from '@/components/AvisoNuevaVersion'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
 const TecnicoApp       = lazy(() => import('@/pages/TecnicoApp'))
@@ -207,6 +208,7 @@ export default function App() {
       <ConfirmProvider>
         <AuthProvider>
           <InnerApp />
+          <AvisoNuevaVersion />
         </AuthProvider>
       </ConfirmProvider>
     </HashRouter>

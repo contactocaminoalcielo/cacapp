@@ -19,7 +19,12 @@ export default defineConfig({
     tailwindcss(),
     basicSsl(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (no 'autoUpdate'): la versión nueva NO entra sola. Con autoUpdate
+      // cada despliegue recargaba la pestaña de todos los usuarios a la vez y se
+      // perdía lo que estuvieran registrando. Ahora avisa y el usuario decide
+      // (componente AvisoNuevaVersion).
+      registerType: 'prompt',
+      injectRegister: null,   // el registro lo hace useRegisterSW en AvisoNuevaVersion
       includeAssets: ['favicon.svg', 'icon.svg', 'icon-192.png', 'icon-512.png'],
       manifest: {
         name: 'Camino al Cielo',
@@ -41,8 +46,9 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         cleanupOutdatedCaches: true,
-        // Toma control inmediato de todas las pestañas al activarse
-        skipWaiting: true,
+        // skipWaiting NO: el SW nuevo espera en cola hasta que el usuario acepta
+        // actualizar. clientsClaim sí, para que al aceptar tome el control.
+        skipWaiting: false,
         clientsClaim: true,
         runtimeCaching: [
           {

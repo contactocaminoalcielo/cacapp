@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/dialog'
@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
+import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
@@ -483,21 +484,27 @@ export default function CuartoFrio() {
   const [saving,      setSaving]      = useState(false)
   const [detalle,     setDetalle]     = useState(null)
   const [movimientos, setMovimientos] = useState([])
+  const primeraCarga                  = useRef(true)
   const [busqueda,    setBusqueda]    = useState('')
 
   useEffect(() => {
     cargar()
+    const refrescar = agruparRefresco(() => cargar())
     const canal = db
       .channel('cuartofrio-registros-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cuarto_frio' }, () => { cargar() })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, () => { cargar() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cuarto_frio' }, refrescar)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, refrescar)
       .subscribe()
-    return () => { db.removeChannel(canal) }
+    return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [])
 
+  // El spinner de pantalla completa solo se pinta en la PRIMERA carga: las
+  // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
+  // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
+  // la pagina entera y con ella cualquier modal abierto.
   async function cargar() {
     try {
-      setLoading(true)
+      if (primeraCarga.current) setLoading(true)
       const [{ data, error: err }, { data: rep }] = await Promise.all([
         db.from('cuarto_frio')
           .select(`*, registrador:registrado_por(nombre,apellido), servicios!inner(
@@ -518,8 +525,13 @@ export default function CuartoFrio() {
       setRegistros(data || [])
       setReportes(rep || [])
     } catch (e) {
-      setError(e.message)
+      // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
+      // `if (error) return` borraria la pagina y el modal abierto): solo la
+      // primera carga, que no tiene nada que mostrar, muestra el error.
+      if (primeraCarga.current) setError(e.message)
+      else console.error('Refresco en segundo plano falló:', e)
     } finally {
+      primeraCarga.current = false
       setLoading(false)
     }
   }

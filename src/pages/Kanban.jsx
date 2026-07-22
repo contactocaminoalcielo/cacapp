@@ -14,6 +14,7 @@ import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificac
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
+import { agruparRefresco } from '@/lib/realtime'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
@@ -394,6 +395,7 @@ export default function Kanban() {
   // ── Data ──────────────────────────────────────────────────────────────────
   const [servicios, setServicios]         = useState([])
   const [loading, setLoading]             = useState(true)
+  const primeraCarga                      = useRef(true)
   const [error, setError]                 = useState(null)
 
   // ── UI ────────────────────────────────────────────────────────────────────
@@ -876,17 +878,18 @@ export default function Kanban() {
       // Eutanasia se gestiona en su propio módulo (/eutanasias), NO como adicional
       .then(({ data }) => setRecListOpts((data || []).filter(r => !/eutanas/i.test(r.nombre || ''))))
 
+    const refrescar    = agruparRefresco(() => cargar())
+    const refrescarSol = agruparRefresco(() => cargarSolicitudes())
     const canal = db
       .channel('kanban-servicios-cambios')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, () => {
-        cargar()
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'solicitudes_servicio' }, () => {
-        cargarSolicitudes()
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, refrescar)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'solicitudes_servicio' }, refrescarSol)
       .subscribe()
 
-    return () => { db.removeChannel(canal) }
+    return () => {
+      refrescar.cancelar(); refrescarSol.cancelar()
+      db.removeChannel(canal)
+    }
   }, [])
 
   // Refresca el reloj cada 30 s: así la tarjeta pasa sola a amarillo/rojo
@@ -933,8 +936,14 @@ export default function Kanban() {
     await marcarLeida(id)
   }
 
+  // El spinner de pantalla completa solo se muestra en la PRIMERA carga: las
+  // recargas posteriores (realtime de otro usuario, o después de guardar) pasan
+  // en segundo plano. Si volviera a `loading`, el `if (loading) return` de abajo
+  // desmontaría el tablero entero — y con él cualquier modal abierto, perdiendo
+  // lo que el usuario llevara escrito.
   async function cargar() {
-    setLoading(true); setError(null)
+    if (primeraCarga.current) setLoading(true)
+    setError(null)
     try {
       const { data, error: err } = await db
         .from('v_kanban').select('*')
@@ -1046,8 +1055,14 @@ export default function Kanban() {
 
       setServicios(rows)
       await autoCorregirDesdeKanban(rows)
-    } catch (e) { setError(e.message) }
-    finally { setLoading(false) }
+    } catch (e) {
+      // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
+      // `if (error) return` borraria la pagina y el modal abierto): solo la
+      // primera carga, que no tiene nada que mostrar, muestra el error.
+      if (primeraCarga.current) setError(e.message)
+      else console.error('Refresco en segundo plano falló:', e)
+    }
+    finally { primeraCarga.current = false; setLoading(false) }
   }
 
   async function autoCorregirDesdeKanban(svcs) {
