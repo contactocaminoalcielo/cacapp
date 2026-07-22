@@ -13,6 +13,7 @@ import { Alert } from '@/components/ui/alert'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
+import { planComisiona } from '@/lib/precios'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
   User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse
@@ -591,6 +592,10 @@ export default function Registro() {
   // ── comisión: plan + volumen mensual del aliado ──
   useEffect(() => {
     if (!aliadoSeleccionado || !planSeleccionado) { setComisionPorcentaje(0); return }
+    // ── Planes que no comisionan (DESAMPARADO): 0 % siempre ────────────────
+    // Va ANTES del bloque VIP: la tasa fija de CREMACION_GRUPAL (32 %) le
+    // aplicaba al desamparado y el total salía con un descuento inexistente.
+    if (!planComisiona(planSeleccionado?.codigo)) { setComisionPorcentaje(0); return }
     async function calcularComision() {
       // ── VIP: comisión máxima fija, sin pisos de volumen ──────────────────
       if (aliadoSeleccionado?.vip) {

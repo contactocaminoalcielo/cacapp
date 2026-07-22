@@ -12,6 +12,7 @@ import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
+import { planComisiona } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
@@ -468,6 +469,10 @@ export default function Kanban() {
 
   async function calcularComisionPct(aliadoId, esVip, planId, tipoProceso) {
     if (!aliadoId || !planId) return 0
+    // DESAMPARADO no comisiona (ni VIP ni por volumen): la tasa fija VIP de
+    // CREMACION_GRUPAL le entraba con 32 % y descontaba de un servicio social.
+    const codigoPlan = planesKanban.find(p => String(p.id) === String(planId))?.codigo
+    if (!planComisiona(codigoPlan)) return 0
     if (esVip) {
       if (tipoProceso === 'COMPOSTAJE_GRUPAL')    return 10
       if (['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(tipoProceso)) return 27
@@ -1209,6 +1214,10 @@ export default function Kanban() {
   // el botón "recalcular por peso" y aplicarRecalculoPorPeso. Devuelve $ o null.
   async function comisionParaPlan(aliadoId, planId, precioBase) {
     if (!aliadoId || !planId || !(precioBase > 0)) return null
+    // Cambiar el plan A desamparado deja la comisión en 0 (el plan es la base
+    // comisionable; si no se limpia, el cuadre la sigue sumando).
+    const codigoPlanNuevo = planesKanban.find(p => String(p.id) === String(planId))?.codigo
+    if (!planComisiona(codigoPlanNuevo)) return 0
     const hoy = new Date()
     const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
     // aliado va primero y separado: usarlo dentro del mismo destructuring del
@@ -3109,7 +3118,11 @@ export default function Kanban() {
 
                         // Recalcular comisión si hay aliado con comisión registrada
                         let nuevaComision = null
-                        if (detalle?.aliado_origen_id && (detalle?.comision_aliado ?? 0) > 0) {
+                        const codigoPlanDet = planPorId(detalle.plan_id)?.codigo
+                        if (!planComisiona(codigoPlanDet)) {
+                          // Desamparado: sin comisión. Si traía una, se limpia.
+                          if ((detalle?.comision_aliado ?? 0) > 0) nuevaComision = 0
+                        } else if (detalle?.aliado_origen_id && (detalle?.comision_aliado ?? 0) > 0) {
                           const hoy = new Date()
                           const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
                           // aliado va primero y separado: usarlo dentro del mismo

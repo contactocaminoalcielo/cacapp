@@ -15,7 +15,7 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
-import { aplicarRecalculoPorPeso } from '@/lib/precios'
+import { aplicarRecalculoPorPeso, planComisiona } from '@/lib/precios'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 
 const POLL = 30_000
@@ -4533,8 +4533,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           // Reconstruir el valor del plan (base comisionable) desde la comisión guardada
           if (pct > 0) setValorPlanBase(Math.round(comisionGuardada * 100 / pct))
         })
-    } else if (aliado?.vip) {
+    } else if (aliado?.vip && planComisiona(plan?.codigo)) {
       // FACTURACION_MENSUAL + VIP: tasas fijas por tipo de proceso (igual que Registro.jsx)
+      // DESAMPARADO queda fuera: no comisiona, no hay nada que "corregir a 32 %".
       const tipo = plan?.tipo_proceso || ''
       let pct = 32 // CREMACION_GRUPAL
       if (tipo === 'COMPOSTAJE_GRUPAL') pct = 10

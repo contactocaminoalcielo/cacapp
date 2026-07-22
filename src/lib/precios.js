@@ -1,6 +1,23 @@
 import { db } from '@/lib/supabase'
 
 /**
+ * Planes que NUNCA generan comisión de aliado.
+ *
+ * DESAMPARADO es un caso social: la mascota no tiene quién pague, la clínica
+ * no vende nada y por lo tanto no comisiona. Ya se excluía del CONTEO mensual
+ * (no sube al aliado de tramo de volumen), pero eso no impedía cobrarle
+ * comisión: si el aliado es VIP la tasa fija de CREMACION_GRUPAL (32 %) o una
+ * regla genérica de config_comisiones con plan_id NULL entraban igual y el
+ * total del servicio salía con un descuento del 32 % que no existe.
+ */
+export const PLANES_SIN_COMISION = ['DESAMPARADO']
+
+/** ¿Este plan (por código) comisiona al aliado? */
+export function planComisiona(codigoPlan) {
+  return !PLANES_SIN_COMISION.includes(codigoPlan)
+}
+
+/**
  * Calcula el precio de un plan según peso y especie.
  * @param {Array}  planes       - [{id, codigo}] cargados de la tabla `planes`
  * @param {string} planId
@@ -107,7 +124,12 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
 
     // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
     let nuevaComision = null
-    if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
+    const codigoPlanSvc = planesData.find(p => String(p.id) === String(svc.plan_id))?.codigo
+    if (!planComisiona(codigoPlanSvc)) {
+      // Desamparado: sin comisión. Si venía con una registrada, se limpia aquí
+      // (si no, el cuadre la volvería a sumar sobre el valor recalculado).
+      if ((svc.comision_aliado ?? 0) > 0) nuevaComision = 0
+    } else if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
       const hoy = new Date()
       const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
       // El fetch del aliado va PRIMERO y separado: la consulta de config_comisiones
