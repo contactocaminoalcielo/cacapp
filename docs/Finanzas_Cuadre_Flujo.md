@@ -197,6 +197,23 @@ cancelado ajustado a mano volvía a la tarifa fija).
 > quedan en `false`: si el viaje perdido fue dominical o nocturno se reconoce con
 > el lápiz de recargo. Tampoco tienen banda de diferencia ni cobro al cliente.
 
+### E-ter. Facturación mensual: el técnico recoge CERO (migración 068)
+Si el aliado del servicio es `FACTURACION_MENSUAL`, la fila entra al cuadre con
+**recogido / efectivo / digital en 0**: esa plata la paga el aliado con la factura
+del mes, no pasa por el técnico. Aplica a los dos tipos de recibo (cliente y
+veterinaria) y se decide por `aliados.modalidad_comision`, no por lo que mande la
+app del técnico.
+
+> Origen: el medio de pago del recibo arranca **prellenado** con el valor del
+> servicio. En una vet de facturación mensual la pantalla oculta los medios pero
+> el valor seguía viajando al guardar → 24 recibos con ~$5,6M de EFECTIVO que
+> nadie recogió, inflando el dinero a entregar. `guardar_recibo_tecnico` ahora lo
+> anula server-side y el backfill de la migración 069 limpió los históricos.
+
+Si el cliente **sí** le pagó al técnico en un servicio de facturación mensual, se
+corrige en el cuadre con el lápiz de **Recogido**: el cero es solo la base y la
+edición manual se aplica después (y se conserva al regenerar).
+
 ### F. Dinero a entregar a gerencia
 ```
 dinero a entregar = efectivo recibido − reconocido al técnico − ajuste manual
