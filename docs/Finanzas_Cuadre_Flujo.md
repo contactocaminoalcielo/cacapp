@@ -172,6 +172,31 @@ El cuadre **siempre se puede cerrar**. Al cerrar solo hay un **aviso** (con bot�
 > y *Verificado OK* (ya se saldó) son decisiones conscientes del coordinador.
 > Solo avisa el faltante **sin revisar**: ahí el técnico se estaría quedando con la plata sin que nadie lo decidiera.
 
+### E-bis. Servicios cancelados: gestión del pago al técnico (migración 067)
+Un cancelado entra al cuadre solo si el técnico **ya había salido**
+(`etapa_cancelacion <> 'INGRESADO'`): es un viaje perdido y se le reconoce.
+El valor de arranque es la **tarifa fija** `tarifas_reconocimiento_tecnico.pago_cancelado`
+(igual para 10 cuadras que para Chía), así que la fila es **editable**:
+
+| Se puede | Cómo | RPC |
+|---|---|---|
+| Ajustar el pago del viaje | lápiz en **Pago téc.** (cancelado o no) | `set_cuadre_item_pago_servicio` |
+| Recargo manual | lápiz en **Recargo** | `set_cuadre_item_recargo_manual` |
+| Lejanía | check **Lejanía** | `set_cuadre_item_lejania` |
+| Estado de revisión + nota | columna **Acción** | `set_cuadre_item_revision` |
+
+Reglas: solo **BORRADOR**, solo **ADMIN/COORDINADOR**, con motivo y auditoría
+(`pago_servicio_original/_editado_en/_editado_por/_motivo`). Lo editado **suma a
+`total_cancelados`**, no a `total_pago_servicio` (el corte lo hace `es_cancelado`).
+
+Al **regenerar** el borrador se conservan pago manual, recargo manual y lejanía
+también en las filas canceladas y sin recibo (antes solo en las de recibo: un
+cancelado ajustado a mano volvía a la tarifa fija).
+
+> Los cancelados **no** tienen recibo, así que `es_dominical/es_festivo/es_nocturno`
+> quedan en `false`: si el viaje perdido fue dominical o nocturno se reconoce con
+> el lápiz de recargo. Tampoco tienen banda de diferencia ni cobro al cliente.
+
 ### F. Dinero a entregar a gerencia
 ```
 dinero a entregar = efectivo recibido − reconocido al técnico − ajuste manual

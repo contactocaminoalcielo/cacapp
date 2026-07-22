@@ -114,6 +114,7 @@ export default function Finanzas() {
   const [valorRecogidoItem, setValorRecogidoItem] = useState(null) // cuadre_item → editar valor recogido
   const [mediosItem, setMediosItem] = useState(null)               // cuadre_item → reclasificar medios (efectivo↔digital)
   const [recargoManualItem, setRecargoManualItem] = useState(null) // cuadre_item → editar recargo
+  const [pagoTecnicoItem, setPagoTecnicoItem] = useState(null)     // cuadre_item → editar pago al técnico (incl. cancelados)
   const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
   const [histLoading,     setHistLoading]     = useState(false)
   const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
@@ -807,8 +808,10 @@ export default function Finanzas() {
   // para gerencia). Solo reglas sobre datos que ya existen — null si la fila
   // está cuadrada y no hay nada que explicar (sin ruido).
   function explicacionItem(it) {
-    if (it.es_cancelado)
-      return `Servicio cancelado: se le reconoce ${fmt(it.pago_servicio || 0)} al técnico por el viaje; no hay cobro al cliente.`
+    if (it.es_cancelado) {
+      const recon = (Number(it.pago_servicio) || 0) + (Number(it.recargo_aplicado) || 0)
+      return `Servicio cancelado: se le reconoce ${fmt(recon)} al técnico por el viaje; no hay cobro al cliente. Puedes ajustar ese pago con el lápiz de "Pago téc." (y el recargo o la lejanía si el viaje lo justifica).`
+    }
     if (it.conciliacion_resuelta)
       return 'Pendiente ya resuelto: el cobro se gestionó.'
     if (it.sin_recibo)
@@ -998,6 +1001,49 @@ export default function Finanzas() {
       return true
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al ajustar recargo' })
+      return false
+    }
+  }
+
+  // Correccion manual del pago reconocido al tecnico por fila (BORRADOR).
+  // Sirve sobre todo en los CANCELADOS: el viaje perdido trae una tarifa fija
+  // igual para todos y aqui se ajusta al viaje real (migracion 067).
+  async function guardarPagoTecnico(item, { pago, motivo }) {
+    const pagoNum = Number(pago)
+    if (!Number.isFinite(pagoNum) || pagoNum < 0) {
+      await showAlert('El pago al técnico debe ser mayor o igual a cero.', { title: 'Valor inválido' })
+      return false
+    }
+    try {
+      const { data, error } = await db.rpc('set_cuadre_item_pago_servicio', {
+        p_item_id:  item.id,
+        p_pago:     pagoNum,
+        p_actor_id: personalData?.id || null,
+        p_motivo:   motivo || null,
+      })
+      if (error) throw error
+      const itemPatch = {
+        pago_servicio: data.pago_servicio,
+        pago_servicio_original: data.pago_servicio_original,
+        pago_servicio_editado_en: data.pago_servicio_editado_en,
+        pago_servicio_editado_por: personalData?.id || null,
+        pago_servicio_motivo: data.pago_servicio_motivo,
+      }
+      setCuadreItems(prev => prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it))
+      setConciliaciones(prev => prev
+        ? prev.map(it => it.id === item.id ? { ...it, ...itemPatch } : it).filter(enConciliacion)
+        : prev)
+      setCuadreData(prev => prev ? {
+        ...prev,
+        total_pago_servicio: data.total_pago_servicio,
+        total_cancelados: data.total_cancelados,
+        total_reconocido: data.total_reconocido,
+        dinero_a_entregar: data.dinero_a_entregar,
+        saldo_a_favor_tecnico: data.saldo_a_favor_tecnico,
+      } : prev)
+      return true
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'Error al ajustar el pago al técnico' })
       return false
     }
   }
@@ -2369,7 +2415,21 @@ export default function Finanzas() {
                                     ) : (it.transporte_reconocido > 0 ? <span className="font-semibold text-[#7C3AED]">{fmt(it.transporte_reconocido)}</span> : '—')}
                                   </td>
                                   <td className="px-3 py-2.5 tabular-nums">
-                                    {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : '—'}
+                                    <div className="flex items-center gap-1.5">
+                                      {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : <span className="text-gray-400">—</span>}
+                                      {puedeEditarCuadre && !cuadreCerrado && (
+                                        <button type="button" onClick={() => setPagoTecnicoItem(it)}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0E7490] hover:bg-[#ECFEFF] transition-colors"
+                                          title={it.es_cancelado ? 'Modificar el pago por el viaje cancelado' : 'Modificar el pago al técnico'}>
+                                          <Pencil size={11} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    {it.pago_servicio_editado_en && (
+                                      <div className="text-[9px] font-bold text-[#0E7490] mt-0.5" title={it.pago_servicio_motivo || ''}>
+                                        editado{it.pago_servicio_original != null ? ` · original ${fmt(it.pago_servicio_original)}` : ''}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-start gap-1.5">
@@ -2384,7 +2444,7 @@ export default function Finanzas() {
                                           </div>
                                         </div>
                                       ) : <span className="text-gray-400 tabular-nums">—</span>}
-                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_cancelado && (
+                                      {puedeEditarCuadre && !cuadreCerrado && (
                                         <button type="button" onClick={() => setRecargoManualItem(it)}
                                           className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:text-[#d97706] hover:bg-amber-50 transition-colors"
                                           title="Modificar recargo">
@@ -2400,7 +2460,7 @@ export default function Finanzas() {
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <label className={`flex items-center gap-1.5 ${cuadreCerrado ? 'cursor-default' : 'cursor-pointer'}`} title="Marcar lejanía (recargo manual al técnico)">
-                                      <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado || it.es_cancelado}
+                                      <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado}
                                         onChange={e => toggleLejania(it, e.target.checked)}
                                         className="w-4 h-4 accent-[#7C3AED] disabled:opacity-40" />
                                       <span className="text-[11px] text-gray-500">{it.es_lejania ? 'Sí' : '—'}</span>
@@ -2408,22 +2468,20 @@ export default function Finanzas() {
                                   </td>
                                   {/* Acción: estado de revisión (sugerido) + nota (features 3, 8) */}
                                   <td className="px-3 py-2.5">
-                                    {it.es_cancelado ? <span className="text-gray-300 text-[11px]">—</span> : (
-                                      <div className="flex flex-col gap-1 min-w-[150px]">
-                                        <select value={it.estado_conciliacion || ''} disabled={cuadreCerrado}
-                                          onChange={e => guardarRevision(it, { estado: e.target.value || null })}
-                                          className="text-[11px] rounded-lg border px-1.5 py-1 outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20 disabled:bg-gray-50"
-                                          style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
-                                          <option value="">{sug ? `Sugerido: ${ESTADO_REV[sug].short}` : 'Sin revisar'}</option>
-                                          {Object.entries(ESTADO_REV).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                                        </select>
-                                        <button onClick={() => setObsItem(it)}
-                                          className={`text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors ${it.observaciones ? 'text-[#1A5CD8] bg-[#EFF6FF] hover:bg-[#DBEAFE]' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                          title={it.observaciones || 'Agregar observación'}>
-                                          <MessageSquare size={10} /> {it.observaciones ? 'Ver nota' : 'Nota'}
-                                        </button>
-                                      </div>
-                                    )}
+                                    <div className="flex flex-col gap-1 min-w-[150px]">
+                                      <select value={it.estado_conciliacion || ''} disabled={cuadreCerrado}
+                                        onChange={e => guardarRevision(it, { estado: e.target.value || null })}
+                                        className="text-[11px] rounded-lg border px-1.5 py-1 outline-none bg-white focus:ring-2 focus:ring-[#1A5CD8]/20 disabled:bg-gray-50"
+                                        style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                                        <option value="">{sug ? `Sugerido: ${ESTADO_REV[sug].short}` : 'Sin revisar'}</option>
+                                        {Object.entries(ESTADO_REV).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                      </select>
+                                      <button onClick={() => setObsItem(it)}
+                                        className={`text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md transition-colors ${it.observaciones ? 'text-[#1A5CD8] bg-[#EFF6FF] hover:bg-[#DBEAFE]' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                                        title={it.observaciones || 'Agregar observación'}>
+                                        <MessageSquare size={10} /> {it.observaciones ? 'Ver nota' : 'Nota'}
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               )})}
@@ -2689,6 +2747,18 @@ export default function Finanzas() {
           onSave={async ({ recargo, motivo }) => {
             const ok = await guardarRecargoManual(recargoManualItem, { recargo, motivo })
             if (ok) setRecargoManualItem(null)
+          }}
+        />
+      )}
+
+      {/* ── Modal editar pago al técnico (incl. servicios cancelados) ──────── */}
+      {pagoTecnicoItem && (
+        <PagoTecnicoModal
+          item={pagoTecnicoItem}
+          onClose={() => setPagoTecnicoItem(null)}
+          onSave={async ({ pago, motivo }) => {
+            const ok = await guardarPagoTecnico(pagoTecnicoItem, { pago, motivo })
+            if (ok) setPagoTecnicoItem(null)
           }}
         />
       )}
@@ -3355,6 +3425,77 @@ function RecargoManualModal({ item, onClose, onSave }) {
   )
 }
 
+// ── Modal: editar el pago reconocido al técnico (ADMIN/COORDINADOR) ───────
+// Pensado sobre todo para los servicios CANCELADOS: la tarifa del viaje perdido
+// es un monto fijo igual para todos y aquí se ajusta al viaje real.
+function PagoTecnicoModal({ item, onClose, onSave }) {
+  const [valor, setValor]   = useState(String(item.pago_servicio ?? 0))
+  const [motivo, setMotivo] = useState(item.pago_servicio_motivo || '')
+  const [saving, setSaving] = useState(false)
+  const actual = Number(item.pago_servicio) || 0
+  const nuevo  = Number(valor)
+  const invalido = !Number.isFinite(nuevo) || nuevo < 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
+      style={{ background: 'rgba(0,0,0,0.5)' }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" style={{ border: '1px solid rgba(30,80,40,0.12)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
+          <div className="flex items-center gap-2">
+            <Pencil size={16} className="text-[#0E7490]" />
+            <span className="text-[14px] font-bold text-gray-900">
+              {item.es_cancelado ? 'Pago por el viaje cancelado' : 'Modificar pago al técnico'}
+            </span>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400"><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="text-[13px] font-bold text-gray-900">{item.mascota_nombre || 'Mascota'}</div>
+            <div className="text-[11px] text-gray-500">
+              Actual: {fmt(actual)}{item.ciudad ? ` · ${item.ciudad}` : ''}
+            </div>
+          </div>
+          {item.es_cancelado && (
+            <p className="text-[11px] text-gray-600 bg-[#ECFEFF] border rounded-xl px-3 py-2 leading-snug" style={{ borderColor: '#A5F3FC' }}>
+              El servicio se canceló con el técnico ya en camino. El valor de arranque es la tarifa fija de cancelado; súbelo si el viaje lo justifica. Suma a <strong>Pago por cancelados</strong> y baja el dinero a entregar.
+            </p>
+          )}
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Nuevo valor reconocido</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-gray-400 font-semibold select-none">$</span>
+              <input type="number" min={0} step={1000} value={valor} autoFocus
+                onChange={e => setValor(e.target.value)}
+                className="w-full pl-6 pr-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#0E7490]/20 focus:border-[#0E7490]"
+                style={{ borderColor: invalido ? '#FCA5A5' : 'rgba(30,80,40,0.2)' }} />
+            </div>
+            {invalido ? (
+              <p className="text-[11px] text-red-600 mt-1">Debe ser mayor o igual a cero.</p>
+            ) : (
+              <p className="text-[11px] text-gray-500 mt-1">Reemplaza el pago reconocido al técnico en esta fila.</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1">Motivo</label>
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
+              placeholder="Ej: cancelaron con el técnico ya en Chía"
+              className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#0E7490]/20 focus:border-[#0E7490] resize-none"
+              style={{ borderColor: 'rgba(30,80,40,0.2)' }} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl text-[13px] font-semibold border text-gray-600 hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.15)' }}>Cancelar</button>
+            <button onClick={async () => { setSaving(true); await onSave({ pago: nuevo, motivo: motivo.trim() }); setSaving(false) }} disabled={saving || invalido}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#0E7490] hover:bg-[#155E75] text-white rounded-xl text-[13px] font-semibold disabled:opacity-60">
+              {saving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Check size={14} />} Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Modal: editar valor recogido en cuadre (solo ADMIN) ───────────────────
 function ValorRecogidoModal({ item, onClose, onSave }) {
   const [valor, setValor]   = useState(String(item.total_cobrado ?? 0))
@@ -3705,6 +3846,7 @@ function GuiaCuadreModal({ onClose }) {
             <p>· Filas <span className="font-bold text-amber-700">ámbar</span> = falta plata o hay cobro por encima del valor a recoger. Elige en <strong>Acción</strong>: <strong>Verificado OK</strong> (saldado, no se debe nada) o <strong>Pendiente gestionar</strong> (queda para revisar/cobrar después en <strong>Conciliaciones</strong>).</p>
             <p>· <strong>FACT. MENSUAL</strong>: la veterinaria paga por factura a fin de mes; el técnico no recoge esa plata. <strong>SIN RECIBO</strong>: hay que cobrar ese servicio; va solo a Conciliaciones.</p>
             <p>· Marca <strong>Lejanía</strong> si la recogida fue lejos (reconocimiento extra al técnico). Solo <strong>efectivo</strong> cuenta como plata en manos del técnico; lo digital ya entró a la empresa.</p>
+            <p>· <strong>CANCELADO</strong>: el técnico ya había salido, así que se le reconoce el viaje perdido con la tarifa fija de cancelado. Con el lápiz de <strong>Pago téc.</strong> lo ajustas al viaje real (y también puedes marcarle lejanía, recargo o dejar una nota). No hay cobro al cliente.</p>
           </Paso>
           <Paso n={3} titulo="Cerrar el cuadre">
             <p>· Antes de cerrar, el <strong>técnico firma el cuadre desde su app</strong> (Mis pagos › Cuadres — le aparece un aviso apenas la abre): el chip junto al estado te dice si ya firmó, si firmó otra versión (los montos cambiaron después) o si sigue sin firmar. <strong>Sin su firma el cierre queda bloqueado</strong>; solo puedes forzarlo escribiendo un motivo que queda registrado en el cuadre.</p>
@@ -3816,7 +3958,9 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
       Number(it.pago_servicio) > 0 ? fmt(it.pago_servicio) : '—',
       Number(it.recargo_aplicado) > 0 ? fmt(it.recargo_aplicado) : '—',
       it.es_lejania ? 'Sí' : '—',
-      it.es_cancelado ? 'CANCELADO' : (EST[it.estado_conciliacion] || '—'),
+      it.es_cancelado
+        ? (EST[it.estado_conciliacion] ? `CANCEL./${EST[it.estado_conciliacion]}` : 'CANCELADO')
+        : (EST[it.estado_conciliacion] || '—'),
       (it.observaciones || '').slice(0, 24),
     ]
     cols.forEach(([, w, a], i) => {
