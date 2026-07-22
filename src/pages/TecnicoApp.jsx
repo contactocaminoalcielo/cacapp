@@ -4394,13 +4394,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const modalidad           = aliado?.modalidad_comision || ''
   const comisionGuardada    = svcData.comision_aliado || 0
   const comisionFueDescontada = svcData.comision_descontada === true
+  // Aliado de FACTURACIÓN MENSUAL: el técnico NO recoge plata en ningún caso
+  // (el aliado paga por factura al cierre del mes), sea el recibo del cliente o
+  // de la veterinaria. Se usa para NO prellenar el medio de pago con el valor
+  // del servicio — ese prellenado dejaba recibos con EFECTIVO que nadie recogió
+  // e inflaba el efectivo del técnico en el cuadre (migración 068).
+  const aliadoFactMensual   = modalidad === 'FACTURACION_MENSUAL'
 
   const precioOriginal = comisionFueDescontada
     ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
     : (svcData.valor_total || 0)                      // ya es el precio completo
 
   // ── Estado: declarados ANTES de useEffects para evitar TDZ en sus dependency arrays ──
-  const montoClienteDefault = comisionFueDescontada ? precioOriginal : saldoPendiente
+  const montoClienteDefault = aliadoFactMensual ? 0
+    : comisionFueDescontada ? precioOriginal : saldoPendiente
   const [tipoRecibo, setTipoRecibo]   = useState(reciboExistente?.tipo || 'CLIENTE')
   const [form, setForm] = useState(() => {
     const base = {
@@ -4417,7 +4424,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       casa:               servicioSel.direccion_recogida || '',
       servicio:           plan?.nombre || '',
       valor_servicio:     precioOriginal,
-      total_recibido:     saldoPendiente,
+      total_recibido:     aliadoFactMensual ? 0 : saldoPendiente,
       toma_huella:        false,
       toma_mechon:        false,
       entrega_rec_basicos: false,
@@ -4744,7 +4751,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     else setComproOverlay(idx)   // ya no está el archivo: volver a elegirlo
   }
 
-  const esFacturacionMensual = modalidad === 'FACTURACION_MENSUAL' && tipoRecibo === 'VETERINARIA'
+  // Aplica a los DOS tipos de recibo: si el aliado factura mensual, el técnico no
+  // recibe plata ni del cliente ni de la veterinaria (regla David 2026-07-22).
+  const esFacturacionMensual = aliadoFactMensual
 
   // Cobro superior al valor del recibo — misma condición que valida la RPC
   // (tolerancia de $1 por redondeos). Se permite solo con motivo explícito
@@ -4777,9 +4786,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     if (pagoPendiente) {
       novedadNota = `Recibo generado con pago pendiente — ${fmt(svcData.valor_total || 0)}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`
     } else if (esFacturacionMensual) {
+      const etiqueta = tipoRecibo === 'VETERINARIA' ? 'VET' : 'CLIENTE'
       novedadNota = comisionFueDescontada
-        ? `Recibo VET generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
-        : `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
+        ? `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+        : `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
     } else if (sinComprobante.length > 0) {
       novedadNota = `Recibo ${form.numero_recibo} guardado con comprobante PENDIENTE (${sinComprobante.map(m => m.metodo).join(', ')}). El técnico puede reintentarlo desde el módulo Recibos.`
     }
@@ -4820,7 +4830,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setGuardando(true); setErr('')
     try {
       const { novedadPago, novedadNota } = construirNovedades(sinComprobante)
-      const medios = pagoPendiente
+      // Facturación mensual: no viaja NINGÚN medio de pago (el aliado paga por
+      // factura). La RPC lo vuelve a forzar server-side, pero no lo mandamos
+      // siquiera para que el recibo no guarde plata que nadie recogió.
+      const medios = (pagoPendiente || esFacturacionMensual)
         ? []
         : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl }))
       // Corrección de comisión solo si el servicio quedó con comision_aliado=0 (previo al fix VIP)
@@ -4837,7 +4850,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_hora_emision:           horaActual,
         p_valor_total:            form.valor_servicio,
         p_medios:                 medios,
-        p_datos_form:             { ...form, pago_pendiente: pagoPendiente },
+        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual },
         p_pago_pendiente:         pagoPendiente,
         p_es_facturacion_mensual: esFacturacionMensual,
         p_actor_id:               tecnico?.id || null,
@@ -4903,7 +4916,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       return
     }
     // Fix #4: valor_cobrado = suma real de medios (no el saldo asumido), igual que la RPC
-    const valorCobrado  = pagoPendiente ? 0 : totalMedios
+    // Facturación mensual = sin cobro ahora, igual que el pago pendiente (068)
+    const sinCobroAhora = pagoPendiente || esFacturacionMensual
+    const valorCobrado  = sinCobroAhora ? 0 : totalMedios
     const { data, error } = await db.from('recibos_tecnico').insert({
         servicio_id:     servicioSel.id,
         tecnico_id:      tecnico?.id || null,
@@ -4913,9 +4928,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         hora_emision:    horaActual,
         valor_total:     form.valor_servicio,
         valor_cobrado:   valorCobrado,
-        medios_pago:     pagoPendiente ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
+        medios_pago:     sinCobroAhora ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
         datos_form:      {
-          ...form, pago_pendiente: pagoPendiente,
+          ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual,
           ...(haySobrepago ? { sobrepago_valor: sobrepagoDiff, sobrepago_motivo: sobrepagoMotivo.trim() } : {}),
         },
         estado:          'GUARDADO',
@@ -4938,9 +4953,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           await db.from('servicios').update({ comision_aliado: comisionManual }).eq('id', servicioSel.id)
         }
         // Con descuento aplicado (regla Animal City): el total a facturar ya es neto
+        const etiquetaRec = tipoRecibo === 'VETERINARIA' ? 'VET' : 'CLIENTE'
         const descNovedad = comisionFueDescontada
-          ? `Recibo VET generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
-          : `Recibo VET generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
+          ? `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+          : `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
@@ -5076,8 +5092,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       t(`Fecha: ${form.fecha}  Hora: ${form.hora}`, W - M, 37.5, { align: 'right' })
       y = 46
 
-      // Banner pago pendiente
-      if (pagoPendiente) {
+      // Banner facturación mensual: el técnico no recibe plata (manda sobre el
+      // de pago pendiente, que ni siquiera se ofrece en este caso)
+      if (esFacturacionMensual) {
+        pdf.setFillColor(239, 246, 255); pdf.setDrawColor(147, 197, 253)
+        pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 13, 'FD')
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(30, 64, 175)
+        t('FACTURACION MENSUAL', W / 2, y + 5.5, { align: 'center' })
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(37, 99, 235)
+        t('Sin cobro en este momento: se factura al aliado al cierre del mes', W / 2, y + 10.5, { align: 'center' })
+        y += 17
+      } else if (pagoPendiente) {
         pdf.setFillColor(254, 243, 199); pdf.setDrawColor(251, 191, 36)
         pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 13, 'FD')
         pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(146, 64, 14)

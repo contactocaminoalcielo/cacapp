@@ -63,7 +63,11 @@ export function buildReciboDataDesdeRecibo(recibo) {
   const medios = (Array.isArray(recibo.medios_pago) ? recibo.medios_pago : [])
     .filter(m => Number(m.monto) > 0)
   const valorTotal  = Number(recibo.valor_total)   || Number(d.valor_servicio) || 0
-  const valorPagado = Number(recibo.valor_cobrado) || Number(d.total_recibido) || 0
+  // OJO: `||` haría que un recibo legítimamente en $0 (facturación mensual, pago
+  // pendiente) cayera al valor del formulario y el PDF dijera que sí se cobró.
+  const valorPagado = recibo.valor_cobrado != null
+    ? Number(recibo.valor_cobrado) || 0
+    : Number(d.total_recibido) || 0
   return {
     numero:         recibo.numero_recibo || d.numero_recibo || '',
     tipo:           recibo.tipo || 'CLIENTE',
@@ -83,6 +87,7 @@ export function buildReciboDataDesdeRecibo(recibo) {
     metodo_pago:    '',
     medios,
     pago_pendiente: String(d.pago_pendiente) === 'true' || d.pago_pendiente === true,
+    facturacion_mensual: String(d.facturacion_mensual) === 'true' || d.facturacion_mensual === true,
     tecnico:        '',
     saldo:          Math.max(0, valorTotal - valorPagado),
     descuento_adicional:        0,
@@ -152,8 +157,17 @@ export async function renderReciboPDF(r, { abrir = false } = {}) {
 
   let y = 52
 
-  // Banner de pago pendiente (recibo generado sin cobro)
-  if (r.pago_pendiente) {
+  // Banner de facturación mensual: el técnico no recibe plata, el aliado la
+  // paga con la factura del mes. Va antes del de pago pendiente porque manda.
+  if (r.facturacion_mensual) {
+    pdf.setFillColor(239, 246, 255); pdf.setDrawColor(147, 197, 253)
+    pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 12, 'FD')
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(30, 64, 175)
+    t('FACTURACION MENSUAL', W / 2, y + 5, { align: 'center' })
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(37, 99, 235)
+    t('Sin cobro en este momento: se factura al aliado al cierre del mes', W / 2, y + 9.5, { align: 'center' })
+    y += 16
+  } else if (r.pago_pendiente) {
     pdf.setFillColor(254, 243, 199); pdf.setDrawColor(251, 191, 36)
     pdf.setLineWidth(0.6); pdf.rect(M, y, CW, 12, 'FD')
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(146, 64, 14)
