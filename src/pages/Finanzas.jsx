@@ -12,7 +12,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle, Sparkles, Pencil, ArrowLeftRight,
+  HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
@@ -116,6 +116,7 @@ export default function Finanzas() {
   const [recargoManualItem, setRecargoManualItem] = useState(null) // cuadre_item → editar recargo
   const [pagoTecnicoItem, setPagoTecnicoItem] = useState(null)     // cuadre_item → editar pago al técnico (incl. cancelados)
   const [historialCuadres, setHistorialCuadres] = useState(null) // null = sin cargar (cuadres anteriores)
+  const [descartando,     setDescartando]     = useState(null)   // id del borrador que se está descartando
   const [histLoading,     setHistLoading]     = useState(false)
   const [saldosAFavor,    setSaldosAFavor]    = useState([])     // cuadres CERRADOS previos con saldo a favor del técnico
   const [entregaModal,    setEntregaModal]    = useState(false)  // modal "confirmar dinero recibido"
@@ -378,6 +379,38 @@ export default function Finanzas() {
   useEffect(() => {
     if (tab === 'tecnicos' && historialCuadres === null && !histLoading) cargarHistorial()
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Descarta un BORRADOR que no se usó (probar rangos deja varios solapados del
+  // mismo técnico). Un CERRADO nunca: es la constancia del dinero entregado.
+  // No toca recibos ni servicios — el borrador es un cálculo, no un hecho: esos
+  // servicios vuelven a entrar al generar el cuadre de nuevo.
+  async function descartarBorrador(c) {
+    const quien  = c.personal ? `${c.personal.nombre} ${c.personal.apellido || ''}`.trim() : 'el técnico'
+    const rango  = `${fmtFecha(c.fecha_desde)} → ${fmtFecha(c.fecha_hasta)}`
+    const avisos = []
+    if (c.tecnico_confirmado_en) avisos.push('· El técnico ya firmó este borrador: su confirmación se pierde.')
+    if (Number(c.total_servicios) > 0) avisos.push(`· Sus ${c.total_servicios} servicios vuelven a quedar libres para el próximo cuadre (no se borra ningún recibo ni servicio).`)
+    const ok = await confirm(
+      `Se descarta el borrador de ${quien} (${rango}).\n\n${avisos.join('\n')}`,
+      { title: '¿Descartar este borrador?', variant: 'warning', confirmLabel: 'Descartar' })
+    if (!ok) return
+    setDescartando(c.id)
+    try {
+      const { error } = await db.rpc('eliminar_cuadre_borrador', {
+        p_cuadre_id: c.id,
+        p_actor_id:  personalData?.id || null,
+      })
+      if (error) throw error
+      setHistorialCuadres(prev => prev ? prev.filter(x => x.id !== c.id) : prev)
+      // Si el descartado era el que está abierto en pantalla, limpiar la vista
+      if (cuadreData?.id === c.id) limpiarCuadre()
+      setSaldosAFavor(prev => prev.filter(s => s.id !== c.id))
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'No se pudo descartar el borrador' })
+    } finally {
+      setDescartando(null)
+    }
+  }
 
   // ── Refresco en vivo del cuadre abierto ────────────────────────────────────
   // Refleja SIN recargar la confirmación del técnico (que llega desde su app) y
@@ -2131,11 +2164,24 @@ export default function Finanzas() {
                                           : <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700" title="El técnico aún no ha entregado el efectivo (o falta confirmarlo aquí)">Pendiente de entrega</span>}
                                     </td>
                                     <td className="px-3 py-2.5">
-                                      <button onClick={() => abrirCuadre(c)} disabled={cuadreLoading}
-                                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60 whitespace-nowrap"
-                                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
-                                        <Eye size={12} /> Abrir
-                                      </button>
+                                      <div className="flex items-center gap-1.5">
+                                        <button onClick={() => abrirCuadre(c)} disabled={cuadreLoading}
+                                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors disabled:opacity-60 whitespace-nowrap"
+                                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                                          <Eye size={12} /> Abrir
+                                        </button>
+                                        {/* Descartar solo borradores: un cerrado es la constancia del dinero */}
+                                        {!cerrado && puedeEditarCuadre && (
+                                          <button onClick={() => descartarBorrador(c)} disabled={descartando === c.id}
+                                            className="flex items-center justify-center h-[30px] w-[30px] rounded-lg border text-gray-400 hover:text-[#DC2626] hover:bg-red-50 hover:border-red-200 transition-colors disabled:opacity-60"
+                                            style={{ borderColor: 'rgba(30,80,40,0.15)' }}
+                                            title="Descartar este borrador (no borra recibos ni servicios)">
+                                            {descartando === c.id
+                                              ? <div className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />
+                                              : <Trash2 size={12} />}
+                                          </button>
+                                        )}
+                                      </div>
                                     </td>
                                   </tr>
                                 )
@@ -3839,6 +3885,7 @@ function GuiaCuadreModal({ onClose }) {
           <Paso n={1} titulo="Generar el cuadre">
             <p>Elige el técnico (el rango se sugiere solo: desde el día siguiente al último cuadre cerrado, hasta hoy) y pulsa <strong>Generar cuadre</strong>. Entran todos los servicios que el técnico recogió en el rango: con recibo, <strong>SIN RECIBO</strong> (recogió pero no cobró) y cancelados.</p>
             <p>Mientras esté en <strong>BORRADOR</strong> puedes regenerarlo las veces que quieras (cambiar rango, ajuste, lejanía…); no se pierde nada.</p>
+            <p>· Si te quedaron borradores de prueba, en <strong>Cuadres anteriores</strong> cada uno trae un botón 🗑 para <strong>descartarlo</strong>. Solo borra el borrador: los recibos y servicios quedan intactos y vuelven a entrar en el próximo cuadre. Un cuadre <strong>CERRADO</strong> nunca se puede descartar.</p>
           </Paso>
           <Paso n={2} titulo="Revisar fila por fila">
             <p>· Cada mascota con algo por resolver trae su <strong>explicación en palabras</strong> debajo del nombre (por qué falta plata, qué hacer). Y el botón <strong>✨ Analizar con IA</strong> te da una guía del cuadre completo leyendo las notas del técnico — solo sugiere, tú confirmas.</p>
