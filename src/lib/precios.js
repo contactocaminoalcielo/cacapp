@@ -1,4 +1,5 @@
 import { db } from '@/lib/supabase'
+import { fmt } from '@/lib/utils'
 
 /**
  * Planes que NUNCA generan comisión de aliado.
@@ -182,6 +183,21 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     if (error) continue
 
     const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
+
+    // Deja rastro del recálculo (antes cambiaba el precio en silencio) para que
+    // la mascota muestre la etiqueta "recategorizado por peso". Best-effort:
+    // si falla, el precio ya quedó aplicado. (migración 075: tipo permitido.)
+    try {
+      const partes = []
+      if (cambioPrecio) partes.push(`valor ${fmt(svc.valor_total || 0)} → ${fmt(nuevoValorTotal)}`)
+      if (cambioComision) partes.push(`comisión ${fmt(svc.comision_aliado || 0)} → ${fmt(nuevaComision)}`)
+      await db.from('novedades_servicio').insert({
+        servicio_id:  svc.id,
+        tipo_novedad: 'RECATEGORIZACION_PESO',
+        descripcion:  `⚖️ Precio recategorizado por nuevo peso (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
+      })
+    } catch (_) { /* best-effort */ }
+
     cambios.push({
       servicioId:      svc.id,
       planNombre,

@@ -16,6 +16,8 @@ import {
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
+import { recategorizacionesPorServicio } from '@/lib/servicios'
+import RecatBadges from '@/components/RecatBadges'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
@@ -144,6 +146,7 @@ export default function Finanzas() {
   const [cuadreData,      setCuadreData]      = useState(null)   // cabecera cuadres_tecnico
   const [cuadreItems,     setCuadreItems]     = useState([])
   const [ajustesTecnico,  setAjustesTecnico]  = useState({})     // sugerencias del técnico (capa sombra) por servicio_id
+  const [recatServicios,  setRecatServicios]  = useState({})     // recategorizaciones (plan/peso) por servicio_id
   const [cuadreLoading,   setCuadreLoading]   = useState(false)
   const [cuadreError,     setCuadreError]     = useState('')
   const [cerrando,        setCerrando]        = useState(false)
@@ -524,6 +527,15 @@ export default function Finanzas() {
     } catch { /* la comparación es opcional; si falla, el cuadre sigue igual */ }
   }
 
+  // Recategorizaciones (cambio de plan / recálculo por peso) para etiquetar las
+  // mascotas del cuadre y estar alerta del cambio.
+  async function cargarRecategorizaciones(items) {
+    setRecatServicios({})
+    const ids = [...new Set((items || []).map(it => it.servicio_id).filter(Boolean))]
+    if (!ids.length) return
+    setRecatServicios(await recategorizacionesPorServicio(ids))
+  }
+
   // La fecha contable del item corresponde al recibo. Para mostrar el servicio
   // usamos su fecha de registro sin alterar periodos, recargos ni snapshots.
   async function conFechaRegistroServicio(items) {
@@ -562,6 +574,7 @@ export default function Finanzas() {
       setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setIaAnalisis(null)
       cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
+      cargarRecategorizaciones(itemsConFechaRegistro)
       cargarSaldosAFavor(hdr)
       cargarEntregaNombre(hdr)
     } catch (err) {
@@ -678,6 +691,7 @@ export default function Finanzas() {
       setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setEntregaPorNombre(null); setIaAnalisis(null)
       cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
+      cargarRecategorizaciones(itemsConFechaRegistro)
       cargarSaldosAFavor(hdr)
     } catch (err) {
       setCuadreError(parsearErrorDB(err))
@@ -769,7 +783,7 @@ export default function Finanzas() {
   }
 
   function limpiarCuadre() {
-    setCuadreData(null); setCuadreItems([]); setCuadreError('')
+    setCuadreData(null); setCuadreItems([]); setCuadreError(''); setRecatServicios({})
     setCuadreAjustes(''); setCuadreAjusteMot('')
     setSaldosAFavor([]); setEntregaPorNombre(null)
     setIaAnalisis(null)
@@ -2466,6 +2480,7 @@ export default function Finanzas() {
                                       {esFactMensual(it) && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>}
                                       {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                       {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
+                                      <RecatBadges recat={recatServicios[it.servicio_id]} size="xs" />
                                     </div>
                                     {(() => {
                                       const exp = explicacionItem(it)
@@ -3192,6 +3207,16 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
     ...entregas.map(e => ({ url: e.foto_firma_url, etiqueta: 'Firma de entrega' })),
   ].filter(x => x.url)
   const peso = cuartoFrio[0]?.peso_kg
+  // Recategorización derivada de las novedades ya cargadas (sin query extra).
+  const recatModal = (() => {
+    const r = { plan: false, peso: false, detallePlan: null, detallePeso: null }
+    for (const n of novedades) {
+      if (n.tipo_novedad === 'CAMBIO_PLAN') r.plan = true
+      else if (n.tipo_novedad === 'RECATEGORIZACION_PESO') { r.peso = true; r.detallePeso = n.descripcion }
+      else if (n.tipo_novedad === 'NOTA' && /^Plan cambiado:/.test(n.descripcion || '')) { r.plan = true; r.detallePlan = n.descripcion }
+    }
+    return r
+  })()
   const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
   const fmtD  = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 
@@ -3236,7 +3261,10 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
           <div className="flex items-center gap-2">
             <span className="text-2xl">🐾</span>
             <div>
-              <div className="text-[15px] font-bold text-gray-900">{m.nombre || 'Mascota'}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[15px] font-bold text-gray-900">{m.nombre || 'Mascota'}</span>
+                <RecatBadges recat={recatModal} />
+              </div>
               <div className="text-[11px] text-gray-400">{m.especies?.nombre || ''}{svc?.codigo ? ` · ${svc.codigo}` : ''}</div>
             </div>
           </div>

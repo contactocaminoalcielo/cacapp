@@ -11,7 +11,8 @@ import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
-import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
+import RecatBadges from '@/components/RecatBadges'
 import { planComisiona } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
@@ -395,6 +396,7 @@ export default function Kanban() {
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const [servicios, setServicios]         = useState([])
+  const [recatMap,  setRecatMap]          = useState({})   // recategorizaciones (plan/peso) por servicio_id
   const [loading, setLoading]             = useState(true)
   const primeraCarga                      = useRef(true)
   const [error, setError]                 = useState(null)
@@ -1059,6 +1061,9 @@ export default function Kanban() {
       }
 
       setServicios(rows)
+      // Etiqueta de recategorización (plan/peso) por servicio — best-effort.
+      recategorizacionesPorServicio(rows.map(r => r.servicio_id))
+        .then(setRecatMap).catch(() => {})
       await autoCorregirDesdeKanban(rows)
     } catch (e) {
       // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
@@ -2364,6 +2369,7 @@ export default function Kanban() {
                                 <div className="flex-1 min-w-0">
                                   <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
                                   <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
+                                  <RecatBadges recat={recatMap[s.servicio_id]} size="xs" className="mt-1" />
                                 </div>
                                 {(s.nevera_codigo || metodosCard.length > 0) && (
                                   <div className="flex flex-col items-end gap-1 flex-shrink-0">

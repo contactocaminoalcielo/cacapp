@@ -1,6 +1,41 @@
 // src/lib/servicios.js — helpers de edición de servicios (quitar ítems / ajustes de cobro)
-import { db } from '@/lib/supabase'
+import { db, dbIn } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
+
+// Detecta qué servicios fueron RECATEGORIZADOS (cambio de plan o recálculo de
+// precio por peso), leyendo novedades_servicio. Para mostrar una etiqueta de
+// alerta en la mascota. Devuelve { [servicioId]: { plan, peso, detallePlan,
+// detallePeso } }. Best-effort: ante error devuelve {} (no rompe la vista).
+//   · plan → hay novedad CAMBIO_PLAN. Detalle = la nota "Plan cambiado: X → Y".
+//   · peso → hay novedad RECATEGORIZACION_PESO (migración 075; solo la escriben
+//     los recálculos NUEVOS — los históricos por peso no dejaron rastro).
+export async function recategorizacionesPorServicio(servicioIds) {
+  const ids = [...new Set((servicioIds || []).filter(Boolean))]
+  if (!ids.length) return {}
+  try {
+    const [markers, planNotas] = await Promise.all([
+      dbIn('novedades_servicio', 'servicio_id, tipo_novedad, descripcion, created_at', 'servicio_id', ids,
+        q => q.in('tipo_novedad', ['CAMBIO_PLAN', 'RECATEGORIZACION_PESO']).order('created_at', { ascending: false })),
+      dbIn('novedades_servicio', 'servicio_id, descripcion, created_at', 'servicio_id', ids,
+        q => q.eq('tipo_novedad', 'NOTA').ilike('descripcion', 'Plan cambiado:%').order('created_at', { ascending: false })),
+    ])
+    const out = {}
+    const rec = id => out[id] || (out[id] = { plan: false, peso: false, detallePlan: null, detallePeso: null })
+    for (const r of markers) {
+      const e = rec(r.servicio_id)
+      if (r.tipo_novedad === 'CAMBIO_PLAN') e.plan = true
+      else if (r.tipo_novedad === 'RECATEGORIZACION_PESO') { e.peso = true; if (!e.detallePeso) e.detallePeso = r.descripcion }
+    }
+    for (const n of planNotas) {
+      const e = rec(n.servicio_id)
+      e.plan = true
+      if (!e.detallePlan) e.detallePlan = n.descripcion   // la más reciente (viene ordenada desc)
+    }
+    return out
+  } catch (_) {
+    return {}
+  }
+}
 
 // Recalcula estado_pago de forma consistente con el resto del sistema
 // (misma fórmula que usa Gestión › Historial).

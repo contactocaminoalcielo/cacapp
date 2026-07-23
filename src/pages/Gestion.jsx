@@ -15,7 +15,8 @@ import { agruparRefresco } from '@/lib/realtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
-import { quitarItemServicio, precioSugeridoItem } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
+import RecatBadges from '@/components/RecatBadges'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import FichaServicio from '@/components/servicio/FichaServicio'
@@ -1413,6 +1414,7 @@ function TabHistorialServicios({ canEdit }) {
   const { confirm, alert: showAlert } = useConfirm()
   const { personalData }              = useAuth()
   const [data, setData]               = useState([])
+  const [recatMap, setRecatMap]       = useState({})     // recategorizaciones (plan/peso) por servicio_id
   const [loading, setLoading]         = useState(true)
   const [total, setTotal]             = useState(0)
   const [exporting, setExporting]     = useState(false)
@@ -1497,6 +1499,11 @@ function TabHistorialServicios({ canEdit }) {
     setData(prev => (buscando || offsetInicial === 0) ? (d || []) : [...prev, ...(d || [])])
     setTotal(count || 0)
     setLoading(false)
+    // Etiquetas de recategorización (plan/peso) — best-effort, acumula por página.
+    try {
+      const recat = await recategorizacionesPorServicio((d || []).map(s => s.id))
+      setRecatMap(prev => (buscando || offsetInicial === 0) ? recat : { ...prev, ...recat })
+    } catch { /* opcional */ }
   }
 
   // Debounce de la búsqueda: dispara la recarga al servidor sin pegar en cada tecla.
@@ -1831,6 +1838,7 @@ function TabHistorialServicios({ canEdit }) {
                       </Td>
                       <Td>
                         <div className="font-medium text-ink text-[12px]">{s.mascotas?.nombre}</div>
+                        <RecatBadges recat={recatMap[s.id]} size="xs" className="my-0.5" />
                         <div className="text-[10px] text-ink3">
                           {s.mascotas?.especies?.nombre}
                           {s.mascotas?.peso_kg ? ` · ${s.mascotas.peso_kg} kg` : ''}
