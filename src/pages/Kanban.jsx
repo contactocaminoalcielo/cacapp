@@ -1264,8 +1264,12 @@ export default function Kanban() {
       if (precioFinal) {
         // Recalcular la comisión del aliado con el plan NUEVO (antes quedaba
         // pegada la del plan viejo). El plan es la BASE comisionable.
+        // Se traen también adicionales/transporte/recargos/descuento para
+        // PRESERVARLOS en valor_total: antes se recomputaba valor_total con solo
+        // el plan y se perdían → el recibo reconstruía un bruto inflado y la
+        // comisión salía sobre un total que no era el real (queja 2026-07-23).
         const { data: sv } = await db.from('servicios')
-          .select('comision_descontada, comision_aliado, aliado_origen_id')
+          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional')
           .eq('id', selected.servicio_id).maybeSingle()
         const descontada = sv?.comision_descontada === true
         let comisionNueva = null
@@ -1273,11 +1277,14 @@ export default function Kanban() {
           comisionNueva = await comisionParaPlan(sv.aliado_origen_id, editPlanId, precioFinal)
         const comisionVigente = comisionNueva != null ? comisionNueva : (sv?.comision_aliado ?? 0)
 
-        // valor_total = precio del plan nuevo; NETO (precio − comisión) si la
-        // comisión se descuenta en el recibo (clínica aliada), BRUTO si no
-        // (domicilio: la comisión se cuadra aparte). Así el recibo reconstruye
-        // el bruto = valor_total + comision_aliado sin inflarse.
-        updates.valor_total = Math.round(precioFinal - (descontada ? comisionVigente : 0))
+        // valor_plan = precio del plan nuevo (BASE comisionable). valor_total
+        // conserva adicionales + transporte + recargos − descuento; NETO
+        // (− comisión) si se descuenta en el recibo (clínica aliada), BRUTO si no
+        // (domicilio). El recibo reconstruye el bruto = valor_total + comisión.
+        const extras = (sv?.valor_adicionales ?? 0) + (sv?.valor_transporte ?? 0)
+                     + (sv?.recargo_nocturno ?? 0) - (sv?.descuento_adicional ?? 0)
+        updates.valor_plan  = Math.round(precioFinal)
+        updates.valor_total = Math.round(precioFinal + extras - (descontada ? comisionVigente : 0))
         if (comisionNueva != null) updates.comision_aliado = comisionNueva
       }
 
@@ -1346,6 +1353,7 @@ export default function Kanban() {
         plan: planNuevo,
         ...(precioFinal ? {
           valor_total:     updates.valor_total,
+          valor_plan:      updates.valor_plan,
           saldo_pendiente: (updates.valor_total ?? 0) - (selected.valor_pagado || 0),
           ...(updates.comision_aliado != null ? { comision_aliado: updates.comision_aliado } : {}),
         } : {}),
