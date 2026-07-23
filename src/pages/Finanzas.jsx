@@ -55,6 +55,22 @@ const COLS_CUADRE = [
 ]
 const CUADRE_COLS_LS = 'orbit_cuadre_cols_ocultas'
 
+// NETO que le queda a la EMPRESA por un servicio del cuadre = bruto − comisión
+// de la veterinaria. Se deriva SIEMPRE del bruto (valor_a_cobrar), NO del
+// snapshot `valor_a_recoger`. Motivo (bug 2026-07-23): cuando un servicio de
+// veterinaria con comisión se registra como recogida a DOMICILIO, se guarda con
+// `comision_descontada = false`, y ahí `valor_a_recoger` quedó igual al BRUTO.
+// Si el técnico recoge el neto (el cliente pagó con la comisión ya descontada),
+// el cuadre marcaba un falso faltante EXACTAMENTE por el valor de la comisión.
+// La comisión NUNCA es faltante del técnico: es plata de la veterinaria y se
+// gestiona en la pestaña Comisiones. La banda aceptable es [neto … bruto].
+function netoCuadreItem(it) {
+  const bruto = it.valor_a_cobrar  != null ? Number(it.valor_a_cobrar)
+              : it.valor_a_recoger != null ? Number(it.valor_a_recoger) : null
+  if (bruto == null) return null
+  return bruto - (Number(it.comision) || 0)
+}
+
 // ── Helpers de badge ─────────────────────────────────────────────────────────
 
 function BadgeEstadoPago({ estado }) {
@@ -796,13 +812,12 @@ export default function Finanzas() {
   }
 
   // ── Diferencia y alerta por mascota (features 5, 7) ─────────────────────────
-  // Valor a RECOGER = lo que el cliente paga (neto, servicios.valor_total). NO el
-  // bruto (valor_a_cobrar incluye la comisión descontada y no se recoge). Si el
-  // item es viejo (sin valor_a_recoger) se cae al valor_a_cobrar.
+  // Valor a RECOGER = NETO que le queda a la empresa = bruto − comisión. Se
+  // deriva del bruto (no del snapshot valor_a_recoger, que quedó = bruto en los
+  // servicios registrados a domicilio con comisión NO descontada). Ver
+  // netoCuadreItem — un único origen de verdad para tabla, modal y PDF.
   function valorARecoger(it) {
-    if (it.valor_a_recoger != null) return Number(it.valor_a_recoger)
-    if (it.valor_a_cobrar  != null) return Number(it.valor_a_cobrar)
-    return null
+    return netoCuadreItem(it)
   }
   // Veterinaria de facturación mensual: el técnico no recoge efectivo; el aliado
   // nos debe el neto (bruto − comisión), que se cobra en la factura mensual.
@@ -3182,16 +3197,18 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
 
   // Desglose de cobros: prioriza el snapshot del cuadre (item) y cae al servicio.
   const n = v => Number(v) || 0
-  const grossVal = item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total)
+  const grossVal    = item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total)
+  const comisionVal = item.comision != null ? n(item.comision) : n(svc?.comision_aliado)
   const cob = {
     adic:       item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
     transporte: item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
     descuento:  n(svc?.descuento_adicional),
     descMotivo: svc?.descuento_adicional_motivo || '',
-    comision:   item.comision != null ? n(item.comision) : n(svc?.comision_aliado),
+    comision:   comisionVal,
     vet:        item.veterinaria || svc?.aliados?.nombre || '—',
-    neto:       item.valor_a_recoger != null ? n(item.valor_a_recoger)
-                : item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total),
+    // NETO = bruto − comisión (lo que le queda a la empresa). La comisión es de
+    // la vet y no la recoge el técnico → no es faltante suyo. Ver netoCuadreItem.
+    neto:       grossVal - comisionVal,
     recogido:   n(item.total_cobrado),
     medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
   }
@@ -4045,7 +4062,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   const difFila = it => {
     if (it.es_cancelado) return '—'
     if (it.modalidad_comision === 'FACTURACION_MENSUAL') return 'FM ' + fmt((Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0))
-    const neto = it.valor_a_recoger != null ? Number(it.valor_a_recoger) : it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : null
+    const neto = netoCuadreItem(it)
     if (neto == null) return '—'
     const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
     const recog = Number(it.total_cobrado) || 0
@@ -4053,7 +4070,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     if (recog > bruto) return '+' + fmt(recog - bruto)
     return fmt(0)
   }
-  const netoFila = it => it.valor_a_recoger != null ? fmt(it.valor_a_recoger) : it.valor_a_cobrar != null ? fmt(it.valor_a_cobrar) : '—'
+  const netoFila = it => { const v = netoCuadreItem(it); return v == null ? '—' : fmt(v) }
 
   // Cabecera
   pdf.setFillColor(...G); pdf.rect(0, 0, W, 22, 'F')
@@ -4141,8 +4158,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   }
   const totalACobrar = items.reduce((a, it) => {
     if (it.es_cancelado) return a
-    const vr = it.valor_a_recoger != null ? Number(it.valor_a_recoger) : (Number(it.valor_a_cobrar) || 0)
-    return a + vr
+    return a + (netoCuadreItem(it) || 0)
   }, 0)
   const totalComision = items.reduce((a, it) => a + (Number(it.comision) || 0), 0)
   fila('Total a cobrar (neto, transp. incl.)', totalACobrar)
@@ -4150,8 +4166,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
   fila('Total recogido (cliente)', c.total_cobrado)
   const totalFalta = items.reduce((a, it) => {
     if (it.es_cancelado) return a
-    const vr = it.valor_a_recoger != null ? Number(it.valor_a_recoger)
-             : it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : null
+    const vr = netoCuadreItem(it)
     if (vr == null) return a
     const d = vr - (Number(it.total_cobrado) || 0)
     const resuelto = it.estado_conciliacion === 'VERIFICADO' || it.conciliacion_resuelta
