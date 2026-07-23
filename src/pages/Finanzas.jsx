@@ -12,7 +12,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2,
+  HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2, Columns3,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
@@ -30,6 +30,30 @@ const VIA_CONCIL = {
   LLAMAR_COBRAR:      { label: 'Llamar a cobrar',      icon: Phone },
   FACTURACION_MENSUAL:{ label: 'Facturación mensual',  icon: Building2 },
 }
+
+// Columnas de la tabla del cuadre, en orden. `fija: true` = no se puede ocultar
+// (Mascota es el ancla de cada fila; Acción es el control de revisión). El resto
+// se puede esconder para reducir el desplazamiento horizontal. El `key` debe
+// coincidir con el guardado en localStorage y con el orden de los <td>.
+const COLS_CUADRE = [
+  { key: 'fecha',       label: 'Fecha de registro' },
+  { key: 'mascota',     label: 'Mascota', fija: true },
+  { key: 'ciudad',      label: 'Ciudad' },
+  { key: 'veterinaria', label: 'Veterinaria' },
+  { key: 'plan',        label: 'Plan' },
+  { key: 'total',       label: 'Total a cobrar',  title: 'Neto que paga el cliente: transporte a municipios incluido y comisión descontada' },
+  { key: 'comision',    label: 'Comisión (info)', title: 'Solo informativo: ya está descontada del total a cobrar, no se suma' },
+  { key: 'recogido',    label: 'Recogido' },
+  { key: 'diferencia',  label: 'Diferencia' },
+  { key: 'efectivo',    label: 'Efectivo' },
+  { key: 'digital',     label: 'Digital → empresa' },
+  { key: 'transporte',  label: 'Transporte téc.' },
+  { key: 'pago',        label: 'Pago téc.' },
+  { key: 'recargo',     label: 'Recargo' },
+  { key: 'lejania',     label: 'Lejanía' },
+  { key: 'accion',      label: 'Acción', fija: true },
+]
+const CUADRE_COLS_LS = 'orbit_cuadre_cols_ocultas'
 
 // ── Helpers de badge ─────────────────────────────────────────────────────────
 
@@ -316,6 +340,27 @@ export default function Finanzas() {
   const cuadreCerrado = cuadreData?.estado === 'CERRADO'
   const puedeEditarCuadre = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
     || [1, 6].includes(Number(personalData?.rol_principal_id))
+
+  // ── Columnas ocultas del cuadre (preferencia por navegador) ─────────────────
+  const [colsOcultas, setColsOcultas] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(CUADRE_COLS_LS) || '[]')) }
+    catch { return new Set() }
+  })
+  const [colMenuAbierto, setColMenuAbierto] = useState(false)
+  const verCol = k => !colsOcultas.has(k)
+  function toggleCol(k) {
+    setColsOcultas(prev => {
+      const next = new Set(prev)
+      next.has(k) ? next.delete(k) : next.add(k)
+      try { localStorage.setItem(CUADRE_COLS_LS, JSON.stringify([...next])) } catch (_) {}
+      return next
+    })
+  }
+  function mostrarTodasCols() {
+    setColsOcultas(new Set())
+    try { localStorage.setItem(CUADRE_COLS_LS, '[]') } catch (_) {}
+  }
+  const colsVisibles = COLS_CUADRE.filter(c => verCol(c.key))
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
@@ -2299,6 +2344,52 @@ export default function Finanzas() {
                         </div>
                       )}
 
+                      {/* Barra de herramientas: elegir columnas visibles */}
+                      {cuadreItems.length > 0 && (
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <p className="text-[11px] text-gray-400">
+                            {colsOcultas.size > 0
+                              ? `${colsVisibles.length} de ${COLS_CUADRE.length} columnas visibles · menos desplazamiento`
+                              : `${COLS_CUADRE.length} columnas`}
+                          </p>
+                          <div className="relative">
+                            <button type="button" onClick={() => setColMenuAbierto(o => !o)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border text-gray-600 hover:bg-gray-50 transition-colors"
+                              style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                              <Columns3 size={13} /> Columnas
+                              {colsOcultas.size > 0 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#1A5CD8]">{colsOcultas.size} ocultas</span>}
+                              <ChevronDown size={12} className={colMenuAbierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
+                            </button>
+                            {colMenuAbierto && (
+                              <>
+                                <div className="fixed inset-0 z-20" onClick={() => setColMenuAbierto(false)} />
+                                <div className="absolute right-0 mt-1 z-30 w-60 rounded-xl border bg-white shadow-xl py-1.5"
+                                  style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+                                  <div className="flex items-center justify-between px-3 py-1.5">
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Mostrar columnas</span>
+                                    <button type="button" onClick={mostrarTodasCols}
+                                      className="text-[10px] font-bold text-[#1A5CD8] hover:underline disabled:text-gray-300 disabled:no-underline"
+                                      disabled={colsOcultas.size === 0}>Todas</button>
+                                  </div>
+                                  <div className="max-h-[320px] overflow-y-auto">
+                                    {COLS_CUADRE.map(c => (
+                                      <label key={c.key}
+                                        className={`flex items-center gap-2 px-3 py-1.5 text-[12px] ${c.fija ? 'opacity-50 cursor-default' : 'cursor-pointer hover:bg-gray-50'}`}>
+                                        <input type="checkbox" checked={verCol(c.key)} disabled={c.fija}
+                                          onChange={() => !c.fija && toggleCol(c.key)}
+                                          className="w-3.5 h-3.5 accent-[#1A5CD8]" />
+                                        <span className="text-gray-700">{c.label}</span>
+                                        {c.fija && <span className="text-[9px] text-gray-400 ml-auto">fija</span>}
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Tabla detalle */}
                       {cuadreItems.length === 0 ? (
                         <div className="py-12 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
@@ -2306,17 +2397,14 @@ export default function Finanzas() {
                           <p className="text-[13px] text-gray-500">Sin recibos del técnico en este rango.</p>
                         </div>
                       ) : (
-                        <div className="overflow-auto max-h-[68vh] border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                          <table className="w-full min-w-[1480px]">
+                        <div className="overflow-auto scroll-grueso max-h-[68vh] border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <table className="w-full" style={{ minWidth: `${colsVisibles.length * 95}px` }}>
                             <thead className="sticky top-0 z-10" style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {['Fecha de registro', 'Mascota', 'Ciudad', 'Veterinaria', 'Plan', 'Total a cobrar', 'Comisión', 'Recogido', 'Diferencia', 'Efectivo', 'Digital → empresa', 'Transporte téc.', 'Pago téc.', 'Recargo', 'Lejanía', 'Acción'].map(h => (
-                                  <th key={h}
-                                    title={h === 'Comisión' ? 'Solo informativo: ya está descontada del total a cobrar, no se suma'
-                                      : h === 'Total a cobrar' ? 'Neto que paga el cliente: transporte a municipios incluido y comisión descontada'
-                                      : undefined}
+                                {colsVisibles.map(c => (
+                                  <th key={c.key} title={c.title}
                                     className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
-                                    {h === 'Comisión' ? 'Comisión (info)' : h}
+                                    {c.label}
                                   </th>
                                 ))}
                               </tr>
@@ -2332,7 +2420,7 @@ export default function Finanzas() {
                                 return (
                                 <tr key={it.id} className={`text-[13px] border-b transition-colors ${alertaGestion ? 'bg-amber-50/70 hover:bg-amber-100/60' : 'hover:bg-gray-50'}`}
                                   style={{ borderColor: 'rgba(30,80,40,0.06)', ...(alertaGestion ? { boxShadow: 'inset 3px 0 0 #f59e0b' } : {}) }}>
-                                  <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha_registro_servicio || it.fecha)}</td>
+                                  {verCol('fecha') && <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(it.fecha_registro_servicio || it.fecha)}</td>}
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-center gap-1">
                                       <button onClick={() => it.servicio_id && setDetalleItem(it)} disabled={!it.servicio_id}
@@ -2386,14 +2474,17 @@ export default function Finanzas() {
                                       )
                                     })()}
                                   </td>
-                                  <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>
-                                  <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>
-                                  <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>
+                                  {verCol('ciudad') && <td className="px-3 py-2.5 text-gray-600">{it.ciudad || '—'}</td>}
+                                  {verCol('veterinaria') && <td className="px-3 py-2.5 text-[12px]">{it.veterinaria ? <span className="font-semibold px-2 py-0.5 rounded-full bg-[#EEF2FF] text-[#3730A3] text-[11px]">🏥 {it.veterinaria}</span> : <span className="text-gray-300">—</span>}</td>}
+                                  {verCol('plan') && <td className="px-3 py-2.5 text-gray-600 text-[12px]">{it.plan_nombre || '—'}</td>}
+                                  {verCol('total') && (
                                   <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900" title="Neto que paga el cliente (la comisión va en su propia columna)">
                                     {valorARecoger(it) != null ? fmt(valorARecoger(it)) : '—'}
                                     {Number(it.valor_adicionales) > 0 && <div className="text-[10px] font-medium text-gray-400">incl. adic. {fmt(it.valor_adicionales)}</div>}
                                   </td>
-                                  <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>
+                                  )}
+                                  {verCol('comision') && <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>}
+                                  {verCol('recogido') && (
                                   <td className="px-3 py-2.5 font-semibold text-gray-900 tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {it.total_cobrado > 0 ? fmt(it.total_cobrado)
@@ -2413,6 +2504,8 @@ export default function Finanzas() {
                                       </div>
                                     )}
                                   </td>
+                                  )}
+                                  {verCol('diferencia') && (
                                   <td className="px-3 py-2.5 tabular-nums">
                                     {esFactMensual(it) ? (
                                       <span className="font-semibold text-[#9A5500] text-[12px]" title="Facturación mensual: el aliado nos debe el neto (bruto − comisión). Se cobra en la factura mensual.">x cobrar al aliado {fmt(pendienteAliado(it))}</span>
@@ -2422,6 +2515,8 @@ export default function Finanzas() {
                                       : d < 0 ? <span className="font-semibold text-[#1E40AF]" title="Recogió de más">+{fmt(-d)}</span>
                                       : <span className="text-[#16a34a] font-semibold inline-flex items-center gap-0.5"><Check size={11} /> $0</span>}
                                   </td>
+                                  )}
+                                  {verCol('efectivo') && (
                                   <td className="px-3 py-2.5 font-semibold text-[#16a34a] tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {fmt(it.efectivo)}
@@ -2440,6 +2535,8 @@ export default function Finanzas() {
                                       </div>
                                     )}
                                   </td>
+                                  )}
+                                  {verCol('digital') && (
                                   <td className="px-3 py-2.5">
                                     {it.digital > 0 ? (
                                       <div className="flex flex-col gap-1">
@@ -2455,11 +2552,15 @@ export default function Finanzas() {
                                       </div>
                                     ) : <span className="text-gray-400 tabular-nums">—</span>}
                                   </td>
+                                  )}
+                                  {verCol('transporte') && (
                                   <td className="px-3 py-2.5 tabular-nums">
                                     {it.transporte_sin_dato ? (
                                       <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md" title="Servicio sin transporte registrado (anterior a la mejora). Verificar manualmente.">sin dato ⚠</span>
                                     ) : (it.transporte_reconocido > 0 ? <span className="font-semibold text-[#7C3AED]">{fmt(it.transporte_reconocido)}</span> : '—')}
                                   </td>
+                                  )}
+                                  {verCol('pago') && (
                                   <td className="px-3 py-2.5 tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : <span className="text-gray-400">—</span>}
@@ -2477,6 +2578,8 @@ export default function Finanzas() {
                                       </div>
                                     )}
                                   </td>
+                                  )}
+                                  {verCol('recargo') && (
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-start gap-1.5">
                                       {it.recargo_aplicado > 0 ? (
@@ -2504,6 +2607,8 @@ export default function Finanzas() {
                                       </div>
                                     )}
                                   </td>
+                                  )}
+                                  {verCol('lejania') && (
                                   <td className="px-3 py-2.5">
                                     <label className={`flex items-center gap-1.5 ${cuadreCerrado ? 'cursor-default' : 'cursor-pointer'}`} title="Marcar lejanía (recargo manual al técnico)">
                                       <input type="checkbox" checked={!!it.es_lejania} disabled={cuadreCerrado}
@@ -2512,6 +2617,7 @@ export default function Finanzas() {
                                       <span className="text-[11px] text-gray-500">{it.es_lejania ? 'Sí' : '—'}</span>
                                     </label>
                                   </td>
+                                  )}
                                   {/* Acción: estado de revisión (sugerido) + nota (features 3, 8) */}
                                   <td className="px-3 py-2.5">
                                     <div className="flex flex-col gap-1 min-w-[150px]">

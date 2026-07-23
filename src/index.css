@@ -138,6 +138,18 @@ a, button, [role="button"] {
 ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
 
+/* ─── Scrollbar grueso para tablas anchas (cuadre) — fácil de agarrar ─── */
+/* La barra global de 5px es casi imposible de tomar con el mouse en una
+   tabla de 16 columnas; esta la engorda solo donde hace falta. */
+.scroll-grueso { scrollbar-width: auto; scrollbar-color: #94A3B8 #EEF2F7; }
+.scroll-grueso::-webkit-scrollbar { height: 16px; width: 16px; }
+.scroll-grueso::-webkit-scrollbar-track { background: #EEF2F7; border-radius: 999px; }
+.scroll-grueso::-webkit-scrollbar-thumb {
+  background: #94A3B8; border-radius: 999px;
+  border: 3px solid #EEF2F7; background-clip: content-box;
+}
+.scroll-grueso::-webkit-scrollbar-thumb:hover { background: #64748B; }
+
 /* ─── Spinner ────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner {
