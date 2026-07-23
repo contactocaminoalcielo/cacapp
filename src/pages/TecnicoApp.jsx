@@ -20,6 +20,13 @@ import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 
 const POLL = 30_000
 
+// Aviso "ve a cuadrar cuentas": a partir de estos servicios acumulados sin
+// cuadrar (regla David 2026-07-22). El conteo lo hace la RPC de la migración
+// 071, con la misma regla del cuadre: cuenta hasta que el cuadre se CIERRA.
+const UMBRAL_CUADRAR = 40
+// Línea de coordinación a la que el técnico pide la cita para cuadrar.
+const WA_COORDINACION = '3132666356'
+
 // ─── ERROR BOUNDARY — evita pantalla en blanco si ReciboForm lanza ─────
 class ReciboErrorBoundary extends Component {
   state = { hasError: false, message: '' }
@@ -1551,6 +1558,8 @@ export default function TecnicoApp() {
   const [entHasta, setEntHasta]   = useState('')
   const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
   const [cuadresPend, setCuadresPend] = useState(0) // cuadres BORRADOR sin firmar (badge + aviso)
+  const [sinCuadrar, setSinCuadrar] = useState(null) // servicios acumulados sin cuadrar (RPC 071)
+  const [alertaCuadrar, setAlertaCuadrar] = useState(false) // modal al entrar
   const [loading, setLoading]     = useState(false)
   const [queryErr, setQueryErr]   = useState('')
   const [notif, setNotif]         = useState(null)
@@ -1785,6 +1794,28 @@ export default function TecnicoApp() {
           Number(c.tecnico_confirmado_monto) !== Number(c.dinero_a_entregar)
         ).length)
       } catch (_) { /* badge best-effort */ }
+
+      // ── 8. Servicios acumulados SIN CUADRAR (migración 071) ──
+      // A partir de UMBRAL_CUADRAR se le avisa al técnico que vaya a cuadrar
+      // cuentas. El conteo lo hace la DB para que sea el mismo que ve el
+      // coordinador al generar el cuadre.
+      try {
+        const { data: pend } = await db.rpc('servicios_sin_cuadrar_tecnico', {
+          p_tecnico_id: tecnico.id,
+          p_desde:      FECHA_CORTE,
+        })
+        if (pend) {
+          setSinCuadrar(pend)
+          // El modal salta UNA vez al día: insistir en cada carga (hay polling)
+          // volvería la app inusable en la calle.
+          if (Number(pend.total) >= UMBRAL_CUADRAR) {
+            try {
+              const clave = `orbit_alerta_cuadrar_${tecnico.id}`
+              if (localStorage.getItem(clave) !== hoyLocalISO()) setAlertaCuadrar(true)
+            } catch (_) { setAlertaCuadrar(true) }
+          }
+        }
+      } catch (_) { /* aviso best-effort: nunca bloquea la operación */ }
     } finally {
       if (!silent) setLoading(false)
     }
@@ -2263,6 +2294,24 @@ export default function TecnicoApp() {
         </div>
       )}
 
+      {/* Aviso permanente: servicios acumulados sin cuadrar. El modal salta una
+          vez al día; esta barra queda mientras el técnico no cuadre. */}
+      {Number(sinCuadrar?.total) >= UMBRAL_CUADRAR && (
+        <button
+          onClick={() => setAlertaCuadrar(true)}
+          className="mx-4 mt-3 flex items-center gap-2.5 px-4 py-3 rounded-xl text-left active:scale-[0.99] transition-transform"
+          style={{ background: '#FEF3C7', border: '1px solid #FCD34D' }}>
+          <Wallet size={16} className="flex-shrink-0" style={{ color: '#B45309' }} />
+          <span className="text-sm font-semibold flex-1" style={{ color: '#92400E' }}>
+            Ya completaste {sinCuadrar.total} servicios — ve a cuadrar cuentas
+            <span className="block text-[11px] font-normal mt-0.5" style={{ color: '#B45309' }}>
+              Toca aquí para escribirle a coordinación y agendar la reunión.
+            </span>
+          </span>
+          <span className="text-[18px]" style={{ color: '#B45309' }}>›</span>
+        </button>
+      )}
+
       {/* Aviso: hay cuadre(s) esperando la firma del técnico. Sin su confirmación
           gerencia no puede cerrar el cuadre (migración 038), así que este aviso
           es la "notificación" — aparece apenas abre la app, en cualquier pestaña. */}
@@ -2284,6 +2333,61 @@ export default function TecnicoApp() {
           <span className="text-[18px]" style={{ color: '#16a34a' }}>›</span>
         </button>
       )}
+
+      {/* Alerta al entrar: pasó el umbral de servicios sin cuadrar. Se cierra
+          por hoy (no por siempre): mientras no cuadre, mañana vuelve a salir. */}
+      {alertaCuadrar && sinCuadrar && (() => {
+        const cerrarPorHoy = () => {
+          try { localStorage.setItem(`orbit_alerta_cuadrar_${tecnico.id}`, hoyLocalISO()) } catch (_) {}
+          setAlertaCuadrar(false)
+        }
+        const textoWA = `Hola, soy ${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim()
+          + `. Ya tengo ${sinCuadrar.total} servicios sin cuadrar en Orbit. ¿Cuándo podríamos reunirnos para cuadrar cuentas?`
+        return (
+          <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.55)' }}
+            onClick={e => { if (e.target === e.currentTarget) cerrarPorHoy() }}>
+            <div className="w-full max-w-sm rounded-3xl bg-white overflow-hidden shadow-2xl">
+              <div className="px-5 pt-6 pb-5 text-center" style={{ background: '#FFFBEB' }}>
+                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full"
+                  style={{ background: '#FDE68A' }}>
+                  <Wallet size={26} style={{ color: '#B45309' }} />
+                </div>
+                <p className="text-[19px] font-extrabold leading-tight" style={{ color: '#92400E' }}>
+                  Ya completaste {sinCuadrar.total} servicios
+                </p>
+                <p className="text-[14px] font-bold mt-1" style={{ color: '#B45309' }}>
+                  Ve a cuadrar cuentas
+                </p>
+              </div>
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-[12px] text-gray-500 leading-relaxed">
+                  Son los servicios que llevas sin cerrar cuadre
+                  {sinCuadrar.desde_fecha
+                    ? ` desde el ${new Date(sinCuadrar.desde_fecha + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'long' })}`
+                    : ''}.
+                  Escríbele a coordinación para agendar la reunión.
+                </p>
+                <a href={waLink(WA_COORDINACION, textoWA)} target="_blank" rel="noopener noreferrer"
+                  onClick={cerrarPorHoy}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-[15px] font-bold text-white active:scale-[0.99] transition-transform"
+                  style={{ background: '#25D366' }}>
+                  <MessageSquare size={18} /> Escribir a coordinación
+                </a>
+                <button onClick={() => { cerrarPorHoy(); setTab('mis_cuadres') }}
+                  className="w-full rounded-2xl border py-3 text-[14px] font-bold text-gray-700 active:scale-[0.99] transition-transform"
+                  style={{ borderColor: '#E5E7EB' }}>
+                  Ver mis cuadres
+                </button>
+                <button onClick={cerrarPorHoy}
+                  className="w-full py-1 text-[13px] font-semibold text-gray-400">
+                  Ahora no
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Contenido — padding-bottom para no quedar tapado por la nav ── */}
       <div className="flex-1 p-4 pb-24">
