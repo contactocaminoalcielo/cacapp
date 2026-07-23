@@ -4498,6 +4498,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const modalidad           = aliado?.modalidad_comision || ''
   const comisionGuardada    = svcData.comision_aliado || 0
   const comisionFueDescontada = svcData.comision_descontada === true
+  // ¿El recibo de VETERINARIA descuenta la comisión (la vet paga el NETO)?
+  // En DESCUENTO_INMEDIATO la vet SIEMPRE paga el neto: la comisión es su
+  // descuento. Antes esto dependía solo de `comision_descontada`, que se fija por
+  // punto de recogida al registrar (domicilio → false) — pero quien paga el
+  // recibo VET es la veterinaria, así que ahí el descuento aplica igual. Sin este
+  // arreglo un descuento inmediato recogido a domicilio mostraba el precio
+  // completo al aliado (queja COPITO 2026-07-23). CREDITO_ACUMULADO y
+  // FACTURACION_MENSUAL NO descuentan (el aliado paga completo, se cuadra aparte).
+  const descuentoInmediatoVet = comisionFueDescontada
+    || (modalidad === 'DESCUENTO_INMEDIATO' && comisionGuardada > 0)
   // Aliado de FACTURACIÓN MENSUAL: el técnico NO recoge plata en ningún caso
   // (el aliado paga por factura al cierre del mes), sea el recibo del cliente o
   // de la veterinaria. Se usa para NO prellenar el medio de pago con el valor
@@ -4599,7 +4609,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   // Porcentaje real: se consulta de config_comisiones para evitar distorsión por recargos
   const [comisionPct, setComisionPct] = useState(
-    comisionFueDescontada && precioOriginal > 0
+    descuentoInmediatoVet && precioOriginal > 0
       ? parseFloat((comisionGuardada / precioOriginal * 100).toFixed(1))
       : 0
   )
@@ -4617,7 +4627,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   )
   useEffect(() => {
     if (!svcData.plan_id) return
-    if (comisionFueDescontada) {
+    if (descuentoInmediatoVet) {
       // DESCUENTO_INMEDIATO: consultar config para % exacto sin distorsión por recargos
       if (comisionGuardada <= 0) return
       db.from('config_comisiones')
@@ -4652,9 +4662,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     }
   }, [])
   // Comisión SOLO sobre el valor del plan, no sobre el total (transporte/adicionales/recargos)
-  const comisionMonto = comisionFueDescontada ? Math.round(valorPlanBase * comisionPct / 100) : 0
-  // Solo se deduce en recibo cuando la comisión fue aplicada inmediatamente
-  const valorVet = comisionFueDescontada
+  const comisionMonto = descuentoInmediatoVet ? Math.round(valorPlanBase * comisionPct / 100) : 0
+  // La vet de DESCUENTO_INMEDIATO paga el neto (precio − comisión) en su recibo.
+  const valorVet = descuentoInmediatoVet
     ? Math.max(0, precioOriginal - comisionMonto)
     : precioOriginal
 
@@ -4944,6 +4954,21 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       // Corrección de comisión solo si el servicio quedó con comision_aliado=0 (previo al fix VIP)
       const comisionParaGuardar = (esFacturacionMensual && !comisionFueDescontada && comisionGuardada <= 0 && comisionManual > 0)
         ? comisionManual : null
+
+      // Recibo de VETERINARIA con DESCUENTO_INMEDIATO registrado a domicilio
+      // (comision_descontada=false, valor_total=bruto): al emitir el recibo VET la
+      // veterinaria paga el NETO. Dejamos el servicio consistente ANTES de la RPC
+      // (comision_descontada=true, valor_total=neto), o estado_pago saldría PARCIAL
+      // al comparar el neto cobrado contra el bruto guardado, y la comisión seguiría
+      // figurando PENDIENTE. Solo al crear el recibo (no al reabrir uno guardado).
+      if (tipoRecibo === 'VETERINARIA' && descuentoInmediatoVet && !comisionFueDescontada
+          && comisionMonto > 0 && !reciboExistente) {
+        try {
+          await db.from('servicios')
+            .update({ comision_descontada: true, valor_total: valorVet })
+            .eq('id', servicioSel.id)
+        } catch (_) { /* best-effort: el recibo se guarda igual */ }
+      }
 
       // ── Camino transaccional e idempotente (RPC) ──────────────────────────
       const { data: rpcData, error: rpcErr } = await db.rpc('guardar_recibo_tecnico', {
@@ -5253,7 +5278,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }
       if (tipo === 'VETERINARIA') {
         const lineH = 6.5
-        if (comisionFueDescontada) {
+        if (descuentoInmediatoVet) {
           // DESCUENTO_INMEDIATO: desglose completo bruto → comisión → total
           const rows = 3
           pdf.setFillColor(255, 251, 235); pdf.rect(M, y, CW, lineH * rows + 4, 'F')
@@ -5432,7 +5457,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         `📅 Fecha: ${form.fecha}`,
         `📦 Plan: ${form.servicio}`,
         ``,
-        ...(comisionFueDescontada ? [
+        ...(descuentoInmediatoVet ? [
           `💵 Precio bruto: ${fmt(precioOriginal)}`,
           `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
         ] : [
@@ -5621,7 +5646,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       {tipoRecibo === 'VETERINARIA' && aliado && (
         <div className="rounded-2xl mb-4 overflow-hidden"
           style={{ border: '1.5px solid #FDE68A' }}>
-          {comisionFueDescontada ? (
+          {descuentoInmediatoVet ? (
             /* DESCUENTO_INMEDIATO: desglose completo con deducción */
             <>
               <div className="px-4 py-2.5" style={{ background: '#FFF3DC' }}>
@@ -5715,7 +5740,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
               <span style={{ fontSize: '13px', fontWeight: '700', color: '#0B1D4F' }}>{fmt(precioOriginal)}</span>
             </div>
             {/* DESCUENTO_INMEDIATO: muestra deducción; CREDITO/FACTURACION: muestra comisión informativa */}
-            {comisionFueDescontada ? (
+            {descuentoInmediatoVet ? (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
                   <span style={{ fontSize: '11px', color: '#92400E' }}>Comisión aliado ({comisionPct}% del plan {fmt(valorPlanBase)})</span>
