@@ -98,7 +98,7 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
   const especieId = parseInt(especieIdRaw) || 0
   const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
     db.from('servicios')
-      .select('id, valor_total, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
+      .select('id, valor_total, valor_plan, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
       .eq('mascota_id', mascotaId)
       .neq('estado', 'ENTREGADO')
       .neq('estado', 'CANCELADO'),
@@ -158,23 +158,25 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
     }
 
-    // El nuevo valor total es el precio del nuevo rango (BRUTO).
-    // Para comision_descontada=true (recogida en clínica aliada) valor_total se
-    // guarda NETO (precio − comisión). DEBE restarse SIEMPRE una comisión: la
-    // recalculada si se pudo recalcular, y si no, la que ya tenía el servicio.
-    // Si aquí se resta 0 pero el servicio conserva comision_aliado>0, el cuadre
-    // (bruto = valor_total + comision_aliado, migración 017) la vuelve a sumar y
-    // sale un valor inflado que no coincide con ninguna tarifa.
+    // `valor_plan` guarda el precio base del NUEVO rango (bruto) y se actualiza a
+    // la par: antes solo se movía valor_total y el "Valor del plan" del cuadre
+    // quedaba con la tarifa vieja → el desglose no cuadraba (bug reportado).
+    //
+    // valor_total se ajusta por DELTA de la porción del plan (no se recomputa
+    // desde cero): así se PRESERVAN adicionales, transporte, recargos, descuentos
+    // y eutanasia ya incluidos. Para comision_descontada=true valor_total va NETO,
+    // así que se aplica también el delta de la comisión.
     const comisionVigente = nuevaComision != null ? nuevaComision : (svc.comision_aliado ?? 0)
-    const nuevoValorTotal = Math.round(
-      nuevoPrecioBase - (svc.comision_descontada ? comisionVigente : 0)
-    )
+    const baseVieja       = Number(svc.valor_plan ?? 0)
+    const deltaBase       = nuevoPrecioBase - baseVieja
+    const deltaComision   = svc.comision_descontada ? (comisionVigente - (svc.comision_aliado ?? 0)) : 0
+    const nuevoValorTotal = Math.round((svc.valor_total ?? 0) + deltaBase - deltaComision)
 
-    const cambioPrecio   = Math.abs(nuevoValorTotal - (svc.valor_total ?? 0)) > 0.5
+    const cambioPrecio   = Math.abs(deltaBase) > 0.5
     const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (svc.comision_aliado ?? 0)) > 0.5
     if (!cambioPrecio && !cambioComision) continue
 
-    const updates = { valor_total: nuevoValorTotal }
+    const updates = { valor_total: nuevoValorTotal, valor_plan: nuevoPrecioBase }
     if (cambioComision) updates.comision_aliado = nuevaComision
     const { error } = await db.from('servicios').update(updates).eq('id', svc.id)
     if (error) continue
