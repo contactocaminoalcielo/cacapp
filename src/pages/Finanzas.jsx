@@ -3426,22 +3426,40 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   const grossVal    = item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total)
   const comisionVal = item.comision != null ? n(item.comision) : n(svc?.comision_aliado)
   const cob = {
-    adic:       item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
-    transporte: item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
-    descuento:  n(svc?.descuento_adicional),
-    descMotivo: svc?.descuento_adicional_motivo || '',
-    comision:   comisionVal,
-    vet:        item.veterinaria || svc?.aliados?.nombre || '—',
+    adic:        item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
+    transporte:  item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
+    recargoNoct: n(svc?.recargo_nocturno),
+    descuento:   n(svc?.descuento_adicional),
+    descMotivo:  svc?.descuento_adicional_motivo || '',
+    comision:    comisionVal,
+    vet:         item.veterinaria || svc?.aliados?.nombre || '—',
+    ciudad:      svc?.ciudad_recogida || item.ciudad || '',
     // NETO = bruto − comisión (lo que le queda a la empresa). La comisión es de
     // la vet y no la recoge el técnico → no es faltante suyo. Ver netoCuadreItem.
     neto:       grossVal - comisionVal,
     recogido:   n(item.total_cobrado),
     medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
   }
-  // Valor del plan: snapshot; para históricos sin desglose lo deriva del bruto.
-  cob.plan = item.valor_plan != null ? n(item.valor_plan)
-           : svc?.valor_plan != null ? n(svc.valor_plan)
-           : Math.max(0, grossVal - cob.adic - cob.transporte)
+  // Valor del plan: el snapshot congelado (migración 010) es la fuente fiel.
+  cob.planSnapshot = item.valor_plan != null ? n(item.valor_plan)
+                   : svc?.valor_plan != null ? n(svc.valor_plan) : null
+  cob.planDerivado = cob.planSnapshot == null   // servicio anterior al desglose congelado
+  // Sin snapshot (servicios previos al 23-jun): se DERIVA de forma que el desglose
+  // reconstruya el bruto. bruto = plan + adicionales + transporte + recargo noct − descuento
+  //   ⇒  plan = bruto + descuento − adicionales − transporte − recargo noct
+  // (El fallback anterior era `bruto − adic − transporte` y OLVIDABA sumar el
+  //  descuento, colapsando todo en el plan: CANDELA 169.000 salía 160.000.)
+  cob.plan = cob.planSnapshot != null ? cob.planSnapshot
+           : Math.max(0, grossVal + cob.descuento - cob.adic - cob.transporte - cob.recargoNoct)
+  // Reconciliación: el desglose debe reconstruir el bruto registrado. Si no cuadra,
+  // hay un dato mal capturado (p.ej. transporte guardado como descuento) → se avisa
+  // en vez de esconderlo detrás de un total que sale por otro lado.
+  cob.brutoDesglose = cob.plan + cob.adic + cob.transporte + cob.recargoNoct - cob.descuento
+  cob.descuadre = Math.round(cob.brutoDesglose) - Math.round(grossVal)
+  cob.cuadra    = Math.abs(cob.descuadre) <= 1
+  // Patrón detectado: el transporte de la ciudad se guardó como "descuento" (motivo
+  // que menciona transporte) → el técnico no lo recibe reconocido. Señal precisa.
+  cob.descParaceTransporte = cob.descuento > 0 && cob.transporte === 0 && /tran/i.test(cob.descMotivo)
   // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
   cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
                  : cob.recogido > grossVal ? grossVal - cob.recogido
@@ -3498,7 +3516,13 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
               </div>
               <div>
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-1">Detalle de cobros</p>
-                <Dato label="Valor del plan">{fmt(cob.plan)}</Dato>
+                <div className="flex justify-between gap-3 py-1 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                  <span className="text-[12px] text-gray-500">
+                    Valor del plan{svc?.planes?.nombre ? ` · ${svc.planes.nombre}` : ''}{peso != null ? ` · ${peso} kg` : ''}
+                    {cob.planDerivado && <span className="ml-1 text-[10px] text-amber-600" title="Servicio anterior al desglose congelado (23-jun): el valor del plan se derivó del total. Se corrige con el backfill de precios.">≈ derivado</span>}
+                  </span>
+                  <span className="text-[12px] font-semibold text-gray-800 text-right tabular-nums">{fmt(cob.plan)}</span>
+                </div>
                 <Dato label="Adicionales">{fmt(cob.adic)}</Dato>
                 {adicionales.length > 0 && (
                   <div className="pl-3 py-0.5 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
@@ -3510,15 +3534,36 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                     ))}
                   </div>
                 )}
-                <Dato label="Transporte">{fmt(cob.transporte)}</Dato>
+                <Dato label={`Transporte${cob.ciudad ? ` · ${cob.ciudad}` : ''}`}>{fmt(cob.transporte)}</Dato>
+                {cob.recargoNoct > 0 && <Dato label="Recargo nocturno">{fmt(cob.recargoNoct)}</Dato>}
                 <Dato label="Descuento">{cob.descuento > 0 ? `- ${fmt(cob.descuento)}` : fmt(0)}</Dato>
                 {cob.descMotivo && (
                   <div className="pl-3 py-0.5 text-[11px] text-orange-600 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>· Motivo: {cob.descMotivo}</div>
                 )}
-                <Dato label="Comisión veterinaria">{fmt(cob.comision)}</Dato>
+                {cob.descParaceTransporte && (
+                  <div className="pl-3 py-0.5 text-[11px] text-amber-700 border-b flex items-start gap-1" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                    <AlertTriangle size={11} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    <span>Parece el transporte de {cob.ciudad || 'la ciudad'} guardado como descuento: el técnico no lo recibe reconocido. Revisar el registro.</span>
+                  </div>
+                )}
+                <Dato label="Comisión veterinaria (info)">{fmt(cob.comision)}</Dato>
                 <Dato label="Veterinaria">{cob.vet}</Dato>
+                {!cob.cuadra && (
+                  <div className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5">
+                    <AlertTriangle size={13} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    <span className="text-[11px] text-amber-700 leading-snug">
+                      El desglose no cuadra con el total registrado por {fmt(Math.abs(cob.descuadre))}.
+                      Suele ser un dato mal capturado en el registro (p.ej. transporte guardado como descuento). Revisar el servicio.
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between gap-3 py-1.5 mt-1 border-t-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
-                  <span className="text-[12px] font-bold text-gray-700">Total a recaudar</span>
+                  <span className="text-[12px] font-bold text-gray-700 inline-flex items-center gap-1">
+                    Total a recaudar
+                    {cob.cuadra
+                      ? <Check size={12} className="text-[#16a34a]" />
+                      : <AlertTriangle size={12} className="text-amber-500" />}
+                  </span>
                   <span className="text-[13px] font-extrabold text-gray-900 tabular-nums">{fmt(cob.neto)}</span>
                 </div>
                 <Dato label="Valor recogido">{fmt(cob.recogido)}</Dato>
