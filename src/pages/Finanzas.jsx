@@ -3457,9 +3457,6 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   cob.brutoDesglose = cob.plan + cob.adic + cob.transporte + cob.recargoNoct - cob.descuento
   cob.descuadre = Math.round(cob.brutoDesglose) - Math.round(grossVal)
   cob.cuadra    = Math.abs(cob.descuadre) <= 1
-  // Patrón detectado: el transporte de la ciudad se guardó como "descuento" (motivo
-  // que menciona transporte) → el técnico no lo recibe reconocido. Señal precisa.
-  cob.descParaceTransporte = cob.descuento > 0 && cob.transporte === 0 && /tran/i.test(cob.descMotivo)
   // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
   cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
                  : cob.recogido > grossVal ? grossVal - cob.recogido
@@ -3539,12 +3536,6 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                 <Dato label="Descuento">{cob.descuento > 0 ? `- ${fmt(cob.descuento)}` : fmt(0)}</Dato>
                 {cob.descMotivo && (
                   <div className="pl-3 py-0.5 text-[11px] text-orange-600 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>· Motivo: {cob.descMotivo}</div>
-                )}
-                {cob.descParaceTransporte && (
-                  <div className="pl-3 py-0.5 text-[11px] text-amber-700 border-b flex items-start gap-1" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
-                    <AlertTriangle size={11} className="text-amber-500 flex-shrink-0 mt-0.5" />
-                    <span>Parece el transporte de {cob.ciudad || 'la ciudad'} guardado como descuento: el técnico no lo recibe reconocido. Revisar el registro.</span>
-                  </div>
                 )}
                 <Dato label="Comisión veterinaria (info)">{fmt(cob.comision)}</Dato>
                 <Dato label="Veterinaria">{cob.vet}</Dato>
