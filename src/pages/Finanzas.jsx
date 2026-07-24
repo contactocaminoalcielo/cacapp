@@ -3457,6 +3457,13 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   cob.brutoDesglose = cob.plan + cob.adic + cob.transporte + cob.recargoNoct - cob.descuento
   cob.descuadre = Math.round(cob.brutoDesglose) - Math.round(grossVal)
   cob.cuadra    = Math.abs(cob.descuadre) <= 1
+  // El desglose SOLO es verificable cuando todas sus piezas están en columnas: se
+  // excluye la eutanasia (va por eutanasia_id, sin monto en el servicio), el
+  // desamparado (recargo de prioridad sin columna) y el plan DERIVADO (se forzó a
+  // cuadrar, así que su ✓ no probaría nada). En esos casos no se muestra el ✓/⚠.
+  cob.eutanasia    = svc?.eutanasia_id != null
+  cob.desamparado  = /desampar/i.test(svc?.planes?.nombre || item.plan_nombre || '')
+  cob.reconciliable = !cob.planDerivado && !cob.eutanasia && !cob.desamparado
   // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
   cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
                  : cob.recogido > grossVal ? grossVal - cob.recogido
@@ -3539,21 +3546,21 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                 )}
                 <Dato label="Comisión veterinaria (info)">{fmt(cob.comision)}</Dato>
                 <Dato label="Veterinaria">{cob.vet}</Dato>
-                {!cob.cuadra && (
+                {cob.reconciliable && !cob.cuadra && (
                   <div className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5">
                     <AlertTriangle size={13} className="text-amber-500 flex-shrink-0 mt-0.5" />
                     <span className="text-[11px] text-amber-700 leading-snug">
                       El desglose no cuadra con el total registrado por {fmt(Math.abs(cob.descuadre))}.
-                      Suele ser un dato mal capturado en el registro (p.ej. transporte guardado como descuento). Revisar el servicio.
+                      Suele ser un dato mal capturado (p.ej. un adicional no sumado al total, o el transporte guardado como descuento). Revisar el servicio.
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between gap-3 py-1.5 mt-1 border-t-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
                   <span className="text-[12px] font-bold text-gray-700 inline-flex items-center gap-1">
                     Total a recaudar
-                    {cob.cuadra
+                    {cob.reconciliable && (cob.cuadra
                       ? <Check size={12} className="text-[#16a34a]" />
-                      : <AlertTriangle size={12} className="text-amber-500" />}
+                      : <AlertTriangle size={12} className="text-amber-500" />)}
                   </span>
                   <span className="text-[13px] font-extrabold text-gray-900 tabular-nums">{fmt(cob.neto)}</span>
                 </div>
