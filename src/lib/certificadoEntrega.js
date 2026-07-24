@@ -172,17 +172,27 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   if (mensajero) filaAncha('Mensajero / Técnico', `${mensajero.nombre} ${mensajero.apellido}`)
   hr()
 
-  // ── Saldo pendiente ───────────────────────────────────────────────────────
-  // Un certificado de ENTREGA no es un recibo: no informa cuánto vale el
-  // servicio ni cuánto se ha pagado. Solo avisa si queda algo por cobrar en el
-  // momento de entregar; si no hay saldo, la sección no aparece.
-  const saldo = Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0))
+  // ── Adicionales por cobrar en la entrega ──────────────────────────────────
+  // Un certificado de ENTREGA no es un recibo: no informa cuánto vale el plan
+  // ni cuánto se ha pagado. Lo único que se cobra al recibir son los
+  // recordatorios ADICIONALES que el cliente pidió y aún no ha pagado — NUNCA
+  // el plan: éste puede quedar "pendiente" porque lo paga la veterinaria
+  // (facturación mensual / comisión) y eso no es responsabilidad del
+  // propietario. Se muestra la suma del valor de esos adicionales (el mismo
+  // `precio_cobrado` que ya se ve en otras vistas), topada al saldo real del
+  // servicio: si el adicional ya se pagó, el saldo es 0 y la sección no aparece
+  // (nunca cobra más de lo que realmente se debe).
+  const saldoServicio = Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0))
+  const totalAdicionales = (items || [])
+    .filter(i => i.origen === 'ADICIONAL' && i.estado !== 'NA')
+    .reduce((s, i) => s + (Number(i.precio_cobrado ?? i.subtotal) || 0), 0)
+  const saldo = Math.min(totalAdicionales, saldoServicio)
   if (saldo > 0) {
     espacio(14)
     pdf.setDrawColor(196, 168, 122); pdf.setLineWidth(0.4)
     pdf.setFillColor(255, 253, 248); pdf.rect(M, y, CW, 11, 'FD')
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(140, 110, 60)
-    t('SALDO POR COBRAR EN LA ENTREGA', M + 4, y + 7)
+    t('ADICIONALES POR COBRAR EN LA ENTREGA', M + 4, y + 7)
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(192, 48, 48)
     t(fmt(saldo), W - M - 4, y + 7.6, { align: 'right' })
     y += 14

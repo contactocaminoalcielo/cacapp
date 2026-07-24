@@ -100,7 +100,7 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
         ).eq('id', servicioId).single(),
         db.from('entregas').select('*').eq('servicio_id', servicioId).maybeSingle(),
         db.from('servicio_recordatorios')
-          .select('id, estado, origen, recordatorios(nombre, categoria)')
+          .select('id, estado, origen, precio_cobrado, recordatorios(nombre, categoria)')
           .eq('servicio_id', servicioId).neq('origen', 'REMOVIDO'),
         db.from('personal').select('id, nombre, apellido, rol_principal_id')
           .eq('activo', true).in('rol_principal_id', [2, 3]).order('nombre'),
