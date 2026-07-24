@@ -3421,18 +3421,28 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
   const fmtD  = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 
-  // Desglose de cobros: prioriza el snapshot del cuadre (item) y cae al servicio.
+  // Desglose de cobros: para el DESGLOSE (plan, adicionales, transporte, descuento,
+  // comisión, total a recaudar) se usa el valor ACTUAL del servicio, que refleja las
+  // correcciones. La copia congelada del cuadre_item quedaba desactualizada en
+  // cuadres CERRADOS (87 items) y mostraba el plan viejo. Lo RECOGIDO (total_cobrado
+  // y medios) SÍ viene del item: es lo que el técnico recaudó en ESTE cuadre.
   const n = v => Number(v) || 0
-  const grossVal    = item.valor_a_cobrar != null ? n(item.valor_a_cobrar) : n(svc?.valor_total)
-  const comisionVal = item.comision != null ? n(item.comision) : n(svc?.comision_aliado)
+  const comisionVal = svc?.comision_aliado != null ? n(svc.comision_aliado)
+                    : item.comision != null ? n(item.comision) : 0
+  // bruto (valor a cobrar) del servicio vivo = neto + comisión si está descontada.
+  const grossVal = svc?.valor_total != null
+    ? n(svc.valor_total) + (svc.comision_descontada ? comisionVal : 0)
+    : n(item.valor_a_cobrar)
   const cob = {
-    adic:        item.valor_adicionales != null ? n(item.valor_adicionales) : n(svc?.valor_adicionales),
-    transporte:  item.transporte_reconocido != null ? n(item.transporte_reconocido) : n(svc?.valor_transporte),
+    adic:        svc?.valor_adicionales != null ? n(svc.valor_adicionales)
+               : item.valor_adicionales  != null ? n(item.valor_adicionales) : 0,
+    transporte:  svc?.valor_transporte != null ? n(svc.valor_transporte)
+               : item.transporte_reconocido != null ? n(item.transporte_reconocido) : 0,
     recargoNoct: n(svc?.recargo_nocturno),
     descuento:   n(svc?.descuento_adicional),
     descMotivo:  svc?.descuento_adicional_motivo || '',
     comision:    comisionVal,
-    vet:         item.veterinaria || svc?.aliados?.nombre || '—',
+    vet:         svc?.aliados?.nombre || item.veterinaria || '—',
     ciudad:      svc?.ciudad_recogida || item.ciudad || '',
     // NETO = bruto − comisión (lo que le queda a la empresa). La comisión es de
     // la vet y no la recoge el técnico → no es faltante suyo. Ver netoCuadreItem.
@@ -3440,9 +3450,10 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
     recogido:   n(item.total_cobrado),
     medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
   }
-  // Valor del plan: el snapshot congelado (migración 010) es la fuente fiel.
-  cob.planSnapshot = item.valor_plan != null ? n(item.valor_plan)
-                   : svc?.valor_plan != null ? n(svc.valor_plan) : null
+  // Valor del plan: valor ACTUAL del servicio (corregido). El snapshot del item
+  // solo se usa si el servicio aún no está cargado.
+  cob.planSnapshot = svc?.valor_plan != null ? n(svc.valor_plan)
+                   : item.valor_plan != null ? n(item.valor_plan) : null
   cob.planDerivado = cob.planSnapshot == null   // servicio anterior al desglose congelado
   // Sin snapshot (servicios previos al 23-jun): se DERIVA de forma que el desglose
   // reconstruya el bruto. bruto = plan + adicionales + transporte + recargo noct − descuento
