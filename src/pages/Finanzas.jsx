@@ -13,6 +13,7 @@ import {
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
   HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2, Columns3, ArrowUpDown,
+  Search, Filter,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
@@ -56,6 +57,21 @@ const COLS_CUADRE = [
   { key: 'accion',      label: 'Acción', fija: true },
 ]
 const CUADRE_COLS_LS = 'orbit_cuadre_cols_ocultas'
+
+// Chips de filtro rápido por estado del ítem (OR entre los activos).
+const CHIPS_ESTADO_CUADRE = [
+  { k: 'alerta',       label: 'Con diferencia' },
+  { k: 'cancelado',    label: 'Cancelados' },
+  { k: 'sin_recibo',   label: 'Sin recibo' },
+  { k: 'fact_mensual', label: 'Fact. mensual' },
+  { k: 'lejania',      label: 'Lejanía' },
+]
+// Filtro por medio de pago (selección única).
+const CHIPS_MEDIO_CUADRE = [
+  { k: 'efectivo', label: 'Solo efectivo' },
+  { k: 'digital',  label: 'Solo digital' },
+  { k: 'mixto',    label: 'Mixto' },
+]
 
 // NETO que le queda a la EMPRESA por un servicio del cuadre = bruto − comisión
 // de la veterinaria. Se deriva SIEMPRE del bruto (valor_a_cobrar), NO del
@@ -411,15 +427,71 @@ export default function Finanzas() {
       default:            return 0
     }
   }
+  // ── Filtros de la tabla del cuadre ──────────────────────────────────────────
+  // `estados` es un Set de chips activos (OR entre ellos). Los demás campos son
+  // de selección única y se combinan con AND entre grupos.
+  const [filtroCuadre, setFiltroCuadre] = useState({ q: '', vet: '', ciudad: '', plan: '', medio: '', estados: new Set() })
+  const filtroCuadreActivo = !!(filtroCuadre.q || filtroCuadre.vet || filtroCuadre.ciudad || filtroCuadre.plan || filtroCuadre.medio || filtroCuadre.estados.size)
+  function limpiarFiltroCuadre() {
+    setFiltroCuadre({ q: '', vet: '', ciudad: '', plan: '', medio: '', estados: new Set() })
+  }
+  function toggleEstadoFiltro(k) {
+    setFiltroCuadre(prev => {
+      const estados = new Set(prev.estados)
+      estados.has(k) ? estados.delete(k) : estados.add(k)
+      return { ...prev, estados }
+    })
+  }
+  // Opciones únicas para los desplegables (a partir de los ítems del cuadre).
+  const opcionesCuadre = useMemo(() => {
+    const vets = new Set(), ciudades = new Set(), planes = new Set()
+    for (const it of cuadreItems) {
+      if (it.veterinaria)  vets.add(it.veterinaria)
+      if (it.ciudad)       ciudades.add(it.ciudad)
+      if (it.plan_nombre)  planes.add(it.plan_nombre)
+    }
+    const ord = s => [...s].sort((a, b) => a.localeCompare(b, 'es'))
+    return { vets: ord(vets), ciudades: ord(ciudades), planes: ord(planes) }
+  }, [cuadreItems])
+  function itemPasaFiltro(it) {
+    const f = filtroCuadre
+    if (f.q) {
+      const q = f.q.toLowerCase()
+      const hay = [it.mascota_nombre, it.ciudad, it.veterinaria, it.plan_nombre]
+        .some(v => (v || '').toLowerCase().includes(q))
+      if (!hay) return false
+    }
+    if (f.vet    && it.veterinaria !== f.vet)    return false
+    if (f.ciudad && it.ciudad      !== f.ciudad) return false
+    if (f.plan   && it.plan_nombre !== f.plan)   return false
+    if (f.medio) {
+      const ef = Number(it.efectivo) > 0, di = Number(it.digital) > 0
+      if (f.medio === 'efectivo' && !(ef && !di)) return false
+      if (f.medio === 'digital'  && !(di && !ef)) return false
+      if (f.medio === 'mixto'    && !(ef && di))  return false
+    }
+    if (f.estados.size > 0) {
+      const match =
+        (f.estados.has('alerta')       && (faltaPlata(it) || cobroDeMasSinRevisar(it))) ||
+        (f.estados.has('cancelado')    && it.es_cancelado) ||
+        (f.estados.has('sin_recibo')   && it.sin_recibo) ||
+        (f.estados.has('fact_mensual') && esFactMensual(it)) ||
+        (f.estados.has('lejania')      && it.es_lejania)
+      if (!match) return false
+    }
+    return true
+  }
+  const cuadreItemsFiltrados = filtroCuadreActivo ? cuadreItems.filter(itemPasaFiltro) : cuadreItems
+
   const cuadreItemsOrden = orden.key
-    ? [...cuadreItems].sort((a, b) => {
+    ? [...cuadreItemsFiltrados].sort((a, b) => {
         const va = valorOrden(a, orden.key), vb = valorOrden(b, orden.key)
         const c = (typeof va === 'number' && typeof vb === 'number')
           ? va - vb
           : String(va).localeCompare(String(vb), 'es')
         return orden.dir === 'desc' ? -c : c
       })
-    : cuadreItems
+    : cuadreItemsFiltrados
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
@@ -2459,11 +2531,90 @@ export default function Finanzas() {
                         </div>
                       )}
 
+                      {/* Barra de filtros del cuadre */}
+                      {cuadreItems.length > 0 && (
+                        <div className="rounded-2xl border p-3 space-y-2.5" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="relative flex-1 min-w-[200px]">
+                              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                              <input type="text" value={filtroCuadre.q}
+                                onChange={e => setFiltroCuadre(prev => ({ ...prev, q: e.target.value }))}
+                                placeholder="Buscar mascota, ciudad, veterinaria o plan…"
+                                className="w-full pl-8 pr-3 py-1.5 rounded-lg border text-[12px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                                style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                            </div>
+                            <select value={filtroCuadre.vet} onChange={e => setFiltroCuadre(prev => ({ ...prev, vet: e.target.value }))}
+                              className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[180px]"
+                              style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                              <option value="">Veterinaria: todas</option>
+                              {opcionesCuadre.vets.map(v => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                            <select value={filtroCuadre.ciudad} onChange={e => setFiltroCuadre(prev => ({ ...prev, ciudad: e.target.value }))}
+                              className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[160px]"
+                              style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                              <option value="">Ciudad: todas</option>
+                              {opcionesCuadre.ciudades.map(v => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                            <select value={filtroCuadre.plan} onChange={e => setFiltroCuadre(prev => ({ ...prev, plan: e.target.value }))}
+                              className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[160px]"
+                              style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                              <option value="">Plan: todos</option>
+                              {opcionesCuadre.planes.map(v => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                            {filtroCuadreActivo && (
+                              <button type="button" onClick={limpiarFiltroCuadre}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors">
+                                <X size={12} /> Limpiar
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide mr-1"><Filter size={11} /> Estado</span>
+                            {CHIPS_ESTADO_CUADRE.map(c => {
+                              const on = filtroCuadre.estados.has(c.k)
+                              return (
+                                <button key={c.k} type="button" onClick={() => toggleEstadoFiltro(c.k)}
+                                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${on ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                                  style={on ? undefined : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                                  {c.label}
+                                </button>
+                              )
+                            })}
+                            <span className="w-px h-4 bg-gray-200 mx-1" />
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mr-1">Medio</span>
+                            {CHIPS_MEDIO_CUADRE.map(c => {
+                              const on = filtroCuadre.medio === c.k
+                              return (
+                                <button key={c.k} type="button" onClick={() => setFiltroCuadre(prev => ({ ...prev, medio: on ? '' : c.k }))}
+                                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${on ? 'bg-[#16a34a] text-white border-[#16a34a]' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                                  style={on ? undefined : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                                  {c.label}
+                                </button>
+                              )
+                            })}
+                            {filtroCuadreActivo && (
+                              <span className="ml-auto text-[11px] font-semibold text-gray-500 tabular-nums">
+                                {cuadreItemsOrden.length} de {cuadreItems.length}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Tabla detalle */}
                       {cuadreItems.length === 0 ? (
                         <div className="py-12 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                           <div className="text-3xl mb-2">🧾</div>
                           <p className="text-[13px] text-gray-500">Sin recibos del técnico en este rango.</p>
+                        </div>
+                      ) : cuadreItemsOrden.length === 0 ? (
+                        <div className="py-12 text-center border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                          <div className="text-3xl mb-2">🔍</div>
+                          <p className="text-[13px] text-gray-500">Ningún servicio coincide con los filtros.</p>
+                          <button type="button" onClick={limpiarFiltroCuadre}
+                            className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors">
+                            <X size={13} /> Limpiar filtros
+                          </button>
                         </div>
                       ) : (
                         <div className="overflow-auto scroll-grueso max-h-[68vh] border rounded-2xl" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
