@@ -3463,7 +3463,11 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   // cuadrar, así que su ✓ no probaría nada). En esos casos no se muestra el ✓/⚠.
   cob.eutanasia    = svc?.eutanasia_id != null
   cob.desamparado  = /desampar/i.test(svc?.planes?.nombre || item.plan_nombre || '')
-  cob.reconciliable = !cob.planDerivado && !cob.eutanasia && !cob.desamparado
+  // Servicios anteriores al 23-jun-2026 (migración 010) no capturaban el desglose
+  // congelado → su reconciliación no es fiable. Se tratan como HISTÓRICO: no se
+  // marca ⚠, se acepta como está (decisión de David).
+  cob.historico = !!(svc?.fecha_ingreso && svc.fecha_ingreso < '2026-06-23')
+  cob.reconciliable = !cob.planDerivado && !cob.eutanasia && !cob.desamparado && !cob.historico
   // Adicional registrado pero NO sumado al total (el descuadre es justo el valor de
   // los adicionales): se cobra aparte, queda PENDIENTE. Es un caso explicado, así que
   // se muestra como tal y no como una alarma genérica de "desglose no cuadra".
@@ -3576,6 +3580,7 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                     {cob.reconciliable && ((cob.cuadra || cob.adicPendiente)
                       ? <Check size={12} className="text-[#16a34a]" />
                       : <AlertTriangle size={12} className="text-amber-500" />)}
+                    {cob.historico && <span className="text-[10px] font-semibold text-gray-400" title="Servicio anterior al 23-jun: el desglose no se guardaba entonces. Aceptado como histórico.">histórico</span>}
                   </span>
                   <span className="text-[13px] font-extrabold text-gray-900 tabular-nums">{fmt(cob.neto)}</span>
                 </div>
