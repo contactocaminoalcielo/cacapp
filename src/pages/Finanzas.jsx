@@ -12,7 +12,7 @@ import {
   Banknote, Building2, Receipt, User2, Tag,
   Calendar, Lock, Download, Eye, FileText, Phone,
   CheckCircle2, AlertTriangle, MapPin, Clock, ClipboardList, MessageSquare, Paperclip,
-  HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2, Columns3,
+  HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2, Columns3, ArrowUpDown,
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
@@ -380,6 +380,46 @@ export default function Finanzas() {
     try { localStorage.setItem(CUADRE_COLS_LS, '[]') } catch (_) {}
   }
   const colsVisibles = COLS_CUADRE.filter(c => verCol(c.key))
+
+  // ── Orden de la tabla del cuadre (clic en la cabecera) ──────────────────────
+  // `key` = columna activa (null = orden natural en el que llegan los ítems).
+  // Primer clic ordena de MAYOR a MENOR (desc); un 2º clic invierte a asc.
+  const [orden, setOrden] = useState({ key: null, dir: 'desc' })
+  function toggleOrden(key) {
+    setOrden(prev => prev.key === key
+      ? { key, dir: prev.dir === 'desc' ? 'asc' : 'desc' }
+      : { key, dir: 'desc' })
+  }
+  // Valor comparable por columna. Numéricas → número; texto → string en minúscula.
+  function valorOrden(it, key) {
+    switch (key) {
+      case 'fecha':       return it.fecha_registro_servicio || it.fecha || ''
+      case 'mascota':     return (it.mascota_nombre || '').toLowerCase()
+      case 'ciudad':      return (it.ciudad || '').toLowerCase()
+      case 'veterinaria': return (it.veterinaria || '').toLowerCase()
+      case 'plan':        return (it.plan_nombre || '').toLowerCase()
+      case 'total':       return valorARecoger(it) ?? 0
+      case 'comision':    return Number(it.comision) || 0
+      case 'recogido':    return Number(it.total_cobrado) || 0
+      case 'diferencia':  return esFactMensual(it) ? pendienteAliado(it) : (diferenciaItem(it) ?? 0)
+      case 'efectivo':    return Number(it.efectivo) || 0
+      case 'digital':     return Number(it.digital) || 0
+      case 'transporte':  return Number(it.transporte_reconocido) || 0
+      case 'pago':        return Number(it.pago_servicio) || 0
+      case 'recargo':     return Number(it.recargo_aplicado) || 0
+      case 'lejania':     return it.es_lejania ? 1 : 0
+      default:            return 0
+    }
+  }
+  const cuadreItemsOrden = orden.key
+    ? [...cuadreItems].sort((a, b) => {
+        const va = valorOrden(a, orden.key), vb = valorOrden(b, orden.key)
+        const c = (typeof va === 'number' && typeof vb === 'number')
+          ? va - vb
+          : String(va).localeCompare(String(vb), 'es')
+        return orden.dir === 'desc' ? -c : c
+      })
+    : cuadreItems
 
   function nombreTecnicoSel(id = cuadreTec) {
     const t = tecnicos.find(t => t.id === id)
@@ -2430,16 +2470,26 @@ export default function Finanzas() {
                           <table className="w-full" style={{ minWidth: `${colsVisibles.length * 95}px` }}>
                             <thead className="sticky top-0 z-10" style={{ background: '#FAFAFA' }}>
                               <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                                {colsVisibles.map(c => (
-                                  <th key={c.key} title={c.title}
-                                    className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">
-                                    {c.label}
+                                {colsVisibles.map(c => {
+                                  const sortable = c.key !== 'accion'
+                                  const activo = orden.key === c.key
+                                  return (
+                                  <th key={c.key} title={sortable ? `${c.title ? c.title + ' · ' : ''}Clic para ordenar de mayor a menor` : c.title}
+                                    onClick={sortable ? () => toggleOrden(c.key) : undefined}
+                                    className={`text-left text-[11px] font-bold uppercase tracking-wide px-3 py-2.5 whitespace-nowrap ${sortable ? 'cursor-pointer select-none hover:text-gray-700' : ''} ${activo ? 'text-[#1A5CD8]' : 'text-gray-500'}`}>
+                                    <span className="inline-flex items-center gap-1">
+                                      {c.label}
+                                      {sortable && (activo
+                                        ? (orden.dir === 'desc' ? <ChevronDown size={13} /> : <ChevronUp size={13} />)
+                                        : <ArrowUpDown size={12} className="text-gray-300" />)}
+                                    </span>
                                   </th>
-                                ))}
+                                  )
+                                })}
                               </tr>
                             </thead>
                             <tbody>
-                              {cuadreItems.map(it => {
+                              {cuadreItemsOrden.map(it => {
                                 const d = diferenciaItem(it)
                                 const alerta = faltaPlata(it)
                                 const exceso = excesoValorARecoger(it)
