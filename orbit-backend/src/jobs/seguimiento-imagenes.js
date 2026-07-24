@@ -147,11 +147,15 @@ export async function jobSeguimientoImagenes({ dryRun = false } = {}) {
     // Nunca dos mensajes el mismo día a la misma persona.
     if (c.contactado_hoy) { r.omitidos++; continue }
 
-    // ¿Cuál toca? El 3º manda sobre el 2º (si ambos vencieron, p. ej. porque el
-    // seguimiento estuvo pausado, se manda el más avanzado y el 2º ya no aplica).
+    // ¿Cuál toca? El 3º manda sobre el 2º. El 2º SOLO aplica dentro de su ventana
+    // [due2, due3): en cuanto llega la fecha del 3º (o el 3º ya salió), el 2º queda
+    // obsoleto y NO se manda. Sin este `hoy < due3`, un backlog con ambos vencidos
+    // mandaba el 3º un día y el 2º al siguiente → el cliente recibía 2 y 3 casi
+    // seguidos (a veces el 3 primero). El guardia "no dos el mismo día" no cubre
+    // días consecutivos, por eso el corte va aquí, en la elección del contacto.
     let numero = null
     if (hoy >= c.due3 && c.estado_c3 !== 'ENVIADO') numero = 3
-    else if (hoy >= c.due2 && c.estado_c2 !== 'ENVIADO') numero = 2
+    else if (hoy >= c.due2 && hoy < c.due3 && c.estado_c2 !== 'ENVIADO' && c.estado_c3 !== 'ENVIADO') numero = 2
     if (!numero) continue
 
     // 'ENVIANDO' colgado (proceso muerto a mitad de envío) → no se toca sola.
