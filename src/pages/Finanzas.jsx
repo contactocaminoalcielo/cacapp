@@ -3464,6 +3464,10 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   cob.eutanasia    = svc?.eutanasia_id != null
   cob.desamparado  = /desampar/i.test(svc?.planes?.nombre || item.plan_nombre || '')
   cob.reconciliable = !cob.planDerivado && !cob.eutanasia && !cob.desamparado
+  // Adicional registrado pero NO sumado al total (el descuadre es justo el valor de
+  // los adicionales): se cobra aparte, queda PENDIENTE. Es un caso explicado, así que
+  // se muestra como tal y no como una alarma genérica de "desglose no cuadra".
+  cob.adicPendiente = cob.adic > 0 && Math.abs(cob.descuadre - cob.adic) <= 1
   // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
   cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
                  : cob.recogido > grossVal ? grossVal - cob.recogido
@@ -3527,7 +3531,15 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                   </span>
                   <span className="text-[12px] font-semibold text-gray-800 text-right tabular-nums">{fmt(cob.plan)}</span>
                 </div>
-                <Dato label="Adicionales">{fmt(cob.adic)}</Dato>
+                <div className="flex justify-between gap-3 py-1 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
+                  <span className="text-[12px] text-gray-500 inline-flex items-center gap-1.5">
+                    Adicionales
+                    {cob.adicPendiente && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#FFF3DC] text-[#9A5500]">pendiente de cobro</span>
+                    )}
+                  </span>
+                  <span className="text-[12px] font-semibold text-gray-800 text-right tabular-nums">{fmt(cob.adic)}</span>
+                </div>
                 {adicionales.length > 0 && (
                   <div className="pl-3 py-0.5 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
                     {adicionales.map(a => (
@@ -3536,6 +3548,9 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                         <span className="tabular-nums">{fmt(a.recordatorios?.precio_base)}</span>
                       </div>
                     ))}
+                    {cob.adicPendiente && (
+                      <div className="text-[10px] text-[#9A5500] mt-0.5">Estos adicionales no están sumados al total: quedan pendientes de cobro.</div>
+                    )}
                   </div>
                 )}
                 <Dato label={`Transporte${cob.ciudad ? ` · ${cob.ciudad}` : ''}`}>{fmt(cob.transporte)}</Dato>
@@ -3546,19 +3561,19 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                 )}
                 <Dato label="Comisión veterinaria (info)">{fmt(cob.comision)}</Dato>
                 <Dato label="Veterinaria">{cob.vet}</Dato>
-                {cob.reconciliable && !cob.cuadra && (
+                {cob.reconciliable && !cob.cuadra && !cob.adicPendiente && (
                   <div className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5">
                     <AlertTriangle size={13} className="text-amber-500 flex-shrink-0 mt-0.5" />
                     <span className="text-[11px] text-amber-700 leading-snug">
                       El desglose no cuadra con el total registrado por {fmt(Math.abs(cob.descuadre))}.
-                      Suele ser un dato mal capturado (p.ej. un adicional no sumado al total, o el transporte guardado como descuento). Revisar el servicio.
+                      Suele ser un dato mal capturado (p.ej. transporte registrado pero no sumado al total). Revisar el servicio.
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between gap-3 py-1.5 mt-1 border-t-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
                   <span className="text-[12px] font-bold text-gray-700 inline-flex items-center gap-1">
                     Total a recaudar
-                    {cob.reconciliable && (cob.cuadra
+                    {cob.reconciliable && ((cob.cuadra || cob.adicPendiente)
                       ? <Check size={12} className="text-[#16a34a]" />
                       : <AlertTriangle size={12} className="text-amber-500" />)}
                   </span>
