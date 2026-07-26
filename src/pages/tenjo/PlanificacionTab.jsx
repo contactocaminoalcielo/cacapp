@@ -10,16 +10,16 @@ import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
-import { petEmoji, waLink, parsearErrorDB } from '@/lib/utils'
+import { petEmoji, waLink, parsearErrorDB, today } from '@/lib/utils'
 import {
-  generarPropuestaLote, evaluarCandidato, mensajeSugerido,
+  generarPropuestaLote, evaluarCandidato, mensajeSugerido, cambiarFechaJornada,
   mensajeConfirmacionCliente, mensajeGrupoProceso, mensajeGrupoVisitas, cargarVisitasTenjo,
   varianteProceso, VARIANTE_LABEL, TIPO_PROCESO_LABEL,
-  proximaJornada, proximasJornadas, esDiaPlanificacion,
+  proximaJornada, proximasJornadas, esDiaPlanificacion, esDiaOperacion, nombreDia,
   CLASIF_CFG, ITEM_ESTADO_CFG, LOTE_ESTADO_CFG,
 } from '@/lib/tenjo'
 import {
-  CalendarCheck, Sparkles, RefreshCw, CheckCircle2, Undo2,
+  CalendarCheck, Sparkles, RefreshCw, CheckCircle2, Undo2, CalendarPlus, CalendarClock,
   MessageCircle, Plus, Trash2, ShieldCheck, Send, Users, Copy, Clock, Check, Info, Ban,
 } from 'lucide-react'
 import SetupNotice from './SetupNotice'
@@ -60,6 +60,11 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const [modalGrupo,       setModalGrupo]        = useState(false)
   const [copiado,          setCopiado]           = useState(false)
   const [visitasJornada,   setVisitasJornada]    = useState([]) // visitas programadas el día de la jornada
+  const [modalNuevo,       setModalNuevo]        = useState(false) // crear lote eligiendo el día
+  const [fechaNueva,       setFechaNueva]        = useState('')
+  const [proponerAuto,     setProponerAuto]      = useState(true)
+  const [modalFecha,       setModalFecha]        = useState(false)  // mover la jornada de este lote
+  const [fechaMover,       setFechaMover]        = useState('')
 
   const fechaJornada = proximaJornada(config)
   const porServicio  = Object.fromEntries((candidatas || []).map(c => [c.servicio_id, c]))
@@ -76,14 +81,16 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
     setLotesList(list)
     setLoteSel(prev => {
       if (prev && list.some(l => l.id === prev)) return prev
-      // Con varios lotes por jornada (migración 065), preferir el borrador de la
-      // próxima jornada; si ya cerró, el lote de esa fecha; si no, cualquier borrador.
-      const prox      = list.find(l => l.fecha_jornada === fechaJornada && ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
-                     || list.find(l => l.fecha_jornada === fechaJornada)
-      const editLote  = list.find(l => ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
-      return prox?.id || editLote?.id || list[0]?.id || null
+      // Preferir el borrador abierto más próximo (de hoy en adelante), aunque su
+      // día esté fuera del calendario configurado: es el lote que se está
+      // armando. Si no hay, cualquier borrador; si no, el lote más reciente.
+      const hoy       = today()
+      const borradores = list.filter(l => ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
+      const proximo   = borradores.filter(l => l.fecha_jornada >= hoy)
+        .sort((a, b) => a.fecha_jornada.localeCompare(b.fecha_jornada))[0]
+      return proximo?.id || borradores[0]?.id || list[0]?.id || null
     })
-  }, [fechaJornada])
+  }, [])
 
   const cargarItems = useCallback(async (loteId) => {
     if (!loteId) { setLote(null); setItems([]); return }
@@ -125,11 +132,10 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
 
   const editable    = lote && ['PROPUESTO', 'EN_REVISION'].includes(lote.estado)
   const gestionable = canPlan && lote && !['CERRADO', 'CANCELADO'].includes(lote.estado)
-  // ¿Ya hay un borrador (PROPUESTO/EN_REVISION) para la próxima jornada? Si no,
-  // se puede generar uno nuevo aunque el lote visible ya esté cerrado — así se
-  // arma un 2º lote para la misma jornada (migración 065).
-  const hayBorradorProxJornada = Array.isArray(lotesList)
-    && lotesList.some(l => l.fecha_jornada === fechaJornada && ['PROPUESTO', 'EN_REVISION'].includes(l.estado))
+  // Lotes ya existentes en una fecha: el borrador (uno por día, migración 065)
+  // manda; los confirmados/cerrados solo definen el sufijo del número.
+  const lotesEnFecha    = f => (Array.isArray(lotesList) ? lotesList : []).filter(l => l.fecha_jornada === f)
+  const borradorEnFecha = f => lotesEnFecha(f).find(l => ['PROPUESTO', 'EN_REVISION'].includes(l.estado)) || null
   const activos  = items.filter(i => ITEMS_ACTIVOS.includes(i.estado))
   const fuera    = items.filter(i => !ITEMS_ACTIVOS.includes(i.estado))
 
@@ -183,21 +189,60 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
   const minJornada  = config.min_procesos_jornada ?? 4
 
   // ── Acciones ──
-  async function generar() {
+  // `fechaJornada` libre: la planta mueve los días de proceso, así que el
+  // calendario configurado solo sugiere la fecha. Sin fecha = próxima jornada.
+  async function generar({ fechaJornada: f = null, proponer = true } = {}) {
     setSaving(true)
     try {
-      const { lote: l, agregadas } = await generarPropuestaLote({
+      const { lote: l, agregadas, creado } = await generarPropuestaLote({
         config, candidatas, personalId: personalData?.id, generadoPor: 'MANUAL',
+        fechaJornada: f, proponerCandidatas: proponer,
       })
       const eraNuevo = l && l.id !== loteSelRef.current
       await cargarLista()
       if (l?.id) { setLoteSel(l.id); await cargarItems(l.id) }
       onChanged?.()
+      setModalNuevo(false)
       if (l && agregadas === 0 && (!lote || eraNuevo)) {
-        await showAlert('Lote creado sin candidatas nuevas para proponer.', { title: 'Propuesta generada' })
+        const dia = fmtFechaLarga(l.fecha_jornada)
+        await showAlert(
+          creado
+            ? (proponer
+                ? `Lote ${l.numero_lote} (${dia}) creado sin candidatas nuevas para proponer.`
+                : `Lote ${l.numero_lote} creado vacío para el ${dia}. Agrega las mascoticas con "Agregar mascota".`)
+            : `Ese día ya tenía el lote ${l.numero_lote} en planeación y no había candidatas nuevas que agregar. Te dejo ese lote abierto.`,
+          { title: creado ? 'Lote creado' : 'Lote existente' })
       }
     } catch (e) {
       await showAlert(parsearErrorDB(e), { title: 'Error generando propuesta', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  function abrirNuevoLote() {
+    // Si está mirando un lote de hoy o futuro, ese día es el default: el caso
+    // típico es "cerró el lote y en la noche entra otra mascota del mismo día".
+    const delLote = lote?.fecha_jornada >= today() ? lote.fecha_jornada : null
+    setFechaNueva(delLote || proximaJornada(config) || today())
+    setProponerAuto(true)
+    setModalNuevo(true)
+  }
+
+  // Mueve este lote a otro día de proceso (arrastra sus traslados programados)
+  async function moverFecha() {
+    if (!lote || !fechaMover) return
+    if (fechaMover === lote.fecha_jornada) { setModalFecha(false); return }
+    setSaving(true)
+    try {
+      const { lote: l, trasladosActualizados } = await cambiarFechaJornada({ lote, nuevaFecha: fechaMover })
+      setModalFecha(false)
+      await cargarLista(); await cargarItems(lote.id); onChanged?.()
+      await showAlert(
+        `El lote quedó como ${l.numero_lote}, jornada del ${fmtFechaLarga(fechaMover)}.`
+        + (trasladosActualizados ? ` Se movieron ${trasladosActualizados} traslado${trasladosActualizados !== 1 ? 's' : ''} programado${trasladosActualizados !== 1 ? 's' : ''} a esa fecha.` : '')
+        + ' Avisa al grupo y a los clientes ya confirmados si la fecha cambió.',
+        { title: 'Jornada reprogramada' })
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo cambiar la fecha', variant: 'danger' })
     } finally { setSaving(false) }
   }
 
@@ -558,10 +603,15 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
               )}
             </p>
           </div>
-          <div className="flex gap-2 flex-shrink-0">
-            {canPlan && (editable || !hayBorradorProxJornada) && (
-              <Button variant="secondary" disabled={saving} onClick={generar}>
-                <RefreshCw size={13} /> {editable ? 'Actualizar propuesta' : 'Generar propuesta'}
+          <div className="flex gap-2 flex-shrink-0 flex-wrap justify-end">
+            {canPlan && editable && (
+              <Button variant="secondary" disabled={saving} onClick={() => generar({ fechaJornada: lote.fecha_jornada })}>
+                <RefreshCw size={13} /> Actualizar propuesta
+              </Button>
+            )}
+            {canPlan && (
+              <Button variant="secondary" disabled={saving} onClick={abrirNuevoLote}>
+                <CalendarPlus size={13} /> {editable ? 'Otro lote' : 'Nuevo lote'}
               </Button>
             )}
             {canPlan && lote && editable && nAprobados > 0 && (
@@ -582,6 +632,12 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             {canPlan && editable && agregables.length > 0 && (
               <Button size="sm" variant="secondary" onClick={() => setModalAgregar(true)}>
                 <Plus size={12} /> Agregar mascota
+              </Button>
+            )}
+            {gestionable && (
+              <Button size="sm" variant="secondary" disabled={saving}
+                onClick={() => { setFechaMover(lote.fecha_jornada); setModalFecha(true) }}>
+                <CalendarClock size={12} /> Cambiar fecha
               </Button>
             )}
             {canPlan && lote.estado === 'CONFIRMADO' && (
@@ -667,6 +723,119 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
         </div>
       )}
 
+      {/* ── Modal nuevo lote (día libre + 2º lote del mismo día) ── */}
+      {modalNuevo && (() => {
+        const yaLotes  = lotesEnFecha(fechaNueva)
+        const borrador = borradorEnFecha(fechaNueva)
+        const fueraCal = fechaNueva && !esDiaOperacion(config, new Date(fechaNueva + 'T12:00:00'))
+        const pasada   = fechaNueva && fechaNueva < today()
+        return (
+          <Modal open onClose={() => setModalNuevo(false)}
+            title="Nuevo lote de proceso"
+            maxWidth="max-w-md"
+            footer={<>
+              <Button variant="secondary" onClick={() => setModalNuevo(false)}>Cancelar</Button>
+              <Button disabled={saving || !fechaNueva}
+                onClick={() => generar({ fechaJornada: fechaNueva, proponer: proponerAuto })}>
+                {saving ? 'Creando…' : borrador ? 'Actualizar ese lote' : 'Crear lote'}
+              </Button>
+            </>}>
+            <div className="space-y-3">
+              <p className="text-[12px] text-ink2">
+                Elige el día del proceso. Puedes salirte del calendario configurado
+                (la planta mueve fechas) y tener <strong>más de un lote el mismo día</strong>.
+              </p>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Día de la jornada *</label>
+                <input type="date" value={fechaNueva} onChange={e => setFechaNueva(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]" />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  <button type="button" onClick={() => setFechaNueva(today())}
+                    className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink2 hover:border-[#3D5A27]">
+                    Hoy
+                  </button>
+                  {proximasJornadas(config, 4).map(f => (
+                    <button key={f} type="button" onClick={() => setFechaNueva(f)}
+                      className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink2 hover:border-[#3D5A27]">
+                      {nombreDia(f)} {f.slice(8)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" checked={proponerAuto} onChange={e => setProponerAuto(e.target.checked)}
+                  className="mt-0.5" />
+                <span className="text-[12px] text-ink2">
+                  Proponer automáticamente las <strong>{agregables.length}</strong> candidata{agregables.length !== 1 ? 's' : ''} en custodia.
+                  {' '}Si lo desmarcas, el lote queda vacío y agregas mascoticas una por una.
+                </span>
+              </label>
+
+              {fechaNueva && (
+                <div className="rounded-xl px-3 py-2 text-[11px] leading-relaxed"
+                  style={{ background: '#FDFBF7', border: '1px solid #E7DFCE', color: '#4B4335' }}>
+                  {borrador
+                    ? <>Ese día ya tiene el lote <strong>{borrador.numero_lote}</strong> en planeación: las candidatas se agregan a <strong>ese</strong> lote (solo cabe un borrador por día). Para separar en dos lotes, confirma primero el actual.</>
+                    : yaLotes.length > 0
+                      ? <>Ese día ya tiene {yaLotes.length} lote{yaLotes.length !== 1 ? 's' : ''} confirmado/cerrado. Se creará un lote <strong>adicional</strong> para la misma jornada.</>
+                      : <>Se creará el primer lote de esa jornada.</>}
+                  {fueraCal && <div className="mt-1 text-amber-700">⚠ {nombreDia(fechaNueva)} no es día de operación en el calendario configurado. El lote se crea igual; si el cambio es permanente, ajusta los días en Configuración → Tenjo.</div>}
+                  {pasada && <div className="mt-1 text-amber-700">⚠ Es una fecha pasada.</div>}
+                </div>
+              )}
+            </div>
+          </Modal>
+        )
+      })()}
+
+      {/* ── Modal cambiar la fecha de la jornada del lote ── */}
+      {modalFecha && lote && (() => {
+        const conTraslado = items.filter(i => i.traslado_id && ITEMS_ACTIVOS.includes(i.estado)).length
+        const choque      = fechaMover !== lote.fecha_jornada && borradorEnFecha(fechaMover)
+        const fueraCal    = fechaMover && !esDiaOperacion(config, new Date(fechaMover + 'T12:00:00'))
+        return (
+          <Modal open onClose={() => setModalFecha(false)}
+            title={`Cambiar el día de proceso — ${lote.numero_lote}`}
+            maxWidth="max-w-md"
+            footer={<>
+              <Button variant="secondary" onClick={() => setModalFecha(false)}>Cancelar</Button>
+              <Button disabled={saving || !fechaMover || !!choque} onClick={moverFecha}>
+                {saving ? 'Guardando…' : 'Mover jornada'}
+              </Button>
+            </>}>
+            <div className="space-y-3">
+              <p className="text-[12px] text-ink2">
+                Jornada actual: <strong>{fmtFechaLarga(lote.fecha_jornada)}</strong>. El lote se renumera a la
+                nueva fecha y sus traslados programados se mueven con él.
+              </p>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Nueva fecha de la jornada *</label>
+                <input type="date" value={fechaMover} onChange={e => setFechaMover(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]" />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {proximasJornadas(config, 4).map(f => (
+                    <button key={f} type="button" onClick={() => setFechaMover(f)}
+                      className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink2 hover:border-[#3D5A27]">
+                      {nombreDia(f)} {f.slice(8)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-xl px-3 py-2 text-[11px] leading-relaxed"
+                style={{ background: '#FDFBF7', border: '1px solid #E7DFCE', color: '#4B4335' }}>
+                {conTraslado > 0
+                  ? <>{conTraslado} traslado{conTraslado !== 1 ? 's' : ''} programado{conTraslado !== 1 ? 's' : ''} pasará{conTraslado !== 1 ? 'n' : ''} a la nueva fecha.</>
+                  : <>Este lote aún no tiene traslados programados.</>}
+                {' '}Si ya avisaste a clientes o al grupo, vuelve a enviarles la fecha nueva.
+                {fueraCal && <div className="mt-1 text-amber-700">⚠ {nombreDia(fechaMover)} no es día de operación en el calendario configurado.</div>}
+                {choque && <div className="mt-1 text-red-700">⛔ Ese día ya tiene el lote <strong>{choque.numero_lote}</strong> en planeación. Solo cabe un borrador por día: confírmalo o elige otra fecha.</div>}
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
+
       {/* ── Modal reprogramar ── */}
       {modalReprogramar && (
         <Modal open onClose={() => setModalReprogramar(null)}
@@ -680,13 +849,20 @@ export default function PlanificacionTab({ config, candidatas, personalData, can
             <p className="text-[12px] text-ink2">Quedará disponible para el siguiente ciclo de planificación. El motivo y la fecha objetivo quedan en la trazabilidad.</p>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Reprogramar para la jornada del</label>
-              <select value={fechaReprog} onChange={e => setFechaReprog(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]">
-                <option value="">Sin fecha definida</option>
-                {proximasJornadas(config, 8).map(f => (
-                  <option key={f} value={f}>{fmtFechaLarga(f)}</option>
+              <input type="date" value={fechaReprog} onChange={e => setFechaReprog(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-[13px] outline-none focus:border-[#3D5A27]" />
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {proximasJornadas(config, 4).map(f => (
+                  <button key={f} type="button" onClick={() => setFechaReprog(f)}
+                    className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink2 hover:border-[#3D5A27]">
+                    {nombreDia(f)} {f.slice(8)}
+                  </button>
                 ))}
-              </select>
+                <button type="button" onClick={() => setFechaReprog('')}
+                  className="px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink3 hover:border-[#3D5A27]">
+                  Sin fecha
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Motivo de reprogramación *</label>

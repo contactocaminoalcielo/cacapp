@@ -1,13 +1,13 @@
 // Pestaña "Candidatas Tenjo" — vista de solo lectura sobre v_candidatos_tenjo.
 // Muestra qué mascotas individuales en custodia pueden programarse, con la
 // evaluación del motor de reglas (clasificación, bloqueos, alertas, acción).
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { petEmoji, parsearErrorDB, parseDate } from '@/lib/utils'
-import { evaluarCandidato, CLASIF_CFG, nombreDia, proximaJornada, agregarCandidataALote, reautorizarCandidata } from '@/lib/tenjo'
+import { evaluarCandidato, CLASIF_CFG, nombreDia, fechaJornadaDestino, agregarCandidataALote, reautorizarCandidata } from '@/lib/tenjo'
 import { Search, X, Snowflake, Plus, Check, Truck, RotateCcw } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
@@ -30,7 +30,17 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
   const { confirm, alert: showAlert } = useConfirm()
   const [busqueda, setBusqueda] = useState('')
   const [savingId, setSavingId] = useState(null)
+  // Destino real de "Agregar al lote": el borrador abierto más próximo (que
+  // puede ser un día fuera del calendario) o la próxima jornada configurada.
+  const [destino,  setDestino]  = useState(null)
   const maxReprog = config.max_reprogramaciones ?? 2
+
+  const refrescarDestino = useCallback(() => {
+    let vivo = true
+    fechaJornadaDestino(config).then(f => { if (vivo) setDestino(f) }).catch(() => {})
+    return () => { vivo = false }
+  }, [config])
+  useEffect(() => refrescarDestino(), [refrescarDestino, candidatas])
 
   async function reautorizar(c) {
     if (!await confirm(
@@ -75,7 +85,7 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
   })
 
   const conteo = k => evaluadas.filter(({ ev }) => ev.clasificacion === k).length
-  const jornada = proximaJornada(config)
+  const jornada = destino
 
   return (
     <div className="space-y-5">
@@ -92,8 +102,8 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
           <Snowflake size={15} className="text-blue-500" />
           <div className="font-semibold text-[15px] text-ink flex-1">Candidatas Tenjo</div>
           {jornada && (
-            <span className="text-[11px] text-ink3">
-              Próxima jornada: <strong className="text-ink">{nombreDia(jornada)} {fmtFecha(jornada + 'T12:00:00')}</strong>
+            <span className="text-[11px] text-ink3" title="Lote al que caen las mascoticas que agregues desde aquí">
+              Se agregan a la jornada del <strong className="text-ink">{nombreDia(jornada)} {fmtFecha(jornada + 'T12:00:00')}</strong>
             </span>
           )}
           <div className="relative w-52">

@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -2948,6 +2948,145 @@ function TabAfiliaciones() {
   )
 }
 
+// ─── TENJO (planta) ──────────────────────────────────────────────────────────
+// Calendario de jornadas y umbrales del módulo (config_operativa, módulo TENJO).
+// Lo leen el frontend (src/lib/tenjo.js) y el job de propuesta del backend
+// (orbit-backend/src/reglas.js) — cambiar aquí cambia ambos, sin desplegar.
+// El calendario es una SUGERENCIA: en Tenjo → Planificación se puede crear un
+// lote para cualquier día y varios lotes el mismo día.
+function TabTenjo() {
+  const DIAS_SEMANA = [
+    { n: 1, label: 'Lun' }, { n: 2, label: 'Mar' }, { n: 3, label: 'Mié' },
+    { n: 4, label: 'Jue' }, { n: 5, label: 'Vie' }, { n: 6, label: 'Sáb' }, { n: 0, label: 'Dom' },
+  ]
+  const [rows, setRows]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [ok, setOk]           = useState(false)
+  const [error, setError]     = useState('')
+
+  useEffect(() => { cargar() }, [])
+
+  async function cargar() {
+    setLoading(true)
+    const { data } = await db.from('config_operativa')
+      .select('clave, valor').eq('modulo', 'TENJO')
+    const map = {}
+    for (const r of data || []) map[r.clave] = r.valor
+    setRows({
+      dias_operacion:        Array.isArray(map.dias_operacion)     ? map.dias_operacion     : [2, 4, 6],
+      dias_planificacion:    Array.isArray(map.dias_planificacion) ? map.dias_planificacion : [1, 3, 5],
+      min_procesos_jornada:  map.min_procesos_jornada  ?? 4,
+      dias_custodia_alerta:  map.dias_custodia_alerta  ?? 5,
+      dias_custodia_critica: map.dias_custodia_critica ?? 8,
+      max_reprogramaciones:  map.max_reprogramaciones  ?? 2,
+    })
+    setLoading(false)
+  }
+
+  function toggleDia(clave, n) {
+    setRows(p => {
+      const set = new Set(p[clave])
+      set.has(n) ? set.delete(n) : set.add(n)
+      return { ...p, [clave]: [...set].sort((a, b) => a - b) }
+    })
+  }
+
+  async function guardar() {
+    setSaving(true); setOk(false); setError('')
+    try {
+      if (!rows.dias_operacion.length) throw new Error('Marca al menos un día de operación.')
+      if (!rows.dias_planificacion.length) throw new Error('Marca al menos un día de planificación (si no, la propuesta automática nunca corre).')
+      const updates = [
+        ['dias_operacion',        rows.dias_operacion],
+        ['dias_planificacion',    rows.dias_planificacion],
+        ['min_procesos_jornada',  parseInt(rows.min_procesos_jornada)  || 0],
+        ['dias_custodia_alerta',  parseInt(rows.dias_custodia_alerta)  || 0],
+        ['dias_custodia_critica', parseInt(rows.dias_custodia_critica) || 0],
+        ['max_reprogramaciones',  parseInt(rows.max_reprogramaciones)  || 0],
+      ]
+      for (const [clave, valor] of updates) {
+        const { error: e } = await db.from('config_operativa')
+          .upsert({ modulo: 'TENJO', clave, valor }, { onConflict: 'modulo,clave' })
+        if (e) throw e
+      }
+      setOk(true); setTimeout(() => setOk(false), 2500)
+    } catch (e) {
+      setError(parsearErrorDB(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading || !rows) return <div className="flex items-center justify-center h-40 gap-3"><div className="spinner" /></div>
+
+  const INPUT_LBL = 'text-[11px] font-bold text-gray-500 block mb-1'
+  const Dias = ({ clave }) => (
+    <div className="flex flex-wrap gap-1.5">
+      {DIAS_SEMANA.map(d => {
+        const on = rows[clave].includes(d.n)
+        return (
+          <button key={d.n} type="button" onClick={() => toggleDia(clave, d.n)}
+            className="px-3 py-1.5 rounded-xl text-[12px] font-bold border transition-colors"
+            style={on
+              ? { background: '#3D5A27', borderColor: '#3D5A27', color: '#fff' }
+              : { background: '#fff', borderColor: '#E5E7EB', color: '#6B7280' }}>
+            {d.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  return (
+    <div className="max-w-3xl">
+      <h3 className="text-[14px] font-bold text-gray-800 mb-1">Calendario de la planta</h3>
+      <p className="text-[12px] text-gray-500 mb-4">
+        Días en que Tenjo procesa y días en que el sistema arma la propuesta automática.
+        Es la <strong>base sugerida</strong>: en Tenjo → Planificación puedes crear un lote para cualquier
+        fecha y tener varios lotes el mismo día, sin tocar esto.
+      </p>
+
+      <div className="mb-5">
+        <label className={INPUT_LBL}>Días de jornada (proceso en planta)</label>
+        <Dias clave="dias_operacion" />
+        <p className="text-[10px] text-gray-400 mt-1.5">Define la "próxima jornada" que se propone por defecto.</p>
+      </div>
+
+      <div className="mb-6">
+        <label className={INPUT_LBL}>Días de planificación (propuesta automática)</label>
+        <Dias clave="dias_planificacion" />
+        <p className="text-[10px] text-gray-400 mt-1.5">El job diario solo arma la propuesta estos días, para la siguiente jornada.</p>
+      </div>
+
+      <h3 className="text-[14px] font-bold text-gray-800 mb-1 mt-7">Umbrales</h3>
+      <p className="text-[12px] text-gray-500 mb-4">Alertas de custodia prolongada y reglas de la propuesta.</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div><label className={INPUT_LBL}>Mín. procesos / jornada</label>
+          <Input type="number" min="0" value={rows.min_procesos_jornada}
+            onChange={e => setRows(p => ({ ...p, min_procesos_jornada: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Solo avisa si el lote va por debajo</p></div>
+        <div><label className={INPUT_LBL}>Días custodia — alerta</label>
+          <Input type="number" min="0" value={rows.dias_custodia_alerta}
+            onChange={e => setRows(p => ({ ...p, dias_custodia_alerta: e.target.value }))} /></div>
+        <div><label className={INPUT_LBL}>Días custodia — crítica</label>
+          <Input type="number" min="0" value={rows.dias_custodia_critica}
+            onChange={e => setRows(p => ({ ...p, dias_custodia_critica: e.target.value }))} /></div>
+        <div><label className={INPUT_LBL}>Máx. reprogramaciones</label>
+          <Input type="number" min="0" value={rows.max_reprogramaciones}
+            onChange={e => setRows(p => ({ ...p, max_reprogramaciones: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Luego exige nueva autorización</p></div>
+      </div>
+
+      {error && <div className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{error}</div>}
+      <div className="flex items-center gap-3 mt-5">
+        <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
+        {ok && <span className="flex items-center gap-1 text-[12px] font-semibold text-green-700"><CheckCircle size={14} /> Guardado</span>}
+      </div>
+    </div>
+  )
+}
+
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function Configuracion() {
   return (
@@ -3001,6 +3140,9 @@ export default function Configuracion() {
             <TabsTrigger value="afiliaciones">
               <Heart size={13} className="mr-1.5" /> Afiliaciones
             </TabsTrigger>
+            <TabsTrigger value="tenjo">
+              <Flame size={13} className="mr-1.5" /> Tenjo
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -3018,6 +3160,7 @@ export default function Configuracion() {
           <TabsContent value="reconocimientos"><TabReconocimientos /></TabsContent>
           <TabsContent value="pago-tecnico"><TabPagoTecnico /></TabsContent>
           <TabsContent value="afiliaciones"><TabAfiliaciones /></TabsContent>
+          <TabsContent value="tenjo"><TabTenjo /></TabsContent>
         </Tabs>
       </div>
     </div>

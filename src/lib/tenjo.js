@@ -224,12 +224,36 @@ async function numeroLoteParaJornada(fechaJornada) {
 }
 
 /**
- * Crea (si no existe) el lote PROPUESTO para la próxima jornada y propone
- * como items todas las candidatas sin lote. Idempotente: si el lote ya
- * existe, agrega solo las candidatas nuevas.
+ * Fecha destino por defecto para agregar una mascota: el borrador abierto más
+ * próximo (de hoy en adelante) y, si no hay, la próxima jornada del calendario.
+ * Así, si el coordinador armó un lote para un día fuera del calendario (fechas
+ * de proceso movidas por la planta), lo que se agrega cae en ESE lote y no
+ * aparece un segundo borrador en otra fecha.
  */
-export async function generarPropuestaLote({ config, candidatas, personalId, generadoPor = 'MANUAL' }) {
-  const fechaJornada = proximaJornada(config)
+export async function fechaJornadaDestino(config) {
+  const { data } = await db.from('lotes_tenjo')
+    .select('fecha_jornada')
+    .in('estado', ESTADOS_PLANIFICABLES)
+    .gte('fecha_jornada', today())
+    .order('fecha_jornada', { ascending: true })
+    .limit(1)
+  return data?.[0]?.fecha_jornada || proximaJornada(config)
+}
+
+/**
+ * Crea (si no existe) el lote PROPUESTO de una jornada y propone como items
+ * todas las candidatas sin lote. Idempotente: si el lote ya existe, agrega solo
+ * las candidatas nuevas.
+ * @param {string} [fechaJornada] día del proceso (YYYY-MM-DD). Si no se pasa,
+ *   la próxima jornada del calendario configurado. El coordinador puede elegir
+ *   cualquier día — la planta mueve fechas y el calendario es solo la sugerencia.
+ * @param {boolean} [proponerCandidatas=true] false = crear el lote vacío.
+ */
+export async function generarPropuestaLote({
+  config, candidatas, personalId, generadoPor = 'MANUAL',
+  fechaJornada: fechaParam = null, proponerCandidatas = true,
+}) {
+  const fechaJornada = fechaParam || proximaJornada(config)
   if (!fechaJornada) throw new Error('No hay días de operación configurados')
 
   // 1. Lote EN PLANEACIÓN de la jornada (borrador existente o nuevo). Si el lote
@@ -239,6 +263,7 @@ export async function generarPropuestaLote({ config, candidatas, personalId, gen
     .select('*').eq('fecha_jornada', fechaJornada).in('estado', ESTADOS_PLANIFICABLES).maybeSingle()
   if (errLote) throw new Error(errLote.message)
 
+  let creado = false
   if (!lote) {
     const { data: nuevo, error: errIns } = await db.from('lotes_tenjo').insert({
       numero_lote:   await numeroLoteParaJornada(fechaJornada),
@@ -253,12 +278,14 @@ export async function generarPropuestaLote({ config, candidatas, personalId, gen
           .select('*').eq('fecha_jornada', fechaJornada).in('estado', ESTADOS_PLANIFICABLES).maybeSingle()
         lote = existente
       } else throw new Error(errIns.message)
-    } else lote = nuevo
+    } else { lote = nuevo; creado = true }
   }
   if (!lote) throw new Error('No se pudo crear ni recuperar el lote')
 
   // 2. Proponer candidatas que aún no están en ningún lote activo
-  const sinLote = (candidatas || []).filter(c => !c.item_activo_id && !c.traslado_activo)
+  const sinLote = proponerCandidatas
+    ? (candidatas || []).filter(c => !c.item_activo_id && !c.traslado_activo)
+    : []
   let agregadas = 0
   for (const c of sinLote) {
     const ev = evaluarCandidato(c, config)
@@ -276,7 +303,7 @@ export async function generarPropuestaLote({ config, candidatas, personalId, gen
     if (error && error.code !== '23505') throw new Error(error.message)
     if (!error) agregadas++
   }
-  return { lote, agregadas }
+  return { lote, agregadas, creado }
 }
 
 /**
@@ -284,10 +311,12 @@ export async function generarPropuestaLote({ config, candidatas, personalId, gen
  * aún no existe. Idempotente: si la mascota ya está en un lote/traslado activo
  * el índice único la descarta sin duplicar. Pensado para agregar desde la
  * pestaña Candidatas sin pasar por Planificación.
+ * @param {string} [fechaJornada] día del proceso; por defecto el borrador
+ *   abierto más próximo (ver `fechaJornadaDestino`).
  * @returns { lote, agregada: boolean }
  */
-export async function agregarCandidataALote({ candidata: c, config, personalId }) {
-  const fechaJornada = proximaJornada(config)
+export async function agregarCandidataALote({ candidata: c, config, personalId, fechaJornada: fechaParam = null }) {
+  const fechaJornada = fechaParam || await fechaJornadaDestino(config)
   if (!fechaJornada) throw new Error('No hay días de operación configurados')
 
   // 1. Lote EN PLANEACIÓN de la jornada (borrador existente o nuevo PROPUESTO).
@@ -330,6 +359,48 @@ export async function agregarCandidataALote({ candidata: c, config, personalId }
   })
   if (error && error.code !== '23505') throw new Error(error.message)
   return { lote, agregada: !error }
+}
+
+/**
+ * Mueve un lote a otro día de proceso. La planta cambia fechas por causas
+ * externas, así que la jornada NO está atada al calendario configurado.
+ * Renumera el lote a la nueva fecha (con sufijo -N si ese día ya tiene lotes) y
+ * arrastra los traslados PROGRAMADO/EN_CAMINO del lote a la nueva fecha, para
+ * que la operación del día no quede apuntando al día viejo.
+ * @returns { lote, trasladosActualizados }
+ */
+export async function cambiarFechaJornada({ lote, nuevaFecha }) {
+  if (!lote?.id)  throw new Error('Lote inválido')
+  if (!nuevaFecha) throw new Error('Elige la nueva fecha de la jornada')
+  if (nuevaFecha === lote.fecha_jornada) return { lote, trasladosActualizados: 0 }
+  if (['CERRADO', 'CANCELADO'].includes(lote.estado))
+    throw new Error('Un lote cerrado o cancelado no cambia de fecha')
+
+  const { data: actualizado, error } = await db.from('lotes_tenjo')
+    .update({ fecha_jornada: nuevaFecha, numero_lote: await numeroLoteParaJornada(nuevaFecha) })
+    .eq('id', lote.id)
+    .select().single()
+  if (error) {
+    // 23505 = uq_lote_tenjo_jornada: ya hay un borrador ese día (migración 065)
+    if (error.code === '23505')
+      throw new Error('Ese día ya tiene un lote en planeación. Trabaja sobre ese lote, o confírmalo antes de mover este.')
+    throw new Error(error.message)
+  }
+
+  // Los traslados vivos del lote siguen a la jornada
+  const { data: its } = await db.from('lotes_tenjo_items')
+    .select('traslado_id').eq('lote_id', lote.id).not('traslado_id', 'is', null)
+  const trasladoIds = [...new Set((its || []).map(i => i.traslado_id).filter(Boolean))]
+  let trasladosActualizados = 0
+  if (trasladoIds.length) {
+    const { data: tr, error: errT } = await db.from('traslados_tenjo')
+      .update({ fecha_traslado: nuevaFecha })
+      .in('id', trasladoIds).in('estado', ['PROGRAMADO', 'EN_CAMINO'])
+      .select('id')
+    if (errT) throw new Error(errT.message)
+    trasladosActualizados = tr?.length || 0
+  }
+  return { lote: actualizado, trasladosActualizados }
 }
 
 /**
