@@ -11,7 +11,7 @@ import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
-import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import { planComisiona } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
@@ -1266,6 +1266,7 @@ export default function Kanban() {
     setCambiandoPlan(true)
     try {
       const updates = { plan_id: editPlanId }
+      let svActual = null   // valores del servicio ANTES del cambio (para la traza del saldo)
       if (precioFinal) {
         // Recalcular la comisión del aliado con el plan NUEVO (antes quedaba
         // pegada la del plan viejo). El plan es la BASE comisionable.
@@ -1274,8 +1275,9 @@ export default function Kanban() {
         // el plan y se perdían → el recibo reconstruía un bruto inflado y la
         // comisión salía sobre un total que no era el real (queja 2026-07-23).
         const { data: sv } = await db.from('servicios')
-          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional')
+          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
           .eq('id', selected.servicio_id).maybeSingle()
+        svActual = sv
         const descontada = sv?.comision_descontada === true
         let comisionNueva = null
         if (sv?.aliado_origen_id && (sv?.comision_aliado ?? 0) > 0)
@@ -1291,6 +1293,10 @@ export default function Kanban() {
         updates.valor_plan  = Math.round(precioFinal)
         updates.valor_total = Math.round(precioFinal + extras - (descontada ? comisionVigente : 0))
         if (comisionNueva != null) updates.comision_aliado = comisionNueva
+        // Si el plan sube (o baja), lo ya pagado deja de cuadrar con el total: sin
+        // esto el servicio se quedaba en COMPLETO y su saldo NO aparecía en la
+        // cartera de Finanzas, que filtra por estado_pago (caso LOLA 2026-07-27).
+        updates.estado_pago = calcularEstadoPago(updates.valor_total, sv?.valor_pagado)
       }
 
       const { error: svErr } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
@@ -1334,12 +1340,17 @@ export default function Kanban() {
         )
       }
 
-      // Registrar novedad
+      // Registrar novedad. Si el cambio de precio deja saldo (o sobrepago), queda
+      // escrito: es plata que alguien tiene que cobrar o devolver.
+      const saldoTrasCambio = updates.valor_total != null
+        ? Math.round(updates.valor_total - (svActual?.valor_pagado || 0)) : 0
       const { data: novInserted } = await db.from('novedades_servicio').insert({
         servicio_id:    selected.servicio_id,
         tipo_novedad:   'NOTA',
         descripcion:    `Plan cambiado: ${planAnterior} → ${planNuevo}` +
                         (precioFinal ? ` · Nuevo valor: ${fmt(precioFinal)}` : '') +
+                        (saldoTrasCambio > 0 ? ` · Queda un saldo pendiente de ${fmt(saldoTrasCambio)}` : '') +
+                        (saldoTrasCambio < 0 ? ` · El cliente pagó ${fmt(-saldoTrasCambio)} de más` : '') +
                         '. Cambio realizado por coordinador.',
         registrado_por: personalData?.id || null,
       }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
@@ -1359,6 +1370,7 @@ export default function Kanban() {
         ...(precioFinal ? {
           valor_total:     updates.valor_total,
           valor_plan:      updates.valor_plan,
+          estado_pago:     updates.estado_pago,
           saldo_pendiente: (updates.valor_total ?? 0) - (selected.valor_pagado || 0),
           ...(updates.comision_aliado != null ? { comision_aliado: updates.comision_aliado } : {}),
         } : {}),

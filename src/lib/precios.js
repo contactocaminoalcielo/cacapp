@@ -1,5 +1,6 @@
 import { db } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
+import { calcularEstadoPago } from '@/lib/servicios'
 
 /**
  * Planes que NUNCA generan comisión de aliado.
@@ -99,7 +100,7 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
   const especieId = parseInt(especieIdRaw) || 0
   const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
     db.from('servicios')
-      .select('id, valor_total, valor_plan, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
+      .select('id, valor_total, valor_pagado, valor_plan, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
       .eq('mascota_id', mascotaId)
       .neq('estado', 'ENTREGADO')
       .neq('estado', 'CANCELADO'),
@@ -179,6 +180,10 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
 
     const updates = { valor_total: nuevoValorTotal, valor_plan: nuevoPrecioBase }
     if (cambioComision) updates.comision_aliado = nuevaComision
+    // Al mover el total, lo ya pagado deja de cuadrar: si el servicio se queda en
+    // COMPLETO, su saldo NO aparece en la cartera de Finanzas (filtra por
+    // estado_pago). Mismo fallo que tenía el cambio de plan (caso LOLA 2026-07-27).
+    if (cambioPrecio) updates.estado_pago = calcularEstadoPago(nuevoValorTotal, svc.valor_pagado)
     const { error } = await db.from('servicios').update(updates).eq('id', svc.id)
     if (error) continue
 

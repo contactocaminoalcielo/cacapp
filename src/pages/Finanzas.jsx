@@ -268,22 +268,55 @@ export default function Finanzas() {
     }
   }
 
+  // Red de seguridad de la cartera: `estado_pago` es una marca guardada, y puede
+  // quedar vieja cuando el valor del servicio sube DESPUÉS de haberlo cobrado
+  // (cambio de plan, recategorización por peso). El servicio se queda en COMPLETO
+  // con saldo > 0 y, como la cartera filtraba por esa marca, la plata pendiente se
+  // volvía invisible aquí aunque el KPI "Por cobrar" sí la contara (caso LOLA,
+  // 2026-07-27). PostgREST no compara dos columnas entre sí, así que se traen los
+  // COMPLETO con un select mínimo, se filtran en cliente y solo se rehidratan los
+  // que de verdad tienen saldo.
+  async function cargarCompletosConSaldo() {
+    try {
+      const { data, error } = await db.from('servicios')
+        .select('id, valor_total, valor_pagado')
+        .not('estado', 'eq', 'CANCELADO')
+        .gte('fecha_ingreso', FECHA_CORTE)
+        .eq('estado_pago', 'COMPLETO')
+        .order('fecha_ingreso', { ascending: false })   // si algún día topa el máximo de filas, que corte por lo más viejo
+      if (error) throw error
+      const ids = (data || [])
+        .filter(s => (s.valor_total || 0) - (s.valor_pagado || 0) > 0)
+        .map(s => s.id)
+      if (!ids.length) return []
+      return await dbIn('servicios', SERVICIO_SELECT, 'id', ids)
+    } catch (err) {
+      console.error('[Finanzas] No se pudieron revisar los servicios COMPLETO con saldo:', err)
+      return []   // best-effort: la cartera normal se muestra igual
+    }
+  }
+
   // Carga inicial: la cartera aparece primero; KPIs, comisiones e historial se
   // actualizan despues para no bloquear la entrada al modulo.
   async function cargar() {
     setLoading(true)
     setResumenLoading(true)
     try {
-      const { data, error } = await db.from('servicios')
-        .select(SERVICIO_SELECT)
-        .not('estado', 'eq', 'CANCELADO')
-        .gte('fecha_ingreso', FECHA_CORTE)
-        .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
-        .order('fecha_ingreso', { ascending: false })
+      const [{ data, error }, descuadrados] = await Promise.all([
+        db.from('servicios')
+          .select(SERVICIO_SELECT)
+          .not('estado', 'eq', 'CANCELADO')
+          .gte('fecha_ingreso', FECHA_CORTE)
+          .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
+          .order('fecha_ingreso', { ascending: false }),
+        cargarCompletosConSaldo(),
+      ])
       if (error) throw error
 
-      const { enriched, comprobantes } = await enriquecerServicios(data || [], { incluirComprobantes: true })
-      setServicios(enriched.filter(s => s.saldo > 0 && s.estado_pago !== 'COMPLETO' && s.estado_pago !== 'CORTESIA'))
+      const filas = [...(data || []), ...descuadrados]
+        .sort((a, b) => String(b.fecha_ingreso || '').localeCompare(String(a.fecha_ingreso || '')))
+      const { enriched, comprobantes } = await enriquecerServicios(filas, { incluirComprobantes: true })
+      setServicios(enriched.filter(s => s.saldo > 0 && s.estado_pago !== 'CORTESIA'))
       setComprobantesSet(comprobantes)
       setLoading(false)
       void cargarResumenFinanzas()
@@ -1439,13 +1472,15 @@ export default function Finanzas() {
 
   const resumenPendiente = resumenLoading && resumenServicios.length === 0
 
+  // Cartera = todo lo que tiene saldo, sin importar la marca `estado_pago`
+  // (los COMPLETO con saldo son un descuadre y hay que verlos, no esconderlos).
   const carteraSvcs = useMemo(() => {
-    return servicios.filter(s =>
-      s.saldo > 0 &&
-      s.estado_pago !== 'COMPLETO' &&
-      s.estado_pago !== 'CORTESIA'
-    )
+    return servicios.filter(s => s.saldo > 0 && s.estado_pago !== 'CORTESIA')
   }, [servicios])
+
+  // Un servicio marcado como pagado que todavía debe plata: la marca quedó vieja
+  // (típicamente porque el valor subió después de cobrar).
+  const esDescuadre = (s) => s.saldo > 0 && s.estado_pago === 'COMPLETO'
 
   // Saldos pendientes agrupados por aliado (solo canal ALIADO con saldo > 0)
   const saldosPorAliado = useMemo(() => {
@@ -1462,7 +1497,9 @@ export default function Finanzas() {
   }, [carteraSvcs])
 
   const carteraFiltrada = useMemo(() => {
-    let base = filtroCartera === 'TODOS' ? carteraSvcs : carteraSvcs.filter(s => s.estado_pago === filtroCartera)
+    let base = filtroCartera === 'TODOS' ? carteraSvcs
+      : filtroCartera === 'DESCUADRE' ? carteraSvcs.filter(esDescuadre)
+      : carteraSvcs.filter(s => s.estado_pago === filtroCartera)
     if (filtroAliado) base = base.filter(s => s.aliado_origen_id === filtroAliado)
     return base
   }, [carteraSvcs, filtroCartera, filtroAliado])
@@ -1818,24 +1855,30 @@ export default function Finanzas() {
 
                   {/* Filtro por estado + indicador de filtro activo */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    {['TODOS', 'PENDIENTE', 'PARCIAL'].map(f => (
-                      <button
-                        key={f}
-                        onClick={() => setFiltroCartera(f)}
-                        className={`px-3 py-1.5 rounded-xl text-[12px] font-semibold border transition-colors ${
-                          filtroCartera === f
-                            ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]'
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                        }`}
-                      >
-                        {f === 'TODOS' ? 'Todos' : f}
-                        {f !== 'TODOS' && (
-                          <span className="ml-1 opacity-70">
-                            ({carteraSvcs.filter(s => s.estado_pago === f && (!filtroAliado || s.aliado_origen_id === filtroAliado)).length})
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                    {['TODOS', 'PENDIENTE', 'PARCIAL', 'DESCUADRE'].map(f => {
+                      const n = carteraSvcs.filter(s =>
+                        (f === 'DESCUADRE' ? esDescuadre(s) : s.estado_pago === f) &&
+                        (!filtroAliado || s.aliado_origen_id === filtroAliado)).length
+                      // El chip de descuadre solo aparece si hay algo que mirar.
+                      if (f === 'DESCUADRE' && n === 0) return null
+                      return (
+                        <button
+                          key={f}
+                          onClick={() => setFiltroCartera(f)}
+                          className={`px-3 py-1.5 rounded-xl text-[12px] font-semibold border transition-colors ${
+                            filtroCartera === f
+                              ? 'bg-[#1A5CD8] text-white border-[#1A5CD8]'
+                              : f === 'DESCUADRE'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                          }`}
+                          title={f === 'DESCUADRE' ? 'Marcados como pagados pero con saldo — la marca quedó vieja' : undefined}
+                        >
+                          {f === 'TODOS' ? 'Todos' : f === 'DESCUADRE' ? '⚠ Marcado pagado' : f}
+                          {f !== 'TODOS' && <span className="ml-1 opacity-70">({n})</span>}
+                        </button>
+                      )
+                    })}
                     {filtroAliado && (
                       <span className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold"
                         style={{ background: '#EEF2FF', color: '#3730A3' }}>
@@ -1899,7 +1942,15 @@ export default function Finanzas() {
                               </td>
                               <td className="py-3 pr-4 text-[#16a34a] font-semibold tabular-nums">{fmt(s.valor_pagado)}</td>
                               <td className="py-3 pr-4 text-[#DC2626] font-bold tabular-nums">{fmt(s.saldo)}</td>
-                              <td className="py-3 pr-4"><BadgeEstadoPago estado={s.estado_pago} /></td>
+                              <td className="py-3 pr-4">
+                                <BadgeEstadoPago estado={s.estado_pago} />
+                                {esDescuadre(s) && (
+                                  <div className="text-[10px] font-semibold text-amber-700 leading-tight mt-0.5"
+                                    title="Está marcado como pagado pero quedó saldo: el valor del servicio cambió después de cobrar. Al registrar el pago la marca se corrige sola.">
+                                    ⚠ marcado pagado, con saldo
+                                  </div>
+                                )}
+                              </td>
                               <td className="py-3">
                                 <div className="flex items-center gap-1.5">
                                   <button
