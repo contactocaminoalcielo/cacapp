@@ -11,7 +11,7 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import {
   Film, Sparkles, CheckCircle2, RefreshCw, Download, Instagram, Youtube,
   Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
-  Eye, PawPrint, Phone,
+  Eye, PawPrint, Phone, Ban,
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
@@ -36,6 +36,12 @@ const piezaDe = (s, tipo) => s.piezas.find(p => p.tipo === tipo && p.estado !== 
 
 // Tipos que este servicio maneja: los del plan + cualquier pieza ya creada
 const tiposDe = (s) => TIPOS.filter(t => s.esperadas.includes(t) || piezaDe(s, t))
+
+// Digitales que el cliente declinó en el portal de imágenes ("no deseo este
+// recordatorio"). No se generan ni se envían — solo se informan, para que no
+// parezca que el pipeline los olvidó. Si por lo que sea ya existe la pieza, manda
+// la pieza (aparece en tiposDe) y no se duplica el aviso.
+const declinadasDe = (s) => (s.declinadas || []).filter(t => !piezaDe(s, t))
 
 const publicadas = (s) => s.piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
 
@@ -102,6 +108,8 @@ function buildMensaje(plantilla, s) {
 function estadoServicio(s) {
   if (conError(s)) return { label: 'Con error', variant: 'red' }
   if (fueEnviado(s)) return { label: 'Enviado', variant: 'green' }
+  // Todo lo que llevaba lo declinó el cliente: no hay nada que producir.
+  if (!tiposDe(s).length && declinadasDe(s).length) return { label: 'No lo desea el cliente', variant: 'gray' }
   if (listoParaEnviar(s)) return { label: 'Listo para enviar', variant: 'green' }
   if (s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado))) {
     return { label: 'En proceso', variant: 'amber' }
@@ -273,6 +281,9 @@ export default function Digitales() {
     buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario, telefono: e.telefono || s.telefono }))), [buscados])
   const candidatosFiltrados = useMemo(() =>
     candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo, c.telefono)), [candidatos, q])
+  // Los que el cliente declinó siguen a la vista, pero aparte: no se generan.
+  const porGenerar = useMemo(() => candidatosFiltrados.filter(c => !c.memorial_declinado), [candidatosFiltrados])
+  const declinados = useMemo(() => candidatosFiltrados.filter(c => c.memorial_declinado), [candidatosFiltrados])
   const servicioDetalle = useMemo(() =>
     data.servicios.find(s => s.servicio_id === detalleId) || null, [data.servicios, detalleId])
 
@@ -280,7 +291,7 @@ export default function Digitales() {
     ['pipeline', `Pipeline (${pipeline.length})`],
     ['enviar', `Para enviar (${listos.length})`],
     ['enviados', `Enviados (${enviados.length})`],
-    ['candidatos', `Por generar (${candidatosFiltrados.length})`],
+    ['candidatos', `Por generar (${porGenerar.length})`],
   ]
 
   return (
@@ -384,7 +395,7 @@ export default function Digitales() {
             <Loader2 className="animate-spin" size={18} /> Cargando…
           </div>
         ) : tab === 'candidatos' ? (
-          <CandidatosList candidatos={candidatosFiltrados} busy={busy} onGenerar={generar}
+          <CandidatosList candidatos={porGenerar} declinados={declinados} busy={busy} onGenerar={generar}
             onEncuadrar={(c) => setEncuadre({ servicioId: c.servicio_id, fotoUrl: c.foto_url, mascota: c.mascota, ajuste: null })} />
         ) : tab === 'enviados' ? (
           <EnviadosList enviados={enviados} q={q} />
@@ -531,21 +542,30 @@ function PipelineTable({ servicios, onOpen }) {
                           </Badge>
                         )
                       })}
+                      {declinadasDe(s).map(t => (
+                        <Badge key={t} variant="gray" className="whitespace-nowrap opacity-70">
+                          <Ban size={11} className="mr-1" /> {TIPO_CORTO[t]}: no lo desea
+                        </Badge>
+                      ))}
                     </div>
                   </Td>
                   <Td>
-                    <div className="w-28">
-                      <div className="flex items-center justify-between text-[12px] font-medium text-gray-500 mb-1">
-                        <span>{progreso.hechas}/{progreso.total}</span>
-                        <span>{pct}%</span>
+                    {progreso.total === 0 ? (
+                      <span className="text-[12px] text-gray-400">—</span>
+                    ) : (
+                      <div className="w-28">
+                        <div className="flex items-center justify-between text-[12px] font-medium text-gray-500 mb-1">
+                          <span>{progreso.hechas}/{progreso.total}</span>
+                          <span>{pct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                          <div
+                            className={'h-full rounded-full ' + (pct === 100 ? 'bg-green-500' : 'bg-[#3D5A27]')}
+                            style={{ width: pct + '%' }}
+                          />
+                        </div>
                       </div>
-                      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className={'h-full rounded-full ' + (pct === 100 ? 'bg-green-500' : 'bg-[#3D5A27]')}
-                          style={{ width: pct + '%' }}
-                        />
-                      </div>
-                    </div>
+                    )}
                   </Td>
                   <Td><Badge variant={estado.variant}>{estado.label}</Badge></Td>
                   <Td className="text-right">
@@ -574,6 +594,7 @@ function ServicioCard({
   onGuardarEnlace, onIrAEnviar,
 }) {
   const tipos = tiposDe(s)
+  const declinadas = declinadasDe(s)
   const mem = piezaDe(s, 'MEMORIAL')
   const url = videoUrl(mem)
   const nPub = publicadas(s).length
@@ -601,9 +622,23 @@ function ServicioCard({
               const est = ESTADO[p?.estado || 'PENDIENTE'] || ESTADO.PENDIENTE
               return <Badge key={t} variant={est.variant}>{TIPO_LABEL[t]}: {est.label}</Badge>
             })}
+            {declinadas.map(t => (
+              <Badge key={t} variant="gray" className="opacity-70"><Ban size={10} className="mr-1" /> {TIPO_LABEL[t]}: no lo desea</Badge>
+            ))}
             {enviado && <Badge variant="green"><Send size={10} className="mr-1" /> Enviado</Badge>}
           </div>
         </div>
+
+        {/* Lo que el cliente rechazó en su formulario de carga de imágenes */}
+        {declinadas.length > 0 && (
+          <div className="flex items-start gap-2 rounded-xl bg-gray-50 text-gray-500 text-[13px] px-3 py-2.5">
+            <Ban size={15} className="shrink-0 mt-0.5" />
+            <span>
+              El cliente indicó en el portal de imágenes que <b className="font-semibold">no desea {declinadas.map(t => TIPO_LABEL[t]).join(', ')}</b>.
+              No se genera ni se envía.
+            </span>
+          </div>
+        )}
 
         {/* MEMORIAL — pipeline propio (render Remotion) */}
         {tipos.includes('MEMORIAL') && (
@@ -951,34 +986,71 @@ function EncuadreModal({ data, busy, onClose, onGenerar }) {
   )
 }
 
-function CandidatosList({ candidatos, busy, onGenerar, onEncuadrar }) {
-  if (!candidatos.length) return <Empty icon={Sparkles} texto="No hay servicios pendientes de memorial." />
+function CandidatosList({ candidatos, declinados = [], busy, onGenerar, onEncuadrar }) {
+  if (!candidatos.length && !declinados.length) {
+    return <Empty icon={Sparkles} texto="No hay servicios pendientes de memorial." />
+  }
   return (
-    <div className="grid gap-3">
-      {candidatos.map(c => (
-        <Card key={c.servicio_id}>
-          <CardContent className="flex items-center justify-between gap-4 py-3">
-            <div className="min-w-0">
-              <div className="font-semibold text-[#263218] truncate">
-                <span className="inline-flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {c.mascota}</span>
-              </div>
-              <div className="text-[13px] text-gray-500 truncate">
-                {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}
-                {c.telefono ? ` · ${c.telefono}` : ''}
-              </div>
-            </div>
-            <div className="flex gap-2 shrink-0">
-              <Button variant="secondary" onClick={() => onEncuadrar(c)} disabled={busy[c.servicio_id] || !c.foto_url}>
-                <Crop size={16} /> Encuadrar
-              </Button>
-              <Button onClick={() => onGenerar(c.servicio_id)} disabled={busy[c.servicio_id]}>
-                {busy[c.servicio_id] ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                Generar
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="space-y-5">
+      {candidatos.length === 0 ? (
+        <Empty icon={Sparkles} texto="No hay servicios pendientes de memorial." />
+      ) : (
+        <div className="grid gap-3">
+          {candidatos.map(c => (
+            <Card key={c.servicio_id}>
+              <CardContent className="flex items-center justify-between gap-4 py-3">
+                <CandidatoDatos c={c} />
+                <div className="flex gap-2 shrink-0">
+                  <Button variant="secondary" onClick={() => onEncuadrar(c)} disabled={busy[c.servicio_id] || !c.foto_url}>
+                    <Crop size={16} /> Encuadrar
+                  </Button>
+                  <Button onClick={() => onGenerar(c.servicio_id)} disabled={busy[c.servicio_id]}>
+                    {busy[c.servicio_id] ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                    Generar
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* El cliente marcó "no deseo este recordatorio" en el portal de imágenes:
+          quedan a la vista para que no parezca que se olvidaron, pero sin generar. */}
+      {declinados.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2 text-[12px] font-semibold uppercase tracking-wide text-gray-400">
+            <Ban size={13} className="shrink-0" />
+            El cliente no desea el memorial ({declinados.length})
+          </div>
+          <div className="grid gap-3">
+            {declinados.map(c => (
+              <Card key={c.servicio_id} className="bg-gray-50/70 border-dashed">
+                <CardContent className="flex items-center justify-between gap-4 py-3">
+                  <CandidatoDatos c={c} apagado />
+                  <Badge variant="gray" className="shrink-0 whitespace-nowrap">
+                    <Ban size={12} className="mr-1" /> No lo desea
+                  </Badge>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CandidatoDatos({ c, apagado = false }) {
+  return (
+    <div className="min-w-0">
+      <div className={`font-semibold truncate ${apagado ? 'text-gray-500' : 'text-[#263218]'}`}>
+        <span className="inline-flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {c.mascota}</span>
+      </div>
+      <div className={`text-[13px] truncate ${apagado ? 'text-gray-400' : 'text-gray-500'}`}>
+        {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}
+        {c.telefono ? ` · ${c.telefono}` : ''}
+      </div>
     </div>
   )
 }

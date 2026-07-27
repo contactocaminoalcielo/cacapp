@@ -91,6 +91,42 @@ function fotoLateral(pRec) {
        ) f ON true`
 }
 
+// El cliente puede decir "no deseo este recordatorio" en el portal de imágenes:
+// esa fila queda en `servicio_recordatorios.estado = 'NA'` (ver imagenes.js). Un
+// digital declinado NO se genera ni se envía, pero SÍ se muestra en el módulo
+// como "el cliente no lo desea" — antes desaparecía sin explicación del pipeline
+// y seguía apareciendo con botón "Generar" en Por generar.
+// Un recordatorio cuenta como declinado solo si TODAS sus filas vivas están en
+// 'NA' (un servicio puede llevar el mismo recordatorio dos veces).
+function declinadosLateral(pRecIds, alias = 'na') {
+  return `LEFT JOIN LATERAL (
+         SELECT array_agg(x.rid::text) AS rec_ids
+         FROM (
+           SELECT sr.recordatorio_id AS rid
+           FROM public.servicio_recordatorios sr
+           WHERE sr.servicio_id = s.id
+             AND sr.recordatorio_id = ANY(${pRecIds}::uuid[])
+             AND COALESCE(sr.origen, '') <> 'REMOVIDO'
+           GROUP BY sr.recordatorio_id
+           HAVING COUNT(*) FILTER (WHERE sr.estado <> 'NA') = 0
+         ) x
+       ) ${alias} ON true`
+}
+
+// ¿El cliente declinó el memorial de este servicio? (mismo criterio que arriba)
+async function memorialDeclinado(client, servicioId, recMemorial) {
+  if (!uuidOrNull(recMemorial)) return false
+  const { rows } = await client.query(
+    `SELECT COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sr.estado <> 'NA') = 0 AS declinado
+     FROM public.servicio_recordatorios sr
+     WHERE sr.servicio_id = $1
+       AND sr.recordatorio_id = $2::uuid
+       AND COALESCE(sr.origen, '') <> 'REMOVIDO'`,
+    [servicioId, recMemorial]
+  )
+  return rows[0]?.declinado === true
+}
+
 async function fotoDelServicio(client, servicioId, recMemorial) {
   const { rows } = await client.query(
     `SELECT sr.imagen_cliente_url, sr.imagenes_cliente_urls
@@ -166,7 +202,8 @@ export async function listarCandidatos() {
               m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
               COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
-              f.foto_url
+              f.foto_url,
+              COALESCE(d.declinado, false) AS memorial_declinado
        FROM public.servicios s
        JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
@@ -174,11 +211,18 @@ export async function listarCandidatos() {
        LEFT JOIN public.piezas_digitales mem
          ON mem.servicio_id = s.id AND mem.tipo = 'MEMORIAL'
        ${fotoLateral('$2')}
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sr.estado <> 'NA') = 0 AS declinado
+         FROM public.servicio_recordatorios sr
+         WHERE sr.servicio_id = s.id
+           AND sr.recordatorio_id = $2::uuid
+           AND COALESCE(sr.origen, '') <> 'REMOVIDO'
+       ) d ON true
        WHERE s.fecha_imagenes_recibidas IS NOT NULL
          AND s.estado <> 'CANCELADO'
          AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
          AND (mem.id IS NULL OR mem.estado IN ('ERROR', 'DESCARTADO'))
-       ORDER BY s.fecha_imagenes_recibidas DESC
+       ORDER BY COALESCE(d.declinado, false) ASC, s.fecha_imagenes_recibidas DESC
        LIMIT 300`,
       [excl, recMemorial]
     )
@@ -204,7 +248,8 @@ export async function listarServicios() {
               COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
               p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               f.foto_url,
-              COALESCE(e.rec_ids, '{}') AS rec_ids
+              COALESCE(e.rec_ids, '{}') AS rec_ids,
+              COALESCE(na.rec_ids, '{}') AS rec_ids_na
        FROM public.servicios s
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
@@ -218,9 +263,11 @@ export async function listarServicios() {
            AND sr.estado <> 'NA'
            AND COALESCE(sr.origen, '') <> 'REMOVIDO'
        ) e ON true
+       ${declinadosLateral('$1')}
        WHERE s.estado <> 'CANCELADO'
          AND s.fecha_imagenes_recibidas IS NOT NULL
          AND (e.rec_ids IS NOT NULL
+              OR na.rec_ids IS NOT NULL
               OR EXISTS (SELECT 1 FROM public.piezas_digitales pd WHERE pd.servicio_id = s.id))
        ORDER BY s.fecha_imagenes_recibidas DESC
        LIMIT 200`,
@@ -257,7 +304,12 @@ export async function listarServicios() {
     const porServicio = Object.fromEntries(servicios.map(s => [s.servicio_id, s]))
     servicios.forEach(s => {
       s.esperadas = TIPOS.filter(t => (s.rec_ids || []).includes(String(mapa[t] || '')))
+      // Declinados por el cliente: se informan aparte de `esperadas` para que no
+      // entren en el progreso ni en la elección de plantilla de envío.
+      s.declinadas = TIPOS.filter(t =>
+        (s.rec_ids_na || []).includes(String(mapa[t] || '')) && !s.esperadas.includes(t))
       delete s.rec_ids
+      delete s.rec_ids_na
       s.piezas = []
       s.envios = []
     })
@@ -311,7 +363,16 @@ export async function generarMemorial({ servicioId, personalId, formato: formato
     if (!svc.fecha_imagenes_recibidas) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'Aún no se han recibido las imágenes del cliente.' } } }
     if (svc.plan_codigo && excl.includes(svc.plan_codigo)) { await client.query('ROLLBACK'); return { status: 422, body: { error: `El plan ${svc.plan_codigo} no lleva memorial.` } } }
 
-    const foto = await fotoDelServicio(client, servicioId, await recordatorioMemorial(client))
+    // El cliente pudo declinar el memorial en el portal de imágenes. La UI ya no
+    // ofrece "Generar" en ese caso, pero una pestaña vieja (o la PWA en caché)
+    // sí puede llamar aquí: la decisión se valida contra la DB.
+    const recMemorial = await recordatorioMemorial(client)
+    if (await memorialDeclinado(client, servicioId, recMemorial)) {
+      await client.query('ROLLBACK')
+      return { status: 422, body: { error: 'El cliente indicó que no desea el memorial.' } }
+    }
+
+    const foto = await fotoDelServicio(client, servicioId, recMemorial)
     if (!foto) { await client.query('ROLLBACK'); return { status: 422, body: { error: 'No hay una foto del cliente para este servicio.' } } }
 
     const frase = typeof cfg.frase === 'string' ? cfg.frase : CONFIG_DEFAULTS.frase
