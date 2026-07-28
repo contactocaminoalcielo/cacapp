@@ -18,7 +18,7 @@ import {
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil } from 'lucide-react'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -222,6 +222,7 @@ export default function Presequiales() {
   const [ficha, setFicha]             = useState(null)   // contrato abierto
   const [modalRenovar, setModalRenovar] = useState(null)
   const [modalActivar, setModalActivar] = useState(null) // { afiliacion, am }
+  const [modalReactivar, setModalReactivar] = useState(null)
 
   useEffect(() => { cargar() }, [])
 
@@ -407,6 +408,12 @@ export default function Presequiales() {
                             <Rocket size={11} /> Activar
                           </Button>
                         )}
+                        {/* Canceladas que en realidad siguen vigentes (sin seguimiento en el sistema viejo) */}
+                        {f.estado === 'CANCELADA' && (
+                          <Button size="sm" variant="secondary" onClick={() => setModalReactivar({ afiliacion: a })}>
+                            <RotateCcw size={11} /> Reactivar
+                          </Button>
+                        )}
                       </div>
                     </Td>
                   </Tr>
@@ -435,6 +442,7 @@ export default function Presequiales() {
         <ModalFicha afiliacion={ficha} config={config} especies={especies}
           onClose={() => setFicha(null)}
           onRenovar={() => setModalRenovar({ afiliacion: ficha })}
+          onReactivar={() => setModalReactivar({ afiliacion: ficha })}
           onActivar={am => setModalActivar({ afiliacion: ficha, am })}
           onCancelar={async () => {
             const n = mascotasDe(ficha).filter(am => am.estado === 'VIGENTE').length
@@ -476,6 +484,12 @@ export default function Presequiales() {
               },
             })
           }} />
+      )}
+
+      {modalReactivar && (
+        <ModalReactivar afiliacion={modalReactivar.afiliacion} config={config} personalData={personalData}
+          onClose={() => setModalReactivar(null)}
+          onSaved={async () => { setModalReactivar(null); await cargar() }} />
       )}
     </div>
   )
@@ -1175,7 +1189,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 }
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
-function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onActivar, onCancelar, onChanged }) {
+function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onChanged }) {
   const { alert: showAlert } = useConfirm()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
   const [pdfGen, setPdfGen] = useState(null)
@@ -1347,6 +1361,9 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
         {a.tipo === 'ANUAL' && ['VIGENTE','VENCIDA'].includes(a.estado) && vivas.length > 0 && (
           <Button variant="secondary" onClick={onRenovar}><RotateCw size={13} /> Renovar</Button>
         )}
+        {a.estado === 'CANCELADA' && vivas.length > 0 && (
+          <Button variant="secondary" onClick={onReactivar}><RotateCcw size={13} /> Reactivar</Button>
+        )}
       </>}>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ background: nc.bg, color: nc.text, borderColor: nc.border }}>{a.nivel}</span>
@@ -1511,6 +1528,187 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
       </div>
 
       {a.notas && <p className="text-[12px] text-ink3 mt-4"><span className="font-bold">Notas:</span> {a.notas}</p>}
+    </Modal>
+  )
+}
+
+// ─── Reactivar: devolver a VIGENTE un contrato que quedó atrás ───────────────
+// Muchos contratos venían del sistema anterior sin seguimiento: el cron los
+// venció y canceló aunque el cliente sí siguió afiliado.
+//
+// ⚠️ NO basta con poner estado = VIGENTE: el job de orbit-backend cancela por
+// FECHA (vencimiento + días de gracia < hoy), no por estado, así que a la
+// mañana siguiente lo volvería a cancelar. Por eso siempre hay que dejar un
+// vencimiento futuro, y este modal lo exige.
+//
+// Dos caminos, porque tienen consecuencias distintas en el cobro:
+//  · RENOVACION (recomendado): el cliente sí renovó y no quedó registrado → se
+//    crea el contrato Nº+1 que faltaba. Al no ser el contrato 0, la cláusula
+//    5×/3× queda suspendida, que es lo correcto para alguien que lleva años.
+//  · CORRECCION: la fecha estaba mal cargada → se corrige el vencimiento del
+//    mismo contrato. Si es el contrato 0, la cláusula SIGUE aplicando.
+function ModalReactivar({ afiliacion: a, config, personalData, onClose, onSaved }) {
+  const { alert: showAlert } = useConfirm()
+  const ct = contratoVigente(a)
+  const esVitalicio = a.tipo === 'VITALICIO'
+  const precioCfg = parseFloat(config?.precios?.ANUAL?.[a.nivel]) || 0
+  const vivas = mascotasDe(a).filter(am => am.estado === 'VIGENTE')
+
+  const [modo, setModo] = useState('RENOVACION')
+  const [desde, setDesde] = useState(today())
+  const [hasta, setHasta] = useState(sumarUnAnio(today()))
+  const [valor, setValor] = useState(precioCfg > 0 ? String(precioCfg) : String(ct?.valor || ''))
+  const [metodoPago, setMetodoPago] = useState('EFECTIVO')
+  const [fechaPago, setFechaPago] = useState(today())
+  const [comprobanteFile, setComprobanteFile] = useState(null)
+  const [motivo, setMotivo] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const numero = (ct?.numero ?? 0) + 1
+  const valorNum = parseFloat(valor) || 0
+  const numeroContrato = generarNumeroContrato({
+    fechaInicio: ct?.fecha_inicio || desde,   // el código conserva la fecha de LA AFILIACIÓN original
+    cliente: a.clientes, nivel: a.nivel, tipo: a.tipo, numero,
+  })
+  // Un vencimiento que ya pasó lo vuelve a cancelar el cron esta misma noche
+  const vencimientoOk = esVitalicio || (hasta && diasPara(hasta) > 0)
+
+  async function guardar() {
+    if (!vencimientoOk) {
+      await showAlert(
+        'La fecha de vigencia tiene que ser futura. Si queda en el pasado, el proceso automático de vencimientos vuelve a cancelar la afiliación mañana.',
+        { title: 'Revisa la fecha', variant: 'warning' })
+      return
+    }
+    setSaving(true)
+    try {
+      if (!esVitalicio && modo === 'RENOVACION') {
+        const comprobantes = []
+        if (comprobanteFile) comprobantes.push(await subirComprobanteAfiliacion(a.id, comprobanteFile))
+        const { error } = await db.from('afiliacion_contratos').insert({
+          afiliacion_id: a.id, numero, numero_contrato: numeroContrato,
+          fecha_inicio: desde, fecha_vencimiento: hasta,
+          valor: valorNum,
+          // Sin cobro registrado no se inventa medio de pago (quedaría plata fantasma)
+          metodo_pago: valorNum > 0 ? metodoPago : null,
+          fecha_pago: valorNum > 0 ? (fechaPago || null) : null,
+          comprobantes, creado_por: personalData?.id || null,
+        })
+        if (error) throw error
+      } else if (!esVitalicio) {
+        const { error } = await db.from('afiliacion_contratos')
+          .update({ fecha_vencimiento: hasta }).eq('id', ct.id)
+        if (error) throw error
+      }
+
+      // Queda rastro en la ficha: quién la reactivó, cuándo y por qué
+      const sello = `[${today()}] Reactivada por ${personalData?.nombre || 'coordinación'}` +
+        (esVitalicio ? '' : modo === 'RENOVACION' ? ` (renovación Nº ${numero} registrada)` : ` (vencimiento corregido a ${hasta})`) +
+        (motivo.trim() ? `: ${motivo.trim()}` : '')
+      const { error: e2 } = await db.from('afiliaciones')
+        .update({ estado: 'VIGENTE', notas: [a.notas, sello].filter(Boolean).join('\n') })
+        .eq('id', a.id)
+      if (e2) throw e2
+      await onSaved()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo reactivar' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} maxWidth="max-w-md"
+      title={`Reactivar afiliación — ${a.clientes?.nombre} ${a.clientes?.apellido || ''}`}
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+        <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Reactivar'}</Button>
+      </>}>
+      <div className="space-y-3">
+        <div className="bg-surface2 rounded-lg px-3 py-2 text-[12px] text-ink2">
+          Hoy está <strong>{a.estado}</strong> · contrato <span className="font-mono font-bold text-ink">{ct?.numero_contrato}</span>
+          {ct?.fecha_vencimiento && <> · venció el <strong>{ct.fecha_vencimiento}</strong></>}<br />
+          Vuelven a quedar cubiertas <strong>{vivas.length} mascota{vivas.length === 1 ? '' : 's'}</strong>
+          {vivas.length > 0 && <>: {vivas.map(am => am.mascotas?.nombre).filter(Boolean).join(', ')}</>}
+        </div>
+
+        {esVitalicio ? (
+          <p className="text-[12px] text-ink2">
+            Es una afiliación <strong>vitalicia</strong>: no tiene vencimiento, así que solo vuelve a
+            quedar VIGENTE.
+          </p>
+        ) : (
+          <>
+            <div>
+              <div className={LABEL}>¿Qué pasó con este contrato?</div>
+              <div className="space-y-1.5">
+                {[
+                  ['RENOVACION', 'El cliente sí renovó y no quedó registrado',
+                    `Crea la renovación Nº ${numero} que falta. Suspende la cláusula del primer año.`],
+                  ['CORRECCION', 'La fecha de vencimiento estaba mal cargada',
+                    'Corrige la fecha del contrato actual, sin crear uno nuevo.'],
+                ].map(([v, titulo, detalle]) => (
+                  <button key={v} onClick={() => setModo(v)}
+                    className={`w-full text-left px-3 py-2 rounded-xl border-2 transition-all ${modo === v ? 'border-primary-dark bg-green-light' : 'border-transparent bg-surface2 hover:bg-surface3'}`}>
+                    <div className="font-bold text-ink text-[12px]">{titulo}</div>
+                    <div className="text-[10px] text-ink3">{detalle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {modo === 'RENOVACION' && (
+                <div><label className={LABEL}>Vigente desde</label>
+                  <Input type="date" value={desde}
+                    onChange={e => { setDesde(e.target.value); if (e.target.value) setHasta(sumarUnAnio(e.target.value)) }} /></div>
+              )}
+              <div><label className={LABEL}>Vigente hasta</label>
+                <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} /></div>
+            </div>
+            {!vencimientoOk && (
+              <p className="text-[11px] text-danger font-semibold">
+                Esa fecha ya pasó: el proceso automático volvería a cancelar la afiliación mañana.
+              </p>
+            )}
+
+            {modo === 'RENOVACION' && (
+              <>
+                <div className="text-[11px] text-ink3">
+                  Nº de contrato: <span className="font-mono font-bold text-ink">{numeroContrato}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className={LABEL}>Valor por mascota</label>
+                    <Input type="number" min="0" value={valor} onChange={e => setValor(e.target.value)} /></div>
+                  {valorNum > 0 && (
+                    <>
+                      <div><label className={LABEL}>Método de pago</label>
+                        <Select value={metodoPago} onChange={e => setMetodoPago(e.target.value)}>
+                          {METODOS_PAGO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </Select></div>
+                      <div><label className={LABEL}>Fecha de pago</label>
+                        <Input type="date" value={fechaPago} onChange={e => setFechaPago(e.target.value)} /></div>
+                      <div><label className={LABEL}>Comprobante</label>
+                        <input type="file" accept="image/*,application/pdf" className="text-[11px] w-full pt-1.5"
+                          onChange={e => setComprobanteFile(e.target.files?.[0] || null)} /></div>
+                    </>
+                  )}
+                </div>
+                <p className="text-[10px] text-ink3">
+                  Si no se cobró nada (o no se sabe cuánto), deja el valor en 0: el contrato queda
+                  registrado sin sumar plata que no entró.
+                </p>
+              </>
+            )}
+          </>
+        )}
+
+        <div>
+          <label className={LABEL}>Motivo (queda en las notas de la ficha)</label>
+          <Textarea rows={2} value={motivo} onChange={e => setMotivo(e.target.value)}
+            placeholder="Ej: venía del sistema anterior, el cliente nunca dejó de estar afiliado" />
+        </div>
+      </div>
     </Modal>
   )
 }
