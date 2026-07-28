@@ -1184,7 +1184,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
   const [emailPara, setEmailPara] = useState(null)  // id del contrato con el form de correo abierto
   const [emailDestino, setEmailDestino] = useState('')
   const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
-  const [formMasc, setFormMasc] = useState({ especie_id: '', raza: '', peso_kg: '', edad: '' })
+  const [formMasc, setFormMasc] = useState({ nombre: '', especie_id: '', raza: '', peso_kg: '', edad: '' })
   const [guardandoMasc, setGuardandoMasc] = useState(false)
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
@@ -1207,14 +1207,15 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
     }
   }
 
-  // Especie, raza, peso y edad cambian (o llegaron vacíos en la importación) y
-  // los cuatro van impresos en el contrato: se corrigen aquí, sobre la mascota
-  // (no sobre la afiliación), que es de donde los lee el PDF.
+  // Los cinco datos que la tabla del contrato imprime (nombre, especie, raza,
+  // peso, edad) cambian o llegaron vacíos en la importación: se corrigen aquí,
+  // sobre la mascota (no sobre la afiliación), que es de donde los lee el PDF.
   function abrirEdicionMascota(am) {
     if (editMasc === am.id) { setEditMasc(null); return }
     const m = am.mascotas
     const edad = edadALaFecha(m)
     setFormMasc({
+      nombre: m?.nombre || '',
       especie_id: m?.especie_id ? String(m.especie_id) : '',
       raza: m?.raza || '',
       peso_kg: parseFloat(m?.peso_kg) > 0 ? String(m.peso_kg) : '',
@@ -1226,6 +1227,12 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
   async function guardarDatosMascota(am) {
     const idMascota = am.mascotas?.id_mascota
     if (!idMascota) return
+    // mascotas.nombre es NOT NULL, y además es el nombre con el que salen el
+    // contrato y todo el historial: no se puede dejar en blanco.
+    if (!formMasc.nombre.trim()) {
+      await showAlert('La mascota necesita un nombre.', { title: 'Falta el nombre', variant: 'warning' })
+      return
+    }
     setGuardandoMasc(true)
     try {
       const peso = parseFloat(formMasc.peso_kg)
@@ -1233,6 +1240,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
       // La edad se guarda con la fecha en que se declaró para que no se pudra:
       // la vigente = edad_anios + años transcurridos (migración 056).
       const cols = {
+        nombre: formMasc.nombre.trim(),
         // especie_id es integer: mandarlo como string lo rechaza la FK
         especie_id: parseInt(formMasc.especie_id) || null,
         raza: formMasc.raza.trim() || null,
@@ -1371,7 +1379,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
                   <Button size="sm" variant="ghost" onClick={() => abrirEdicionMascota(am)}
-                    title="Corregir especie, raza, peso y edad de la mascota">
+                    title="Corregir nombre, especie, raza, peso y edad de la mascota">
                     <Pencil size={11} /> Editar datos
                   </Button>
                   {['VIGENTE','VENCIDA'].includes(est) && (
@@ -1385,6 +1393,11 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                 <form className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}
                   onSubmit={e => { e.preventDefault(); guardarDatosMascota(am) }}>
                   <div className="flex flex-wrap items-end gap-2">
+                    <div>
+                      <label className={LABEL}>Nombre</label>
+                      <Input className="w-36" value={formMasc.nombre}
+                        onChange={e => setFormMasc(p => ({ ...p, nombre: e.target.value }))} />
+                    </div>
                     <div>
                       <label className={LABEL}>Especie</label>
                       <Select className="w-36" value={formMasc.especie_id}
@@ -1417,8 +1430,9 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                   </div>
                   <p className="text-[10px] text-ink3 mt-1.5">
                     La edad se guarda como la que tiene <b>hoy</b> y de ahí en adelante envejece sola.
-                    Para cambiar el nombre, ve a Gestión › Mascotas.
-                    Vuelve a generar el PDF del contrato para que salga con estos datos.
+                    El nombre es el mismo de toda la operación: al cambiarlo, cambia también en
+                    servicios, certificados e historial. Vuelve a generar el PDF del contrato para
+                    que salga con estos datos.
                   </p>
                 </form>
               )}
