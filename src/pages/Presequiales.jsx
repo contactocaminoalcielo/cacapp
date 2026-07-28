@@ -235,7 +235,7 @@ export default function Presequiales() {
             clientes(id_cliente,nombre,apellido,whatsapp,telefono,email,cedula_nit,direccion,ciudad),
             afiliacion_contratos(*),
             afiliacion_mascotas(id,estado,fecha_activacion,servicio_activado_id,created_at,
-              mascotas(id_mascota,nombre,raza,peso_kg,fallecida,edad_anios,edad_declarada_en,especies(nombre)))`)
+              mascotas(id_mascota,nombre,raza,peso_kg,fallecida,edad_anios,edad_declarada_en,especie_id,especies(nombre)))`)
           .order('created_at', { ascending: false }),
         db.from('planes').select('id,codigo,nombre').eq('activo', true),
         db.from('especies').select('id,nombre').order('nombre'),
@@ -432,7 +432,7 @@ export default function Presequiales() {
       )}
 
       {ficha && (
-        <ModalFicha afiliacion={ficha} config={config}
+        <ModalFicha afiliacion={ficha} config={config} especies={especies}
           onClose={() => setFicha(null)}
           onRenovar={() => setModalRenovar({ afiliacion: ficha })}
           onActivar={am => setModalActivar({ afiliacion: ficha, am })}
@@ -1175,7 +1175,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 }
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
-function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCancelar, onChanged }) {
+function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onActivar, onCancelar, onChanged }) {
   const { alert: showAlert } = useConfirm()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
   const [pdfGen, setPdfGen] = useState(null)
@@ -1184,7 +1184,7 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
   const [emailPara, setEmailPara] = useState(null)  // id del contrato con el form de correo abierto
   const [emailDestino, setEmailDestino] = useState('')
   const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
-  const [formMasc, setFormMasc] = useState({ peso_kg: '', edad: '' })
+  const [formMasc, setFormMasc] = useState({ especie_id: '', peso_kg: '', edad: '' })
   const [guardandoMasc, setGuardandoMasc] = useState(false)
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
@@ -1207,14 +1207,15 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
     }
   }
 
-  // Peso y edad cambian con los años y la importación histórica llegó sin
-  // ellos: se corrigen aquí, sobre la mascota (no sobre la afiliación), que es
-  // de donde los lee el PDF del contrato.
+  // Especie, peso y edad cambian (o llegaron vacíos en la importación) y los
+  // tres van impresos en el contrato: se corrigen aquí, sobre la mascota (no
+  // sobre la afiliación), que es de donde los lee el PDF.
   function abrirEdicionMascota(am) {
     if (editMasc === am.id) { setEditMasc(null); return }
     const m = am.mascotas
     const edad = edadALaFecha(m)
     setFormMasc({
+      especie_id: m?.especie_id ? String(m.especie_id) : '',
       peso_kg: parseFloat(m?.peso_kg) > 0 ? String(m.peso_kg) : '',
       edad: edad == null ? '' : String(edad),
     })
@@ -1231,6 +1232,8 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
       // La edad se guarda con la fecha en que se declaró para que no se pudra:
       // la vigente = edad_anios + años transcurridos (migración 056).
       const cols = {
+        // especie_id es integer: mandarlo como string lo rechaza la FK
+        especie_id: parseInt(formMasc.especie_id) || null,
         peso_kg: Number.isFinite(peso) && peso > 0 ? peso : 0,
         ...(Number.isFinite(anios) && anios >= 0
           ? { edad_anios: anios, edad_declarada_en: today() }
@@ -1366,8 +1369,8 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
                   <Button size="sm" variant="ghost" onClick={() => abrirEdicionMascota(am)}
-                    title="Corregir peso y edad de la mascota">
-                    <Pencil size={11} /> Peso y edad
+                    title="Corregir especie, peso y edad de la mascota">
+                    <Pencil size={11} /> Editar datos
                   </Button>
                   {['VIGENTE','VENCIDA'].includes(est) && (
                     <Button size="sm" variant="gold" onClick={() => onActivar(am)}>
@@ -1380,6 +1383,14 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
                 <form className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}
                   onSubmit={e => { e.preventDefault(); guardarDatosMascota(am) }}>
                   <div className="flex flex-wrap items-end gap-2">
+                    <div>
+                      <label className={LABEL}>Especie</label>
+                      <Select className="w-36" value={formMasc.especie_id}
+                        onChange={e => setFormMasc(p => ({ ...p, especie_id: e.target.value }))}>
+                        <option value="">Sin especie</option>
+                        {(especies || []).map(esp => <option key={esp.id} value={esp.id}>{esp.nombre}</option>)}
+                      </Select>
+                    </div>
                     <div>
                       <label className={LABEL}>Peso (kg)</label>
                       <Input type="number" min="0" step="0.1" className="w-24" autoFocus
@@ -1399,6 +1410,7 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
                   </div>
                   <p className="text-[10px] text-ink3 mt-1.5">
                     La edad se guarda como la que tiene <b>hoy</b> y de ahí en adelante envejece sola.
+                    Para cambiar el nombre o la raza, ve a Gestión › Mascotas.
                     Vuelve a generar el PDF del contrato para que salga con estos datos.
                   </p>
                 </form>
