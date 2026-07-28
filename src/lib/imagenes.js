@@ -23,6 +23,22 @@ export function requiereImagen(rec) {
   return !!rec && rec.requiere_imagen === true && rec.solo_nombre !== true && (rec.max_fotos || 0) > 0
 }
 
+// ─── ¿A qué número se le escribe? ────────────────────────────────────────────
+// Manda el número VIGENTE de la ficha del cliente. `solicitudes_imagenes
+// .whatsapp_destino` es el registro de a dónde salió el contacto 1, NO la
+// libreta de direcciones: cuando el coordinador corrige el WhatsApp (justamente
+// porque el viejo estaba malo), el 2º y el 3º deben ir al nuevo. Mostrar el
+// snapshot hacía creer que el cambio no se había guardado.
+// Mismo criterio de validez que el backend (`waOrNull` en seguimiento-imagenes.js)
+// y que la consulta que arma las solicitudes: al menos 10 dígitos.
+export function waVigente(whatsappCliente, destinoRegistrado) {
+  const sirve = v => {
+    const s = String(v || '').trim()
+    return s.replace(/\D/g, '').length >= 10 ? s : null
+  }
+  return sirve(whatsappCliente) || sirve(destinoRegistrado) || null
+}
+
 // ─── Etapa de contacto (compartida por Seguimiento, Producción, Ficha y Kanban) ──
 // Vive aquí y no en cada página para que las cuatro digan lo MISMO: si esta regla
 // se duplica, un módulo acaba contradiciendo al otro sobre el mismo cliente.

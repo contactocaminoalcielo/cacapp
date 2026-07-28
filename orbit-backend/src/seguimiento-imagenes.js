@@ -35,6 +35,14 @@ function uuidOrNull(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s) ? s : null
 }
 
+// Un número sirve si tiene al menos 10 dígitos — mismo criterio con el que el
+// job elige a quién contactar. Sirve para no dejar que un campo en blanco o a
+// medio digitar en la ficha del cliente pise un destino que sí servía.
+function waOrNull(value) {
+  const s = String(value || '').trim()
+  return s.replace(/\D/g, '').length >= 10 ? s : null
+}
+
 /**
  * Envía el contacto `numero` (2 ó 3) de una solicitud. Idempotente y seguro para
  * ejecutar en paralelo con el envío manual del contacto 1 (mismo advisory lock).
@@ -78,7 +86,13 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
     if (['RECIBIDO', 'CANCELADO'].includes(sol.estado)) { await client.query('ROLLBACK'); return { enviado: false, motivo: 'solicitud_cerrada' } }
     if (sol.seguimiento_pausado && automatico) { await client.query('ROLLBACK'); return { enviado: false, motivo: 'pausado' } }
 
-    const destino = sol.whatsapp_destino || sol.whatsapp
+    // El número VIGENTE del cliente manda. `sol.whatsapp_destino` es el registro
+    // de a dónde salió el contacto 1, no la libreta de direcciones: si se
+    // corrigió el WhatsApp (justamente porque el viejo estaba malo), el 2º y el
+    // 3º tienen que ir al nuevo. Al revés se quedaba pegado el primero y los
+    // mensajes seguían saliendo al número equivocado. El snapshot solo sirve de
+    // respaldo si el cliente se quedó sin número en la ficha.
+    const destino = waOrNull(sol.whatsapp) || waOrNull(sol.whatsapp_destino)
     if (!destino) { await client.query('ROLLBACK'); return { enviado: false, motivo: 'sin_whatsapp' } }
 
     const config = await cargarConfigImagenes(client)

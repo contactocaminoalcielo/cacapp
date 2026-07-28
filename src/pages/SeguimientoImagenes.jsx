@@ -10,7 +10,7 @@ import { LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import {
   ESTADO_SOLICITUD, obtenerSolicitudes, enviarSolicitud, reintentarSolicitud,
   cancelarSolicitud, prepararContactos, obtenerSeguimiento, forzarContacto, pausarSeguimiento,
-  etapaContacto,
+  etapaContacto, waVigente,
 } from '@/lib/imagenes'
 import {
   MessageCircle, RefreshCw, Send, Copy, Check, X, RotateCw, AlertTriangle, Link2,
@@ -147,7 +147,7 @@ export default function SeguimientoImagenes() {
     const campos = {
       cliente: [c.nombre, c.apellido, m.nombre].filter(Boolean).join(' '),
       plan: [svc.planes?.nombre, svc.planes?.codigo].filter(Boolean).join(' '),
-      whatsapp: s.whatsapp_destino || c.whatsapp || '',
+      whatsapp: waVigente(c.whatsapp, s.whatsapp_destino) || '',
       ingreso: fechaCorta(svc.fecha_ingreso),
       recordatorio: (s.recordatorios_img || []).length
         ? (s.recordatorios_img || []).map(r => r.nombre + ' ' + r.cantidad).join(' ')
@@ -428,7 +428,7 @@ export default function SeguimientoImagenes() {
                 const svc = s.servicios || {}
                 const m   = svc.mascotas
                 const c   = m?.clientes
-                const wa  = s.whatsapp_destino || c?.whatsapp
+                const wa  = waVigente(c?.whatsapp, s.whatsapp_destino)
                 const est = ESTADO_SOLICITUD[s.estado] || {}
                 const enviable = ENVIABLE.has(s.estado)
                 const trabajando = busy === s.id
