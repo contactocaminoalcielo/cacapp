@@ -15,11 +15,20 @@ import { agruparRefresco } from '@/lib/realtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso } from '@/lib/precios'
+import { edadALaFecha } from '@/lib/afiliaciones'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import FichaServicio from '@/components/servicio/FichaServicio'
+
+// Edad de la mascota para mostrar: no se guarda cruda sino declarada en una
+// fecha (migración 056), así envejece sola. El fallback a `edad_anios` cubre
+// filas viejas que quedaron sin la fecha de declaración.
+const edadMostrada = m => {
+  const e = edadALaFecha(m) ?? m.edad_anios
+  return e == null ? '-' : `${e} año${e === 1 ? '' : 's'}`
+}
 
 // Convierte solo los campos indicados a null cuando están vacíos (para enums/FK opcionales)
 const nullify = (obj, keys) => {
@@ -539,11 +548,17 @@ function TabMascotas({ isAdmin, canEdit }) {
   }
   function abrir(item) {
     setSelected(item || { nuevo: true })
+    // `edad` es solo del formulario (en años cumplidos hoy); `edad_original`
+    // guarda con qué llegó para no reescribir la fecha de declaración si el
+    // coordinador vino a editar otra cosa. Ninguna de las dos es columna de la DB.
+    const edadActual = item ? (edadALaFecha(item) ?? item.edad_anios) : null
     setForm(item ? {
       nombre: item.nombre || '', especie_id: item.especie_id || '',
       raza: item.raza || '', sexo: item.sexo || 'Macho',
       peso_kg: item.peso_kg || '', tamano: item.tamano || 'Mediano', notas: item.notas || '',
-    } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'' })
+      edad: edadActual == null ? '' : String(edadActual),
+      edad_original: edadActual == null ? '' : String(edadActual),
+    } : { nombre:'',especie_id:'',raza:'',sexo:'Macho',peso_kg:'',tamano:'Mediano',notas:'',edad:'',edad_original:'' })
   }
   async function guardar() {
     if (!form.nombre?.trim()) { await showAlert('El nombre es requerido.', { title: 'Campo requerido', variant: 'warning' }); return }
@@ -551,7 +566,17 @@ function TabMascotas({ isAdmin, canEdit }) {
     const pesoNuevo  = parseFloat(form.peso_kg)       || 0
     const pesoPrevio = parseFloat(selected?.peso_kg)  || 0
     const especieId  = parseInt(form.especie_id || selected?.especie_id) || 0
-    const body = nullify({ ...form, peso_kg: pesoNuevo }, ['especie_id'])
+    // `edad`/`edad_original` no son columnas: se traducen a edad_anios +
+    // edad_declarada_en, y solo si el coordinador cambió el número (si no, se
+    // dejan intactas para no correrle el cumpleaños a la mascota).
+    const { edad, edad_original, ...campos } = form
+    const edadNum = parseInt(edad)
+    const edadCols = String(edad ?? '').trim() === String(edad_original ?? '').trim()
+      ? {}
+      : Number.isFinite(edadNum) && edadNum >= 0
+        ? { edad_anios: edadNum, edad_declarada_en: today() }
+        : { edad_anios: null, edad_declarada_en: null }
+    const body = nullify({ ...campos, peso_kg: pesoNuevo, ...edadCols }, ['especie_id'])
     const { error } = selected?.id_mascota
       ? await db.from('mascotas').update(body).eq('id_mascota', selected.id_mascota)
       : await db.from('mascotas').insert(body)
@@ -614,7 +639,7 @@ function TabMascotas({ isAdmin, canEdit }) {
       </div>
       {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Cliente</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Especie</Th><Th>Raza</Th><Th>Peso</Th><Th>Edad</Th><Th>Cliente</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
           <tbody>
             {filtered.map(m => (
               <Tr key={m.id_mascota}>
@@ -622,6 +647,7 @@ function TabMascotas({ isAdmin, canEdit }) {
                 <Td className="text-ink3">{m.especies?.nombre}</Td>
                 <Td className="text-ink3">{m.raza || '-'}</Td>
                 <Td className="text-ink3">{m.peso_kg}kg</Td>
+                <Td className="text-ink3">{edadMostrada(m)}</Td>
                 <Td className="text-ink3">{m.clientes?.nombre} {m.clientes?.apellido}</Td>
                 {(canEdit || isAdmin) && (
                   <Td>
@@ -652,6 +678,7 @@ function TabMascotas({ isAdmin, canEdit }) {
               </Select></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Raza</label><Input value={form.raza||''} onChange={e => setForm(p => ({...p,raza:e.target.value}))} /></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Peso (kg)</label><Input type="text" inputMode="decimal" placeholder="Ej: 28.5" value={form.peso_kg||''} onChange={e => setForm(p => ({...p,peso_kg:e.target.value.replace(',','.')}))} /></div>
+            <div><label className="text-[11px] font-bold text-ink3 block mb-1">Edad (años cumplidos hoy)</label><Input type="number" min="0" max="40" placeholder="Ej: 7" value={form.edad||''} onChange={e => setForm(p => ({...p,edad:e.target.value}))} /></div>
             <div><label className="text-[11px] font-bold text-ink3 block mb-1">Sexo</label>
               <Select value={form.sexo||'Macho'} onChange={e => setForm(p => ({...p,sexo:e.target.value}))}>
                 <option value="Macho">Macho</option><option value="Hembra">Hembra</option>

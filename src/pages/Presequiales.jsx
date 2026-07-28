@@ -18,7 +18,7 @@ import {
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail } from 'lucide-react'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -72,6 +72,17 @@ const mascotasDe = a =>
 // cubierta, hereda el ciclo de vida del contrato (vencido, cancelado...).
 const estadoMascota = (a, am) =>
   am.estado === 'VIGENTE' ? a.estado : am.estado
+
+// Peso y edad son los datos que el contrato imprime y que el cliente pregunta.
+// La importación histórica llegó sin ellos, así que se editan desde la ficha.
+// La edad NO se guarda cruda: va declarada en una fecha (migración 056) y
+// envejece sola, por eso siempre se muestra `edadALaFecha`, nunca `edad_anios`.
+const pesoTexto = m => (parseFloat(m?.peso_kg) > 0 ? `${m.peso_kg} kg` : null)
+const edadTexto = m => {
+  const e = edadALaFecha(m)
+  return e == null ? null : `${e} año${e === 1 ? '' : 's'}`
+}
+const datosMascotaTexto = m => [pesoTexto(m), edadTexto(m)].filter(Boolean).join(' · ')
 
 const diasPara = fechaISO => {
   if (!fechaISO) return null
@@ -348,7 +359,12 @@ export default function Presequiales() {
                       <div className="font-semibold text-ink">{c?.nombre} {c?.apellido}</div>
                       <div className="text-[10px] text-ink3">{c?.cedula_nit}</div>
                     </Td>
-                    <Td className="text-ink2">{petEmoji(m?.especies?.nombre)} {m?.nombre}</Td>
+                    <Td className="text-ink2">
+                      <div>{petEmoji(m?.especies?.nombre)} {m?.nombre}</div>
+                      {datosMascotaTexto(m)
+                        ? <div className="text-[10px] text-ink3">{datosMascotaTexto(m)}</div>
+                        : <div className="text-[10px] text-[#9A5500] font-semibold">Sin peso ni edad</div>}
+                    </Td>
                     <Td>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
                         style={{ background: nc.bg, color: nc.text, borderColor: nc.border }}>{a.nivel}</span>
@@ -775,8 +791,10 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [seleccionadas, setSeleccionadas] = useState([])   // ids de mascotas existentes
   const [nuevas, setNuevas] = useState([])                 // formularios de mascota nueva
   // Edad en años por mascota existente: el contrato la imprime y el cliente la
-  // da en años, no como fecha de nacimiento (migración 056).
+  // da en años, no como fecha de nacimiento (migración 056). El peso también se
+  // imprime y cambia con el tiempo, así que se puede corregir aquí mismo.
   const [edades, setEdades] = useState({})
+  const [pesos, setPesos] = useState({})
 
   // plan + pago
   const [tipo, setTipo]   = useState('ANUAL')
@@ -812,16 +830,19 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 
   async function elegirCliente(c) {
     setCliente(c); setClienteNuevo(false); setResultados([]); setClienteBusqueda('')
-    setSeleccionadas([]); setNuevas([]); setEdades({})
+    setSeleccionadas([]); setNuevas([]); setEdades({}); setPesos({})
     const { data } = await db.from('mascotas')
       .select('id_mascota,nombre,fallecida,peso_kg,edad_anios,edad_declarada_en,especies(nombre)')
       .eq('cliente_id', c.id_cliente).order('nombre')
     setMascotasCliente(data || [])
-    // Precarga la edad que ya conocemos, envejecida a hoy
+    // Precarga la edad que ya conocemos, envejecida a hoy, y el peso registrado
     setEdades(Object.fromEntries((data || [])
       .map(m => [m.id_mascota, edadALaFecha(m)])
       .filter(([, e]) => e != null)
       .map(([id, e]) => [id, String(e)])))
+    setPesos(Object.fromEntries((data || [])
+      .filter(m => parseFloat(m.peso_kg) > 0)
+      .map(m => [m.id_mascota, String(m.peso_kg)])))
   }
 
   const nuevasValidas = nuevas.filter(m => m.nombre.trim())
@@ -877,10 +898,15 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         mascotaIds.push(data.id_mascota)
       }
 
-      // Mascotas ya registradas: refrescar la edad que digitó el coordinador
+      // Mascotas ya registradas: refrescar peso y edad que digitó el coordinador.
+      // Solo se escribe lo que llenó: dejar un campo vacío no borra lo que había.
       for (const id of seleccionadas) {
-        const cols = edadCols(edades[id])
-        if (cols.edad_anios != null) await db.from('mascotas').update(cols).eq('id_mascota', id)
+        const cols = {}
+        const edad = edadCols(edades[id])
+        if (edad.edad_anios != null) Object.assign(cols, edad)
+        const peso = parseFloat(pesos[id])
+        if (Number.isFinite(peso) && peso > 0) cols.peso_kg = peso
+        if (Object.keys(cols).length) await db.from('mascotas').update(cols).eq('id_mascota', id)
       }
 
       const { data: afil, error: e1 } = await db.from('afiliaciones').insert({
@@ -1019,9 +1045,13 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
                         {petEmoji(m.especies?.nombre)} {m.nombre} <span className="text-ink3 font-normal">({m.especies?.nombre || 'sin especie'})</span>
                       </span>
                     </button>
-                    {/* La edad va impresa en el contrato */}
+                    {/* Peso y edad van impresos en el contrato */}
                     {marcada && (
                       <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] font-bold text-ink3">Peso</span>
+                        <Input type="number" min="0" step="0.1" value={pesos[m.id_mascota] ?? ''}
+                          onChange={e => setPesos(p => ({ ...p, [m.id_mascota]: e.target.value }))}
+                          className="w-16 h-7 text-[12px]" placeholder="kg" />
                         <span className="text-[10px] font-bold text-ink3">Edad</span>
                         <Input type="number" min="0" max="40" value={edades[m.id_mascota] ?? ''}
                           onChange={e => setEdades(p => ({ ...p, [m.id_mascota]: e.target.value }))}
@@ -1153,6 +1183,9 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
   const [enviandoEmail, setEnviandoEmail] = useState(null)
   const [emailPara, setEmailPara] = useState(null)  // id del contrato con el form de correo abierto
   const [emailDestino, setEmailDestino] = useState('')
+  const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
+  const [formMasc, setFormMasc] = useState({ peso_kg: '', edad: '' })
+  const [guardandoMasc, setGuardandoMasc] = useState(false)
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
   const mascotas = mascotasDe(a)
@@ -1171,6 +1204,46 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
       await showAlert(e.message, { title: 'Error subiendo el comprobante' })
     } finally {
       setSubiendo(null)
+    }
+  }
+
+  // Peso y edad cambian con los años y la importación histórica llegó sin
+  // ellos: se corrigen aquí, sobre la mascota (no sobre la afiliación), que es
+  // de donde los lee el PDF del contrato.
+  function abrirEdicionMascota(am) {
+    if (editMasc === am.id) { setEditMasc(null); return }
+    const m = am.mascotas
+    const edad = edadALaFecha(m)
+    setFormMasc({
+      peso_kg: parseFloat(m?.peso_kg) > 0 ? String(m.peso_kg) : '',
+      edad: edad == null ? '' : String(edad),
+    })
+    setEditMasc(am.id)
+  }
+
+  async function guardarDatosMascota(am) {
+    const idMascota = am.mascotas?.id_mascota
+    if (!idMascota) return
+    setGuardandoMasc(true)
+    try {
+      const peso = parseFloat(formMasc.peso_kg)
+      const anios = parseInt(formMasc.edad)
+      // La edad se guarda con la fecha en que se declaró para que no se pudra:
+      // la vigente = edad_anios + años transcurridos (migración 056).
+      const cols = {
+        peso_kg: Number.isFinite(peso) && peso > 0 ? peso : 0,
+        ...(Number.isFinite(anios) && anios >= 0
+          ? { edad_anios: anios, edad_declarada_en: today() }
+          : { edad_anios: null, edad_declarada_en: null }),
+      }
+      const { error } = await db.from('mascotas').update(cols).eq('id_mascota', idMascota)
+      if (error) throw error
+      setEditMasc(null)
+      await onChanged()
+    } catch (e) {
+      await showAlert(e.message, { title: 'Error guardando los datos de la mascota' })
+    } finally {
+      setGuardandoMasc(false)
     }
   }
 
@@ -1274,25 +1347,62 @@ function ModalFicha({ afiliacion: a, config, onClose, onRenovar, onActivar, onCa
       <div className="space-y-1.5 mb-5">
         {mascotas.map(am => {
           const est = estadoMascota(a, am)
+          const m = am.mascotas
           return (
-            <div key={am.id} className="flex items-center justify-between gap-2 border rounded-xl px-3 py-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
-              <div className="min-w-0">
-                <div className="font-semibold text-ink text-[13px] truncate">
-                  {petEmoji(am.mascotas?.especies?.nombre)} {am.mascotas?.nombre}
-                  <span className="text-ink3 font-normal"> ({am.mascotas?.especies?.nombre || 'sin especie'}{am.mascotas?.raza ? ` · ${am.mascotas.raza}` : ''})</span>
+            <div key={am.id} className="border rounded-xl px-3 py-2" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-semibold text-ink text-[13px] truncate">
+                    {petEmoji(m?.especies?.nombre)} {m?.nombre}
+                    <span className="text-ink3 font-normal"> ({m?.especies?.nombre || 'sin especie'}{m?.raza ? ` · ${m.raza}` : ''})</span>
+                  </div>
+                  {datosMascotaTexto(m)
+                    ? <div className="text-[11px] text-ink3">{datosMascotaTexto(m)}</div>
+                    : <div className="text-[11px] text-[#9A5500] font-semibold">Sin peso ni edad registrados</div>}
+                  {am.estado === 'ACTIVADA' && (
+                    <div className="text-[10px] text-[#5B21B6] font-semibold">Activada el {am.fecha_activacion} — servicio prestado</div>
+                  )}
                 </div>
-                {am.estado === 'ACTIVADA' && (
-                  <div className="text-[10px] text-[#5B21B6] font-semibold">Activada el {am.fecha_activacion} — servicio prestado</div>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
-                {['VIGENTE','VENCIDA'].includes(est) && (
-                  <Button size="sm" variant="gold" onClick={() => onActivar(am)}>
-                    <Rocket size={11} /> Activar
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
+                  <Button size="sm" variant="ghost" onClick={() => abrirEdicionMascota(am)}
+                    title="Corregir peso y edad de la mascota">
+                    <Pencil size={11} /> Peso y edad
                   </Button>
-                )}
+                  {['VIGENTE','VENCIDA'].includes(est) && (
+                    <Button size="sm" variant="gold" onClick={() => onActivar(am)}>
+                      <Rocket size={11} /> Activar
+                    </Button>
+                  )}
+                </div>
               </div>
+              {editMasc === am.id && (
+                <form className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}
+                  onSubmit={e => { e.preventDefault(); guardarDatosMascota(am) }}>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div>
+                      <label className={LABEL}>Peso (kg)</label>
+                      <Input type="number" min="0" step="0.1" className="w-24" autoFocus
+                        value={formMasc.peso_kg}
+                        onChange={e => setFormMasc(p => ({ ...p, peso_kg: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className={LABEL}>Edad (años)</label>
+                      <Input type="number" min="0" max="40" className="w-24"
+                        value={formMasc.edad}
+                        onChange={e => setFormMasc(p => ({ ...p, edad: e.target.value }))} />
+                    </div>
+                    <Button size="sm" type="submit" disabled={guardandoMasc}>
+                      {guardandoMasc ? 'Guardando...' : 'Guardar'}
+                    </Button>
+                    <Button size="sm" variant="ghost" type="button" onClick={() => setEditMasc(null)}>Cancelar</Button>
+                  </div>
+                  <p className="text-[10px] text-ink3 mt-1.5">
+                    La edad se guarda como la que tiene <b>hoy</b> y de ahí en adelante envejece sola.
+                    Vuelve a generar el PDF del contrato para que salga con estos datos.
+                  </p>
+                </form>
+              )}
             </div>
           )
         })}
