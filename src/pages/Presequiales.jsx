@@ -1184,7 +1184,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
   const [emailPara, setEmailPara] = useState(null)  // id del contrato con el form de correo abierto
   const [emailDestino, setEmailDestino] = useState('')
   const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
-  const [formMasc, setFormMasc] = useState({ especie_id: '', peso_kg: '', edad: '' })
+  const [formMasc, setFormMasc] = useState({ especie_id: '', raza: '', peso_kg: '', edad: '' })
   const [guardandoMasc, setGuardandoMasc] = useState(false)
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
@@ -1207,15 +1207,16 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
     }
   }
 
-  // Especie, peso y edad cambian (o llegaron vacíos en la importación) y los
-  // tres van impresos en el contrato: se corrigen aquí, sobre la mascota (no
-  // sobre la afiliación), que es de donde los lee el PDF.
+  // Especie, raza, peso y edad cambian (o llegaron vacíos en la importación) y
+  // los cuatro van impresos en el contrato: se corrigen aquí, sobre la mascota
+  // (no sobre la afiliación), que es de donde los lee el PDF.
   function abrirEdicionMascota(am) {
     if (editMasc === am.id) { setEditMasc(null); return }
     const m = am.mascotas
     const edad = edadALaFecha(m)
     setFormMasc({
       especie_id: m?.especie_id ? String(m.especie_id) : '',
+      raza: m?.raza || '',
       peso_kg: parseFloat(m?.peso_kg) > 0 ? String(m.peso_kg) : '',
       edad: edad == null ? '' : String(edad),
     })
@@ -1234,6 +1235,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
       const cols = {
         // especie_id es integer: mandarlo como string lo rechaza la FK
         especie_id: parseInt(formMasc.especie_id) || null,
+        raza: formMasc.raza.trim() || null,
         peso_kg: Number.isFinite(peso) && peso > 0 ? peso : 0,
         ...(Number.isFinite(anios) && anios >= 0
           ? { edad_anios: anios, edad_declarada_en: today() }
@@ -1369,7 +1371,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
                   <Button size="sm" variant="ghost" onClick={() => abrirEdicionMascota(am)}
-                    title="Corregir especie, peso y edad de la mascota">
+                    title="Corregir especie, raza, peso y edad de la mascota">
                     <Pencil size={11} /> Editar datos
                   </Button>
                   {['VIGENTE','VENCIDA'].includes(est) && (
@@ -1392,6 +1394,11 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                       </Select>
                     </div>
                     <div>
+                      <label className={LABEL}>Raza</label>
+                      <Input className="w-36" value={formMasc.raza} placeholder="Ej: Criollo"
+                        onChange={e => setFormMasc(p => ({ ...p, raza: e.target.value }))} />
+                    </div>
+                    <div>
                       <label className={LABEL}>Peso (kg)</label>
                       <Input type="number" min="0" step="0.1" className="w-24" autoFocus
                         value={formMasc.peso_kg}
@@ -1410,7 +1417,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onAct
                   </div>
                   <p className="text-[10px] text-ink3 mt-1.5">
                     La edad se guarda como la que tiene <b>hoy</b> y de ahí en adelante envejece sola.
-                    Para cambiar el nombre o la raza, ve a Gestión › Mascotas.
+                    Para cambiar el nombre, ve a Gestión › Mascotas.
                     Vuelve a generar el PDF del contrato para que salga con estos datos.
                   </p>
                 </form>
