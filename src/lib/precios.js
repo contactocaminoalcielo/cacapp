@@ -20,6 +20,36 @@ export function planComisiona(codigoPlan) {
 }
 
 /**
+ * Qué especies pagan el rango FELINO (tarifa fija de mamífero pequeño desde
+ * 1 kg) en vez de la tarifa por peso de perro. Vive en `especies.tarifa_peso`
+ * (migración 079) y se edita desde Configuración → Catálogos.
+ *
+ * Antes era un hardcode `especieId === 2 || especieId === 3`: agregar una
+ * especie al catálogo no cambiaba el precio y cobraba tarifa de perro (caso del
+ * cobayo, que se registraba como "Hámster" y sobre 1 kg pagaba de más).
+ *
+ * Se lee una sola vez por sesión: `calcularPrecioPara` se llama en bucle por
+ * servicio y el catálogo tiene 9 filas que no cambian en el día a día.
+ */
+let promesaEspecies = null
+function cargarTarifasEspecie() {
+  if (!promesaEspecies) {
+    promesaEspecies = db.from('especies').select('id, tarifa_peso')
+      .then(({ data, error }) => {
+        // Sin la columna todavía (o sin red): se reintenta en la próxima llamada
+        // y mientras tanto el llamador cae al criterio viejo.
+        if (error || !data) { promesaEspecies = null; return null }
+        return new Map(data.map(e => [String(e.id), e.tarifa_peso === 'FELINO' ? 'FELINO' : 'ESTANDAR']))
+      })
+      .catch(() => { promesaEspecies = null; return null })
+  }
+  return promesaEspecies
+}
+
+/** Olvida el catálogo cacheado (tras editarlo en Configuración). */
+export function invalidarTarifasEspecie() { promesaEspecies = null }
+
+/**
  * Calcula el precio de un plan según peso y especie.
  * @param {Array}  planes       - [{id, codigo}] cargados de la tabla `planes`
  * @param {string} planId
@@ -33,7 +63,10 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
 
   const pesoG      = Math.round(pesoKg * 1000)
   const especieId  = parseInt(especieIdRaw) || 0
-  const usaFelino  = especieId === 2 || especieId === 3  // Gato o Conejo
+  const tarifas    = await cargarTarifasEspecie()
+  const usaFelino  = tarifas
+    ? tarifas.get(String(especieId)) === 'FELINO'
+    : (especieId === 2 || especieId === 3)  // sin catálogo: Gato o Conejo, como antes
 
   let q = db.from('planes_precios').select('precio').eq('plan_id', planId)
   if (pesoG < 1000) {
@@ -94,9 +127,14 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
  * Aplica directamente (sin confirmación) y devuelve la lista de cambios
  * realizados, para que el llamador decida si informa al usuario.
  *
+ * También corre al corregir la ESPECIE: la especie decide si el servicio paga
+ * tarifa felino o tarifa por peso, así que reclasificar una mascota mueve el
+ * precio igual que cambiarle el peso (`motivo` solo cambia el texto de la
+ * novedad que queda en la ficha).
+ *
  * @returns {Promise<Array<{servicioId, planNombre, valorAntes, valorDespues, comisionAntes, comisionDespues}>>}
  */
-export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw) {
+export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw, motivo = 'peso') {
   const especieId = parseInt(especieIdRaw) || 0
   const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
     db.from('servicios')
@@ -196,10 +234,13 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       const partes = []
       if (cambioPrecio) partes.push(`valor ${fmt(svc.valor_total || 0)} → ${fmt(nuevoValorTotal)}`)
       if (cambioComision) partes.push(`comisión ${fmt(svc.comision_aliado || 0)} → ${fmt(nuevaComision)}`)
+      const causa = motivo === 'especie'
+        ? `🐾 Precio recategorizado por cambio de especie`
+        : `⚖️ Precio recategorizado por nuevo peso`
       await db.from('novedades_servicio').insert({
         servicio_id:  svc.id,
         tipo_novedad: 'RECATEGORIZACION_PESO',
-        descripcion:  `⚖️ Precio recategorizado por nuevo peso (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
+        descripcion:  `${causa} (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
       })
     } catch (_) { /* best-effort */ }
 

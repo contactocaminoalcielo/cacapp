@@ -33,7 +33,7 @@ export function waLink(numero, texto) {
 export const hoyLocalISO = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 export const today = () => hoyLocalISO()
-export const petEmoji = e => ({ Perro: '🐕', Gato: '🐈', Conejo: '🐇', Ave: '🐦', Hámster: '🐹' })[e] || '🐾'
+export const petEmoji = e => ({ Perro: '🐕', Gato: '🐈', Conejo: '🐇', Ave: '🐦', Hámster: '🐹', Cobayo: '🐹', Pez: '🐠', Reptil: '🦎' })[e] || '🐾'
 export const initials = (n, a) => ((n || '?')[0] + (a || '?')[0]).toUpperCase()
 export const needsAcomp = p => p && ['CREMACION_INDIVIDUAL', 'COMPOSTAJE_INDIVIDUAL'].includes(p.tipo_proceso)
 

@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
+import { invalidarTarifasEspecie } from '@/lib/precios'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
@@ -1977,10 +1978,17 @@ function TabComisiones() {
 }
 
 // ─── CATÁLOGOS ────────────────────────────────────────────────────────────────
-function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo = true }) {
+/**
+ * `conTarifa` (solo Especies): además del nombre, cada fila deja elegir si la
+ * especie paga tarifa de mamífero pequeño (rango FELINO, fija desde 1 kg) o la
+ * tarifa por peso de perro. Antes eso era un hardcode en `lib/precios.js`, así
+ * que agregar una especie aquí no cambiaba el precio. Ver migración 079.
+ */
+function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo = true, conTarifa = false, ayuda = null }) {
   const { confirm, alert: showAlert } = useConfirm()
   const [adding, setAdding]       = useState(false)
   const [newNombre, setNewNombre] = useState('')
+  const [newTarifa, setNewTarifa] = useState('ESTANDAR')
   const [editingId, setEditingId] = useState(null)
   const [editNombre, setEditNombre] = useState('')
   const [saving, setSaving]       = useState(false)
@@ -1988,10 +1996,20 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
   async function add() {
     if (!newNombre.trim()) return
     setSaving(true)
-    const { error } = await db.from(table).insert({ nombre: newNombre.trim() })
+    const fila = { nombre: newNombre.trim() }
+    if (conTarifa) fila.tarifa_peso = newTarifa
+    const { error } = await db.from(table).insert(fila)
     setSaving(false)
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
-    setNewNombre(''); setAdding(false); onReload()
+    if (conTarifa) invalidarTarifasEspecie()
+    setNewNombre(''); setNewTarifa('ESTANDAR'); setAdding(false); onReload()
+  }
+
+  async function cambiarTarifa(item, tarifa) {
+    const { error } = await db.from(table).update({ tarifa_peso: tarifa }).eq(pkCol, item[pkCol])
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
+    invalidarTarifasEspecie()
+    onReload()
   }
 
   async function save(item) {
@@ -2028,13 +2046,20 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
         </button>
       </div>
       <div className="p-3">
+        {ayuda && <p className="text-[11px] text-gray-400 mb-2 leading-snug">{ayuda}</p>}
         {adding && (
           <div className="flex items-center gap-2 mb-2 pb-2 border-b border-gray-100">
             <Input autoFocus value={newNombre} onChange={e => setNewNombre(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && add()}
               placeholder="Nombre..." className="flex-1 h-8 text-[12px]" />
+            {conTarifa && (
+              <Select value={newTarifa} onChange={e => setNewTarifa(e.target.value)} className="h-8 text-[12px] w-auto">
+                <option value="ESTANDAR">Tarifa por peso</option>
+                <option value="FELINO">Tarifa pequeño</option>
+              </Select>
+            )}
             <Button size="sm" onClick={add} disabled={saving}>Guardar</Button>
-            <button onClick={() => { setAdding(false); setNewNombre('') }} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
+            <button onClick={() => { setAdding(false); setNewNombre(''); setNewTarifa('ESTANDAR') }} className="text-gray-400 hover:text-gray-600"><X size={13} /></button>
           </div>
         )}
         <div className="space-y-0.5">
@@ -2051,6 +2076,18 @@ function CatalogSection({ title, table, items, onReload, pkCol = 'id', hasActivo
               ) : (
                 <>
                   <span className="flex-1 text-[13px] text-gray-700">{item.nombre}</span>
+                  {conTarifa && (
+                    <button
+                      onClick={() => cambiarTarifa(item, item.tarifa_peso === 'FELINO' ? 'ESTANDAR' : 'FELINO')}
+                      title="Tarifa que paga de 1 kg en adelante — clic para cambiar"
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full transition-colors ${
+                        item.tarifa_peso === 'FELINO'
+                          ? 'bg-violet-50 text-violet-600 hover:bg-violet-100'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}>
+                      {item.tarifa_peso === 'FELINO' ? 'Tarifa pequeño' : 'Tarifa por peso'}
+                    </button>
+                  )}
                   {hasActivo && item.activo === false && (
                     <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">Inactivo</span>
                   )}
@@ -2110,7 +2147,8 @@ function TabCatalogos() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <CatalogSection title="Canales de origen" table="canal_origen" items={canales} onReload={cargar} hasActivo />
-      <CatalogSection title="Especies" table="especies" items={especies} onReload={cargar} hasActivo={false} />
+      <CatalogSection title="Especies" table="especies" items={especies} onReload={cargar} hasActivo={false} conTarifa
+        ayuda="De 1 kg en adelante: «Tarifa pequeño» cobra la tarifa fija de gato/conejo; «Tarifa por peso» cobra el rango de perro. Por debajo de 1 kg todas pagan PETIT." />
       <CatalogSection title="Máquinas de producción" table="maquinas_produccion" items={maquinas} onReload={cargar} hasActivo />
       <CatalogSection title="Roles de personal" table="roles_personal" items={roles} onReload={cargar} hasActivo={false} />
     </div>

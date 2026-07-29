@@ -583,24 +583,30 @@ function TabMascotas({ isAdmin, canEdit }) {
     setSaving(false)
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
 
-    // Si se editó el peso, verificar si los servicios activos cambian de rango de precio
-    if (selected?.id_mascota && Math.abs(pesoNuevo - pesoPrevio) > 0.01) {
-      await ofrecerRecalcularPrecio(selected.id_mascota, pesoPrevio, pesoNuevo, especieId)
+    // Si se editó el peso —o la ESPECIE, que decide si paga tarifa felino o
+    // tarifa por peso de perro— verificar si los servicios activos cambian de
+    // rango de precio. Antes solo miraba el peso: reclasificar una mascota
+    // (p. ej. de "Hámster" a "Cobayo") dejaba el precio viejo.
+    const especiePrevia = parseInt(selected?.especie_id) || 0
+    const cambioEspecie = !!especieId && especieId !== especiePrevia
+    if (selected?.id_mascota && (Math.abs(pesoNuevo - pesoPrevio) > 0.01 || cambioEspecie)) {
+      await ofrecerRecalcularPrecio(selected.id_mascota, pesoPrevio, pesoNuevo, especieId, cambioEspecie ? 'especie' : 'peso')
     }
 
     await cargar(); setSelected(null)
   }
 
-  // Al cambiar el peso, el precio (y la comisión) de los servicios activos se
-  // recalcula y actualiza AUTOMÁTICAMENTE si entró a otro rango. Solo se informa
-  // del cambio aplicado (no se pregunta). Lógica centralizada en lib/precios.js.
-  async function ofrecerRecalcularPrecio(mascotaId, pesoPrevio, pesoNuevo, especieId) {
+  // Al cambiar el peso o la especie, el precio (y la comisión) de los servicios
+  // activos se recalcula y actualiza AUTOMÁTICAMENTE si entró a otro rango. Solo
+  // se informa del cambio aplicado (no se pregunta). Lógica en lib/precios.js.
+  async function ofrecerRecalcularPrecio(mascotaId, pesoPrevio, pesoNuevo, especieId, motivo = 'peso') {
+    const porEspecie = motivo === 'especie'
     let cambios
     try {
-      cambios = await aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieId)
+      cambios = await aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieId, motivo)
     } catch (e) {
-      // El peso ya quedó guardado; si el recálculo falla debe verse, no morir en silencio
-      await showAlert(`El peso se guardó, pero no se pudo recalcular el precio del servicio: ${e.message}`, { title: 'Recálculo de precio falló', variant: 'warning' })
+      // Los datos ya quedaron guardados; si el recálculo falla debe verse, no morir en silencio
+      await showAlert(`La mascota se guardó, pero no se pudo recalcular el precio del servicio: ${e.message}`, { title: 'Recálculo de precio falló', variant: 'warning' })
       return
     }
     if (!cambios.length) return
@@ -612,8 +618,10 @@ function TabMascotas({ isAdmin, canEdit }) {
     }).join('\n\n')
 
     await showAlert(
-      `Se actualizó el precio según el nuevo peso (${pesoNuevo} kg):\n\n${detalleCambios}`,
-      { title: 'Precio actualizado por peso' }
+      porEspecie
+        ? `Se actualizó el precio según la especie corregida (${pesoNuevo} kg):\n\n${detalleCambios}`
+        : `Se actualizó el precio según el nuevo peso (${pesoNuevo} kg):\n\n${detalleCambios}`,
+      { title: porEspecie ? 'Precio actualizado por especie' : 'Precio actualizado por peso' }
     )
   }
   async function eliminar(m) {
