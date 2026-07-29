@@ -21,6 +21,9 @@ const CONFIG_DEFAULTS = {
   dias_aviso_renovacion: 30,
   multiplicador_semestre_1: 5,
   multiplicador_semestre_2: 3,
+  descuento_renovacion_anticipada: 25,
+  descuento_multiples_mascotas: 25,
+  descuento_renovacion_multiple_tardia: 10,
 }
 
 export async function cargarConfigAfiliaciones() {
@@ -55,6 +58,76 @@ export function generarNumeroContrato({ fechaInicio, cliente, nivel, tipo, numer
   return `${mes}${dd}${yy}${iniciales}${suma}-${ABREV_NIVEL[nivel] || '??'}${sufijo}`
 }
 
+// ─── Descuentos (reglas cerradas con David 2026-07-29) ──────────────────────
+// Tres reglas, con el porcentaje editable en Configuración › Afiliaciones:
+//   · RENOVACION_ANTICIPADA      25 % — renueva en o antes del vencimiento.
+//   · MULTIPLES_MASCOTAS         25 % — el contrato cubre más de una mascota.
+//   · RENOVACION_MULTIPLE_TARDIA 10 % — varias mascotas, pero renovando tarde.
+// NUNCA se acumulan: si aplica más de uno se toma el MAYOR (decisión de David;
+// sumarlos haría que subir un porcentaje en config moviera solo el acumulado).
+// Estas funciones solo SUGIEREN: quien decide aplicarlo es el coordinador.
+export const MOTIVOS_DESCUENTO = {
+  RENOVACION_ANTICIPADA:      'Renovación antes del vencimiento',
+  MULTIPLES_MASCOTAS:         'Más de una mascota en el mismo plan',
+  RENOVACION_MULTIPLE_TARDIA: 'Renovación de varias mascotas después del vencimiento',
+  MANUAL:                     'Descuento manual',
+}
+
+const pctConfig = (config, clave) => {
+  const p = parseFloat(config?.[clave])
+  return Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : 0
+}
+
+// `escenario`: 'NUEVA' (afiliación nueva) | 'RENOVACION' (renovar o reactivar).
+// `fechaVencimiento` es la del contrato que se está renovando; se compara contra
+// HOY, no contra la fecha de inicio del contrato nuevo: lo que da el descuento es
+// que el cliente pague antes de que se le venza, no dónde arranque la vigencia.
+// Renovar el mismo día del vencimiento cuenta como anticipada (no está vencida).
+export function descuentosAplicables({ escenario, nMascotas = 0, fechaVencimiento = null, config, hoyISO = null }) {
+  const varias = nMascotas > 1
+  const out = []
+  const push = (motivo, clave) => {
+    const pct = pctConfig(config, clave)
+    if (pct > 0) out.push({ motivo, pct, etiqueta: MOTIVOS_DESCUENTO[motivo] })
+  }
+
+  if (escenario === 'RENOVACION') {
+    const hoy = parseDate(hoyISO || hoyLocalISO())
+    const anticipada = !!fechaVencimiento && parseDate(fechaVencimiento) >= hoy
+    if (anticipada) {
+      push('RENOVACION_ANTICIPADA', 'descuento_renovacion_anticipada')
+      if (varias) push('MULTIPLES_MASCOTAS', 'descuento_multiples_mascotas')
+    } else if (varias) {
+      // Después del vencimiento el multi-mascota vale 10 %, no 25 %.
+      push('RENOVACION_MULTIPLE_TARDIA', 'descuento_renovacion_multiple_tardia')
+    }
+  } else if (varias) {
+    push('MULTIPLES_MASCOTAS', 'descuento_multiples_mascotas')
+  }
+  return out
+}
+
+// El que más le conviene al cliente, o null si no aplica ninguno.
+export function mejorDescuento(args) {
+  const lista = descuentosAplicables(args)
+  return lista.length ? lista.reduce((a, b) => (b.pct > a.pct ? b : a)) : null
+}
+
+// Precio unitario a cobrar = precio de lista menos el descuento, al peso.
+export function aplicarDescuento(valorLista, pct) {
+  const v = parseFloat(valorLista) || 0
+  const p = Math.min(100, Math.max(0, parseFloat(pct) || 0))
+  return Math.round(v * (1 - p / 100))
+}
+
+// Precio de lista de un contrato ya guardado. Los contratos anteriores a la
+// migración 077 no tienen la columna llena (el backfill la iguala a `valor`,
+// pero el fallback deja el código a salvo si llega una fila sin ella).
+export function valorListaContrato(contrato) {
+  const lista = parseFloat(contrato?.valor_lista)
+  return Number.isFinite(lista) && lista > 0 ? lista : (parseFloat(contrato?.valor) || 0)
+}
+
 // Cobro al activar (falleció): lo ÚNICO que paga el cliente por el servicio es
 // la cláusula si aplica; el recargo de transporte lo suma Registro como siempre.
 // Devuelve { cobro, multiplicador, motivo } — cobro 0 = servicio cubierto.
@@ -75,13 +148,17 @@ export function calcularCobroActivacion({ afiliacion, contratoVigente, config })
   const dias = Math.round((hoy - inicio) / 86400000)
   const m1 = parseFloat(config?.multiplicador_semestre_1) || 5
   const m2 = parseFloat(config?.multiplicador_semestre_2) || 3
-  const valor = parseFloat(contratoVigente.valor) || 0
+  // Sobre el PRECIO DE LISTA, no sobre lo que pagó: el descuento abarata la
+  // afiliación, no la activación (decisión de David 2026-07-29, migración 077).
+  const valor = valorListaContrato(contratoVigente)
+  const conDescuento = (parseFloat(contratoVigente.descuento_pct) || 0) > 0
   const primerTramo = dias <= 180
   const mult = primerTramo ? m1 : m2
   return {
     cobro: Math.round(valor * mult),
     multiplicador: mult,
-    motivo: `Cláusula del primer año (día ${dias}, ${primerTramo ? 'hasta el 180' : 'desde el 181'}): ${mult}× ${fmt(valor)}`,
+    motivo: `Cláusula del primer año (día ${dias}, ${primerTramo ? 'hasta el 180' : 'desde el 181'}): ${mult}× ${fmt(valor)}` +
+      (conDescuento ? ' (precio de lista: el descuento del contrato no aplica a la activación)' : ''),
   }
 }
 
@@ -260,7 +337,12 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
   const renovacion = !vitalicio && contrato.numero >= 1
   const nivel      = afiliacion.nivel
   const nivelTxt   = vitalicio ? nivel + ' VITALICIO' : nivel
-  const valor      = parseFloat(contrato.valor) || 0
+  // El papel declara el valor de LISTA (es la base del 5×/3× del Parágrafo 2) y,
+  // si hubo descuento, lo dice aparte con el valor efectivamente pagado. Sin esa
+  // línea el contrato se contradecía: "vale $93.000 y su activación $620.000".
+  const valor      = valorListaContrato(contrato)
+  const pctDcto    = Math.min(100, Math.max(0, parseFloat(contrato.descuento_pct) || 0))
+  const valorPagado = parseFloat(contrato.valor) || 0
   const m1 = parseFloat(config?.multiplicador_semestre_1) || 5
   const m2 = parseFloat(config?.multiplicador_semestre_2) || 3
   const recargo = parseFloat(config?.recargo_municipios) || 30000
@@ -347,11 +429,24 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
     'renunciar el Tomador a la prestación del servicio, con la intención de que le sea pagada alguna suma de dinero en ' +
     'contraprestación o como compensación.')
 
+  // Frase del descuento, con el motivo tal como lo guardó el contrato.
+  const parrafoDescuento = () => {
+    if (!(pctDcto > 0)) return
+    const motivo = MOTIVOS_DESCUENTO[contrato.descuento_motivo]
+    parrafo(
+      'Parágrafo ' + (vitalicio ? '3' : '4') + ': Sobre el valor de la afiliación aquí señalado, EL TOMADOR recibió ' +
+      'un descuento del ' + pctDcto + '%' + (motivo ? ' por ' + motivo.toLowerCase() : '') +
+      ', por lo cual el valor efectivamente pagado por mascota es de ' + pesos(valorPagado) +
+      '. El descuento aplica únicamente al valor de la afiliación' +
+      (vitalicio ? '.' : ' y no modifica los valores de activación señalados en el Parágrafo 2.'))
+  }
+
   if (vitalicio) {
     parrafo(
       'Parágrafo 2: La afiliación al Plan Pre Exequial ' + nivelTxt + ' tiene un valor de ' + pesos(valor) +
       ' por mascota, no tiene tiempos de carencia, por lo cual se puede solicitar y utilizar a partir de la ' +
       'formalización del contrato.')
+    parrafoDescuento()
     parrafo(
       'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene vigencia desde el: ' +
       fechaLarga(contrato.fecha_inicio) + ' hasta requerir la utilización del mismo.')
@@ -369,6 +464,7 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
       'Parágrafo 3: El presente contrato es renovable siempre y cuando el TOMADOR cancele de nuevo la afiliación ' +
       nivel + ' antes de transcurridos 365 días desde la formalización del mismo, y este no tendrá activación si hay ' +
       'continuidad en la renovación.')
+    parrafoDescuento()
     parrafo(
       'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene una vigencia de 365 días luego de su ' +
       'formalización, para efectos de este contrato en particular su vigencia es desde el ' +

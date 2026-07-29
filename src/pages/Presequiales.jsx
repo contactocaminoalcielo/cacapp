@@ -16,9 +16,10 @@ import {
   NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, calcularCobroActivacion,
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf, totalContrato,
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
+  mejorDescuento, aplicarDescuento, valorListaContrato, MOTIVOS_DESCUENTO,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil } from 'lucide-react'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil, BadgePercent } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -503,12 +504,29 @@ function mensajeRenovacion(a, ct, config) {
     ? nombres.slice(0, -1).join(', ') + ' y ' + nombres[nombres.length - 1]
     : (nombres[0] || 'tu mascota')
   const total = unit * (vivas.length || 1)
+  // El recordatorio sale en la ventana "por vencer", que es justo cuando renovar
+  // todavía es anticipado: si hay descuento, es el mejor argumento para que
+  // renueve ya. Ojo: la afiliación también puede estar VENCIDA cuando se envía,
+  // y ahí el descuento posible es otro ("antes del" ya no tendría sentido).
+  const dcto = mejorDescuento({
+    escenario: 'RENOVACION', nMascotas: vivas.length,
+    fechaVencimiento: ct?.fecha_vencimiento, config,
+  })
+  const unitDcto = dcto ? aplicarDescuento(unit, dcto.pct) : unit
+  const gancho = dcto?.motivo === 'RENOVACION_ANTICIPADA'
+    ? `Si la renuevas antes del ${ct?.fecha_vencimiento}`
+    : 'Por tener varias mascotas en el mismo plan'
   return `Hola ${a.clientes?.nombre} 👋 Te escribimos de Camino al Cielo 🌈\n\n` +
     `La afiliación pre-exequial ${a.nivel} de ${lista} vence el ${ct?.fecha_vencimiento}. ` +
     (vivas.length > 1
       ? `Renovarla por un año más tiene un valor de ${fmt(total)} (${vivas.length} mascotas × ${fmt(unit)})`
       : `Renovarla por un año más tiene un valor de ${fmt(total)}`) +
-    ` y mantiene ${nombres.length > 1 ? 'sus servicios cubiertos' : 'su servicio cubierto'}.\n\n¿Deseas renovarla?`
+    ` y mantiene ${nombres.length > 1 ? 'sus servicios cubiertos' : 'su servicio cubierto'}.` +
+    (dcto
+      ? `\n\n🎁 ${gancho} tienes un ${dcto.pct}% de descuento: ` +
+        `${fmt(unitDcto * (vivas.length || 1))}${vivas.length > 1 ? ` (${vivas.length} × ${fmt(unitDcto)})` : ''}.`
+      : '') +
+    `\n\n¿Deseas renovarla?`
 }
 
 function descargarPlantillaImportacion() {
@@ -656,6 +674,9 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
               fecha_inicio: r.fecha_inicio,
               fecha_vencimiento: r.tipo === 'ANUAL' ? sumarUnAnio(r.fecha_inicio) : null,
               valor: r.valor_num,              // precio POR MASCOTA
+              // La importación trae el valor ya cobrado; sin traza de descuento
+              // el precio de lista es ese mismo (base de la cláusula 5×/3×).
+              valor_lista: r.valor_num,
               metodo_pago: r.metodo,
               fecha_pago: r.fecha_pago || null,
               comprobantes: [],
@@ -785,9 +806,78 @@ function ModalImportarAfiliaciones({ especies, personalData, onClose, onImported
   )
 }
 
-// ─── Nueva afiliación: buscar-o-crear cliente + N mascotas + primer contrato ──
+// ─── Descuentos: se sugieren, no se imponen ─────────────────────────────────
+// David pidió expresamente "solo pequeñas alertas": el sistema detecta cuál
+// aplica y lo muestra, pero el valor no baja hasta que el coordinador pulse
+// Aplicar. Las reglas y los porcentajes viven en src/lib/afiliaciones.js +
+// Configuración › Afiliaciones (migración 077).
+//
+// El descuento activo se deriva SIEMPRE de la sugerencia vigente: si el
+// coordinador lo aplica y después quita una mascota (o cambia el escenario),
+// la sugerencia deja de existir y el descuento se cae solo — nunca queda un
+// porcentaje pegado a un contrato que ya no lo merece.
+function useDescuentoSugerido({ escenario, nMascotas, fechaVencimiento, config }) {
+  const sugerido = useMemo(
+    () => mejorDescuento({ escenario, nMascotas, fechaVencimiento, config }),
+    [escenario, nMascotas, fechaVencimiento, config])
+  const [aplicar, setAplicar] = useState(false)
+  const activo = aplicar && sugerido ? sugerido : null
+  return {
+    sugerido,
+    pct: activo?.pct || 0,
+    motivo: activo?.motivo || null,
+    aplicado: !!activo,
+    onAplicar: () => setAplicar(true),
+    onQuitar: () => setAplicar(false),
+  }
+}
+
+function AvisoDescuento({ sugerido, aplicado, valorLista, onAplicar, onQuitar }) {
+  if (!sugerido || !(valorLista > 0)) return null
+  const neto = aplicarDescuento(valorLista, sugerido.pct)
+  return (
+    <div className={`flex items-start gap-2 rounded-lg px-3 py-2 border ${aplicado
+      ? 'bg-green-light border-[rgba(30,80,40,0.20)]'
+      : 'bg-[#FFF8E6] border-[#F0D9A0]'}`}>
+      <BadgePercent size={14} className={`shrink-0 mt-0.5 ${aplicado ? 'text-primary-dark' : 'text-[#9A5500]'}`} />
+      <div className="flex-1 min-w-0">
+        <div className={`text-[11.5px] font-semibold ${aplicado ? 'text-primary-dark' : 'text-[#9A5500]'}`}>
+          {aplicado
+            ? `${sugerido.pct}% de descuento aplicado`
+            : `Este plan puede tener el ${sugerido.pct}% de descuento`}
+        </div>
+        <div className="text-[10.5px] text-ink3">
+          {sugerido.etiqueta} · {fmt(valorLista)} → <span className="font-bold text-ink2">{fmt(neto)}</span> por mascota
+        </div>
+      </div>
+      <button type="button" onClick={aplicado ? onQuitar : onAplicar}
+        className={`shrink-0 text-[11px] font-bold px-2 py-1 rounded-lg ${aplicado
+          ? 'text-ink3 bg-surface2 hover:bg-surface3'
+          : 'text-white bg-primary-dark hover:opacity-90'}`}>
+        {aplicado ? 'Quitar' : 'Aplicar'}
+      </button>
+    </div>
+  )
+}
+
+// Resumen de plata de un contrato: lista → descuento → total por N mascotas.
+function ResumenValor({ nMascotas, valorLista, pct }) {
+  if (!(valorLista > 0) || !(nMascotas > 0)) return null
+  const neto = aplicarDescuento(valorLista, pct)
+  return (
+    <div className="flex items-center justify-between bg-surface2 rounded-lg px-3 py-2">
+      <span className="text-[12px] text-ink2">
+        {nMascotas} mascota{nMascotas === 1 ? '' : 's'} × {fmt(neto)}
+        {pct > 0 && <span className="text-ink3"> (antes {fmt(valorLista)}, −{pct}%)</span>}
+      </span>
+      <span className="text-[15px] font-bold text-ink">Total {fmt(neto * nMascotas)}</span>
+    </div>
+  )
+}
+
 const MASCOTA_VACIA = () => ({ key: crypto.randomUUID(), nombre: '', especie_id: '', raza: '', sexo: 'Macho', tamano: 'Pequeño', peso_kg: '', edad: '' })
 
+// ─── Nueva afiliación: buscar-o-crear cliente + N mascotas + primer contrato ──
 function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved }) {
   const { alert: showAlert } = useConfirm()
   const [saving, setSaving] = useState(false)
@@ -863,7 +953,10 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const nMascotas = seleccionadas.length + nuevasValidas.length
   // apellido: clientes.apellido es NOT NULL y su inicial va en el nº de contrato
   const clienteListo = cliente || (clienteNuevo && formCliente.nombre.trim() && formCliente.apellido.trim() && formCliente.whatsapp.trim() && formCliente.cedula_nit.trim())
+  // `valor` es el precio de LISTA por mascota; el descuento se resta encima.
   const valorNum = parseFloat(valor) || 0
+  const dcto = useDescuentoSugerido({ escenario: 'NUEVA', nMascotas, config })
+  const valorNeto = aplicarDescuento(valorNum, dcto.pct)
   const puedeGuardar = clienteListo && nMascotas > 0 && valorNum > 0 && !saving
 
   const previewCodigo = (clienteListo && !saving) ? generarNumeroContrato({
@@ -949,7 +1042,11 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           afiliacion_id: afil.id, numero: 0, numero_contrato: numeroContrato,
           fecha_inicio: fechaInicio,
           fecha_vencimiento: tipo === 'ANUAL' ? sumarUnAnio(fechaInicio) : null,
-          valor: valorNum, metodo_pago: metodoPago, fecha_pago: fechaPago || null,
+          // `valor` = lo que paga por mascota (ya con descuento); `valor_lista`
+          // guarda el precio pleno, que es la base de la cláusula 5×/3×.
+          valor: valorNeto, valor_lista: valorNum,
+          descuento_pct: dcto.pct, descuento_motivo: dcto.motivo,
+          metodo_pago: metodoPago, fecha_pago: fechaPago || null,
           comprobantes, creado_por: personalData?.id || null,
         })
         if (e2) throw e2
@@ -1154,12 +1251,11 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           {cfgPrecio === 0 && (
             <p className="text-[11px] text-[#9A5500] mt-1.5">Este nivel no tiene precio en Configuración › Afiliaciones — se usará el valor que digites.</p>
           )}
-          {nMascotas > 0 && valorNum > 0 && (
-            <div className="mt-2 flex items-center justify-between bg-surface2 rounded-lg px-3 py-2">
-              <span className="text-[12px] text-ink2">{nMascotas} mascota{nMascotas === 1 ? '' : 's'} × {fmt(valorNum)}</span>
-              <span className="text-[15px] font-bold text-ink">Total {fmt(valorNum * nMascotas)}</span>
-            </div>
-          )}
+          <div className="mt-2 space-y-2">
+            <AvisoDescuento sugerido={dcto.sugerido} aplicado={dcto.aplicado} valorLista={valorNum}
+              onAplicar={dcto.onAplicar} onQuitar={dcto.onQuitar} />
+            <ResumenValor nMascotas={nMascotas} valorLista={valorNum} pct={dcto.pct} />
+          </div>
           {previewCodigo && (
             <p className="text-[11px] text-ink3 mt-2">Nº de contrato: <span className="font-mono font-bold text-ink">{previewCodigo}</span>
               {nMascotas > 1 && <span> — uno solo para las {nMascotas} mascotas</span>}</p>
@@ -1474,6 +1570,12 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   {mascotas.length > 1 && <span className="text-ink3 font-normal"> ({mascotas.length} × {fmt(c.valor)})</span>}
                   {c.metodo_pago ? ` · ${c.metodo_pago}` : ''}{c.fecha_pago ? ` · pagado ${c.fecha_pago}` : ''}
                 </div>
+                {parseFloat(c.descuento_pct) > 0 && (
+                  <div className="text-[10px] font-semibold text-primary-dark mt-0.5">
+                    −{parseFloat(c.descuento_pct)}% de descuento sobre {fmt(valorListaContrato(c))} c/u
+                    {MOTIVOS_DESCUENTO[c.descuento_motivo] ? ` · ${MOTIVOS_DESCUENTO[c.descuento_motivo]}` : ''}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1.5">
                 {(c.comprobantes || []).map((comp, i) => (
@@ -1566,6 +1668,14 @@ function ModalReactivar({ afiliacion: a, config, personalData, onClose, onSaved 
 
   const numero = (ct?.numero ?? 0) + 1
   const valorNum = parseFloat(valor) || 0
+  // Una reactivación es una renovación que llegó tarde: con varias mascotas cae
+  // en el 10 %. (Si el vencimiento aún no ha pasado —cancelada por error— la
+  // regla de anticipada le da el 25 %, que es lo justo.)
+  const dcto = useDescuentoSugerido({
+    escenario: 'RENOVACION', nMascotas: vivas.length,
+    fechaVencimiento: ct?.fecha_vencimiento, config,
+  })
+  const valorNeto = aplicarDescuento(valorNum, dcto.pct)
   const numeroContrato = generarNumeroContrato({
     fechaInicio: ct?.fecha_inicio || desde,   // el código conserva la fecha de LA AFILIACIÓN original
     cliente: a.clientes, nivel: a.nivel, tipo: a.tipo, numero,
@@ -1588,7 +1698,10 @@ function ModalReactivar({ afiliacion: a, config, personalData, onClose, onSaved 
         const { error } = await db.from('afiliacion_contratos').insert({
           afiliacion_id: a.id, numero, numero_contrato: numeroContrato,
           fecha_inicio: desde, fecha_vencimiento: hasta,
-          valor: valorNum,
+          valor: valorNeto, valor_lista: valorNum,
+          // Sin valor no hay descuento que registrar (dejaría un "−25 %" sobre $0)
+          descuento_pct: valorNum > 0 ? dcto.pct : 0,
+          descuento_motivo: valorNum > 0 ? dcto.motivo : null,
           // Sin cobro registrado no se inventa medio de pago (quedaría plata fantasma)
           metodo_pago: valorNum > 0 ? metodoPago : null,
           fecha_pago: valorNum > 0 ? (fechaPago || null) : null,
@@ -1694,6 +1807,9 @@ function ModalReactivar({ afiliacion: a, config, personalData, onClose, onSaved 
                     </>
                   )}
                 </div>
+                <AvisoDescuento sugerido={dcto.sugerido} aplicado={dcto.aplicado} valorLista={valorNum}
+                  onAplicar={dcto.onAplicar} onQuitar={dcto.onQuitar} />
+                <ResumenValor nMascotas={vivas.length} valorLista={valorNum} pct={dcto.pct} />
                 <p className="text-[10px] text-ink3">
                   Si no se cobró nada (o no se sabe cuánto), deja el valor en 0: el contrato queda
                   registrado sin sumar plata que no entró.
@@ -1733,6 +1849,13 @@ function ModalRenovar({ afiliacion: a, config, personalData, onClose, onSaved })
   const [saving, setSaving] = useState(false)
 
   const valorNum = parseFloat(valor) || 0
+  // El descuento depende de si HOY el contrato anterior sigue vigente (25 % por
+  // anticipada) o ya venció (10 %, y solo si son varias mascotas).
+  const dcto = useDescuentoSugerido({
+    escenario: 'RENOVACION', nMascotas: vivas.length,
+    fechaVencimiento: ct?.fecha_vencimiento, config,
+  })
+  const valorNeto = aplicarDescuento(valorNum, dcto.pct)
   const numeroContrato = generarNumeroContrato({
     fechaInicio: ct?.fecha_inicio || inicio,   // el código conserva la fecha de LA AFILIACIÓN original
     cliente: a.clientes, nivel: a.nivel, tipo: a.tipo, numero,
@@ -1746,7 +1869,9 @@ function ModalRenovar({ afiliacion: a, config, personalData, onClose, onSaved })
       const { error } = await db.from('afiliacion_contratos').insert({
         afiliacion_id: a.id, numero, numero_contrato: numeroContrato,
         fecha_inicio: inicio, fecha_vencimiento: sumarUnAnio(inicio),
-        valor: valorNum, metodo_pago: metodoPago, fecha_pago: fechaPago || null,
+        valor: valorNeto, valor_lista: valorNum,
+        descuento_pct: dcto.pct, descuento_motivo: dcto.motivo,
+        metodo_pago: metodoPago, fecha_pago: fechaPago || null,
         comprobantes, creado_por: personalData?.id || null,
       })
       if (error) throw error
@@ -1803,12 +1928,9 @@ function ModalRenovar({ afiliacion: a, config, personalData, onClose, onSaved })
               onChange={e => setComprobanteFile(e.target.files?.[0] || null)} /></div>
         </div>
 
-        {valorNum > 0 && (
-          <div className="flex items-center justify-between bg-surface2 rounded-lg px-3 py-2">
-            <span className="text-[12px] text-ink2">{vivas.length} × {fmt(valorNum)}</span>
-            <span className="text-[15px] font-bold text-ink">Total {fmt(valorNum * vivas.length)}</span>
-          </div>
-        )}
+        <AvisoDescuento sugerido={dcto.sugerido} aplicado={dcto.aplicado} valorLista={valorNum}
+          onAplicar={dcto.onAplicar} onQuitar={dcto.onQuitar} />
+        <ResumenValor nMascotas={vivas.length} valorLista={valorNum} pct={dcto.pct} />
       </div>
     </Modal>
   )

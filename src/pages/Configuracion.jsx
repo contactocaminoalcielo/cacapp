@@ -2862,9 +2862,15 @@ function TabAfiliaciones() {
       dias_aviso_renovacion: map.dias_aviso_renovacion ?? 30,
       multiplicador_semestre_1: map.multiplicador_semestre_1 ?? 5,
       multiplicador_semestre_2: map.multiplicador_semestre_2 ?? 3,
+      descuento_renovacion_anticipada: map.descuento_renovacion_anticipada ?? 25,
+      descuento_multiples_mascotas: map.descuento_multiples_mascotas ?? 25,
+      descuento_renovacion_multiple_tardia: map.descuento_renovacion_multiple_tardia ?? 10,
     })
     setLoading(false)
   }
+
+  // Los descuentos se guardan como número entre 0 y 100 (0 = regla apagada).
+  const pctValido = v => Math.min(100, Math.max(0, parseFloat(v) || 0))
 
   function setPrecio(tipo, nivel, v) {
     setRows(p => ({ ...p, precios: { ...p.precios, [tipo]: { ...p.precios[tipo], [nivel]: v } } }))
@@ -2884,6 +2890,9 @@ function TabAfiliaciones() {
         ['dias_aviso_renovacion', parseInt(rows.dias_aviso_renovacion) || 30],
         ['multiplicador_semestre_1', parseFloat(rows.multiplicador_semestre_1) || 5],
         ['multiplicador_semestre_2', parseFloat(rows.multiplicador_semestre_2) || 3],
+        ['descuento_renovacion_anticipada', pctValido(rows.descuento_renovacion_anticipada)],
+        ['descuento_multiples_mascotas', pctValido(rows.descuento_multiples_mascotas)],
+        ['descuento_renovacion_multiple_tardia', pctValido(rows.descuento_renovacion_multiple_tardia)],
       ]
       for (const [clave, valor] of updates) {
         const { error: e } = await db.from('config_operativa')
@@ -2939,7 +2948,29 @@ function TabAfiliaciones() {
             onChange={e => setRows(p => ({ ...p, multiplicador_semestre_2: e.target.value }))} /></div>
       </div>
 
-      {error && <div className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{error}</div>}
+      <h3 className="text-[14px] font-bold text-gray-800 mb-1 mt-7">Descuentos</h3>
+      <p className="text-[12px] text-gray-500 mb-4">
+        Al crear o renovar una afiliación, el módulo <b>avisa</b> cuál aplica y el coordinador decide si lo usa —
+        nunca baja el precio solo. Si aplican varios se ofrece el mayor, <b>no se suman</b>. Deja un porcentaje
+        en <b>0</b> para apagar esa regla. El descuento afecta el valor de la afiliación, <b>no</b> la activación
+        (la cláusula 5×/3× se calcula sobre el precio de lista).
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div><label className={INPUT_LBL}>Renovación anticipada (%)</label>
+          <Input type="number" min="0" max="100" value={rows.descuento_renovacion_anticipada}
+            onChange={e => setRows(p => ({ ...p, descuento_renovacion_anticipada: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Renueva en o antes de la fecha de vencimiento</p></div>
+        <div><label className={INPUT_LBL}>Más de una mascota (%)</label>
+          <Input type="number" min="0" max="100" value={rows.descuento_multiples_mascotas}
+            onChange={e => setRows(p => ({ ...p, descuento_multiples_mascotas: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">El contrato cubre 2 o más mascotas en el mismo plan</p></div>
+        <div><label className={INPUT_LBL}>Varias mascotas, tarde (%)</label>
+          <Input type="number" min="0" max="100" value={rows.descuento_renovacion_multiple_tardia}
+            onChange={e => setRows(p => ({ ...p, descuento_renovacion_multiple_tardia: e.target.value }))} />
+          <p className="text-[10px] text-gray-400 mt-1">Renueva varias mascotas después del vencimiento</p></div>
+      </div>
+
+      {error &&<div className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{error}</div>}
       <div className="flex items-center gap-3 mt-5">
         <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
         {ok && <span className="flex items-center gap-1 text-[12px] font-semibold text-green-700"><CheckCircle size={14} /> Guardado</span>}
