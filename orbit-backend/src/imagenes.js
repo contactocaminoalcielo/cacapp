@@ -14,6 +14,9 @@ import { pool, log } from './db.js'
 import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
 } from './reglas-imagenes.js'
+import {
+  ofertaParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
+} from './ofertas.js'
 import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
@@ -244,7 +247,7 @@ export async function datosPortal({ codigo }) {
   const client = await pool.connect()
   try {
     const { rows } = await client.query(
-      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas,
+      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id,
               m.nombre AS mascota, e.nombre AS especie,
               p.nombre AS plan, p.tipo_proceso
        FROM public.servicios s
@@ -296,6 +299,12 @@ export async function datosPortal({ codigo }) {
     )
     const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
 
+    // Anuncio que le corresponde a este servicio (uno solo, el de mayor
+    // prioridad). Si acepta, el portal habilita la carga de SU recordatorio.
+    const oferta = (yaRecibido || fueraDeVentana)
+      ? null
+      : await ofertaParaServicio(client, s.id, s.plan_id)
+
     return { status: 200, body: {
       ok: true,
       ya_recibido: yaRecibido,
@@ -303,6 +312,7 @@ export async function datosPortal({ codigo }) {
       tiene_entrega_fisica: tieneEntregaFisica,
       servicio: { id: s.id, mascota: s.mascota, especie: s.especie, plan: s.plan, tipo_proceso: s.tipo_proceso, estado: s.estado },
       items,
+      oferta,
       limites: { max_mb: parseInt(config.max_mb) || 8, mimes: config.mimes_permitidos || [] },
     } }
   } finally { client.release() }
@@ -319,7 +329,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     await lockClave(client, `fotos:${cod}`)
 
     const { rows: svcRows } = await client.query(
-      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, p.tipo_proceso
+      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id, p.tipo_proceso
        FROM public.servicios s
        LEFT JOIN public.planes p ON p.id = s.plan_id
        WHERE s.codigo_fotos = $1
@@ -363,6 +373,14 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       (payload.declinados || []).map(String).filter(id => items.some(it => String(it.sr_id) === id))
     )
 
+    // Oferta: se re-resuelve contra la DB. Del payload solo se toma el `acepta`
+    // (y el id, para descartar respuestas a un anuncio que ya no aplica). El
+    // precio y el recordatorio salen de la tabla `ofertas`, nunca del navegador.
+    const oferta   = await ofertaParaServicio(client, s.id, s.plan_id)
+    const ofPay    = payload.oferta && typeof payload.oferta === 'object' ? payload.oferta : null
+    const ofValida = !!(oferta && ofPay && String(ofPay.oferta_id) === String(oferta.id))
+    const ofAcepta = ofValida && ofPay.acepta === true
+
     // Validar completitud server-side (carga parcial NO pasa a Producción).
     // Los declinados se omiten: no requieren imágenes ni textos.
     const faltantes = []
@@ -371,6 +389,9 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       const entry = entradas.get(String(item.sr_id))
       if (!itemCompleto(item, entry, s.id)) faltantes.push(item.recordatorio.nombre)
     }
+    // Si aceptó la oferta, su recordatorio se exige igual que los del plan: no
+    // se cobra un adicional que después Producción no puede fabricar.
+    if (ofAcepta && !ofertaCompleta(oferta, ofPay, s.id)) faltantes.push(oferta.recordatorio.nombre)
     if (faltantes.length) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'incompleto', faltantes } }
@@ -392,7 +413,9 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
        ) AS tiene`,
       [s.id]
     )
-    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
+    // Aceptar una oferta física convierte en entregable un servicio que no lo
+    // era (p.ej. eco-grupal, todo digital): entonces sí hay que pedir la entrega.
+    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true || (ofAcepta && oferta.es_fisico)
     if (tieneEntregaFisica && (!entrega || !entrega.direccion || !entrega.recibe || !entrega.telefono)) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
@@ -424,6 +447,16 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
         [item.sr_id, s.id, urls[0] || null, urls,
          entry.textos && Object.keys(entry.textos).length ? JSON.stringify(entry.textos) : null]
       )
+    }
+
+    // Respuesta a la oferta. Aceptar = venta: crea el adicional con sus fotos,
+    // suma al total y recalcula estado_pago (ver ofertas.js). Rechazar solo deja
+    // el registro para medir conversión. En ambos casos el UNIQUE
+    // (servicio, oferta) impide cobrar dos veces si el cliente reenvía.
+    let ofertaSrId = null
+    if (ofValida) {
+      if (ofAcepta) ofertaSrId = await aplicarOfertaAceptada(client, { servicioId: s.id, oferta, entry: ofPay })
+      else          await registrarRechazoOferta(client, { servicioId: s.id, oferta })
     }
 
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
@@ -489,8 +522,9 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     }
 
     await client.query('COMMIT')
-    log('[imagenes/recibir]', cod, 'RECIBIDO', items.length, 'items')
-    return { status: 200, body: { ok: true, recibido: true, items: items.length } }
+    log('[imagenes/recibir]', cod, 'RECIBIDO', items.length, 'items',
+        ofValida ? `oferta=${ofAcepta ? 'ACEPTADA' : 'RECHAZADA'}` : '')
+    return { status: 200, body: { ok: true, recibido: true, items: items.length, oferta_aceptada: !!ofertaSrId } }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e

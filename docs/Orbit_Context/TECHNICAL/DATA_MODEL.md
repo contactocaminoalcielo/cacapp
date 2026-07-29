@@ -149,6 +149,19 @@
 - **PENDIENTE DE IMPLEMENTAR**
 - Diseño en DATA_MODEL original: id, entidad, entidad_id, accion, usuario_id, valor_anterior, valor_nuevo, fecha, observacion
 
+### Ofertas del portal — tablas `ofertas`, `oferta_planes`, `oferta_respuestas` (migración 078)
+Ver `MODULES/OFERTAS.md`.
+- `ofertas.id` (UUID) — PK · `titulo`, `descripcion`, `imagen_url`
+- `ofertas.recordatorio_id` (UUID FK → `recordatorios.id`) — qué se vende
+- `ofertas.precio_oferta` (numeric) — **fuente de verdad del cobro**; `precio_lista` es solo el tachado de display (NULL → `recordatorios.precio_base`)
+- `ofertas.orden` (int) — menor = mayor prioridad; solo se muestra la primera aplicable
+- `ofertas.aplica_todos_planes` (bool), `vigencia_desde/hasta` (date), `activo` (bool)
+- `oferta_planes` — `oferta_id` × `plan_id` (UNIQUE), planes donde se muestra
+- `oferta_respuestas` — `respuesta` ∈ `ACEPTADA | RECHAZADA`, `precio_ofrecido` (snapshot),
+  `servicio_recordatorio_id` (el adicional creado). **UNIQUE (servicio_id, oferta_id)** = candado anti doble cobro
+- RLS: solo `authenticated` (ALL en catálogo, SELECT en respuestas). `anon` NO tiene acceso —
+  el portal las lee por el backend propio. Bucket público `ofertas` para la foto del anuncio.
+
 ## Relaciones críticas
 - `servicios → mascotas` vía `mascota_id` → para llegar a cliente: `mascotas(nombre, clientes(nombre, apellido))`
 - `servicios → aliados` vía `aliado_origen_id`

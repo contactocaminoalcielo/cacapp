@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { db } from '@/lib/supabase'
 import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 import { portalDatos, portalRecibir } from '@/lib/imagenes'
-import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus } from 'lucide-react'
+import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift } from 'lucide-react'
 
 const G      = '#1A5CD8'
 const G_LITE = '#E8F3EB'
@@ -12,6 +12,8 @@ const BG     = '#F4F7F4'
 const BORD   = '#D8E5D8'
 
 const MIMES_OK = MIMES_IMAGEN_OK
+
+const pesos = v => `$${Number(v || 0).toLocaleString('es-CO')}`
 
 // Límite de palabras por tipo de campo de texto (evita leyendas larguísimas).
 // Devuelve 0 si el campo no tiene límite.
@@ -33,15 +35,19 @@ const slide = {
   exit:   d => ({ x: d > 0 ? '-60%' : '60%', opacity: 0, transition: { duration: 0.2 } }),
 }
 
-function itemListo(item, fotos, textos) {
-  const rec  = item.recordatorios
+/** ¿Un recordatorio tiene ya todo lo que pide (fotos + textos)? */
+function recListo(rec, files, textosVals) {
   const maxF = (rec?.requiere_imagen && !rec?.solo_nombre && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
-  if (maxF > 0 && (fotos[item.id] || []).filter(Boolean).length < maxF) return false
+  if (maxF > 0 && (files || []).filter(Boolean).length < maxF) return false
   for (const c of (rec?.campos_texto || [])) {
-    const arr = textos[item.id]?.[c.label] || []
+    const arr = textosVals?.[c.label] || []
     if (arr.filter(v => v && String(v).trim()).length < (c.cantidad || 1)) return false
   }
   return true
+}
+
+function itemListo(item, fotos, textos) {
+  return recListo(item.recordatorios, fotos[item.id], textos[item.id])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,25 +69,42 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [paso,        setPaso]       = useState(0)
   const [dir,         setDir]        = useState(1)
   const [declinados,  setDeclinados] = useState(() => new Set()) // ids de recordatorios "no deseo"
+  // ── Oferta del portal (un solo anuncio, el que manda el backend) ──
+  const [oferta,        setOferta]       = useState(null)
+  const [ofertaAcepta,  setOfertaAcepta] = useState(null)   // null = sin responder
+  const [ofertaFotos,   setOfertaFotos]  = useState([])
+  const [ofertaTextos,  setOfertaTextos] = useState({})
+  const [confirmando,   setConfirmando]  = useState(false)  // secuencia de confirmaciones finales
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
-  const totalPasos   = items.length + 1
+  // El anuncio es un paso propio del wizard, entre los recordatorios y la
+  // revisión final: así el cliente lo ve con calma y no como un banner al paso.
+  const pasoOferta   = oferta ? items.length : -1
+  const totalPasos   = items.length + (oferta ? 1 : 0) + 1
   const esFinal      = paso === totalPasos - 1
-  const itemActual   = items[paso]
+  const enOferta     = oferta && paso === pasoOferta
+  const itemActual   = paso < items.length ? items[paso] : null
   // La pregunta de "recordatorios anticipados" SOLO aplica a compostaje INDIVIDUAL.
   // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
   // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
-  const pedirEntrega = servicio?.tiene_entrega_fisica !== false
+  // Aceptar una oferta física convierte en entregable un servicio que no lo era:
+  // el backend aplica la misma regla al recibir.
+  const pedirEntrega = servicio?.tiene_entrega_fisica !== false || (ofertaAcepta === true && oferta?.es_fisico)
   // Cuando aplica, los datos esenciales son obligatorios para enviar.
   const CAMPOS_ENTREGA_REQ = ['direccion', 'recibe', 'telefono']
   const entregaReqOk = !pedirEntrega || CAMPOS_ENTREGA_REQ.every(k => String(entrega[k] || '').trim())
   const mascota      = servicio?.mascota || 'tu mascota'
   // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
   const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
+  // La oferta está resuelta si dijo que no, o si dijo que sí y ya subió lo suyo.
+  const ofertaListo  = !oferta || ofertaAcepta === false ||
+                       (ofertaAcepta === true && recListo(oferta.recordatorio, ofertaFotos, ofertaTextos))
   // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
+  const puedeEnviar  = todoListo && ofertaListo && entregaReqOk
+
   function toggleDeclinado(id, v) {
     setDeclinados(prev => { const n = new Set(prev); v ? n.add(id) : n.delete(id); return n })
   }
@@ -116,6 +139,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
       setItems(it)
       setDeclinados(new Set())
 
+      // Oferta (puede no venir: backend viejo, o ninguna aplica a este plan)
+      setOferta(r.oferta || null)
+      setOfertaAcepta(null)
+      setOfertaFotos([])
+      setOfertaTextos(iniTextos(r.oferta?.recordatorio))
+
       const fi = {}
       it.forEach(item => {
         const rec = item.recordatorios
@@ -145,7 +174,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
   }
 
   // ── Subida segura de una imagen ─────────────────────────────────────────────
-  async function subirArchivo(srId, file) {
+  // `carpeta` es el 2º segmento de la ruta (sr_id, o `oferta-<id>` cuando el
+  // recordatorio todavía no existe porque lo crea el backend al recibir).
+  async function subirArchivo(carpeta, file) {
     const mime = await sniffMime(file)
     if (!MIMES_OK.includes(mime))
       throw new Error('Ese archivo no es una foto válida. Usa una imagen (JPG, PNG, WEBP o HEIC).')
@@ -154,7 +185,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
     if (blob.size > maxBytes)
       throw new Error(`La imagen supera ${limites.max_mb} MB. Intenta con otra foto.`)
     const ext  = extDeMime(blob.type === 'image/jpeg' ? 'image/jpeg' : mime)
-    const path = `${servicio.id}/${srId}/${crypto.randomUUID()}.${ext}`   // único → no sobrescribe
+    const path = `${servicio.id}/${carpeta}/${crypto.randomUUID()}.${ext}`   // único → no sobrescribe
     const { error } = await db.storage.from('fotos-clientes')
       .upload(path, blob, { upsert: false, contentType: blob.type || mime })
     if (error) {
@@ -170,7 +201,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
 
   // ── Guardar (transaccional en el backend; el navegador no cambia estados) ───
   async function guardar() {
-    if (!todoListo || !entregaReqOk) return
+    if (!puedeEnviar) return
+    setConfirmando(false)
     setGuardando(true)
     try {
       const recordatorios = []
@@ -181,6 +213,24 @@ export default function FotosCliente({ codigo: codigoProp }) {
         for (const f of files) urls.push(await subirArchivo(item.id, f))
         recordatorios.push({ sr_id: item.id, urls, textos: textos[item.id] || {} })
       }
+
+      // Oferta: el navegador solo dice SÍ o NO. El precio y el ítem los resuelve
+      // el backend contra la tabla `ofertas` — aquí nunca viaja un monto.
+      let ofertaPayload
+      if (oferta && ofertaAcepta !== null) {
+        const urlsOferta = []
+        if (ofertaAcepta) {
+          for (const f of ofertaFotos.filter(Boolean))
+            urlsOferta.push(await subirArchivo(`oferta-${oferta.id}`, f))
+        }
+        ofertaPayload = {
+          oferta_id: oferta.id,
+          acepta:    ofertaAcepta === true,
+          urls:      urlsOferta,
+          textos:    ofertaAcepta ? ofertaTextos : {},
+        }
+      }
+
       const entregaLlena = Object.values(entrega).some(v => String(v).trim())
       const payload = {
         recordatorios,
@@ -189,6 +239,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
         entrega: entregaLlena ? entrega : undefined,
+        oferta: ofertaPayload,
       }
       const r = await portalRecibir(codigo, payload)
       if (r.ok || r.ya_recibido) { setFase('enviado'); return }
@@ -229,6 +280,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
 
   // ── WIZARD ────────────────────────────────────────────────────────────────
+  const pasosVisibles = items.length + (oferta ? 1 : 0)
   return (
     <div className="min-h-screen flex flex-col" style={{ background: BG }}>
       <header className="sticky top-0 z-20 bg-white shadow-sm border-b" style={{ borderColor: BORD }}>
@@ -247,7 +299,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                 transition={{ type: 'spring', stiffness: 200, damping: 28 }} />
             </div>
             <span className="text-[13px] font-bold whitespace-nowrap flex-shrink-0" style={{ color: G }}>
-              {esFinal ? 'Revisión final' : `Paso ${paso + 1} de ${items.length}`}
+              {esFinal ? 'Revisión final' : `Paso ${paso + 1} de ${pasosVisibles}`}
             </span>
           </div>
         </div>
@@ -259,7 +311,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
             variants={slide} initial="enter" animate="center" exit="exit"
             className="absolute inset-0 overflow-y-auto">
             <div className="max-w-lg mx-auto px-5 pt-7 pb-40">
-              {!esFinal && itemActual && (
+              {itemActual && (
                 <PasoItem
                   item={itemActual}
                   mascota={mascota}
@@ -271,6 +323,21 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   onToggleDeclined={v => toggleDeclinado(itemActual.id, v)}
                 />
               )}
+              {enOferta && (
+                <PasoOferta
+                  oferta={oferta}
+                  mascota={mascota}
+                  acepta={ofertaAcepta}
+                  onResponder={v => {
+                    setOfertaAcepta(v)
+                    if (v && ofertaFotos.length === 0) setOfertaFotos(iniFotos(oferta.recordatorio))
+                  }}
+                  files={ofertaFotos}
+                  textosVals={ofertaTextos}
+                  onFilesChange={setOfertaFotos}
+                  onTextosChange={setOfertaTextos}
+                />
+              )}
               {esFinal && (
                 <PasoFinal
                   mascota={mascota}
@@ -280,6 +347,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
                   entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}
+                  oferta={oferta} ofertaAcepta={ofertaAcepta}
+                  onIrOferta={() => ir(pasoOferta)}
                   onGoTo={ir}
                 />
               )}
@@ -292,14 +361,18 @@ export default function FotosCliente({ codigo: codigoProp }) {
         <div className="max-w-lg mx-auto space-y-3">
           {esFinal ? (
             <>
-              {(!todoListo || !entregaReqOk) && (
+              {!puedeEnviar && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                   {!todoListo
                     ? 'Completa todas las fotos y datos requeridos para poder enviar.'
-                    : 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'}
+                    : !ofertaListo
+                      ? (ofertaAcepta === null
+                          ? 'Responde si deseas la oferta para poder enviar.'
+                          : 'Falta subir la foto del recordatorio que aceptaste.')
+                      : 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'}
                 </p>
               )}
-              <motion.button onClick={guardar} disabled={guardando || !todoListo || !entregaReqOk} whileTap={{ scale: 0.98 }}
+              <motion.button onClick={() => setConfirmando(true)} disabled={guardando || !puedeEnviar} whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
                 style={{ background: G }}>
                 {guardando
@@ -309,15 +382,27 @@ export default function FotosCliente({ codigo: codigoProp }) {
             </>
           ) : (
             <>
-              {!itemActualListo && (
+              {enOferta ? (
+                ofertaAcepta === null ? (
+                  <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
+                    Elige si deseas esta oferta para continuar.
+                  </p>
+                ) : !ofertaListo && (
+                  <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
+                    Sube la foto de tu nuevo recordatorio para continuar.
+                  </p>
+                )
+              ) : !itemActualListo && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                   Sube la foto o marca "No deseo este recordatorio" para continuar.
                 </p>
               )}
-              <motion.button onClick={siguiente} disabled={!itemActualListo} whileTap={{ scale: 0.98 }}
+              <motion.button onClick={siguiente}
+                disabled={enOferta ? (ofertaAcepta === null || !ofertaListo) : !itemActualListo}
+                whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
                 style={{ background: G }}>
-                {paso === items.length - 1 ? 'Revisar y enviar →' : 'Siguiente recordatorio →'}
+                {paso === pasosVisibles - 1 ? 'Revisar y enviar →' : 'Siguiente recordatorio →'}
               </motion.button>
             </>
           )}
@@ -330,14 +415,38 @@ export default function FotosCliente({ codigo: codigoProp }) {
           )}
         </div>
       </div>
+
+      {confirmando && (
+        <ConfirmacionesEnvio
+          mascota={mascota}
+          items={items} fotos={fotos} declinados={declinados}
+          entrega={entrega} pedirEntrega={pedirEntrega}
+          oferta={oferta} ofertaAcepta={ofertaAcepta}
+          onCancelar={() => setConfirmando(false)}
+          onCorregirEntrega={() => { setConfirmando(false); ir(totalPasos - 1) }}
+          onQuieroOferta={() => { setConfirmando(false); ir(pasoOferta) }}
+          onConfirmado={guardar}
+        />
+      )}
     </div>
   )
 }
 
-// ── PasoItem ─────────────────────────────────────────────────────────────────
-function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosChange, declined, onToggleDeclined }) {
-  const rec      = item.recordatorios
-  const nombre   = rec?.nombre || 'Recordatorio'
+// Estructuras iniciales de captura para un recordatorio del catálogo
+function iniFotos(rec) {
+  const max = (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
+  return Array(max).fill(null)
+}
+function iniTextos(rec) {
+  const out = {}
+  for (const c of (rec?.campos_texto || [])) out[c.label] = Array(c.cantidad || 1).fill('')
+  return out
+}
+
+// ── Captura reutilizable: fotos + campos de texto de UN recordatorio ─────────
+// La usan el paso de recordatorio del plan y el paso de oferta aceptada, para
+// que el cliente vea exactamente la misma mecánica en ambos.
+function CapturaRecordatorio({ rec, mascota, files, textosVals, onFilesChange, onTextosChange }) {
   const maxFotos = (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
   const campos   = rec?.campos_texto || []
   const arreglo  = Array.from({ length: maxFotos }, (_, i) => files?.[i] ?? null)
@@ -345,7 +454,6 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
   const allDone  = maxFotos > 0 && filled === maxFotos
   const singleRef = useRef(null)
   const multiRef  = useRef(null)
-  const [confirmar, setConfirmar] = useState(false) // confirmación de "no deseo"
 
   function setFile(idx, file) { const n = [...arreglo]; n[idx] = file; onFilesChange(n) }
   function onMulti(e) {
@@ -361,55 +469,23 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
     onTextosChange({ ...textosVals, [label]: arr })
   }
 
-  // Recordatorio declinado: ocultamos la carga y ofrecemos reactivarlo.
-  if (declined) {
-    return (
-      <div className="space-y-7">
-        <div>
-          <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
-            Para los recuerdos de {mascota}
-          </p>
-          <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
-        </div>
-        <div className="bg-white rounded-3xl border-2 p-7 text-center space-y-4" style={{ borderColor: BORD }}>
-          <div className="text-5xl">🚫</div>
-          <p className="text-[17px] font-bold text-gray-800">No deseas este recordatorio</p>
-          <p className="text-[14px] text-gray-500 leading-relaxed">
-            No te pediremos fotos para este. Si cambias de opinión, puedes volver a activarlo.
-          </p>
-          <button onClick={() => onToggleDeclined(false)}
-            className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
-            style={{ borderColor: G, color: G, background: G_LITE }}>
-            Sí lo quiero
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="space-y-7">
-      <div>
-        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
-          Para los recuerdos de {mascota}
-        </p>
-        <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
-        {maxFotos > 0 && (
-          <div className="flex items-center gap-2 mt-3">
-            <div className="flex gap-1.5">
-              {Array.from({ length: maxFotos }).map((_, i) => (
-                <div key={i} className="w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all"
-                  style={{ background: arreglo[i] ? G : 'white', borderColor: arreglo[i] ? G : BORD }}>
-                  {arreglo[i] && <Check size={9} color="#fff" strokeWidth={3} />}
-                </div>
-              ))}
-            </div>
-            <span className="text-[13px] font-semibold" style={{ color: allDone ? G : '#9CA3AF' }}>
-              {allDone ? '✓ Fotos listas' : `${filled} de ${maxFotos} foto${maxFotos > 1 ? 's' : ''}`}
-            </span>
+    <>
+      {maxFotos > 0 && (
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
+            {Array.from({ length: maxFotos }).map((_, i) => (
+              <div key={i} className="w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all"
+                style={{ background: arreglo[i] ? G : 'white', borderColor: arreglo[i] ? G : BORD }}>
+                {arreglo[i] && <Check size={9} color="#fff" strokeWidth={3} />}
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+          <span className="text-[13px] font-semibold" style={{ color: allDone ? G : '#9CA3AF' }}>
+            {allDone ? '✓ Fotos listas' : `${filled} de ${maxFotos} foto${maxFotos > 1 ? 's' : ''}`}
+          </span>
+        </div>
+      )}
 
       {maxFotos > 0 && (
         <div className="space-y-3">
@@ -547,6 +623,55 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
           })}
         </div>
       )}
+    </>
+  )
+}
+
+// ── PasoItem ─────────────────────────────────────────────────────────────────
+function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosChange, declined, onToggleDeclined }) {
+  const rec    = item.recordatorios
+  const nombre = rec?.nombre || 'Recordatorio'
+  const [confirmar, setConfirmar] = useState(false) // confirmación de "no deseo"
+
+  // Recordatorio declinado: ocultamos la carga y ofrecemos reactivarlo.
+  if (declined) {
+    return (
+      <div className="space-y-7">
+        <div>
+          <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
+            Para los recuerdos de {mascota}
+          </p>
+          <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
+        </div>
+        <div className="bg-white rounded-3xl border-2 p-7 text-center space-y-4" style={{ borderColor: BORD }}>
+          <div className="text-5xl">🚫</div>
+          <p className="text-[17px] font-bold text-gray-800">No deseas este recordatorio</p>
+          <p className="text-[14px] text-gray-500 leading-relaxed">
+            No te pediremos fotos para este. Si cambias de opinión, puedes volver a activarlo.
+          </p>
+          <button onClick={() => onToggleDeclined(false)}
+            className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
+            style={{ borderColor: G, color: G, background: G_LITE }}>
+            Sí lo quiero
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-7">
+      <div>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
+          Para los recuerdos de {mascota}
+        </p>
+        <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
+        <div className="mt-3">
+          <CapturaRecordatorio
+            rec={rec} mascota={mascota} files={files} textosVals={textosVals}
+            onFilesChange={onFilesChange} onTextosChange={onTextosChange} />
+        </div>
+      </div>
 
       {confirmar ? (
         <div className="rounded-2xl border-2 p-5 space-y-3" style={{ borderColor: '#FCA5A5', background: '#FEF2F2' }}>
@@ -578,8 +703,86 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
   )
 }
 
+// ── PasoOferta ───────────────────────────────────────────────────────────────
+// El anuncio. Sin presión: se explica, se muestra el precio y el cliente decide.
+// Si acepta, se abre debajo la misma captura de fotos/textos que los demás.
+function PasoOferta({ oferta, mascota, acepta, onResponder, files, textosVals, onFilesChange, onTextosChange }) {
+  const rec   = oferta.recordatorio
+  const lista = oferta.precio_lista
+  const hayDescuento = lista != null && Number(lista) > Number(oferta.precio_oferta)
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5" style={{ color: '#9DBD9D' }}>
+          <Gift size={14} /> Una propuesta para ti
+        </p>
+        <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{oferta.titulo}</h2>
+      </div>
+
+      <div className="bg-white rounded-3xl border-2 overflow-hidden" style={{ borderColor: acepta === true ? G : BORD }}>
+        {oferta.imagen_url && (
+          <img src={oferta.imagen_url} alt={oferta.titulo} className="w-full object-cover" style={{ aspectRatio: '16/10' }} />
+        )}
+        <div className="p-6 space-y-4">
+          {oferta.descripcion && (
+            <p className="text-[15px] text-gray-600 leading-relaxed whitespace-pre-line">{oferta.descripcion}</p>
+          )}
+          <div className="flex items-baseline gap-3">
+            <span className="text-[26px] font-bold" style={{ color: G }}>{pesos(oferta.precio_oferta)}</span>
+            {hayDescuento && <span className="text-[16px] text-gray-400 line-through">{pesos(lista)}</span>}
+          </div>
+          <p className="text-[13px] text-gray-500 leading-relaxed">
+            Si lo aceptas, se agrega a los recuerdos de {mascota} y se cobra junto con tu servicio
+            al momento de la entrega. Si prefieres que no, no pasa nada.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <button onClick={() => onResponder(false)}
+              className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
+              style={acepta === false
+                ? { borderColor: '#9CA3AF', color: '#374151', background: '#F3F4F6' }
+                : { borderColor: BORD, color: '#6B7280', background: 'white' }}>
+              No, gracias
+            </button>
+            <button onClick={() => onResponder(true)}
+              className="py-4 rounded-2xl font-bold text-[15px] border-2 text-white transition-all"
+              style={acepta === true
+                ? { borderColor: G, background: G }
+                : { borderColor: G, background: G, opacity: 0.92 }}>
+              {acepta === true ? '✓ Lo quiero' : 'Sí, lo quiero'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {acepta === true && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+          <div className="rounded-2xl border-2 px-5 py-4" style={{ borderColor: G_MID, background: G_LITE }}>
+            <p className="text-[15px] font-bold" style={{ color: G }}>¡Qué alegría! Ahora {rec.nombre}</p>
+            <p className="text-[13px] text-gray-600 mt-1 leading-relaxed">
+              Necesitamos lo mismo que para los demás recuerdos de {mascota}.
+            </p>
+          </div>
+          <CapturaRecordatorio
+            rec={rec} mascota={mascota} files={files} textosVals={textosVals}
+            onFilesChange={onFilesChange} onTextosChange={onTextosChange} />
+        </motion.div>
+      )}
+
+      {acepta === false && (
+        <div className="rounded-2xl border px-5 py-4 text-center" style={{ borderColor: BORD, background: 'white' }}>
+          <p className="text-[14px] text-gray-500">
+            Sin problema. Continuemos con los recuerdos de {mascota}.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, oferta, ofertaAcepta, onIrOferta, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
@@ -622,6 +825,34 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
         </div>
       )}
 
+      {/* Resumen de la oferta: qué respondió y cuánto suma si la aceptó */}
+      {oferta && (
+        <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: ofertaAcepta === true ? G : BORD }}>
+          <div className="px-5 py-3 border-b" style={{ borderColor: BORD }}>
+            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>Oferta</p>
+          </div>
+          <div className="flex items-center gap-4 px-5 py-4">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ background: ofertaAcepta === true ? G : '#E5E7EB' }}>
+              {ofertaAcepta === true
+                ? <Check size={16} color="#fff" strokeWidth={3} />
+                : <X size={15} color="#6B7280" strokeWidth={3} />}
+            </div>
+            <span className="flex-1 text-[15px] leading-tight text-gray-800">
+              {oferta.titulo}
+              <span className="block text-[12px] font-semibold mt-0.5" style={{ color: ofertaAcepta === true ? G : '#9CA3AF' }}>
+                {ofertaAcepta === true
+                  ? `Aceptada · ${pesos(oferta.precio_oferta)} se suman a tu servicio`
+                  : 'No la deseas'}
+              </span>
+            </span>
+            <button onClick={onIrOferta} className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all flex-shrink-0" style={{ background: G_LITE, color: G }}>
+              {ofertaAcepta === true ? 'Editar' : 'Ver'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Interés en un adicional → SOLO crea una solicitud para coordinación */}
       <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: interes.quiere ? G : BORD }}>
         <button className="w-full flex items-center justify-between px-5 py-4 text-left transition-colors hover:bg-gray-50"
@@ -643,7 +874,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
                   <select value={interes.recordatorio_id} onChange={e => setInteres(p => ({ ...p, recordatorio_id: e.target.value }))}
                     className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none bg-white" style={{ borderColor: BORD }}>
                     <option value="">Selecciona un recordatorio…</option>
-                    {catalogo.map(r => <option key={r.id} value={r.id}>{r.nombre}{r.precio_base > 0 ? ` — $${Number(r.precio_base).toLocaleString('es-CO')}` : ''}</option>)}
+                    {catalogo.map(r => <option key={r.id} value={r.id}>{r.nombre}{r.precio_base > 0 ? ` — ${pesos(r.precio_base)}` : ''}</option>)}
                   </select>
                 </div>
                 <textarea value={interes.texto} onChange={e => setInteres(p => ({ ...p, texto: e.target.value }))} rows={3}
@@ -731,6 +962,155 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
       <p className="text-center text-[13px] text-gray-400 pb-2 leading-relaxed px-2">
         Al enviar, autorizas el uso de estas fotos para elaborar los recordatorios de {mascota}.
       </p>
+    </div>
+  )
+}
+
+// ── Confirmaciones antes de enviar ───────────────────────────────────────────
+// Tres preguntas, una a la vez, en el orden que pidió David:
+//   1. ¿Subiste todas las fotos?
+//   2. ¿Los datos de entrega están correctos?  (solo si hay entrega física)
+//   3. ¿Confirmas que NO quieres la oferta?    (solo si la rechazó)
+// Cada una permite devolverse a corregir en vez de seguir de largo.
+function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedirEntrega, oferta, ofertaAcepta, onCancelar, onCorregirEntrega, onQuieroOferta, onConfirmado }) {
+  const pasos = ['fotos']
+  if (pedirEntrega) pasos.push('entrega')
+  if (oferta && ofertaAcepta !== true) pasos.push('oferta')
+
+  const [idx, setIdx] = useState(0)
+  const actual = pasos[idx]
+  const esUltimo = idx === pasos.length - 1
+
+  function avanzar() {
+    if (esUltimo) onConfirmado()
+    else setIdx(i => i + 1)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-5"
+      style={{ background: 'rgba(15,23,42,0.45)' }}>
+      <motion.div
+        initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 320, damping: 30 }}
+        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl max-h-[88vh] overflow-y-auto">
+
+        <div className="px-6 pt-6 pb-2 flex items-center gap-2">
+          {pasos.map((p, i) => (
+            <div key={p} className="h-1.5 flex-1 rounded-full transition-colors"
+              style={{ background: i <= idx ? G : '#E5E7EB' }} />
+          ))}
+        </div>
+
+        <div className="p-6 pt-4 space-y-5">
+          {actual === 'fotos' && (
+            <>
+              <div className="text-center">
+                <div className="text-4xl mb-2">📸</div>
+                <h3 className="text-[20px] font-bold text-gray-900">¿Ya subiste todas las fotos?</h3>
+                <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
+                  Después de enviar no podrás agregar más desde aquí.
+                </p>
+              </div>
+              <div className="rounded-2xl border divide-y" style={{ borderColor: BORD }}>
+                {items.map(it => {
+                  const declined = declinados.has(it.id)
+                  const maxF = it.recordatorios?.max_fotos || 0
+                  const nF   = (fotos[it.id] || []).filter(Boolean).length
+                  return (
+                    <div key={it.id} className="flex items-center justify-between px-4 py-3" style={{ borderColor: BORD }}>
+                      <span className={`text-[14px] ${declined ? 'text-gray-400' : 'text-gray-700'}`}>{it.recordatorios?.nombre}</span>
+                      <span className="text-[13px] font-bold" style={{ color: declined ? '#9CA3AF' : G }}>
+                        {declined ? 'No deseado' : maxF > 0 ? `${nF}/${maxF}` : 'Listo'}
+                      </span>
+                    </div>
+                  )
+                })}
+                {oferta && ofertaAcepta === true && (
+                  <div className="flex items-center justify-between px-4 py-3" style={{ borderColor: BORD }}>
+                    <span className="text-[14px] text-gray-700">{oferta.recordatorio.nombre}</span>
+                    <span className="text-[13px] font-bold" style={{ color: G }}>Listo</span>
+                  </div>
+                )}
+                {items.length === 0 && !oferta && (
+                  <div className="px-4 py-3 text-[13px] text-gray-400 text-center">Este servicio no requiere fotos.</div>
+                )}
+              </div>
+            </>
+          )}
+
+          {actual === 'entrega' && (
+            <>
+              <div className="text-center">
+                <div className="text-4xl mb-2">📦</div>
+                <h3 className="text-[20px] font-bold text-gray-900">¿Estos datos de entrega están bien?</h3>
+                <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
+                  Con ellos llevaremos los recuerdos de {mascota}.
+                </p>
+              </div>
+              <div className="rounded-2xl border p-4 space-y-2" style={{ borderColor: BORD, background: '#FAFCFA' }}>
+                <FilaDato label="Dirección" valor={entrega.direccion} />
+                {(entrega.barrio || entrega.localidad) &&
+                  <FilaDato label="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
+                <FilaDato label="Recibe" valor={entrega.recibe} />
+                <FilaDato label="Teléfono" valor={[entrega.telefono, entrega.telefono_adicional].filter(Boolean).join(' · ')} />
+                {entrega.horarios && <FilaDato label="Horarios" valor={entrega.horarios} />}
+              </div>
+              <button onClick={onCorregirEntrega}
+                className="w-full py-3.5 rounded-2xl font-bold text-[14px] border-2 transition-all"
+                style={{ borderColor: BORD, color: '#6B7280', background: 'white' }}>
+                Corregir los datos
+              </button>
+            </>
+          )}
+
+          {actual === 'oferta' && (
+            <>
+              <div className="text-center">
+                <div className="text-4xl mb-2">🎁</div>
+                <h3 className="text-[20px] font-bold text-gray-900">¿Confirmas que no deseas esta oferta?</h3>
+                <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
+                  Es la última oportunidad de agregarla a los recuerdos de {mascota}.
+                </p>
+              </div>
+              <div className="rounded-2xl border overflow-hidden" style={{ borderColor: BORD }}>
+                {oferta.imagen_url && (
+                  <img src={oferta.imagen_url} alt="" className="w-full object-cover" style={{ aspectRatio: '16/9' }} />
+                )}
+                <div className="p-4">
+                  <p className="text-[15px] font-bold text-gray-900">{oferta.titulo}</p>
+                  <p className="text-[17px] font-bold mt-1" style={{ color: G }}>{pesos(oferta.precio_oferta)}</p>
+                </div>
+              </div>
+              <button onClick={onQuieroOferta}
+                className="w-full py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
+                style={{ borderColor: G, color: G, background: G_LITE }}>
+                Mejor sí la quiero
+              </button>
+            </>
+          )}
+
+          <div className="space-y-2 pt-1">
+            <button onClick={avanzar}
+              className="w-full py-4 rounded-2xl font-bold text-white text-[16px] transition-all"
+              style={{ background: G }}>
+              {esUltimo ? 'Sí, enviar ahora' : 'Sí, confirmo'}
+            </button>
+            <button onClick={onCancelar}
+              className="w-full py-3 rounded-2xl font-semibold text-[14px] text-gray-500">
+              Volver a revisar
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
+function FilaDato({ label, valor }) {
+  return (
+    <div className="flex gap-3">
+      <span className="text-[12px] font-bold text-gray-400 uppercase tracking-wide w-28 flex-shrink-0 pt-0.5">{label}</span>
+      <span className="text-[14px] text-gray-800 flex-1 break-words">{valor || '—'}</span>
     </div>
   )
 }
