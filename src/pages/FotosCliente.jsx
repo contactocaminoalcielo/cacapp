@@ -69,41 +69,62 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [paso,        setPaso]       = useState(0)
   const [dir,         setDir]        = useState(1)
   const [declinados,  setDeclinados] = useState(() => new Set()) // ids de recordatorios "no deseo"
-  // ── Oferta del portal (un solo anuncio, el que manda el backend) ──
-  const [oferta,        setOferta]       = useState(null)
-  const [ofertaAcepta,  setOfertaAcepta] = useState(null)   // null = sin responder
-  const [ofertaFotos,   setOfertaFotos]  = useState([])
-  const [ofertaTextos,  setOfertaTextos] = useState({})
+  // ── Ofertas del portal (las que manda el backend; hoy hasta 2) ──
+  // Todo va indexado por id de oferta: el cliente responde cada anuncio por
+  // separado y puede aceptar uno, los dos, o ninguno.
+  const [ofertas,       setOfertas]      = useState([])
+  const [ofertaResp,    setOfertaResp]   = useState({})     // { [id]: true|false } · sin clave = sin responder
+  const [ofertaFotos,   setOfertaFotos]  = useState({})     // { [id]: [File|null] }
+  const [ofertaTextos,  setOfertaTextos] = useState({})     // { [id]: { label: [...] } }
   const [confirmando,   setConfirmando]  = useState(false)  // secuencia de confirmaciones finales
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
-  // El anuncio es un paso propio del wizard, entre los recordatorios y la
-  // revisión final: así el cliente lo ve con calma y no como un banner al paso.
-  const pasoOferta   = oferta ? items.length : -1
-  const totalPasos   = items.length + (oferta ? 1 : 0) + 1
+  // Cada anuncio es un paso propio del wizard, entre los recordatorios y la
+  // revisión final: así el cliente los ve con calma y no como un banner al paso.
+  // Van uno tras otro a partir de `items.length`.
+  const totalPasos   = items.length + ofertas.length + 1
   const esFinal      = paso === totalPasos - 1
-  const enOferta     = oferta && paso === pasoOferta
+  const ofertaIdx    = paso - items.length
+  const ofertaActual = (ofertaIdx >= 0 && ofertaIdx < ofertas.length) ? ofertas[ofertaIdx] : null
+  const enOferta     = !!ofertaActual
   const itemActual   = paso < items.length ? items[paso] : null
+  const pasoDeOferta = of => items.length + ofertas.findIndex(o => o.id === of.id)
   // La pregunta de "recordatorios anticipados" SOLO aplica a compostaje INDIVIDUAL.
   // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
   // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
   // Aceptar una oferta física convierte en entregable un servicio que no lo era:
   // el backend aplica la misma regla al recibir.
-  const pedirEntrega = servicio?.tiene_entrega_fisica !== false || (ofertaAcepta === true && oferta?.es_fisico)
+  // Basta con que UNA de las aceptadas sea física.
+  const pedirEntrega = servicio?.tiene_entrega_fisica !== false ||
+                       ofertas.some(of => ofertaResp[of.id] === true && of.es_fisico)
   // Cuando aplica, los datos esenciales son obligatorios para enviar.
   const CAMPOS_ENTREGA_REQ = ['direccion', 'recibe', 'telefono']
   const entregaReqOk = !pedirEntrega || CAMPOS_ENTREGA_REQ.every(k => String(entrega[k] || '').trim())
   const mascota      = servicio?.mascota || 'tu mascota'
   // Un recordatorio declinado ("no deseo") cuenta como resuelto: no exige fotos.
   const todoListo    = items.every(it => declinados.has(it.id) || itemListo(it, fotos, textos))
-  // La oferta está resuelta si dijo que no, o si dijo que sí y ya subió lo suyo.
-  const ofertaListo  = !oferta || ofertaAcepta === false ||
-                       (ofertaAcepta === true && recListo(oferta.recordatorio, ofertaFotos, ofertaTextos))
+  // Una oferta está resuelta si dijo que no, o si dijo que sí y ya subió lo suyo.
+  function ofertaResuelta(of) {
+    const r = ofertaResp[of.id]
+    if (r === false) return true
+    if (r === true)  return recListo(of.recordatorio, ofertaFotos[of.id] || [], ofertaTextos[of.id] || {})
+    return false
+  }
+  const ofertasListas   = ofertas.every(ofertaResuelta)
+  const faltaResponder  = ofertas.some(of => ofertaResp[of.id] == null)
+  const ofertaActualListo = !ofertaActual || ofertaResuelta(ofertaActual)
+  const respActual      = ofertaActual ? ofertaResp[ofertaActual.id] : undefined
   // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
-  const puedeEnviar  = todoListo && ofertaListo && entregaReqOk
+  const puedeEnviar  = todoListo && ofertasListas && entregaReqOk
+
+  // Responder un anuncio. Al aceptar se inicializa su captura de fotos.
+  function responderOferta(of, v) {
+    setOfertaResp(p => ({ ...p, [of.id]: v }))
+    if (v) setOfertaFotos(p => (p[of.id]?.length ? p : { ...p, [of.id]: iniFotos(of.recordatorio) }))
+  }
 
   function toggleDeclinado(id, v) {
     setDeclinados(prev => { const n = new Set(prev); v ? n.add(id) : n.delete(id); return n })
@@ -139,11 +160,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
       setItems(it)
       setDeclinados(new Set())
 
-      // Oferta (puede no venir: backend viejo, o ninguna aplica a este plan)
-      setOferta(r.oferta || null)
-      setOfertaAcepta(null)
-      setOfertaFotos([])
-      setOfertaTextos(iniTextos(r.oferta?.recordatorio))
+      // Ofertas (pueden no venir: backend viejo, o ninguna aplica a este plan).
+      // `oferta` singular es la forma vieja del backend — se acepta por si el
+      // portal se despliega antes que el contenedor.
+      const ofs = Array.isArray(r.ofertas) ? r.ofertas : (r.oferta ? [r.oferta] : [])
+      setOfertas(ofs)
+      setOfertaResp({})
+      setOfertaFotos({})
+      setOfertaTextos(Object.fromEntries(ofs.map(of => [of.id, iniTextos(of.recordatorio)])))
 
       const fi = {}
       it.forEach(item => {
@@ -214,21 +238,24 @@ export default function FotosCliente({ codigo: codigoProp }) {
         recordatorios.push({ sr_id: item.id, urls, textos: textos[item.id] || {} })
       }
 
-      // Oferta: el navegador solo dice SÍ o NO. El precio y el ítem los resuelve
-      // el backend contra la tabla `ofertas` — aquí nunca viaja un monto.
-      let ofertaPayload
-      if (oferta && ofertaAcepta !== null) {
+      // Ofertas: el navegador solo dice SÍ o NO en cada una. El precio y el ítem
+      // los resuelve el backend contra la tabla `ofertas` — aquí nunca viaja un
+      // monto.
+      const ofertasPayload = []
+      for (const of of ofertas) {
+        const resp = ofertaResp[of.id]
+        if (resp == null) continue
         const urlsOferta = []
-        if (ofertaAcepta) {
-          for (const f of ofertaFotos.filter(Boolean))
-            urlsOferta.push(await subirArchivo(`oferta-${oferta.id}`, f))
+        if (resp === true) {
+          for (const f of (ofertaFotos[of.id] || []).filter(Boolean))
+            urlsOferta.push(await subirArchivo(`oferta-${of.id}`, f))
         }
-        ofertaPayload = {
-          oferta_id: oferta.id,
-          acepta:    ofertaAcepta === true,
+        ofertasPayload.push({
+          oferta_id: of.id,
+          acepta:    resp === true,
           urls:      urlsOferta,
-          textos:    ofertaAcepta ? ofertaTextos : {},
-        }
+          textos:    resp === true ? (ofertaTextos[of.id] || {}) : {},
+        })
       }
 
       const entregaLlena = Object.values(entrega).some(v => String(v).trim())
@@ -239,7 +266,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
         anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
         entrega: entregaLlena ? entrega : undefined,
-        oferta: ofertaPayload,
+        ofertas: ofertasPayload.length ? ofertasPayload : undefined,
+        // Compat: un backend viejo solo entiende `oferta` (singular). El nuevo
+        // ignora esta clave cuando `ofertas` viene como array, así que mandar
+        // ambas hace que el orden de despliegue no importe.
+        oferta: ofertasPayload[0],
       }
       const r = await portalRecibir(codigo, payload)
       if (r.ok || r.ya_recibido) { setFase('enviado'); return }
@@ -280,7 +311,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
 
   // ── WIZARD ────────────────────────────────────────────────────────────────
-  const pasosVisibles = items.length + (oferta ? 1 : 0)
+  const pasosVisibles = items.length + ofertas.length
   return (
     <div className="min-h-screen flex flex-col" style={{ background: BG }}>
       <header className="sticky top-0 z-20 bg-white shadow-sm border-b" style={{ borderColor: BORD }}>
@@ -323,19 +354,18 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   onToggleDeclined={v => toggleDeclinado(itemActual.id, v)}
                 />
               )}
-              {enOferta && (
+              {ofertaActual && (
                 <PasoOferta
-                  oferta={oferta}
+                  key={ofertaActual.id}
+                  oferta={ofertaActual}
                   mascota={mascota}
-                  acepta={ofertaAcepta}
-                  onResponder={v => {
-                    setOfertaAcepta(v)
-                    if (v && ofertaFotos.length === 0) setOfertaFotos(iniFotos(oferta.recordatorio))
-                  }}
-                  files={ofertaFotos}
-                  textosVals={ofertaTextos}
-                  onFilesChange={setOfertaFotos}
-                  onTextosChange={setOfertaTextos}
+                  acepta={respActual ?? null}
+                  orden={ofertas.length > 1 ? { i: ofertaIdx + 1, total: ofertas.length } : null}
+                  onResponder={v => responderOferta(ofertaActual, v)}
+                  files={ofertaFotos[ofertaActual.id] || []}
+                  textosVals={ofertaTextos[ofertaActual.id] || {}}
+                  onFilesChange={f => setOfertaFotos(p => ({ ...p, [ofertaActual.id]: f }))}
+                  onTextosChange={v => setOfertaTextos(p => ({ ...p, [ofertaActual.id]: v }))}
                 />
               )}
               {esFinal && (
@@ -347,8 +377,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
                   entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}
-                  oferta={oferta} ofertaAcepta={ofertaAcepta}
-                  onIrOferta={() => ir(pasoOferta)}
+                  ofertas={ofertas} ofertaResp={ofertaResp}
+                  onIrOferta={of => ir(pasoDeOferta(of))}
                   onGoTo={ir}
                 />
               )}
@@ -365,9 +395,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                   {!todoListo
                     ? 'Completa todas las fotos y datos requeridos para poder enviar.'
-                    : !ofertaListo
-                      ? (ofertaAcepta === null
-                          ? 'Responde si deseas la oferta para poder enviar.'
+                    : !ofertasListas
+                      ? (faltaResponder
+                          ? `Responde si deseas ${ofertas.length > 1 ? 'las ofertas' : 'la oferta'} para poder enviar.`
                           : 'Falta subir la foto del recordatorio que aceptaste.')
                       : 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'}
                 </p>
@@ -383,11 +413,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
           ) : (
             <>
               {enOferta ? (
-                ofertaAcepta === null ? (
+                respActual == null ? (
                   <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                     Elige si deseas esta oferta para continuar.
                   </p>
-                ) : !ofertaListo && (
+                ) : !ofertaActualListo && (
                   <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                     Sube la foto de tu nuevo recordatorio para continuar.
                   </p>
@@ -398,11 +428,13 @@ export default function FotosCliente({ codigo: codigoProp }) {
                 </p>
               )}
               <motion.button onClick={siguiente}
-                disabled={enOferta ? (ofertaAcepta === null || !ofertaListo) : !itemActualListo}
+                disabled={enOferta ? (respActual == null || !ofertaActualListo) : !itemActualListo}
                 whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
                 style={{ background: G }}>
-                {paso === pasosVisibles - 1 ? 'Revisar y enviar →' : 'Siguiente recordatorio →'}
+                {paso === pasosVisibles - 1
+                  ? 'Revisar y enviar →'
+                  : (paso + 1 >= items.length ? 'Siguiente →' : 'Siguiente recordatorio →')}
               </motion.button>
             </>
           )}
@@ -421,10 +453,10 @@ export default function FotosCliente({ codigo: codigoProp }) {
           mascota={mascota}
           items={items} fotos={fotos} declinados={declinados}
           entrega={entrega} pedirEntrega={pedirEntrega}
-          oferta={oferta} ofertaAcepta={ofertaAcepta}
+          ofertas={ofertas} ofertaResp={ofertaResp}
           onCancelar={() => setConfirmando(false)}
           onCorregirEntrega={() => { setConfirmando(false); ir(totalPasos - 1) }}
-          onQuieroOferta={() => { setConfirmando(false); ir(pasoOferta) }}
+          onQuieroOferta={of => { setConfirmando(false); ir(pasoDeOferta(of)) }}
           onConfirmado={guardar}
         />
       )}
@@ -706,7 +738,7 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
 // ── PasoOferta ───────────────────────────────────────────────────────────────
 // El anuncio. Sin presión: se explica, se muestra el precio y el cliente decide.
 // Si acepta, se abre debajo la misma captura de fotos/textos que los demás.
-function PasoOferta({ oferta, mascota, acepta, onResponder, files, textosVals, onFilesChange, onTextosChange }) {
+function PasoOferta({ oferta, mascota, acepta, orden, onResponder, files, textosVals, onFilesChange, onTextosChange }) {
   const rec   = oferta.recordatorio
   const lista = oferta.precio_lista
   const hayDescuento = lista != null && Number(lista) > Number(oferta.precio_oferta)
@@ -715,7 +747,7 @@ function PasoOferta({ oferta, mascota, acepta, onResponder, files, textosVals, o
     <div className="space-y-6">
       <div>
         <p className="text-[13px] font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5" style={{ color: '#9DBD9D' }}>
-          <Gift size={14} /> Una propuesta para ti
+          <Gift size={14} /> {orden ? `Propuesta ${orden.i} de ${orden.total}` : 'Una propuesta para ti'}
         </p>
         <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{oferta.titulo}</h2>
       </div>
@@ -782,7 +814,7 @@ function PasoOferta({ oferta, mascota, acepta, onResponder, files, textosVals, o
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, oferta, ofertaAcepta, onIrOferta, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, ofertas, ofertaResp, onIrOferta, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
@@ -825,31 +857,39 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
         </div>
       )}
 
-      {/* Resumen de la oferta: qué respondió y cuánto suma si la aceptó */}
-      {oferta && (
-        <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: ofertaAcepta === true ? G : BORD }}>
+      {/* Resumen de las ofertas: qué respondió en cada una y cuánto suma */}
+      {ofertas.length > 0 && (
+        <div className="bg-white rounded-2xl border overflow-hidden"
+          style={{ borderColor: ofertas.some(of => ofertaResp[of.id] === true) ? G : BORD }}>
           <div className="px-5 py-3 border-b" style={{ borderColor: BORD }}>
-            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>Oferta</p>
+            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>
+              {ofertas.length > 1 ? 'Ofertas' : 'Oferta'}
+            </p>
           </div>
-          <div className="flex items-center gap-4 px-5 py-4">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-              style={{ background: ofertaAcepta === true ? G : '#E5E7EB' }}>
-              {ofertaAcepta === true
-                ? <Check size={16} color="#fff" strokeWidth={3} />
-                : <X size={15} color="#6B7280" strokeWidth={3} />}
-            </div>
-            <span className="flex-1 text-[15px] leading-tight text-gray-800">
-              {oferta.titulo}
-              <span className="block text-[12px] font-semibold mt-0.5" style={{ color: ofertaAcepta === true ? G : '#9CA3AF' }}>
-                {ofertaAcepta === true
-                  ? `Aceptada · ${pesos(oferta.precio_oferta)} se suman a tu servicio`
-                  : 'No la deseas'}
-              </span>
-            </span>
-            <button onClick={onIrOferta} className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all flex-shrink-0" style={{ background: G_LITE, color: G }}>
-              {ofertaAcepta === true ? 'Editar' : 'Ver'}
-            </button>
-          </div>
+          {ofertas.map((of, i) => {
+            const acepta = ofertaResp[of.id]
+            return (
+              <div key={of.id} className={`flex items-center gap-4 px-5 py-4 ${i > 0 ? 'border-t' : ''}`} style={{ borderColor: BORD }}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ background: acepta === true ? G : '#E5E7EB' }}>
+                  {acepta === true
+                    ? <Check size={16} color="#fff" strokeWidth={3} />
+                    : <X size={15} color="#6B7280" strokeWidth={3} />}
+                </div>
+                <span className="flex-1 text-[15px] leading-tight text-gray-800">
+                  {of.titulo}
+                  <span className="block text-[12px] font-semibold mt-0.5" style={{ color: acepta === true ? G : '#9CA3AF' }}>
+                    {acepta === true
+                      ? `Aceptada · ${pesos(of.precio_oferta)} se suman a tu servicio`
+                      : acepta === false ? 'No la deseas' : 'Sin responder'}
+                  </span>
+                </span>
+                <button onClick={() => onIrOferta(of)} className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all flex-shrink-0" style={{ background: G_LITE, color: G }}>
+                  {acepta === true ? 'Editar' : 'Ver'}
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -970,15 +1010,18 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
 // Tres preguntas, una a la vez, en el orden que pidió David:
 //   1. ¿Subiste todas las fotos?
 //   2. ¿Los datos de entrega están correctos?  (solo si hay entrega física)
-//   3. ¿Confirmas que NO quieres la oferta?    (solo si la rechazó)
+//   3. ¿Confirmas que NO quieres la oferta?    (una por cada oferta rechazada)
 // Cada una permite devolverse a corregir en vez de seguir de largo.
-function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedirEntrega, oferta, ofertaAcepta, onCancelar, onCorregirEntrega, onQuieroOferta, onConfirmado }) {
-  const pasos = ['fotos']
-  if (pedirEntrega) pasos.push('entrega')
-  if (oferta && ofertaAcepta !== true) pasos.push('oferta')
+function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedirEntrega, ofertas, ofertaResp, onCancelar, onCorregirEntrega, onQuieroOferta, onConfirmado }) {
+  const aceptadas  = ofertas.filter(of => ofertaResp[of.id] === true)
+  const rechazadas = ofertas.filter(of => ofertaResp[of.id] !== true)
+  const pasos = [{ tipo: 'fotos' }]
+  if (pedirEntrega) pasos.push({ tipo: 'entrega' })
+  // Última oportunidad, una por cada anuncio que declinó.
+  for (const of of rechazadas) pasos.push({ tipo: 'oferta', oferta: of })
 
   const [idx, setIdx] = useState(0)
-  const actual = pasos[idx]
+  const actual = pasos[idx] || pasos[0]
   const esUltimo = idx === pasos.length - 1
 
   function avanzar() {
@@ -996,13 +1039,13 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
 
         <div className="px-6 pt-6 pb-2 flex items-center gap-2">
           {pasos.map((p, i) => (
-            <div key={p} className="h-1.5 flex-1 rounded-full transition-colors"
+            <div key={`${p.tipo}-${p.oferta?.id || ''}`} className="h-1.5 flex-1 rounded-full transition-colors"
               style={{ background: i <= idx ? G : '#E5E7EB' }} />
           ))}
         </div>
 
         <div className="p-6 pt-4 space-y-5">
-          {actual === 'fotos' && (
+          {actual.tipo === 'fotos' && (
             <>
               <div className="text-center">
                 <div className="text-4xl mb-2">📸</div>
@@ -1025,20 +1068,20 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
                     </div>
                   )
                 })}
-                {oferta && ofertaAcepta === true && (
-                  <div className="flex items-center justify-between px-4 py-3" style={{ borderColor: BORD }}>
-                    <span className="text-[14px] text-gray-700">{oferta.recordatorio.nombre}</span>
+                {aceptadas.map(of => (
+                  <div key={of.id} className="flex items-center justify-between px-4 py-3" style={{ borderColor: BORD }}>
+                    <span className="text-[14px] text-gray-700">{of.recordatorio.nombre}</span>
                     <span className="text-[13px] font-bold" style={{ color: G }}>Listo</span>
                   </div>
-                )}
-                {items.length === 0 && !oferta && (
+                ))}
+                {items.length === 0 && ofertas.length === 0 && (
                   <div className="px-4 py-3 text-[13px] text-gray-400 text-center">Este servicio no requiere fotos.</div>
                 )}
               </div>
             </>
           )}
 
-          {actual === 'entrega' && (
+          {actual.tipo === 'entrega' && (
             <>
               <div className="text-center">
                 <div className="text-4xl mb-2">📦</div>
@@ -1063,7 +1106,7 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
             </>
           )}
 
-          {actual === 'oferta' && (
+          {actual.tipo === 'oferta' && (
             <>
               <div className="text-center">
                 <div className="text-4xl mb-2">🎁</div>
@@ -1073,15 +1116,15 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
                 </p>
               </div>
               <div className="rounded-2xl border overflow-hidden" style={{ borderColor: BORD }}>
-                {oferta.imagen_url && (
-                  <img src={oferta.imagen_url} alt="" className="w-full object-cover" style={{ aspectRatio: '16/9' }} />
+                {actual.oferta.imagen_url && (
+                  <img src={actual.oferta.imagen_url} alt="" className="w-full object-cover" style={{ aspectRatio: '16/9' }} />
                 )}
                 <div className="p-4">
-                  <p className="text-[15px] font-bold text-gray-900">{oferta.titulo}</p>
-                  <p className="text-[17px] font-bold mt-1" style={{ color: G }}>{pesos(oferta.precio_oferta)}</p>
+                  <p className="text-[15px] font-bold text-gray-900">{actual.oferta.titulo}</p>
+                  <p className="text-[17px] font-bold mt-1" style={{ color: G }}>{pesos(actual.oferta.precio_oferta)}</p>
                 </div>
               </div>
-              <button onClick={onQuieroOferta}
+              <button onClick={() => onQuieroOferta(actual.oferta)}
                 className="w-full py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
                 style={{ borderColor: G, color: G, background: G_LITE }}>
                 Mejor sí la quiero

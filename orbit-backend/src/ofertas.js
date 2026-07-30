@@ -1,9 +1,9 @@
 // Ofertas del portal de fotos — reglas canónicas server-side.
 //
-// El cliente que carga las imágenes de su mascota ve UN anuncio (el de mayor
-// prioridad que aplique a su plan) y decide sí/no. Si acepta, al enviar el
-// formulario el recordatorio ofertado se agrega al servicio como adicional y se
-// cobra al precio de la oferta.
+// El cliente que carga las imágenes de su mascota ve hasta MAX_OFERTAS_PORTAL
+// anuncios (los de mayor prioridad que apliquen a su plan) y decide sí/no en
+// cada uno. Por cada una que acepte, al enviar el formulario el recordatorio
+// ofertado se agrega al servicio como adicional y se cobra al precio de oferta.
 //
 // Frase rectora: **el precio nunca viene del navegador**. El portal solo manda
 // `oferta_id` y `acepta`; el monto, el recordatorio y la elegibilidad se
@@ -15,7 +15,16 @@ import { pideDatosCliente, requiereImagen } from './reglas-imagenes.js'
 const MOD = 'OFERTAS'
 
 /**
- * Oferta que le corresponde a un servicio, o null.
+ * Tope de anuncios que ve un cliente en una sesión del portal.
+ *
+ * Decisión de producto: es un momento sensible (acaba de perder a su mascota),
+ * así que se muestran POCOS y los de mayor prioridad — no todo el catálogo.
+ * Subir este número satura al cliente y baja la conversión de las demás.
+ */
+export const MAX_OFERTAS_PORTAL = 2
+
+/**
+ * Ofertas que le corresponden a un servicio (array, puede venir vacío).
  *
  * Filtros (todos obligatorios):
  *  - oferta y recordatorio activos, dentro de vigencia (fecha de Bogotá)
@@ -23,11 +32,13 @@ const MOD = 'OFERTAS'
  *  - el cliente NO respondió antes esta oferta (uq servicio+oferta)
  *  - el servicio NO tiene ya ese recordatorio (no se vende lo que ya se lleva)
  *
- * Solo devuelve la primera por `orden` — decisión de producto: un anuncio, en un
- * momento sensible para el cliente.
+ * Devuelve las primeras `limite` por `orden`. El tope es server-side a
+ * propósito: el navegador no decide cuántos anuncios ve ni cuáles.
  */
-export async function ofertaParaServicio(client, servicioId, planId) {
-  if (!planId) return null
+export async function ofertasParaServicio(client, servicioId, planId, limite = MAX_OFERTAS_PORTAL) {
+  if (!planId) return []
+  const tope = Math.max(0, Math.min(parseInt(limite) || 0, MAX_OFERTAS_PORTAL))
+  if (!tope) return []
   const { rows } = await client.query(
     `SELECT o.id, o.titulo, o.descripcion, o.imagen_url,
             o.precio_oferta, o.precio_lista, o.recordatorio_id,
@@ -52,12 +63,14 @@ export async function ofertaParaServicio(client, servicioId, planId) {
                            AND COALESCE(sr.origen,'') <> 'REMOVIDO'
                            AND sr.estado <> 'NA')
       ORDER BY o.orden ASC, o.created_at ASC
-      LIMIT 1`,
-    [servicioId, planId]
+      LIMIT $3`,
+    [servicioId, planId, tope]
   )
-  const o = rows[0]
-  if (!o) return null
+  return rows.map(mapearOferta)
+}
 
+/** Fila cruda de `ofertas` + `recordatorios` → forma que consume el portal. */
+function mapearOferta(o) {
   const recordatorio = {
     id: o.recordatorio_id,
     nombre: o.rec_nombre,

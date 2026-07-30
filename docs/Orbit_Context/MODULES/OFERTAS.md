@@ -36,10 +36,12 @@ Bucket de Storage **`ofertas`** (público, 5 MB, jpeg/png/webp) para la foto del
 portal es anónimo y debe poder leerla. Las tablas NO se exponen a `anon` — las lee el
 backend propio con conexión directa a Postgres.
 
-## Qué oferta ve un servicio
+## Qué ofertas ve un servicio
 
-`ofertaParaServicio()` en `orbit-backend/src/ofertas.js` devuelve **una sola** (decisión de
-producto: un anuncio, en un momento sensible). Filtros, todos obligatorios:
+`ofertasParaServicio()` en `orbit-backend/src/ofertas.js` devuelve **hasta
+`MAX_OFERTAS_PORTAL` = 2** (decisión de producto: pocos anuncios, en un momento sensible).
+El tope es server-side: el navegador no decide cuántos ve ni cuáles. Filtros, todos
+obligatorios:
 
 1. Oferta y recordatorio **activos** y dentro de vigencia (`fn_hoy_bogota()`).
 2. El plan del servicio está en `oferta_planes`, o `aplica_todos_planes`.
@@ -75,10 +77,12 @@ exigir los datos de entrega, y el backend aplica la misma regla al recibir.
 
 ## El portal (`src/pages/FotosCliente.jsx`)
 
-El anuncio es **un paso propio del wizard**, entre los recordatorios del plan y la revisión
-final. Si el cliente acepta, se abre debajo la misma captura de fotos/textos que los demás
-ítems (componente compartido `CapturaRecordatorio`). No se puede avanzar sin responder, ni
-sin completar lo que el recordatorio aceptado pide.
+Cada anuncio es **un paso propio del wizard**, uno tras otro entre los recordatorios del
+plan y la revisión final (con "Propuesta 1 de 2" cuando hay más de uno). Si el cliente
+acepta, se abre debajo la misma captura de fotos/textos que los demás ítems (componente
+compartido `CapturaRecordatorio`). No se puede avanzar sin responder, ni sin completar lo
+que el recordatorio aceptado pide. El cliente puede aceptar una, las dos o ninguna: las
+respuestas van indexadas por id de oferta (`ofertaResp`, `ofertaFotos`, `ofertaTextos`).
 
 Las fotos del ítem aceptado se suben a `servicioId/oferta-<ofertaId>/uuid.ext` — el segundo
 segmento es un marcador porque el `servicio_recordatorios` todavía no existe (lo crea el
@@ -91,8 +95,16 @@ Al pulsar "Enviar" aparece una secuencia de confirmaciones, una a la vez:
 
 1. **¿Subiste todas las fotos?** — con el resumen ítem por ítem.
 2. **¿Los datos de entrega están correctos?** — solo si hay entrega física; permite volver a corregirlos.
-3. **¿Confirmas que NO deseas la oferta?** — solo si la rechazó; con botón "Mejor sí la quiero"
-   que devuelve al paso del anuncio.
+3. **¿Confirmas que NO deseas la oferta?** — **una pregunta por cada oferta rechazada**; con
+   botón "Mejor sí la quiero" que devuelve al paso de ESE anuncio.
+
+### Compatibilidad con PWA en caché
+
+El portal vive en una PWA que puede estar cacheada en el teléfono del cliente, así que las
+dos formas conviven en ambos sentidos: `datosPortal` devuelve `ofertas` (array) **y**
+`oferta` (la primera) para que una app vieja siga mostrando una; y `recibirImagenesPortal`
+acepta `payload.ofertas` (array) o `payload.oferta` (objeto suelto). El portal nuevo manda
+las dos claves, de modo que el orden de despliegue backend/frontend no importa.
 
 ## Dónde se ve el resultado
 

@@ -15,7 +15,7 @@ import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
 } from './reglas-imagenes.js'
 import {
-  ofertaParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
+  ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
 } from './ofertas.js'
 import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
 
@@ -299,11 +299,12 @@ export async function datosPortal({ codigo }) {
     )
     const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
 
-    // Anuncio que le corresponde a este servicio (uno solo, el de mayor
-    // prioridad). Si acepta, el portal habilita la carga de SU recordatorio.
-    const oferta = (yaRecibido || fueraDeVentana)
-      ? null
-      : await ofertaParaServicio(client, s.id, s.plan_id)
+    // Anuncios que le corresponden a este servicio (los de mayor prioridad,
+    // con tope server-side). Por cada uno que acepte, el portal habilita la
+    // carga de SU recordatorio.
+    const ofertas = (yaRecibido || fueraDeVentana)
+      ? []
+      : await ofertasParaServicio(client, s.id, s.plan_id)
 
     return { status: 200, body: {
       ok: true,
@@ -312,7 +313,11 @@ export async function datosPortal({ codigo }) {
       tiene_entrega_fisica: tieneEntregaFisica,
       servicio: { id: s.id, mascota: s.mascota, especie: s.especie, plan: s.plan, tipo_proceso: s.tipo_proceso, estado: s.estado },
       items,
-      oferta,
+      ofertas,
+      // Compat: las PWA en caché leen `oferta` (singular) y solo saben mostrar
+      // una. Mientras siga viva alguna versión vieja, se les manda la primera
+      // en vez de dejarlas sin anuncio.
+      oferta: ofertas[0] || null,
       limites: { max_mb: parseInt(config.max_mb) || 8, mimes: config.mimes_permitidos || [] },
     } }
   } finally { client.release() }
@@ -373,13 +378,28 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       (payload.declinados || []).map(String).filter(id => items.some(it => String(it.sr_id) === id))
     )
 
-    // Oferta: se re-resuelve contra la DB. Del payload solo se toma el `acepta`
-    // (y el id, para descartar respuestas a un anuncio que ya no aplica). El
-    // precio y el recordatorio salen de la tabla `ofertas`, nunca del navegador.
-    const oferta   = await ofertaParaServicio(client, s.id, s.plan_id)
-    const ofPay    = payload.oferta && typeof payload.oferta === 'object' ? payload.oferta : null
-    const ofValida = !!(oferta && ofPay && String(ofPay.oferta_id) === String(oferta.id))
-    const ofAcepta = ofValida && ofPay.acepta === true
+    // Ofertas: se re-resuelven contra la DB. Del payload solo se toma el
+    // `acepta` (y el id, para casar cada respuesta con su anuncio y descartar
+    // las que ya no aplican). El precio y el recordatorio salen de la tabla
+    // `ofertas`, nunca del navegador.
+    const ofertas = await ofertasParaServicio(client, s.id, s.plan_id)
+    // `ofertas` (array) es la forma nueva; `oferta` (objeto) la manda una PWA
+    // en caché que solo conoce un anuncio. Se aceptan ambas.
+    const ofPayLista = Array.isArray(payload.ofertas)
+      ? payload.ofertas
+      : (payload.oferta && typeof payload.oferta === 'object' ? [payload.oferta] : [])
+    const ofPayPorId = new Map(
+      ofPayLista
+        .filter(e => e && typeof e === 'object' && e.oferta_id != null)
+        .map(e => [String(e.oferta_id), e])
+    )
+    // Solo cuentan las respuestas a un anuncio que HOY le corresponde al
+    // servicio: así un id inventado (o vencido) no crea una venta.
+    const respuestas = ofertas
+      .map(of => ({ oferta: of, entry: ofPayPorId.get(String(of.id)) }))
+      .filter(r => !!r.entry)
+      .map(r => ({ ...r, acepta: r.entry.acepta === true }))
+    const aceptadas = respuestas.filter(r => r.acepta)
 
     // Validar completitud server-side (carga parcial NO pasa a Producción).
     // Los declinados se omiten: no requieren imágenes ni textos.
@@ -389,9 +409,11 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       const entry = entradas.get(String(item.sr_id))
       if (!itemCompleto(item, entry, s.id)) faltantes.push(item.recordatorio.nombre)
     }
-    // Si aceptó la oferta, su recordatorio se exige igual que los del plan: no
-    // se cobra un adicional que después Producción no puede fabricar.
-    if (ofAcepta && !ofertaCompleta(oferta, ofPay, s.id)) faltantes.push(oferta.recordatorio.nombre)
+    // Cada oferta aceptada exige su recordatorio igual que los del plan: no se
+    // cobra un adicional que después Producción no puede fabricar.
+    for (const r of aceptadas) {
+      if (!ofertaCompleta(r.oferta, r.entry, s.id)) faltantes.push(r.oferta.recordatorio.nombre)
+    }
     if (faltantes.length) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'incompleto', faltantes } }
@@ -415,7 +437,9 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     )
     // Aceptar una oferta física convierte en entregable un servicio que no lo
     // era (p.ej. eco-grupal, todo digital): entonces sí hay que pedir la entrega.
-    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true || (ofAcepta && oferta.es_fisico)
+    // Basta con que UNA de las aceptadas sea física.
+    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true ||
+                               aceptadas.some(r => r.oferta.es_fisico)
     if (tieneEntregaFisica && (!entrega || !entrega.direccion || !entrega.recibe || !entrega.telefono)) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
@@ -449,14 +473,21 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       )
     }
 
-    // Respuesta a la oferta. Aceptar = venta: crea el adicional con sus fotos,
+    // Respuesta a cada oferta. Aceptar = venta: crea el adicional con sus fotos,
     // suma al total y recalcula estado_pago (ver ofertas.js). Rechazar solo deja
     // el registro para medir conversión. En ambos casos el UNIQUE
     // (servicio, oferta) impide cobrar dos veces si el cliente reenvía.
-    let ofertaSrId = null
-    if (ofValida) {
-      if (ofAcepta) ofertaSrId = await aplicarOfertaAceptada(client, { servicioId: s.id, oferta, entry: ofPay })
-      else          await registrarRechazoOferta(client, { servicioId: s.id, oferta })
+    // Van en serie, no en Promise.all: comparten la transacción y cada
+    // aplicación suma sobre el `valor_total` que dejó la anterior.
+    const ofertaSrIds = []
+    for (const r of respuestas) {
+      if (r.acepta) {
+        ofertaSrIds.push(
+          await aplicarOfertaAceptada(client, { servicioId: s.id, oferta: r.oferta, entry: r.entry })
+        )
+      } else {
+        await registrarRechazoOferta(client, { servicioId: s.id, oferta: r.oferta })
+      }
     }
 
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
@@ -523,8 +554,15 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
 
     await client.query('COMMIT')
     log('[imagenes/recibir]', cod, 'RECIBIDO', items.length, 'items',
-        ofValida ? `oferta=${ofAcepta ? 'ACEPTADA' : 'RECHAZADA'}` : '')
-    return { status: 200, body: { ok: true, recibido: true, items: items.length, oferta_aceptada: !!ofertaSrId } }
+        respuestas.length
+          ? `ofertas=${respuestas.map(r => `${r.oferta.titulo}:${r.acepta ? 'ACEPTADA' : 'RECHAZADA'}`).join(', ')}`
+          : '')
+    return { status: 200, body: {
+      ok: true, recibido: true, items: items.length,
+      ofertas_aceptadas: ofertaSrIds.length,
+      // Compat con la PWA vieja, que lee el booleano.
+      oferta_aceptada: ofertaSrIds.length > 0,
+    } }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
