@@ -120,6 +120,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
   const puedeEnviar  = todoListo && ofertasListas && entregaReqOk
 
+  // ¿El anuncio vende algo que el cliente YA lleva en su plan? Se le ofrece
+  // igual (es "un recuerdo más"), pero conviene decírselo para que no crea que
+  // le estamos pidiendo dos veces la misma foto.
+  const ofertaRepetida = of =>
+    items.some(it => String(it.recordatorios?.id) === String(of.recordatorio?.id))
+
   // Responder un anuncio. Al aceptar se inicializa su captura de fotos.
   function responderOferta(of, v) {
     setOfertaResp(p => ({ ...p, [of.id]: v }))
@@ -361,6 +367,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   mascota={mascota}
                   acepta={respActual ?? null}
                   orden={ofertas.length > 1 ? { i: ofertaIdx + 1, total: ofertas.length } : null}
+                  yaLoTiene={ofertaRepetida(ofertaActual)}
                   onResponder={v => responderOferta(ofertaActual, v)}
                   files={ofertaFotos[ofertaActual.id] || []}
                   textosVals={ofertaTextos[ofertaActual.id] || {}}
@@ -738,7 +745,7 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
 // ── PasoOferta ───────────────────────────────────────────────────────────────
 // El anuncio. Sin presión: se explica, se muestra el precio y el cliente decide.
 // Si acepta, se abre debajo la misma captura de fotos/textos que los demás.
-function PasoOferta({ oferta, mascota, acepta, orden, onResponder, files, textosVals, onFilesChange, onTextosChange }) {
+function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, files, textosVals, onFilesChange, onTextosChange }) {
   const rec   = oferta.recordatorio
   const lista = oferta.precio_lista
   const hayDescuento = lista != null && Number(lista) > Number(oferta.precio_oferta)
@@ -764,6 +771,14 @@ function PasoOferta({ oferta, mascota, acepta, orden, onResponder, files, textos
             <span className="text-[26px] font-bold" style={{ color: G }}>{pesos(oferta.precio_oferta)}</span>
             {hayDescuento && <span className="text-[16px] text-gray-400 line-through">{pesos(lista)}</span>}
           </div>
+          {yaLoTiene && (
+            <div className="rounded-xl px-4 py-3" style={{ background: G_LITE }}>
+              <p className="text-[13px] leading-relaxed" style={{ color: G }}>
+                <strong>Sería un {rec.nombre} adicional</strong>, además del que ya viene en tu
+                plan — con la foto que tú elijas. Ideal si quieres uno para otro ser querido.
+              </p>
+            </div>
+          )}
           <p className="text-[13px] text-gray-500 leading-relaxed">
             Si lo aceptas, se agrega a los recuerdos de {mascota} y se cobra junto con tu servicio
             al momento de la entrega. Si prefieres que no, no pasa nada.

@@ -30,7 +30,14 @@ export const MAX_OFERTAS_PORTAL = 2
  *  - oferta y recordatorio activos, dentro de vigencia (fecha de Bogotá)
  *  - el plan del servicio está entre los planes elegidos (o aplica a todos)
  *  - el cliente NO respondió antes esta oferta (uq servicio+oferta)
- *  - el servicio NO tiene ya ese recordatorio (no se vende lo que ya se lleva)
+ *
+ * NO se descarta un recordatorio que el servicio ya lleva: la oferta es
+ * justamente "un recuerdo más" y vender un segundo igual es válido (decisión de
+ * David, 2026-07-30). Ya pasa en la operación normal — hay servicios con dos
+ * Tarjetas de oración, dos Cristales con foto, dos Huellas 3D — y ni la DB
+ * (sin UNIQUE sobre servicio+recordatorio) ni Producción se molestan.
+ * Qué NO conviene duplicar (un memorial digital, un reporte) se controla al
+ * crear la oferta: es la elección del recordatorio, no un filtro automático.
  *
  * Devuelve las primeras `limite` por `orden`. El tope es server-side a
  * propósito: el navegador no decide cuántos anuncios ve ni cuáles.
@@ -57,11 +64,6 @@ export async function ofertasParaServicio(client, servicioId, planId, limite = M
                          WHERE op.oferta_id = o.id AND op.plan_id = $2))
         AND NOT EXISTS (SELECT 1 FROM public.oferta_respuestas resp
                          WHERE resp.servicio_id = $1 AND resp.oferta_id = o.id)
-        AND NOT EXISTS (SELECT 1 FROM public.servicio_recordatorios sr
-                         WHERE sr.servicio_id = $1
-                           AND sr.recordatorio_id = o.recordatorio_id
-                           AND COALESCE(sr.origen,'') <> 'REMOVIDO'
-                           AND sr.estado <> 'NA')
       ORDER BY o.orden ASC, o.created_at ASC
       LIMIT $3`,
     [servicioId, planId, tope]
