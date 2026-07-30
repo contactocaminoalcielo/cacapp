@@ -46,7 +46,13 @@ obligatorios:
 1. Oferta y recordatorio **activos** y dentro de vigencia (`fn_hoy_bogota()`).
 2. El plan del servicio está en `oferta_planes`, o `aplica_todos_planes`.
 3. El cliente **no respondió antes** esa oferta.
-4. El servicio **no tiene ya** ese recordatorio (no se vende lo que ya se lleva).
+
+**Sí se ofrece un recordatorio que el servicio ya lleva.** La oferta es "un recuerdo más" y
+vender un segundo igual es válido; no hay UNIQUE sobre (servicio, recordatorio) y en la
+operación ya hay servicios con dos Tarjetas de oración o dos Cristales con foto. Lo que no
+conviene duplicar (un memorial digital, un reporte) se controla **al elegir el recordatorio
+de la oferta**, no con un filtro automático. Cuando el ítem ya está en el plan, el portal se
+lo aclara al cliente ("sería un X adicional, además del que ya viene en tu plan").
 
 Orden: `orden ASC, created_at ASC`.
 
