@@ -112,9 +112,28 @@ dos formas conviven en ambos sentidos: `datosPortal` devuelve `ofertas` (array) 
 acepta `payload.ofertas` (array) o `payload.oferta` (objeto suelto). El portal nuevo manda
 las dos claves, de modo que el orden de despliegue backend/frontend no importa.
 
+## Vistas del anuncio (migración 081)
+
+`oferta_vistas` — una fila por **(servicio, oferta)**, escrita por `registrarVistasOfertas()`
+desde `datosPortal` cada vez que el portal devuelve el anuncio:
+
+- **filas** = a cuántos servicios distintos les llegó → es la base de la conversión.
+- **`vistas`** = aperturas del portal (el cliente puede recargar) → dato secundario, va en el
+  tooltip.
+
+Es **best-effort** (`try/catch` que se traga el error): medir no puede romperle el portal a un
+cliente que está subiendo las fotos de su mascota. La migración siembra la tabla con las
+respuestas ya existentes —quien respondió, vio— para que el tablero no arranque en el
+imposible "0 vistas, 5 respuestas".
+
+⚠️ La vista se cuenta **al abrir el link**, no al llegar al paso del anuncio: quien abandona
+antes también suma. Es lo que se quiso medir ("cuántos abrieron el link"), pero conviene
+recordarlo al leer la conversión.
+
 ## Dónde se ve el resultado
 
-- **Módulo Ofertas**: aceptadas / rechazadas / conversión por oferta y el detalle de quién respondió.
+- **Módulo Ofertas**: ojito con las vistas, aceptadas / rechazadas / conversión **sobre los que
+  vieron** por oferta, y el detalle de quién respondió.
 - **Kanban**: el adicional en la lista de recordatorios + la novedad en la ficha.
 - **Finanzas**: el servicio aparece con saldo pendiente por el nuevo total.
 - **Producción**: el ítem entra a la cola con sus fotos.
