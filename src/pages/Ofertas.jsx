@@ -85,8 +85,14 @@ export default function Ofertas() {
     const aceptadas  = ofertas.reduce((a, o) => a + o.stats.aceptadas, 0)
     const rechazadas = ofertas.reduce((a, o) => a + o.stats.rechazadas, 0)
     const vendido    = ofertas.reduce((a, o) => a + o.stats.aceptadas * (Number(o.precio_oferta) || 0), 0)
-    const vistas     = aceptadas + rechazadas
-    return { activas, aceptadas, rechazadas, vendido, conversion: vistas ? Math.round(aceptadas / vistas * 100) : null }
+    // La conversión se mide sobre quienes VIERON el anuncio (migración 081), no
+    // sobre quienes respondieron: el que abre el link y abandona también cuenta,
+    // y es justo el que explica una oferta que no vende.
+    const vistas     = ofertas.reduce((a, o) => a + o.stats.vistas, 0)
+    const base       = vistas || (aceptadas + rechazadas)
+    return { activas, aceptadas, rechazadas, vendido, vistas,
+             sinResponder: Math.max(0, vistas - aceptadas - rechazadas),
+             conversion: base ? Math.round(aceptadas / base * 100) : null }
   }, [ofertas])
 
   async function borrar(o) {
@@ -115,8 +121,10 @@ export default function Ofertas() {
       <Topbar />
       <div className="p-4 sm:p-7 space-y-6">
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <StatCard label="Ofertas activas"   value={totales.activas}    icon={Tag} />
+          <StatCard label="La vieron"          value={totales.vistas} icon={Eye}
+                    sub={totales.sinResponder > 0 ? `${totales.sinResponder} sin responder` : null} />
           <StatCard label="Aceptadas"          value={totales.aceptadas}  icon={CheckCircle2} valueColor="#1D8A55" />
           <StatCard label="Conversión"         value={totales.conversion == null ? '—' : `${totales.conversion}%`}
                     sub={`${totales.rechazadas} rechazos`} icon={TrendingUp} />
@@ -177,8 +185,11 @@ function TarjetaOferta({ oferta, delay, onEditar, onBorrar, onVerRespuestas }) {
   const rec    = oferta.recordatorios
   const lista  = oferta.precio_lista ?? rec?.precio_base
   const pct    = descuentoPct(lista, oferta.precio_oferta)
-  const vistas = oferta.stats.aceptadas + oferta.stats.rechazadas
-  const conv   = vistas ? Math.round(oferta.stats.aceptadas / vistas * 100) : null
+  // La conversión va sobre quienes VIERON el anuncio; si todavía no hay vistas
+  // registradas (oferta anterior a la migración 081) cae a las respuestas.
+  const vistas = oferta.stats.vistas
+  const base   = vistas || (oferta.stats.aceptadas + oferta.stats.rechazadas)
+  const conv   = base ? Math.round(oferta.stats.aceptadas / base * 100) : null
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay }}>
@@ -223,8 +234,11 @@ function TarjetaOferta({ oferta, delay, onEditar, onBorrar, onVerRespuestas }) {
           </div>
 
           <div className="mt-auto pt-3 border-t flex items-center justify-between" style={{ borderColor: '#F3F4F6' }}>
-            <button onClick={onVerRespuestas} className="flex items-center gap-2 text-[12px] text-gray-500 hover:text-gray-800 transition-colors">
-              <CheckCircle2 size={13} className="text-[#1D8A55]" /> <span className="font-bold">{oferta.stats.aceptadas}</span>
+            <button onClick={onVerRespuestas} className="flex items-center gap-2 text-[12px] text-gray-500 hover:text-gray-800 transition-colors"
+              title={`${vistas} la vieron · ${oferta.stats.aceptadas} aceptaron · ${oferta.stats.rechazadas} rechazaron`
+                     + (oferta.stats.aperturas > vistas ? ` · ${oferta.stats.aperturas} aperturas del portal` : '')}>
+              <Eye size={13} className="text-gray-400" /> <span className="font-bold">{vistas}</span>
+              <CheckCircle2 size={13} className="text-[#1D8A55] ml-1" /> <span className="font-bold">{oferta.stats.aceptadas}</span>
               <XCircle size={13} className="text-gray-300 ml-1" /> <span>{oferta.stats.rechazadas}</span>
               {conv != null && <span className="ml-1 text-[11px] text-gray-400">· {conv}%</span>}
             </button>

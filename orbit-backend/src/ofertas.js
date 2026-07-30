@@ -11,6 +11,7 @@
 //
 // Ver migración 078_ofertas_portal.sql.
 import { pideDatosCliente, requiereImagen } from './reglas-imagenes.js'
+import { log } from './db.js'
 
 const MOD = 'OFERTAS'
 
@@ -97,6 +98,33 @@ function mapearOferta(o) {
     // Si es físico y el servicio no tenía nada que entregar (eco-grupal), aceptar
     // la oferta OBLIGA a pedir los datos de entrega.
     es_fisico: (o.rec_categoria || '') !== 'digital',
+  }
+}
+
+/**
+ * Deja constancia de que el anuncio se le MOSTRÓ al cliente (abrió el link del
+ * portal y el anuncio venía adentro). Sin esto la conversión se calcula sobre
+ * los que respondieron, no sobre los que vieron: una oferta con 5 rechazos y
+ * 200 vistas silenciosas se ve igual que una con 5 rechazos y 5 vistas.
+ *
+ * Una fila por (servicio, oferta) — las filas son servicios alcanzados y
+ * `vistas` cuenta las recargas. **Best-effort**: si falla, se traga el error;
+ * medir no puede romperle el portal a un cliente que está subiendo las fotos
+ * de su mascota. Va fuera de cualquier transacción de venta.
+ */
+export async function registrarVistasOfertas(client, servicioId, ofertas) {
+  if (!servicioId || !ofertas?.length) return
+  try {
+    await client.query(
+      `INSERT INTO public.oferta_vistas (oferta_id, servicio_id)
+       SELECT unnest($1::uuid[]), $2
+       ON CONFLICT (servicio_id, oferta_id) DO UPDATE
+         SET vistas = public.oferta_vistas.vistas + 1,
+             ultima_vista_en = now()`,
+      [ofertas.map(o => o.id), servicioId]
+    )
+  } catch (e) {
+    log('[ofertas] no se pudo registrar la vista:', e?.message || e)
   }
 }
 

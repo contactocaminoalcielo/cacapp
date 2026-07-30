@@ -13,14 +13,17 @@ import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imag
 export const BUCKET_OFERTAS = 'ofertas'
 export const MAX_MB_OFERTA  = 5
 
-/** Ofertas con su recordatorio, sus planes y el conteo de respuestas. */
+/** Ofertas con su recordatorio, sus planes, sus vistas y el conteo de respuestas. */
 export async function listarOfertas() {
-  const [{ data: ofertas, error }, { data: vinculos }, { data: respuestas }] = await Promise.all([
+  const [{ data: ofertas, error }, { data: vinculos }, { data: respuestas }, { data: vistas }] = await Promise.all([
     db.from('ofertas')
       .select('*, recordatorios(id, nombre, categoria, precio_base, requiere_imagen, solo_nombre, max_fotos, campos_texto, activo)')
       .order('orden').order('created_at'),
     db.from('oferta_planes').select('oferta_id, plan_id, planes(id, nombre, codigo)'),
     db.from('oferta_respuestas').select('oferta_id, respuesta'),
+    // Migración 081. Si el backend aún no la tiene, `error` viene y `data` null:
+    // el módulo sigue funcionando con las vistas en 0 en vez de romperse.
+    db.from('oferta_vistas').select('oferta_id, vistas'),
   ])
   if (error) throw error
 
@@ -28,17 +31,25 @@ export async function listarOfertas() {
   for (const v of vinculos || []) (planesPorOferta[v.oferta_id] ||= []).push(v)
 
   const statsPorOferta = {}
+  const stat = id => (statsPorOferta[id] ||= { aceptadas: 0, rechazadas: 0, vistas: 0, aperturas: 0 })
   for (const r of respuestas || []) {
-    const s = (statsPorOferta[r.oferta_id] ||= { aceptadas: 0, rechazadas: 0 })
+    const s = stat(r.oferta_id)
     if (r.respuesta === 'ACEPTADA') s.aceptadas++
     else s.rechazadas++
+  }
+  // Cada FILA es un servicio distinto al que le llegó el anuncio; `vistas` son
+  // las aperturas de ese servicio (el cliente puede recargar el portal).
+  for (const v of vistas || []) {
+    const s = stat(v.oferta_id)
+    s.vistas++
+    s.aperturas += Number(v.vistas) || 1
   }
 
   return (ofertas || []).map(o => ({
     ...o,
     planes: (planesPorOferta[o.id] || []).map(v => v.planes).filter(Boolean),
     plan_ids: (planesPorOferta[o.id] || []).map(v => v.plan_id),
-    stats: statsPorOferta[o.id] || { aceptadas: 0, rechazadas: 0 },
+    stats: statsPorOferta[o.id] || { aceptadas: 0, rechazadas: 0, vistas: 0, aperturas: 0 },
   }))
 }
 

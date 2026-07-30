@@ -16,6 +16,7 @@ import {
 } from './reglas-imagenes.js'
 import {
   ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
+  registrarVistasOfertas,
 } from './ofertas.js'
 import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
 
@@ -305,6 +306,10 @@ export async function datosPortal({ codigo }) {
     const ofertas = (yaRecibido || fueraDeVentana)
       ? []
       : await ofertasParaServicio(client, s.id, s.plan_id)
+
+    // El anuncio llegó a los ojos del cliente: se cuenta la impresión. Es
+    // best-effort y no bloquea la respuesta del portal.
+    await registrarVistasOfertas(client, s.id, ofertas)
 
     return { status: 200, body: {
       ok: true,
