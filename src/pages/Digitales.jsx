@@ -66,12 +66,18 @@ const fueEnviado = (s) => s.envios.some(e => (e.estado || 'ENVIADO') === 'ENVIAD
 const envioExitoso = (s) => s.envios.find(e => (e.estado || 'ENVIADO') === 'ENVIADO')
 const ultimoError = (s) => (s.envios[0]?.estado === 'ERROR' ? s.envios[0] : null)
 
-// Plantilla Zolutium aplicable según las piezas que lleva el servicio:
+// Lo que el PLAN lleva: piezas vivas + las que el cliente declinó. La declinada
+// no se produce, pero el plan no cambió — y la plantilla la nombra igual, con un
+// texto en vez del enlace.
+const tiposDelPlan = (s) => TIPOS.filter(t => tiposDe(s).includes(t) || (s.declinadas || []).includes(t))
+
+// Plantilla Zolutium aplicable según lo que lleva el plan:
 // 3 digitales → plantilla completa · solo memorial → plantilla de memorial ·
 // cualquier otra combinación → sin plantilla (envío manual).
 function plantillaAplicable(s, zolutium) {
   if (!zolutium?.activo) return null
-  const tipos = tiposDe(s)
+  if (!tiposDe(s).length) return null   // todo declinado: no hay nada que enviar
+  const tipos = tiposDelPlan(s)
   if (tipos.length === 3) return zolutium.plantilla_completos
   if (tipos.length === 1 && tipos[0] === 'MEMORIAL') return zolutium.plantilla_memorial
   return null
@@ -215,8 +221,12 @@ export default function Digitales() {
     const tel = tels[s.servicio_id] ?? (s.telefono || '')
     if (!normalizarTel(tel)) return flash('err', 'No hay un teléfono válido para WhatsApp.')
     const plantilla = plantillaAplicable(s, data.zolutium)
+    const noPedidas = (s.declinadas || []).filter(t => !tiposDe(s).includes(t))
     const ok = await confirm(
-      `Se enviará la plantilla «${plantilla}» por WhatsApp al ${tel} con los enlaces de ${s.mascota}.`,
+      `Se enviará la plantilla «${plantilla}» por WhatsApp al ${tel} con los enlaces de ${s.mascota}.` +
+      (noPedidas.length
+        ? ` ${noPedidas.map(t => TIPO_CORTO[t]).join(' y ')} no lo pidió el cliente: en su lugar irá una nota, no un enlace.`
+        : ''),
       { title: 'Enviar digitales al cliente', variant: 'success', confirmLabel: 'Enviar' }
     )
     if (!ok) return
@@ -791,6 +801,7 @@ function ServicioCard({
 // ── Tarjeta de envío al cliente ─────────────────────────────────────────────
 function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, zolutium, onEnviarAuto, onEnviar, onMarcar, onCopiar }) {
   const texto = mensajes[s.servicio_id] ?? buildMensaje(plantilla, s)
+  const noPedidas = (s.declinadas || []).filter(t => !tiposDe(s).includes(t))
   const tel = tels[s.servicio_id] ?? (s.telefono || '')
   const k = `envio:${s.servicio_id}`
   const plantillaZol = plantillaAplicable(s, zolutium)
@@ -823,18 +834,26 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
         </div>
 
         {plantillaZol ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={onEnviarAuto} disabled={busy[k]}>
-              {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} Enviar
-            </Button>
-            <span className="text-[12px] text-gray-400">
-              Automático por Zolutium · plantilla «{plantillaZol}»
-            </span>
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={onEnviarAuto} disabled={busy[k]}>
+                {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} Enviar
+              </Button>
+              <span className="text-[12px] text-gray-400">
+                Automático por Zolutium · plantilla «{plantillaZol}»
+              </span>
+            </div>
+            {noPedidas.length > 0 && (
+              <p className="text-[11px] text-gray-400">
+                {noPedidas.map(t => TIPO_CORTO[t]).join(' y ')} no lo pidió el cliente: la plantilla
+                va igual, con una nota en lugar de ese enlace.
+              </p>
+            )}
           </div>
         ) : zolutium?.activo ? (
           <div className="flex items-start gap-2 text-amber-700 text-[12px] bg-amber-50 rounded-lg px-3 py-2">
             <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-            Las piezas de este servicio ({tiposDe(s).map(t => TIPO_CORTO[t]).join(' + ')}) no coinciden
+            Las piezas de este servicio ({tiposDelPlan(s).map(t => TIPO_CORTO[t]).join(' + ')}) no coinciden
             con ninguna plantilla aprobada — envíalo manual con el mensaje de abajo.
           </div>
         ) : null}

@@ -532,11 +532,16 @@ export async function descartarPieza({ id }) {
 }
 
 // ── Envío automático por Zolutium (plantillas HSM aprobadas) ─────────────────
-// Dos plantillas según lo que el servicio lleva (mismo criterio que la UI):
-//   plantilla_completos → espera los 3 digitales: {{1}} video, {{2}} short, {{3}} memorial
-//   plantilla_memorial  → espera solo memorial:   {{1}} memorial
-// Cualquier otra combinación (p. ej. le quitaron el short) NO se envía
-// automático — queda el envío manual (decisión David 2026-07-09, opción a).
+// Dos plantillas según lo que el PLAN del servicio lleva (mismo criterio que la UI):
+//   plantilla_completos → los 3 digitales: {{1}} video, {{2}} short, {{3}} memorial
+//   plantilla_memorial  → solo memorial:   {{1}} memorial
+// Si el cliente declinó una pieza en el portal ("no deseo este recordatorio"), el
+// plan sigue siendo el mismo: se usa la misma plantilla y en el parámetro de esa
+// pieza va `TEXTO_DECLINADO` en vez del enlace (decisión David 2026-07-31, releva
+// la del 2026-07-09 que mandaba estas combinaciones al envío manual). Meta acepta
+// cualquier texto en un parámetro; lo que NO acepta es un parámetro vacío.
+// Cualquier otra combinación (planes raros sin memorial, piezas sueltas) sigue
+// yendo por envío manual.
 // `texto` y `cubre` describen la plantilla YA APROBADA en Meta y deben editarse
 // a la par de ella (la API de GHL no expone el cuerpo, así que no hay forma de
 // derivarlos):
@@ -546,6 +551,17 @@ export async function descartarPieza({ id }) {
 //   cubre → ids de recordatorio que la plantilla entrega con enlace FIJO escrito
 //           en su cuerpo (audio, herramientas de duelo, tarjeta de oración…).
 //           Sin él esos digitales quedan PENDIENTE aunque el cliente ya los tenga.
+// Lo que el cliente ve donde iría el enlace de una pieza que él mismo declinó.
+// Configurable en config_operativa (DIGITALES.texto_declinado) por si hay que
+// ajustar el tono sin desplegar. Un parámetro de plantilla NO puede ir vacío ni
+// llevar saltos de línea o tabs — Meta rechaza el envío.
+const TEXTO_DECLINADO_DEFAULT = '(no lo solicitaste)'
+
+function textoDeclinado(cfg) {
+  const v = typeof cfg.texto_declinado === 'string' ? cfg.texto_declinado.replace(/\s+/g, ' ').trim() : ''
+  return v || TEXTO_DECLINADO_DEFAULT
+}
+
 function plantillaCfg(v) {
   if (!(v && typeof v === 'object' && typeof v.nombre === 'string' && v.nombre.trim())) return null
   return {
@@ -635,13 +651,16 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   // 2) Piezas del servicio: qué lleva (esperadas + creadas) y qué está publicado
   const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
   const [{ rows: espRows }, { rows: piezas }] = await Promise.all([
+    // Una fila por recordatorio del plan, con la marca de declinado (todas sus
+    // filas vivas en 'NA' — un servicio puede llevar el mismo recordatorio dos veces)
     pool.query(
-      `SELECT COALESCE(array_agg(DISTINCT sr.recordatorio_id::text), '{}') AS rec_ids
+      `SELECT sr.recordatorio_id::text AS rec_id,
+              COUNT(*) FILTER (WHERE sr.estado <> 'NA') = 0 AS declinado
        FROM public.servicio_recordatorios sr
        WHERE sr.servicio_id = $1
          AND sr.recordatorio_id = ANY($2::uuid[])
-         AND sr.estado <> 'NA'
-         AND COALESCE(sr.origen, '') <> 'REMOVIDO'`,
+         AND COALESCE(sr.origen, '') <> 'REMOVIDO'
+       GROUP BY sr.recordatorio_id`,
       [servicioId, recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000']]
     ),
     pool.query(
@@ -650,9 +669,16 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
       [servicioId]
     ),
   ])
-  const esperadasRec = espRows[0]?.rec_ids || []
+  const esperadasRec = espRows.filter(r => !r.declinado).map(r => r.rec_id)
+  const declinadasRec = espRows.filter(r => r.declinado).map(r => r.rec_id)
+  // Piezas vivas: las que hay que tener publicadas y las que se registran como enviadas.
   const tipos = TIPOS.filter(t =>
     esperadasRec.includes(String(mapa[t] || '')) || piezas.some(p => p.tipo === t))
+  // Declinadas por el cliente: no se producen ni se marcan entregadas, pero sí
+  // cuentan para saber qué plantilla corresponde (el plan no cambió).
+  const declinadas = TIPOS.filter(t =>
+    declinadasRec.includes(String(mapa[t] || '')) && !tipos.includes(t))
+  const tiposPlan = TIPOS.filter(t => tipos.includes(t) || declinadas.includes(t))
   const urls = Object.fromEntries(
     piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
       .map(p => [p.tipo, limpiarUrlInstagram(p.url_publica)]))
@@ -661,17 +687,25 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   if (!tipos.length) return { status: 422, body: { error: 'Este servicio no lleva piezas digitales.' } }
   if (faltantes.length) return { status: 422, body: { error: `Faltan piezas por publicar: ${faltantes.join(', ')}.` } }
 
-  // 3) Elegir plantilla según la combinación de piezas
+  // 3) Elegir plantilla según lo que lleva el plan; las declinadas van con texto
+  // en vez de enlace (un parámetro vacío hace que Meta rechace el envío).
+  const sinEnlace = textoDeclinado(cfg)
+  const param = (t) => urls[t] || (declinadas.includes(t) ? sinEnlace : null)
   let plantilla = null, bodyParams = []
-  if (tipos.length === 3) {
+  if (tiposPlan.length === 3) {
     plantilla = plantillaCfg(cfg.plantilla_completos)
-    bodyParams = [urls.VIDEO, urls.SHORT, urls.MEMORIAL]
-  } else if (tipos.length === 1 && tipos[0] === 'MEMORIAL') {
+    bodyParams = [param('VIDEO'), param('SHORT'), param('MEMORIAL')]
+  } else if (tiposPlan.length === 1 && tiposPlan[0] === 'MEMORIAL') {
     plantilla = plantillaCfg(cfg.plantilla_memorial)
-    bodyParams = [urls.MEMORIAL]
+    bodyParams = [param('MEMORIAL')]
   }
   if (!plantilla) {
-    return { status: 422, body: { error: `La combinación de piezas (${tipos.join(' + ')}) no coincide con ninguna plantilla aprobada — usa el envío manual.` } }
+    return { status: 422, body: { error: `La combinación de piezas (${tiposPlan.join(' + ')}) no coincide con ninguna plantilla aprobada — usa el envío manual.` } }
+  }
+  // Un parámetro vacío hace que Meta rechace el envío de forma asíncrona (queda
+  // ENVIADO en GHL y `failed` en Meta): mejor no mandarlo.
+  if (bodyParams.some(p => !p)) {
+    return { status: 422, body: { error: 'Faltan enlaces para armar la plantilla — usa el envío manual.' } }
   }
 
   const enlaces = tipos.map(t => ({ tipo: t, url: urls[t] }))
@@ -679,7 +713,8 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   // plantilla aprobada (que trae los enlaces fijos), no el resumen que arma Orbit.
   const mensaje = plantilla.texto
     ? resolverTextoPlantilla(plantilla.texto, bodyParams)
-    : construirMensajeCliente(cfg, svc.mascota, enlaces)
+    : construirMensajeCliente(cfg, svc.mascota, enlaces,
+        declinadas.map(t => ({ tipo: t, texto: sinEnlace })))
 
   // 4) Envío (red) → luego evidencia atómica, mismo patrón que reportes grupales
   let envioOk = null, envioErr = null
@@ -741,9 +776,14 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
 
 // Texto legible que queda en la evidencia y en la conversación de GHL
 // (lo que el cliente ve lo define la plantilla aprobada en Meta).
-function construirMensajeCliente(cfg, mascota, enlaces) {
+function construirMensajeCliente(cfg, mascota, enlaces, declinadas = []) {
   const labels = { MEMORIAL: 'Memorial', VIDEO: 'Video conmemorativo', SHORT: 'Short' }
-  const links = enlaces.map(e => `• ${labels[e.tipo] || e.tipo}: ${e.url}`).join('\n')
+  // Las declinadas también van en la evidencia: la plantilla las nombra con el
+  // texto de relleno, así que omitirlas haría que la evidencia mienta.
+  const links = [
+    ...enlaces.map(e => `• ${labels[e.tipo] || e.tipo}: ${e.url}`),
+    ...declinadas.map(d => `• ${labels[d.tipo] || d.tipo}: ${d.texto}`),
+  ].join('\n')
   const base = typeof cfg.mensaje_cliente === 'string' && cfg.mensaje_cliente
     ? cfg.mensaje_cliente
     : 'Hola 💛 Te compartimos los recuerdos digitales de {mascota}:\n\n{enlaces}\n\nCamino al Cielo 🕊️'
