@@ -2284,7 +2284,11 @@ export default function TecnicoApp() {
   }
 
   async function aceptarEntrega(ent) {
-    const { error } = await db.from('entregas').update({ estado: 'EN_CAMINO' }).eq('id', ent.id)
+    // `aceptada_en` es la hora real de salida: con ella el tablero puede decir
+    // cuánto pasó entre que salió y entregó (antes solo quedaba el estado).
+    const { error } = await db.from('entregas')
+      .update({ estado: 'EN_CAMINO', aceptada_en: new Date().toISOString() })
+      .eq('id', ent.id)
     if (error) throw new Error(error.message)
     await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', ent.servicio_id)
     // Notificar coordinadores

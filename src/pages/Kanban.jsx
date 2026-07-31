@@ -26,6 +26,7 @@ import {
   ImageUp, History,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
+import ResumenEntrega from '@/components/servicio/ResumenEntrega'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import { ModalReemplazarFoto, ModalHistorialFotos } from '@/components/imagenes/FotosDelCliente'
@@ -3228,6 +3229,11 @@ export default function Kanban() {
                 </button>
               </div>
             </div>
+
+            {/* ── Resumen de la entrega: horas, evidencia y certificado firmado ── */}
+            {['EN_ENTREGA', 'ENTREGADO'].includes(selected.estado) && (
+              <ResumenEntrega servicioId={selected.servicio_id} />
+            )}
 
             {/* Preparar entrega (LISTO) */}
             {selected.estado === 'LISTO' && (

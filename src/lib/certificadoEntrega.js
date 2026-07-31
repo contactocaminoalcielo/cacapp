@@ -11,8 +11,34 @@ const EMPRESA = {
   web:       'www.caminoalcielo.com.co',
 }
 
+// Hora legible de un timestamptz
+const hhmm = (ts) => {
+  try { return new Date(ts).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) }
+  catch (_) { return '—' }
+}
+
+// La firma llega de dos formas: recién dibujada (dataURL, la trae el técnico en
+// el momento) o ya guardada en storage (URL http, al reimprimir el certificado
+// desde el tablero). jsPDF solo entiende dataURL, así que la http se descarga.
+async function resolverFirma(firma) {
+  if (!firma) return null
+  if (!/^https?:/i.test(firma)) return firma
+  try {
+    const res = await fetch(firma)
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return await new Promise((ok, fail) => {
+      const fr = new FileReader()
+      fr.onload = () => ok(fr.result)
+      fr.onerror = fail
+      fr.readAsDataURL(blob)
+    })
+  } catch (_) { return null }   // sin firma el certificado sale con la línea en blanco
+}
+
 // Genera y descarga el certificado de entrega
 export async function generarCertificadoEntrega({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
+  const firmaImg = await resolverFirma(firmaDataUrl || entrega?.foto_firma_url)
   const { default: jsPDF } = await import('jspdf')
   const pdf = new jsPDF('p', 'mm', 'a4')
   const W = 210, H = 297, M = 15, CW = W - M * 2
@@ -113,6 +139,33 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   )
   hr()
 
+  // ── Datos de entrega ──────────────────────────────────────────────────────
+  // Va ANTES de los ítems (orden pedido por David 2026-07-31): quien lee el
+  // certificado primero ubica dónde y a quién se entregó, y después qué.
+  sec('DATOS DE ENTREGA')
+  filaAncha('Dirección de entrega', entrega?.direccion_entrega || '—')
+  fila2('Barrio', entrega?.barrio || '—', 'Localidad', entrega?.localidad || '—')
+  fila2('Ciudad', entrega?.ciudad || '—', 'Tipo de entrega', entrega?.tipo_entrega || 'DOMICILIO')
+  const tels = [entrega?.contacto_telefono, entrega?.telefono_adicional].filter(Boolean).join('   ·   ') || '—'
+  fila2('Quién recibe', entrega?.contacto_nombre || '—', 'Teléfono(s)', tels)
+  if (entrega?.hora_realizada || entrega?.aceptada_en) {
+    fila2(
+      'Salió a entregar', entrega?.aceptada_en ? hhmm(entrega.aceptada_en) : '—',
+      'Hora de entrega',  entrega?.hora_realizada ? String(entrega.hora_realizada).slice(0, 5) : '—',
+    )
+  }
+
+  if (entrega?.horarios_atencion) {
+    filaAncha('Horarios a tener en cuenta', entrega.horarios_atencion)
+    espacio(6)
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(7); pdf.setTextColor(140, 140, 140)
+    t('No corresponde a una hora exacta de entrega confirmada.', M, y)
+    y += 4.5
+  }
+  if (entrega?.indicaciones) filaAncha('Instrucciones', entrega.indicaciones)
+  if (mensajero) filaAncha('Mensajero / Técnico', `${mensajero.nombre} ${mensajero.apellido}`)
+  hr()
+
   // ── Ítems ─────────────────────────────────────────────────────────────────
   // Separados en entregados físicamente vs enviados digitalmente: los digitales
   // (categoria='digital') se envían electrónicamente y NO requieren entrega
@@ -152,25 +205,6 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
       hr()
     }
   }
-
-  // ── Datos de entrega ──────────────────────────────────────────────────────
-  sec('DATOS DE ENTREGA')
-  filaAncha('Dirección de entrega', entrega?.direccion_entrega || '—')
-  fila2('Barrio', entrega?.barrio || '—', 'Localidad', entrega?.localidad || '—')
-  fila2('Ciudad', entrega?.ciudad || '—', 'Tipo de entrega', entrega?.tipo_entrega || 'DOMICILIO')
-  const tels = [entrega?.contacto_telefono, entrega?.telefono_adicional].filter(Boolean).join('   ·   ') || '—'
-  fila2('Quién recibe', entrega?.contacto_nombre || '—', 'Teléfono(s)', tels)
-
-  if (entrega?.horarios_atencion) {
-    filaAncha('Horarios a tener en cuenta', entrega.horarios_atencion)
-    espacio(6)
-    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(7); pdf.setTextColor(140, 140, 140)
-    t('No corresponde a una hora exacta de entrega confirmada.', M, y)
-    y += 4.5
-  }
-  if (entrega?.indicaciones) filaAncha('Instrucciones', entrega.indicaciones)
-  if (mensajero) filaAncha('Mensajero / Técnico', `${mensajero.nombre} ${mensajero.apellido}`)
-  hr()
 
   // ── Adicionales por cobrar en la entrega ──────────────────────────────────
   // Un certificado de ENTREGA no es un recibo: no informa cuánto vale el plan
@@ -215,8 +249,8 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   sec('CONSTANCIA DE RECIBIDO')
   y += 1
 
-  if (firmaDataUrl) {
-    try { pdf.addImage(firmaDataUrl, 'PNG', M, y, 80, 18) }
+  if (firmaImg) {
+    try { pdf.addImage(firmaImg, 'PNG', M, y, 80, 18) }
     catch (e) { /* si falla la imagen, queda solo la línea */ }
   }
   pdf.setDrawColor(160, 160, 160); pdf.setLineWidth(0.3)

@@ -278,6 +278,8 @@ export default function FichaServicio({ servicioId, onClose }) {
                 <Dato label="Tipo">{entrega?.tipo_entrega ? entrega.tipo_entrega.replace(/_/g, ' ').toLowerCase() : null}</Dato>
                 <Dato label="Mensajero">{entrega?.mensajero_nombre}</Dato>
                 <Dato label="Programada">{entrega?.fecha_programada ? `${fmtD(entrega.fecha_programada)}${entrega.hora_programada ? ` · ${String(entrega.hora_programada).slice(0, 5)}` : ''}` : null}</Dato>
+                <Dato label="La tomó">{entrega?.tomada_en ? new Date(entrega.tomada_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null}</Dato>
+                <Dato label="Salió a entregar">{entrega?.aceptada_en ? new Date(entrega.aceptada_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null}</Dato>
                 <Dato label="Realizada">{entrega?.fecha_realizada ? `${fmtD(entrega.fecha_realizada)}${entrega.hora_realizada ? ` · ${String(entrega.hora_realizada).slice(0, 5)}` : ''}` : null}</Dato>
                 <Dato label="Dirección">{entrega?.direccion_entrega}</Dato>
                 <Dato label="Ciudad">{entrega?.ciudad}</Dato>
