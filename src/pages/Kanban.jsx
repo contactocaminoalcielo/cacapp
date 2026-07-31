@@ -1684,8 +1684,14 @@ export default function Kanban() {
     setSaving(true)
     try {
       await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', selected.servicio_id)
+      // Asignar aquí también saca la entrega del pool: sin pasarla a ASIGNADA se
+      // quedaba en PENDIENTE (el cascarón del trigger) y no aparecía en la app
+      // del mensajero, que solo lista ASIGNADA/EN_CAMINO.
       if (mensajeroId)
-        await db.from('entregas').update({ mensajero_id: mensajeroId }).eq('servicio_id', selected.servicio_id).in('estado', ['PENDIENTE'])
+        await db.from('entregas')
+          .update({ mensajero_id: mensajeroId, estado: 'ASIGNADA' })
+          .eq('servicio_id', selected.servicio_id)
+          .in('estado', ['PENDIENTE', 'DISPONIBLE'])
       setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, estado: 'EN_ENTREGA' } : s))
       setSelected(prev => ({ ...prev, estado: 'EN_ENTREGA' })); setMensajeroId('')
     } catch (e) { await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' }) }

@@ -1,16 +1,19 @@
 import { useState, useEffect } from 'react'
 import { db } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
 import { fmt, waLink } from '@/lib/utils'
 import { crearNotificacion } from '@/lib/notificaciones'
 import { generarCertificadoEntrega } from '@/lib/certificadoEntrega'
 import { X, Truck, MapPin, User, Calendar, MessageCircle, Download, Check, AlertCircle } from 'lucide-react'
 
 export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado }) {
+  const { personalData: yo } = useAuth()
   const [loading,    setLoading]    = useState(true)
   const [saving,     setSaving]     = useState(false)
   const [genCert,    setGenCert]    = useState(false)
   const [error,      setError]      = useState(null)
   const [ok,         setOk]         = useState(false)
+  const [publicado,  setPublicado]  = useState(false)
 
   // Datos cargados (fuente de verdad para los auto-fills)
   const [svc,        setSvc]        = useState(null)
@@ -34,6 +37,12 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
   const [mensajeroId,      setMensajeroId]      = useState('')
 
   useEffect(() => { cargar() }, [servicioId])
+
+  // Nombre de quien la tiene (la tomó del pool o se la asignaron)
+  const tomadaPor = (() => {
+    const m = mensajeros.find(x => x.id === entrega?.mensajero_id)
+    return m ? `${m.nombre} ${m.apellido}`.trim() : null
+  })()
 
   // ── Rellena todos los campos de dirección/contacto según el tipo ────────────
   // svcData: datos del servicio (con mascotas.clientes y aliados)
@@ -171,8 +180,21 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
     }
   }
 
-  async function guardar() {
-    if (!mensajeroId) { setError('Debes asignar un mensajero o técnico'); return }
+  // Dos vías (decisión David 2026-07-31):
+  //   publicar → al pool: la ven todos los mensajeros/técnicos y la toma quien pueda
+  //   asignar  → directo a una persona, como siempre
+  // La entrega ya tomada por alguien no se puede re-publicar sin quitársela: eso
+  // se hace cambiando el mensajero a mano.
+  async function guardar({ publicar } = { publicar: false }) {
+    if (!publicar && !mensajeroId) { setError('Elige a quién se la asignas, o publícala para que la tomen'); return }
+    // Una entrega que ya salió (o se hizo) no se re-publica ni se reasigna desde
+    // aquí: se le quitaría el trabajo a quien la está haciendo.
+    if (['EN_CAMINO', 'ENTREGADA'].includes(entrega?.estado)) {
+      setError(entrega.estado === 'EN_CAMINO'
+        ? 'Esta entrega ya va en camino — no se puede reasignar desde aquí.'
+        : 'Esta entrega ya se completó.')
+      return
+    }
     setSaving(true); setError(null)
     try {
       const patch = {
@@ -188,8 +210,10 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
         horarios_atencion:  horarios         || null,
         fecha_programada:   fechaProg        || null,
         notas:              notas            || null,
-        mensajero_id:       mensajeroId,
-        estado:             'ASIGNADA',
+        ...(publicar
+          ? { mensajero_id: null, estado: 'DISPONIBLE', publicada_en: new Date().toISOString(),
+              publicada_por: yo?.id || null, tomada_en: null }
+          : { mensajero_id: mensajeroId, estado: 'ASIGNADA' }),
         ...(tipoEntrega === 'ALIADO' && svc?.aliados?.id_aliado
           ? { aliado_id: svc.aliados.id_aliado } : {}),
       }
@@ -202,27 +226,33 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
         if (e) throw e
       }
 
+      // Al publicar no se notifica a nadie: la entrega aparece en el tab Entregas
+      // de todos los mensajeros y técnicos, con su contador. Notificar a todos por
+      // cada entrega sería ruido — quien esté disponible la ve al entrar.
       const mascota = svc?.mascotas
       const cliente = mascota?.clientes
-      await crearNotificacion({
-        para_personal_id: mensajeroId,
-        tipo:             'ENTREGA_ASIGNADA',
-        titulo:           'Nueva entrega asignada',
-        mensaje:          `Entregar recordatorios de ${mascota?.nombre || 'mascota'}` +
-          `${cliente ? ` (${cliente.nombre} ${cliente.apellido})` : ''}. ` +
-          `${direccionEntrega ? `Dir: ${direccionEntrega}` : ''}` +
-          `${fechaProg ? ` · Fecha: ${fechaProg}` : ''}`,
-        servicio_id: servicioId,
-        datos: {
-          mascota:   mascota?.nombre,
-          cliente:   cliente ? `${cliente.nombre} ${cliente.apellido}` : null,
-          direccion: direccionEntrega,
-          ciudad,
-          saldo:     Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0)),
-          notas,
-        },
-      })
+      if (!publicar) {
+        await crearNotificacion({
+          para_personal_id: mensajeroId,
+          tipo:             'ENTREGA_ASIGNADA',
+          titulo:           'Nueva entrega asignada',
+          mensaje:          `Entregar recordatorios de ${mascota?.nombre || 'mascota'}` +
+            `${cliente ? ` (${cliente.nombre} ${cliente.apellido})` : ''}. ` +
+            `${direccionEntrega ? `Dir: ${direccionEntrega}` : ''}` +
+            `${fechaProg ? ` · Fecha: ${fechaProg}` : ''}`,
+          servicio_id: servicioId,
+          datos: {
+            mascota:   mascota?.nombre,
+            cliente:   cliente ? `${cliente.nombre} ${cliente.apellido}` : null,
+            direccion: direccionEntrega,
+            ciudad,
+            saldo:     Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0)),
+            notas,
+          },
+        })
+      }
 
+      setPublicado(publicar)
       setOk(true)
       setTimeout(() => { onGuardado(); onClose() }, 800)
     } catch (e) {
@@ -300,7 +330,29 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
             {ok && (
               <div className="flex items-center gap-2 p-3 rounded-xl text-sm font-semibold"
                 style={{ background: '#D1FAE5', color: '#065F46' }}>
-                <Check size={15} /> ¡Entrega configurada! Notificando al mensajero…
+                <Check size={15} />
+                {publicado
+                  ? '¡Publicada! Ya aparece en la app de mensajeros y técnicos.'
+                  : '¡Entrega configurada! Notificando al mensajero…'}
+              </div>
+            )}
+
+            {/* Estado del pool: qué pasó con esta entrega hasta ahora */}
+            {!ok && entrega?.estado === 'DISPONIBLE' && (
+              <div className="flex items-center gap-2 p-3 rounded-xl text-[13px]"
+                style={{ background: '#EEF2FF', color: '#3730A3' }}>
+                <Truck size={14} />
+                Publicada{entrega.publicada_en
+                  ? ` el ${new Date(entrega.publicada_en).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                  : ''} — esperando que alguien la tome.
+              </div>
+            )}
+            {!ok && ['ASIGNADA', 'EN_CAMINO'].includes(entrega?.estado) && tomadaPor && (
+              <div className="flex items-center gap-2 p-3 rounded-xl text-[13px]"
+                style={{ background: '#F5F3FF', color: '#5B21B6' }}>
+                <User size={14} />
+                {entrega.tomada_en ? 'La tomó' : 'Asignada a'} {tomadaPor}
+                {entrega.estado === 'EN_CAMINO' ? ' · va en camino' : ''}
               </div>
             )}
             {error && (
@@ -481,19 +533,24 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                 style={{ borderColor: '#E5E7EB' }} />
             </div>
 
-            {/* Mensajero */}
+            {/* Mensajero — opcional: si no eliges a nadie, se publica al pool */}
             <div>
               <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                <Truck size={11} /> Mensajero / Técnico asignado *
+                <Truck size={11} /> Mensajero / Técnico
               </label>
               <select value={mensajeroId} onChange={e => setMensajeroId(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none bg-white"
                 style={{ borderColor: mensajeroId ? '#4F46E5' : '#E5E7EB' }}>
-                <option value="">— Seleccionar mensajero o técnico —</option>
+                <option value="">— Que la tome quien pueda —</option>
                 {mensajeros.map(m => (
                   <option key={m.id} value={m.id}>{m.nombre} {m.apellido}</option>
                 ))}
               </select>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                {mensajeroId
+                  ? 'Se le asigna solo a esta persona y le llega una notificación.'
+                  : 'Sin elegir a nadie, la entrega queda disponible para todos y la toma el primero que pueda.'}
+              </p>
             </div>
 
             {/* Notas */}
@@ -541,13 +598,16 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                 className="px-4 py-2 rounded-xl text-[13px] font-semibold text-gray-600 hover:bg-gray-100 transition-colors">
                 Cancelar
               </button>
-              <button onClick={guardar} disabled={saving || ok}
+              <button onClick={() => guardar({ publicar: !mensajeroId })}
+                disabled={saving || ok || ['EN_CAMINO', 'ENTREGADA'].includes(entrega?.estado)}
                 className="flex items-center gap-2 px-5 py-2 rounded-xl text-[13px] font-bold text-white transition-all hover:opacity-90 disabled:opacity-60"
                 style={{ background: '#4F46E5' }}>
                 {saving
                   ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   : <Truck size={14} />}
-                {saving ? 'Guardando…' : 'Confirmar entrega'}
+                {saving
+                  ? 'Guardando…'
+                  : mensajeroId ? 'Asignar entrega' : 'Publicar para que la tomen'}
               </button>
             </div>
 

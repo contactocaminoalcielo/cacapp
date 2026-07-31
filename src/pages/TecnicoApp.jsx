@@ -1132,11 +1132,64 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   )
 }
 
+// ─── CARD ENTREGA DISPONIBLE (pool) ─────────────────────────────────────
+// Lo justo para decidir si me sirve: qué mascota, para dónde, cuándo y si hay
+// plata por cobrar. El detalle completo aparece cuando ya es mía.
+function CardDisponible({ ent, tomando, onTomar }) {
+  const mascota = ent.servicios?.mascotas
+  const cliente = mascota?.clientes
+  const emoji   = petEmoji(mascota?.especies?.nombre)
+  const saldo   = Math.max(0, (ent.servicios?.valor_total || 0) - (ent.servicios?.valor_pagado || 0))
+  const zona    = [ent.barrio, ent.localidad, ent.ciudad].filter(Boolean).join(' · ')
+
+  return (
+    <div className="bg-white rounded-2xl border p-4 mb-3 shadow-sm" style={{ borderColor: '#C7D2FE' }}>
+      <div className="flex items-start gap-3 mb-2.5">
+        <span style={{ fontSize: 26 }}>{emoji}</span>
+        <div className="min-w-0 flex-1">
+          <div className="font-bold text-gray-900 text-base leading-tight">{mascota?.nombre || '—'}</div>
+          <div className="text-xs text-gray-500 truncate">
+            {cliente ? `${cliente.nombre} ${cliente.apellido}` : ''}
+            {ent.tipo_entrega && ent.tipo_entrega !== 'DOMICILIO' ? ` · ${ent.tipo_entrega}` : ''}
+          </div>
+        </div>
+        {saldo > 0 && (
+          <span className="text-[10px] font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+            style={{ background: '#FEF3C7', color: '#92400E' }}>
+            Cobrar {fmt(saldo)}
+          </span>
+        )}
+      </div>
+
+      <div className="text-[13px] text-gray-700 mb-1 flex items-start gap-1.5">
+        <MapPin size={13} className="mt-0.5 flex-shrink-0 text-gray-400" />
+        <span>{ent.direccion_entrega || 'Sin dirección registrada'}</span>
+      </div>
+      {zona && <div className="text-[11px] text-gray-400 mb-1 pl-[19px]">{zona}</div>}
+      {ent.fecha_programada && (
+        <div className="text-[11px] text-gray-500 mb-1 pl-[19px]">
+          📅 Programada: {new Date(ent.fecha_programada + 'T00:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+        </div>
+      )}
+      {ent.horarios_atencion && (
+        <div className="text-[11px] text-gray-500 pl-[19px]">🕐 {ent.horarios_atencion}</div>
+      )}
+
+      <button onClick={() => onTomar(ent)} disabled={tomando}
+        className="w-full mt-3 py-3 rounded-2xl text-[15px] font-bold transition-all active:scale-98 disabled:opacity-60"
+        style={{ background: '#4F46E5', color: '#fff' }}>
+        {tomando ? 'Tomando…' : '🙋 Tomar esta entrega'}
+      </button>
+    </div>
+  )
+}
+
 // ─── CARD ENTREGA ───────────────────────────────────────────────────────
-function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
+function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   const [contactoModal,  setContactoModal]  = useState(null)
   const [actErr,         setActErr]         = useState('')
   const [aceptando,      setAceptando]      = useState(false)
+  const [soltando,       setSoltando]       = useState(false)
   const [completando,    setCompletando]    = useState(false)
   const [fotoUrl,        setFotoUrl]        = useState(ent.foto_entrega_url || null)
   const [firmaDataUrl,   setFirmaDataUrl]   = useState(null)
@@ -1170,6 +1223,13 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
     try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente }) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompletando(false) }
+  }
+
+  async function soltar() {
+    setSoltando(true); setActErr('')
+    try { await onSoltar(ent) }
+    catch (e) { setActErr(e.message || 'Error al devolver la entrega') }
+    finally { setSoltando(false) }
   }
 
   async function descargarCertificado() {
@@ -1265,11 +1325,21 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar }) {
 
       {/* ── FASE 1: ASIGNADA → aceptar ── */}
       {ent.estado === 'ASIGNADA' && (
-        <button onClick={aceptar} disabled={aceptando}
-          className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-60"
-          style={{ background: '#4F46E5', color: '#fff' }}>
-          {aceptando ? 'Aceptando…' : '🛵 Acepto y salgo a entregar'}
-        </button>
+        <>
+          <button onClick={aceptar} disabled={aceptando || soltando}
+            className="w-full py-4 rounded-2xl text-base font-bold transition-all active:scale-98 disabled:opacity-60"
+            style={{ background: '#4F46E5', color: '#fff' }}>
+            {aceptando ? 'Aceptando…' : '🛵 Acepto y salgo a entregar'}
+          </button>
+          {/* Solo si la tomé yo del pool: devolverla mientras no haya salido */}
+          {onSoltar && ent.tomada_en && (
+            <button onClick={soltar} disabled={aceptando || soltando}
+              className="w-full mt-2 py-2.5 rounded-xl text-[13px] font-semibold transition-all active:scale-98 disabled:opacity-60"
+              style={{ background: '#F3F4F6', color: '#6B7280' }}>
+              {soltando ? 'Devolviendo…' : 'Devolverla — que la tome otro'}
+            </button>
+          )}
+        </>
       )}
 
       {/* ── FASE 2: EN_CAMINO → completar entrega ── */}
@@ -1549,8 +1619,16 @@ export default function TecnicoApp() {
   useEffect(() => {
     try { localStorage.setItem('tecnico_ui_tab', tab) } catch (_) {}
   }, [tab])
+  // El mensajero solo tiene Entregas: si venía una pestaña guardada de otro rol
+  // (o cambió de rol), la app abriría en una pestaña que ya no existe.
+  useEffect(() => {
+    if (tecnico?.rol === 'MENSAJERO' && tab !== 'entregas') setTab('entregas')
+  }, [tecnico, tab])
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
+  // Pool: entregas publicadas sin dueño, que cualquiera puede tomar
+  const [disponibles, setDisponibles] = useState([])
+  const [tomando, setTomando]     = useState(null)   // id de la entrega que se está tomando
   // Filtro de fechas de las colas activas (vacío = todo; no oculta trabajo por defecto)
   const [recDesde, setRecDesde]   = useState('')
   const [recHasta, setRecHasta]   = useState('')
@@ -1683,23 +1761,32 @@ export default function TecnicoApp() {
         cuarto_frio_data: cfMap[s.id] || null,
       }))
 
-      // ── 4. Entregas ──
-      const { data: entData } = await db.from('entregas')
-        .select(`
-          *,
-          servicios:servicio_id (
-            id, estado, valor_total, valor_pagado, estado_pago,
-            mascotas:mascota_id (
-              nombre, especie_id,
-              especies ( nombre ),
-              clientes:cliente_id ( nombre, apellido, whatsapp )
-            ),
-            planes:plan_id ( nombre )
-          )
-        `)
-        .eq('mensajero_id', tecnico.id)
-        .in('estado', ['ASIGNADA', 'EN_CAMINO'])
-        .order('fecha_programada', { ascending: true, nullsFirst: true })
+      // ── 4. Entregas: las mías + el pool de disponibles ──
+      // El pool (DISPONIBLE, sin dueño) lo ve todo mensajero/técnico y lo toma el
+      // primero que pueda; PENDIENTE es el cascarón que crea el trigger al nacer
+      // el servicio y NO se muestra nunca.
+      const SELECT_ENTREGA = `
+        *,
+        servicios:servicio_id (
+          id, estado, valor_total, valor_pagado, estado_pago,
+          mascotas:mascota_id (
+            nombre, especie_id,
+            especies ( nombre ),
+            clientes:cliente_id ( nombre, apellido, whatsapp )
+          ),
+          planes:plan_id ( nombre )
+        )
+      `
+      const [{ data: entData }, { data: poolData }] = await Promise.all([
+        db.from('entregas').select(SELECT_ENTREGA)
+          .eq('mensajero_id', tecnico.id)
+          .in('estado', ['ASIGNADA', 'EN_CAMINO'])
+          .order('fecha_programada', { ascending: true, nullsFirst: true }),
+        db.from('entregas').select(SELECT_ENTREGA)
+          .eq('estado', 'DISPONIBLE')
+          .order('fecha_programada', { ascending: true, nullsFirst: true })
+          .limit(100),
+      ])
 
       // Recogidas activas: solo INGRESADO y EN_RECOGIDA
       // EN_CUARTO_FRIO va exclusivamente al tab C. Frío
@@ -1708,6 +1795,7 @@ export default function TecnicoApp() {
       )
       // Entregas de servicios cancelados no son tareas activas
       const nuevasE = (entData || []).filter(e => e.servicios?.estado !== 'CANCELADO')
+      setDisponibles((poolData || []).filter(e => e.servicios?.estado !== 'CANCELADO'))
 
       const total = nuevasR.length
       if (silent && prevCountRef.current !== null && total > prevCountRef.current) {
@@ -1834,9 +1922,17 @@ export default function TecnicoApp() {
         filter: `tecnico_id=eq.${tecnico.id}`,
       }, () => { cargar(true) })
       .subscribe()
+    // El pool es compartido: si un compañero toma una entrega, debe desaparecer
+    // de mi lista sin esperar al polling (si no, la toco y me sale "ya la tomaron").
+    const canalEnt = db
+      .channel(`tecnico-entregas-${tecnico.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' },
+        () => { cargar(true) })
+      .subscribe()
     return () => {
       clearInterval(id)
       db.removeChannel(canal)
+      db.removeChannel(canalEnt)
     }
   }, [tecnico, cargar])
 
@@ -2137,6 +2233,56 @@ export default function TecnicoApp() {
     await cargar()
   }
 
+  // Tomar una entrega del pool. El UPDATE es condicional (sigue DISPONIBLE y sin
+  // dueño): si dos personas la tocan a la vez, la segunda no actualiza ninguna
+  // fila y se entera de que ya se la llevaron, en vez de pisar al primero.
+  async function tomarEntrega(ent) {
+    setTomando(ent.id)
+    try {
+      const { data, error } = await db.from('entregas')
+        .update({ mensajero_id: tecnico.id, estado: 'ASIGNADA', tomada_en: new Date().toISOString() })
+        .eq('id', ent.id)
+        .eq('estado', 'DISPONIBLE')
+        .is('mensajero_id', null)
+        .select('id')
+      if (error) throw new Error(error.message)
+      if (!data?.length) {
+        setNotif('Otro compañero tomó esa entrega primero.')
+        setTimeout(() => setNotif(null), 6000)
+        await cargar(true)
+        return
+      }
+      const coords = await getCoordinadores()
+      const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+      await Promise.all(coords.map(c => crearNotificacion({
+        para_personal_id: c.id,
+        de_personal_id:   tecnico?.id,
+        tipo:             'ENTREGA_TOMADA',
+        titulo:           `${tecnico?.nombre} tomó una entrega`,
+        mensaje:          `${mascota} · ${ent.direccion_entrega || 'sin dirección'}`,
+        servicio_id:      ent.servicio_id,
+      })))
+      await cargar()
+    } catch (e) {
+      setNotif(e.message || 'No se pudo tomar la entrega')
+      setTimeout(() => setNotif(null), 6000)
+    } finally {
+      setTomando(null)
+    }
+  }
+
+  // Devolver al pool una entrega que tomé y no voy a hacer. Solo antes de salir:
+  // ya EN_CAMINO el servicio quedó en EN_ENTREGA y hay que resolverla.
+  async function soltarEntrega(ent) {
+    const { error } = await db.from('entregas')
+      .update({ mensajero_id: null, estado: 'DISPONIBLE', tomada_en: null })
+      .eq('id', ent.id)
+      .eq('estado', 'ASIGNADA')
+      .eq('mensajero_id', tecnico.id)
+    if (error) throw new Error(error.message)
+    await cargar()
+  }
+
   async function aceptarEntrega(ent) {
     const { error } = await db.from('entregas').update({ estado: 'EN_CAMINO' }).eq('id', ent.id)
     if (error) throw new Error(error.message)
@@ -2199,14 +2345,19 @@ export default function TecnicoApp() {
 
   const sinReporteHoy = !reporteHoy
   // Orden = flujo real del técnico: recoger → recibo → comprobante → cuarto frío → entregar
-  const TABS = [
+  const TABS_TODOS = [
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
     { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: 0,                    color: '#7C3AED' },
     { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
-    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length,       color: '#1A5CD8' },
+    { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length + disponibles.length, color: '#1A5CD8' },
     { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: cuadresPend,           color: '#16a34a' },
   ]
+  // El MENSAJERO solo hace entregas: el resto de la app es del técnico de campo
+  // (decisión David 2026-07-31). Si algún día cobra en la puerta, habrá que
+  // devolverle Recibos/Comprobantes/Mis pagos.
+  const esMensajero = tecnico?.rol === 'MENSAJERO'
+  const TABS = esMensajero ? TABS_TODOS.filter(t => t.key === 'entregas') : TABS_TODOS
 
   // Filtro de fechas de las colas activas (cliente). Sin fecha no se oculta nada.
   const enRango = (f, d, h) => !f || ((!d || f >= d) && (!h || f <= h))
@@ -2417,17 +2568,38 @@ export default function TecnicoApp() {
           </div>
         ) : tab === 'entregas' ? (
           <div className="space-y-3">
+
+            {/* ── Mis entregas ── */}
             {entregas.length > 0 && (
               <FiltroFechas desde={entDesde} hasta={entHasta} setDesde={setEntDesde} setHasta={setEntHasta} />
             )}
             {entregasFiltradas.length === 0
               ? <EmptyState icon="📦"
-                  texto={entregas.length ? 'Sin entregas en ese rango' : 'Sin entregas asignadas'}
-                  sub={entregas.length ? 'Ajusta o quita el filtro de fechas para ver las demás.' : 'Cuando te asignen una entrega, aparecerá aquí.'} />
+                  texto={entregas.length ? 'Sin entregas en ese rango' : 'No has tomado ninguna entrega'}
+                  sub={entregas.length
+                    ? 'Ajusta o quita el filtro de fechas para ver las demás.'
+                    : disponibles.length
+                      ? 'Abajo están las disponibles: toma la que puedas hacer.'
+                      : 'Cuando haya entregas listas, aparecerán aquí para tomarlas.'} />
               : entregasFiltradas.map(e => (
                 <CardEntrega key={e.id} ent={e} tecnico={tecnico}
-                  onAceptar={aceptarEntrega} onCompletar={completarEntrega} />
+                  onAceptar={aceptarEntrega} onCompletar={completarEntrega} onSoltar={soltarEntrega} />
               ))}
+
+            {/* ── Pool: disponibles para tomar ── */}
+            {disponibles.length > 0 && (
+              <div className="pt-2">
+                <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 mb-3 text-sm font-semibold"
+                  style={{ background: '#EEF2FF', color: '#3730A3', border: '1px solid #C7D2FE' }}>
+                  <Package size={15} style={{ flexShrink: 0 }} />
+                  {disponibles.length} entrega{disponibles.length > 1 ? 's' : ''} disponible{disponibles.length > 1 ? 's' : ''} — toma la que puedas hacer
+                </div>
+                {disponibles.map(e => (
+                  <CardDisponible key={e.id} ent={e}
+                    tomando={tomando === e.id} onTomar={tomarEntrega} />
+                ))}
+              </div>
+            )}
           </div>
         ) : tab === 'cuarto_frio' ? (
           <div className="space-y-4">

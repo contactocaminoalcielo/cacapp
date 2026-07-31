@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
-import { db } from '@/lib/supabase'
+import { db, dbIn } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
@@ -274,8 +274,44 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
   )
 }
 
+// Estado de la entrega por servicio: { servicio_id → entrega }. PENDIENTE es el
+// cascarón que crea el trigger al nacer el servicio, no una entrega preparada:
+// se descarta para que la tarjeta no diga nada hasta que alguien la publique.
+// `dbIn` trocea: `.in()` con cientos de ids revienta la URL (414) en silencio.
+async function cargarEntregas(servicioIds = []) {
+  const filas = await dbIn(
+    'entregas',
+    'id, servicio_id, estado, mensajero_id, publicada_en, tomada_en, ' +
+    'personal:mensajero_id ( nombre, apellido )',
+    'servicio_id',
+    servicioIds,
+    q => q.neq('estado', 'PENDIENTE')
+  )
+  return Object.fromEntries(filas.map(e => [e.servicio_id, e]))
+}
+
+// Línea de estado bajo el botón de entrega: dónde está parada la entrega y con quién.
+function EstadoEntrega({ ent }) {
+  if (!ent) return null
+  const quien = ent.personal ? `${ent.personal.nombre} ${ent.personal.apellido}`.trim() : null
+  const CFG = {
+    DISPONIBLE:  { color: '#3730A3', texto: 'Publicada — esperando que alguien la tome' },
+    ASIGNADA:    { color: '#5B21B6', texto: quien ? `${ent.tomada_en ? 'La tomó' : 'Asignada a'} ${quien}` : 'Asignada' },
+    EN_CAMINO:   { color: '#1E40AF', texto: quien ? `${quien} va en camino` : 'En camino' },
+    ENTREGADA:   { color: '#065F46', texto: quien ? `Entregada por ${quien}` : 'Entregada' },
+    FALLIDA:     { color: '#991B1B', texto: 'Entrega fallida' },
+    REPROGRAMADA:{ color: '#92400E', texto: 'Reprogramada' },
+  }[ent.estado]
+  if (!CFG) return null
+  return (
+    <div className="mt-1.5 text-[11px] font-semibold text-center" style={{ color: CFG.color }}>
+      {CFG.texto}
+    </div>
+  )
+}
+
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
@@ -437,14 +473,17 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, filt
               </div>
             )}
 
-            {/* Botón preparar entrega cuando está LISTO */}
+            {/* Botón preparar entrega cuando está LISTO + en qué va */}
             {todoListo && onPrepararEntrega && (
-              <button
-                onClick={() => onPrepararEntrega(sId)}
-                className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
-                style={{ background: '#4F46E5' }}>
-                <Truck size={13} /> Preparar entrega
-              </button>
+              <>
+                <button
+                  onClick={() => onPrepararEntrega(sId)}
+                  className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+                  style={{ background: '#4F46E5' }}>
+                  <Truck size={13} /> {entregas[sId] ? 'Ver entrega' : 'Preparar entrega'}
+                </button>
+                <EstadoEntrega ent={entregas[sId]} />
+              </>
             )}
           </div>
         )
@@ -873,6 +912,7 @@ export default function Produccion() {
   const esAdmin = personalData?.rol === 'ADMIN' || personalData?.rol === 'COORDINADOR'
   const [recordatorios, setRecordatorios] = useState([])
   const [etapas,        setEtapas]        = useState({})   // servicio_id → etapa de contacto
+  const [entregas,      setEntregas]      = useState({})   // servicio_id → entrega (pool / asignada)
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])
   const [loading,       setLoading]       = useState(true)
@@ -946,6 +986,12 @@ export default function Produccion() {
       setRecordatorios(recs || [])
       setPersonal(per || [])
       setMaquinas(maq || [])
+      // Estado de la entrega de los servicios ya LISTO: si está publicada al pool,
+      // si alguien la tomó y quién. Es el control de entregas del coordinador.
+      cargarEntregas((recs || [])
+        .filter(r => ['LISTO', 'EN_ENTREGA'].includes(r.servicios?.estado))
+        .map(r => r.servicios?.id))
+        .then(setEntregas).catch(() => {})   // informativo: si falla, el tablero sigue
       // En qué contacto va cada servicio que AÚN espera fotos. Solo se piden los
       // que no han cargado: para el resto la etiqueta no aplica y seria ruido.
       // Va aparte (no en el join) porque los contactos cuelgan del servicio, no
@@ -1152,6 +1198,7 @@ export default function Produccion() {
         {vista === 'servicio' && (
           <VistaPorServicio
             recordatorios={recordatorios} personal={personal} maquinas={maquinas} etapas={etapas}
+            entregas={entregas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
