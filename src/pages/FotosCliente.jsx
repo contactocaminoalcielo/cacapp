@@ -912,9 +912,15 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
       {ofertas.length > 0 && (
         <div className="bg-white rounded-2xl border overflow-hidden"
           style={{ borderColor: ofertas.some(of => ofertaResp[of.id] === true) ? G : BORD }}>
-          <div className="px-5 py-3 border-b" style={{ borderColor: BORD }}>
-            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>
-              {ofertas.length > 1 ? 'Ofertas' : 'Oferta'}
+          {/* Encabezado con peso: es lo último que ve antes de enviar y la
+              última ocasión de recuperar una oferta que rechazó. */}
+          <div className="px-5 py-4 border-b" style={{ borderColor: BORD, background: G_LITE }}>
+            <p className="text-[15px] font-bold flex items-center gap-2" style={{ color: G }}>
+              <Gift size={17} />
+              {ofertas.length > 1 ? 'Ofertas especiales para ti' : 'Oferta especial para ti'}
+            </p>
+            <p className="text-[12.5px] text-gray-500 mt-1 leading-relaxed">
+              Puedes agregarlas a los recuerdos de {mascota} hasta antes de enviar.
             </p>
           </div>
           {ofertas.map((of, i) => {
