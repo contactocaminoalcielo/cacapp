@@ -75,6 +75,24 @@ Todo dentro de la transacción de `recibirImagenesPortal`:
 Es el mismo tratamiento que "agregar adicional sin pagar" del Kanban: el cobro se hace en
 la entrega.
 
+### Aislamiento: una oferta no puede tumbar el envío
+
+Cada respuesta a una oferta corre en su **propio SAVEPOINT** (helper `aislado` en
+`imagenes.js`). El envío del cliente —fotos, textos, datos de entrega, avance de estado— es
+todo-o-nada, pero la oferta es accesoria: si su aplicación revienta, se deshace solo ese
+pedazo y el envío se guarda igual.
+
+Cuando falla una oferta **aceptada** queda una alerta **ALTA** `OFERTA_ACEPTADA` con
+`clave_dedupe = 'oferta-fallida:<oferta>:<servicio>'` y, en `metadata`, las URLs de las
+fotos que el cliente sí subió, para montar el adicional a mano desde Kanban. Una venta
+aceptada nunca se pierde en silencio.
+
+**Por qué:** hasta el 3-ago-2026 un `INSERT` con `datos_cliente = NULL` (columna
+`NOT NULL DEFAULT '{}'`; un NULL explícito **no** cae al default) hacía ROLLBACK del envío
+completo para todo cliente que aceptara una oferta cuyo recordatorio no pide textos
+(Memopet, Huella 3D). 6 clientes bloqueados y 42 fallos en 3 días, resubiendo sus fotos en
+cada reintento. Al añadir efectos secundarios nuevos aquí, envolverlos en `aislado`.
+
 ### Efecto lateral: entrega física
 
 Aceptar una oferta **no digital** convierte en entregable un servicio que no lo era (p. ej.
