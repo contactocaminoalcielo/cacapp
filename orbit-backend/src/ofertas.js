@@ -183,7 +183,11 @@ export async function aplicarOfertaAceptada(client, { servicioId, oferta, entry 
     `INSERT INTO public.servicio_recordatorios
        (servicio_id, recordatorio_id, origen, estado, cantidad, precio_cobrado,
         imagen_cliente_url, imagenes_cliente_urls, datos_cliente)
-     VALUES ($1, $2, 'ADICIONAL', 'EN_PROCESO', 1, $3, $4, $5::text[], $6::jsonb)
+     -- COALESCE obligatorio: datos_cliente es NOT NULL DEFAULT '{}', y un NULL
+     -- explícito NO cae al default. Sin esto, aceptar una oferta cuyo
+     -- recordatorio no pide textos (Huella 3D, Memopet) reventaba el INSERT y
+     -- hacía ROLLBACK de TODO el envío del portal.
+     VALUES ($1, $2, 'ADICIONAL', 'EN_PROCESO', 1, $3, $4, $5::text[], COALESCE($6::jsonb, '{}'::jsonb))
      RETURNING id`,
     [servicioId, oferta.recordatorio.id, precio, urls[0] || null, urls, textos]
   )

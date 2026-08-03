@@ -37,6 +37,18 @@ app.use((req, res, next) => {
   next()
 })
 
+// En los portales públicos el cliente NO debe ver el error real (filtra esquema
+// de la DB), pero "Error interno" a secas es indiagnosticable: hubo 3 días de
+// fallos silenciosos en el portal de fotos sin que nadie supiera la causa.
+// Solución: un `ref` corto que se imprime en el log JUNTO al error real y viaja
+// al navegador. El cliente lo lee por WhatsApp y `docker logs | grep <ref>` da
+// la causa exacta.
+function errorInterno(res, tag, e) {
+  const ref = Math.random().toString(36).slice(2, 8).toUpperCase()
+  log(`[${tag}] ERROR ref=${ref}`, e?.message, e?.stack?.split('\n')[1]?.trim() || '')
+  res.status(500).json({ ok: false, error: 'Error interno', ref })
+}
+
 // ── Salud ──
 app.get('/health', async (_req, res) => {
   try {
@@ -200,8 +212,7 @@ app.get('/portal/imagenes/:codigo', async (req, res) => {
     const r = await datosPortal({ codigo: req.params.codigo })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[portal/imagenes GET] ERROR', e.message)
-    res.status(500).json({ ok: false, error: 'Error interno' })
+    errorInterno(res, 'portal/imagenes GET', e)
   }
 })
 
@@ -210,8 +221,7 @@ app.post('/portal/imagenes/:codigo', async (req, res) => {
     const r = await recibirImagenesPortal({ codigo: req.params.codigo, payload: req.body || {} })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[portal/imagenes POST] ERROR', e.message)
-    res.status(500).json({ ok: false, error: 'Error interno' })
+    errorInterno(res, 'portal/imagenes POST', e)
   }
 })
 
@@ -222,8 +232,7 @@ app.post('/portal/aliado/validar', async (req, res) => {
     const r = await validarTokenPortal({ token: req.body?.token })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[portal/aliado/validar] ERROR', e.message)
-    res.status(500).json({ ok: false, error: 'Error interno' })
+    errorInterno(res, 'portal/aliado/validar', e)
   }
 })
 
@@ -232,8 +241,7 @@ app.post('/portal/aliado/solicitud', async (req, res) => {
     const r = await crearSolicitudAliado({ token: req.body?.token, payload: req.body || {} })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[portal/aliado/solicitud] ERROR', e.message)
-    res.status(500).json({ ok: false, error: 'Error interno' })
+    errorInterno(res, 'portal/aliado/solicitud', e)
   }
 })
 
@@ -243,8 +251,7 @@ app.post('/portal/aliado/afiliacion', async (req, res) => {
     const r = await registrarAfiliacion({ payload: req.body || {} })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[portal/aliado/afiliacion] ERROR', e.message)
-    res.status(500).json({ ok: false, error: 'Error interno' })
+    errorInterno(res, 'portal/aliado/afiliacion', e)
   }
 })
 

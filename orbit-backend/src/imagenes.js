@@ -22,6 +22,38 @@ import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.j
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
+/**
+ * Corre un efecto SECUNDARIO del envío del portal dentro de su propio SAVEPOINT.
+ *
+ * El núcleo del envío (fotos, textos, datos de entrega, avance de estado) es
+ * todo-o-nada y así debe seguir. Pero lo accesorio —una oferta, una alerta— no
+ * puede costarle al cliente su carga completa: en agosto de 2026 un INSERT de
+ * oferta con `datos_cliente` NULL hizo ROLLBACK de envíos enteros y varios
+ * clientes reintentaron hasta 8 veces, volviendo a subir todas sus fotos y a
+ * llenar el formulario cada vez. Ver [[bug_null_explicito_no_cae_al_default]].
+ *
+ * Si `fn` revienta, se deshace SOLO su pedazo y la transacción sigue viva
+ * (ROLLBACK TO SAVEPOINT deja la sesión utilizable; sin él, Postgres rechaza
+ * todo comando posterior hasta el ROLLBACK final).
+ *
+ * El nombre del savepoint lo generamos nosotros — nunca sale del payload del
+ * cliente, que no puede inyectar un identificador SQL.
+ */
+async function aislado(client, etiqueta, fn) {
+  const sp = 'sp_' + Math.random().toString(36).slice(2, 10)
+  await client.query(`SAVEPOINT ${sp}`)
+  try {
+    const valor = await fn()
+    await client.query(`RELEASE SAVEPOINT ${sp}`)
+    return { ok: true, valor }
+  } catch (e) {
+    await client.query(`ROLLBACK TO SAVEPOINT ${sp}`)
+    log('[imagenes/recibir] efecto aislado FALLÓ —', etiqueta, '—', e.message,
+        '(el envío del cliente NO se pierde)')
+    return { ok: false, error: e }
+  }
+}
+
 function uuidOrNull(value) {
   if (!value) return null
   const s = String(value)
@@ -484,15 +516,46 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // (servicio, oferta) impide cobrar dos veces si el cliente reenvía.
     // Van en serie, no en Promise.all: comparten la transacción y cada
     // aplicación suma sobre el `valor_total` que dejó la anterior.
+    // Cada respuesta va AISLADA: una venta que no se puede cargar es un problema
+    // de la casa, no del cliente — él ya llenó todo y sus fotos ya están subidas.
     const ofertaSrIds = []
+    const ofertasFallidas = []
     for (const r of respuestas) {
-      if (r.acepta) {
-        ofertaSrIds.push(
-          await aplicarOfertaAceptada(client, { servicioId: s.id, oferta: r.oferta, entry: r.entry })
-        )
-      } else {
+      const res = await aislado(client, `oferta ${r.oferta.titulo} (${r.acepta ? 'ACEPTADA' : 'RECHAZADA'})`, async () => {
+        if (r.acepta)
+          return await aplicarOfertaAceptada(client, { servicioId: s.id, oferta: r.oferta, entry: r.entry })
         await registrarRechazoOferta(client, { servicioId: s.id, oferta: r.oferta })
-      }
+        return null
+      })
+      if (res.ok) { if (r.acepta && res.valor) ofertaSrIds.push(res.valor) }
+      else if (r.acepta) ofertasFallidas.push({ ...r, error: res.error })
+    }
+
+    // Una venta aceptada que no quedó cargada NO puede perderse en silencio: el
+    // cliente ya dijo que sí y espera el producto. Alerta ALTA con las URLs de
+    // sus fotos, que sí sobrevivieron en el storage, para que Producción las
+    // encuentre al montar el adicional a mano.
+    for (const f of ofertasFallidas) {
+      await aislado(client, `alerta de oferta fallida ${f.oferta.id}`, () => client.query(
+        `INSERT INTO public.alertas_operativas
+           (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+         VALUES ($1, NULL, $2, 'OFERTA_ACEPTADA', 'ALTA', $3, $4, $5, $6::jsonb)
+         ON CONFLICT DO NOTHING`,
+        [s.id, MOD,
+         `El cliente ACEPTÓ la oferta "${f.oferta.titulo}" (${f.oferta.recordatorio.nombre}) ` +
+         `por $${Number(f.oferta.precio_oferta || 0).toLocaleString('es-CO')}, pero un error técnico ` +
+         `impidió cargar el adicional. Sus fotos SÍ se recibieron.`,
+         'Agregar el adicional manualmente desde Kanban (con sus fotos, ver metadata) y confirmar el cobro en la entrega.',
+         `oferta-fallida:${f.oferta.id}:${s.id}`,
+         JSON.stringify({
+           oferta_id: f.oferta.id,
+           recordatorio_id: f.oferta.recordatorio.id,
+           precio: f.oferta.precio_oferta,
+           urls: (f.entry?.urls || []).filter(u => typeof u === 'string' && u.includes(s.id)),
+           textos: f.entry?.textos || {},
+           error: f.error?.message || null,
+         })]
+      ))
     }
 
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
@@ -531,7 +594,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Interés en adicional → SOLO alerta para coordinación (sin crear servicio_recordatorios ni cobro)
     const ai = payload.adicional_interes
     if (ai && (ai.recordatorio_id || ai.texto)) {
-      await client.query(
+      await aislado(client, 'alerta de interés en adicional', () => client.query(
         `INSERT INTO public.alertas_operativas
            (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
          VALUES ($1, NULL, $2, 'SOLICITA_ADICIONAL', 'MEDIA', $3, $4, NULL, $5::jsonb)`,
@@ -539,14 +602,14 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
          'El cliente solicitó información para comprar un recordatorio adicional',
          'Contactar al cliente y, si confirma, agregar el adicional por el flujo de Kanban',
          JSON.stringify({ recordatorio_id: ai.recordatorio_id || null, texto: ai.texto || null })]
-      )
+      ))
     }
 
     // Recordatorios declinados → alerta para coordinación (quedaron en 'NA').
     if (declinados.size) {
       const declList = items.filter(it => declinados.has(String(it.sr_id)))
       const nombres  = declList.map(it => it.recordatorio?.nombre || 'Recordatorio').join(', ')
-      await client.query(
+      await aislado(client, 'alerta de recordatorios declinados', () => client.query(
         `INSERT INTO public.alertas_operativas
            (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
          VALUES ($1, NULL, $2, 'RECORDATORIO_DECLINADO', 'MEDIA', $3, $4, NULL, $5::jsonb)`,
@@ -554,14 +617,15 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
          `El cliente indicó que NO desea ${declList.length} recordatorio(s): ${nombres}`,
          'Quedaron marcados como NO aplica (no entran a producción). Revisar con el cliente si corresponde.',
          JSON.stringify({ declinados: declList.map(it => ({ sr_id: it.sr_id, nombre: it.recordatorio?.nombre || null })) })]
-      )
+      ))
     }
 
     await client.query('COMMIT')
     log('[imagenes/recibir]', cod, 'RECIBIDO', items.length, 'items',
         respuestas.length
           ? `ofertas=${respuestas.map(r => `${r.oferta.titulo}:${r.acepta ? 'ACEPTADA' : 'RECHAZADA'}`).join(', ')}`
-          : '')
+          : '',
+        ofertasFallidas.length ? `⚠ ${ofertasFallidas.length} oferta(s) NO cargada(s) — ver alerta ALTA` : '')
     return { status: 200, body: {
       ok: true, recibido: true, items: items.length,
       ofertas_aceptadas: ofertaSrIds.length,

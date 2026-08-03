@@ -286,9 +286,13 @@ export default function FotosCliente({ codigo: codigoProp }) {
         throw new Error('Por favor completa los datos de entrega: dirección, quién recibe y teléfono.')
       if (r.error === 'ya_procesado') { setFase('ya_procesado'); return }
       if (r.error === 'fuera_de_ventana') { setFase('fuera_ventana'); return }
-      throw new Error(r.error || 'No se pudo guardar')
+      // `ref` lo genera el backend y queda en su log junto al error real: es lo
+      // único que permite diagnosticar un fallo del portal sin adivinar.
+      console.error('[FotosCliente] guardar falló:', r)
+      throw new Error((r.error || 'No se pudo guardar') + (r.ref ? ` (ref ${r.ref})` : ''))
     } catch (e) {
-      alert('Ocurrió un error. Intenta de nuevo.\n\n' + e.message)
+      alert('Ocurrió un error. Intenta de nuevo.\n\n' + e.message +
+            '\n\nSi vuelve a fallar, escríbenos por WhatsApp con este mensaje.')
     } finally { setGuardando(false) }
   }
 
