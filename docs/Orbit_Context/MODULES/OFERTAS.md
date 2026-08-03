@@ -113,14 +113,30 @@ segmento es un marcador porque el `servicio_recordatorios` todavía no existe (l
 backend al recibir). La policy `anon_insert_fotos_clientes` solo valida el primer segmento,
 así que no requiere cambios.
 
+### Cómo se ve el rechazo (y cómo se deshace)
+
+Rechazar es una decisión y debe **sentirse tomada**: con el gris de antes el cliente no
+distinguía "dije que no" de "todavía no respondo". Al pulsar "No, gracias" el botón queda
+marcado en rojo (`R = #DC2626`) con una ✕, el borde del anuncio se pone rojo y aparece el
+bloque "No deseas este `<recordatorio>`". El botón vecino pasa a **"Mejor sí lo quiero"** en
+outline verde — cambiar de opinión nunca queda a más de un toque.
+
+En el resumen de la revisión final las ofertas se listan por el **nombre del recordatorio**
+(Memopet, Huella 3D), no por el título del anuncio, que es prácticamente idéntico en todas.
+Para una rechazada el botón dice **"Sí lo quiero"** y no solo navega: llama a
+`quiereOferta()`, que la deja **aceptada** y salta al paso de su captura. Obligarlo a pulsar
+"Sí, lo quiero" otra vez en el anuncio era un paso de más para quien ya decidió comprar.
+
 ### Confirmaciones antes de enviar
 
 Al pulsar "Enviar" aparece una secuencia de confirmaciones, una a la vez:
 
 1. **¿Subiste todas las fotos?** — con el resumen ítem por ítem.
 2. **¿Los datos de entrega están correctos?** — solo si hay entrega física; permite volver a corregirlos.
-3. **¿Confirmas que NO deseas la oferta?** — **una pregunta por cada oferta rechazada**; con
-   botón "Mejor sí la quiero" que devuelve al paso de ESE anuncio.
+3. **¿Seguro que no deseas agregar `<recordatorio>`?** — **una por cada oferta rechazada**.
+   Aquí la jerarquía está invertida a propósito: **"✓ Sí lo quiero"** es el botón verde
+   protagonista (acepta y lleva a la captura) y continuar sin él es el gris discreto
+   "No, gracias · enviar ahora". Es el último momento para recuperar la venta.
 
 ### Compatibilidad con PWA en caché
 
