@@ -10,6 +10,11 @@ const G_LITE = '#E8F3EB'
 const G_MID  = '#C5DEC9'
 const BG     = '#F4F7F4'
 const BORD   = '#D8E5D8'
+// Rojo del "no, gracias": rechazar es una decisión y debe SENTIRSE tomada. Con
+// el gris de antes el cliente no distinguía "dije que no" de "no he respondido".
+const R      = '#DC2626'
+const R_LITE = '#FEF2F2'
+const R_MID  = '#FCA5A5'
 
 const MIMES_OK = MIMES_IMAGEN_OK
 
@@ -130,6 +135,15 @@ export default function FotosCliente({ codigo: codigoProp }) {
   function responderOferta(of, v) {
     setOfertaResp(p => ({ ...p, [of.id]: v }))
     if (v) setOfertaFotos(p => (p[of.id]?.length ? p : { ...p, [of.id]: iniFotos(of.recordatorio) }))
+  }
+
+  // "Sí lo quiero" tras haber dicho que no: se acepta y se lleva al cliente
+  // directo a subir lo que ese recordatorio necesita. Volver a pedirle que
+  // pulse "Sí, lo quiero" otra vez en el anuncio sería un paso de más justo
+  // cuando ya decidió comprar.
+  function quiereOferta(of) {
+    responderOferta(of, true)
+    ir(pasoDeOferta(of))
   }
 
   function toggleDeclinado(id, v) {
@@ -390,6 +404,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}
                   ofertas={ofertas} ofertaResp={ofertaResp}
                   onIrOferta={of => ir(pasoDeOferta(of))}
+                  onQuiereOferta={of => quiereOferta(of)}
                   onGoTo={ir}
                 />
               )}
@@ -467,7 +482,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
           ofertas={ofertas} ofertaResp={ofertaResp}
           onCancelar={() => setConfirmando(false)}
           onCorregirEntrega={() => { setConfirmando(false); ir(totalPasos - 1) }}
-          onQuieroOferta={of => { setConfirmando(false); ir(pasoDeOferta(of)) }}
+          onQuieroOferta={of => { setConfirmando(false); quiereOferta(of) }}
           onConfirmado={guardar}
         />
       )}
@@ -763,7 +778,8 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
         <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{oferta.titulo}</h2>
       </div>
 
-      <div className="bg-white rounded-3xl border-2 overflow-hidden" style={{ borderColor: acepta === true ? G : BORD }}>
+      <div className="bg-white rounded-3xl border-2 overflow-hidden"
+        style={{ borderColor: acepta === true ? G : acepta === false ? R_MID : BORD }}>
         {oferta.imagen_url && (
           <img src={oferta.imagen_url} alt={oferta.titulo} className="w-full object-cover" style={{ aspectRatio: '16/10' }} />
         )}
@@ -788,21 +804,28 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
             al momento de la entrega. Si prefieres que no, no pasa nada.
           </p>
 
+          {/* La opción elegida se ve elegida: rojo si dijo que no, verde si dijo
+              que sí. La otra queda en outline, siempre a un toque de distancia
+              por si cambia de opinión. */}
           <div className="grid grid-cols-2 gap-3 pt-1">
-            <button onClick={() => onResponder(false)}
-              className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
+            <motion.button onClick={() => onResponder(false)} whileTap={{ scale: 0.97 }}
+              className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
               style={acepta === false
-                ? { borderColor: '#9CA3AF', color: '#374151', background: '#F3F4F6' }
+                ? { borderColor: R, color: R, background: R_LITE }
                 : { borderColor: BORD, color: '#6B7280', background: 'white' }}>
+              {acepta === false && <X size={16} strokeWidth={3} />}
               No, gracias
-            </button>
-            <button onClick={() => onResponder(true)}
-              className="py-4 rounded-2xl font-bold text-[15px] border-2 text-white transition-all"
+            </motion.button>
+            <motion.button onClick={() => onResponder(true)} whileTap={{ scale: 0.97 }}
+              className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
               style={acepta === true
-                ? { borderColor: G, background: G }
-                : { borderColor: G, background: G, opacity: 0.92 }}>
-              {acepta === true ? '✓ Lo quiero' : 'Sí, lo quiero'}
-            </button>
+                ? { borderColor: G, background: G, color: '#fff' }
+                : acepta === false
+                  ? { borderColor: G, background: 'white', color: G }
+                  : { borderColor: G, background: G, color: '#fff', opacity: 0.92 }}>
+              {acepta === true && <Check size={16} strokeWidth={3} />}
+              {acepta === false ? 'Mejor sí lo quiero' : acepta === true ? 'Lo quiero' : 'Sí, lo quiero'}
+            </motion.button>
           </div>
         </div>
       </div>
@@ -822,18 +845,27 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
       )}
 
       {acepta === false && (
-        <div className="rounded-2xl border px-5 py-4 text-center" style={{ borderColor: BORD, background: 'white' }}>
-          <p className="text-[14px] text-gray-500">
-            Sin problema. Continuemos con los recuerdos de {mascota}.
-          </p>
-        </div>
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl border-2 px-5 py-4 flex items-start gap-3"
+          style={{ borderColor: R_MID, background: R_LITE }}>
+          <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ background: R }}>
+            <X size={15} color="#fff" strokeWidth={3} />
+          </div>
+          <div>
+            <p className="text-[15px] font-bold" style={{ color: R }}>No deseas este {rec.nombre}</p>
+            <p className="text-[13px] text-gray-600 mt-0.5 leading-relaxed">
+              Sin problema. Continuemos con los recuerdos de {mascota} — puedes cambiar de
+              opinión aquí mismo o antes de enviar.
+            </p>
+          </div>
+        </motion.div>
       )}
     </div>
   )
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, ofertas, ofertaResp, onIrOferta, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
@@ -888,23 +920,31 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           {ofertas.map((of, i) => {
             const acepta = ofertaResp[of.id]
             return (
-              <div key={of.id} className={`flex items-center gap-4 px-5 py-4 ${i > 0 ? 'border-t' : ''}`} style={{ borderColor: BORD }}>
+              <div key={of.id} className={`flex items-center gap-4 px-5 py-4 ${i > 0 ? 'border-t' : ''}`}
+                style={{ borderColor: BORD, background: acepta === false ? R_LITE : 'transparent' }}>
                 <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                  style={{ background: acepta === true ? G : '#E5E7EB' }}>
+                  style={{ background: acepta === true ? G : acepta === false ? R : '#E5E7EB' }}>
                   {acepta === true
                     ? <Check size={16} color="#fff" strokeWidth={3} />
-                    : <X size={15} color="#6B7280" strokeWidth={3} />}
+                    : <X size={15} color={acepta === false ? '#fff' : '#6B7280'} strokeWidth={3} />}
                 </div>
                 <span className="flex-1 text-[15px] leading-tight text-gray-800">
-                  {of.titulo}
-                  <span className="block text-[12px] font-semibold mt-0.5" style={{ color: acepta === true ? G : '#9CA3AF' }}>
+                  {of.recordatorio?.nombre || of.titulo}
+                  <span className="block text-[12px] font-semibold mt-0.5"
+                    style={{ color: acepta === true ? G : acepta === false ? R : '#9CA3AF' }}>
                     {acepta === true
                       ? `Aceptada · ${pesos(of.precio_oferta)} se suman a tu servicio`
-                      : acepta === false ? 'No la deseas' : 'Sin responder'}
+                      : acepta === false ? `No lo deseas · ${pesos(of.precio_oferta)}` : 'Sin responder'}
                   </span>
                 </span>
-                <button onClick={() => onIrOferta(of)} className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all flex-shrink-0" style={{ background: G_LITE, color: G }}>
-                  {acepta === true ? 'Editar' : 'Ver'}
+                {/* Rechazada: el botón no es "ver", es la puerta de vuelta. Deja la
+                    oferta aceptada y lleva directo a subir lo que necesita. */}
+                <button onClick={() => acepta === false ? onQuiereOferta(of) : onIrOferta(of)}
+                  className="text-[13px] font-bold px-4 py-2 rounded-xl transition-all flex-shrink-0 border-2"
+                  style={acepta === false
+                    ? { background: G, color: '#fff', borderColor: G }
+                    : { background: G_LITE, color: G, borderColor: 'transparent' }}>
+                  {acepta === true ? 'Editar' : acepta === false ? 'Sí lo quiero' : 'Ver'}
                 </button>
               </div>
             )
@@ -1033,7 +1073,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
 // Cada una permite devolverse a corregir en vez de seguir de largo.
 function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedirEntrega, ofertas, ofertaResp, onCancelar, onCorregirEntrega, onQuieroOferta, onConfirmado }) {
   const aceptadas  = ofertas.filter(of => ofertaResp[of.id] === true)
-  const rechazadas = ofertas.filter(of => ofertaResp[of.id] !== true)
+  const rechazadas = ofertas.filter(of => ofertaResp[of.id] === false)
   const pasos = [{ tipo: 'fotos' }]
   if (pedirEntrega) pasos.push({ tipo: 'entrega' })
   // Última oportunidad, una por cada anuncio que declinó.
@@ -1129,12 +1169,15 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
             <>
               <div className="text-center">
                 <div className="text-4xl mb-2">🎁</div>
-                <h3 className="text-[20px] font-bold text-gray-900">¿Confirmas que no deseas esta oferta?</h3>
+                <h3 className="text-[20px] font-bold text-gray-900">
+                  ¿Seguro que no deseas agregar {actual.oferta.recordatorio?.nombre || 'este recordatorio'}?
+                </h3>
                 <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
-                  Es la última oportunidad de agregarla a los recuerdos de {mascota}.
+                  Es la última oportunidad de sumarlo a los recuerdos de {mascota}. Después de
+                  enviar ya no podrás agregarlo desde aquí.
                 </p>
               </div>
-              <div className="rounded-2xl border overflow-hidden" style={{ borderColor: BORD }}>
+              <div className="rounded-2xl border-2 overflow-hidden" style={{ borderColor: BORD }}>
                 {actual.oferta.imagen_url && (
                   <img src={actual.oferta.imagen_url} alt="" className="w-full object-cover" style={{ aspectRatio: '16/9' }} />
                 )}
@@ -1143,19 +1186,27 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
                   <p className="text-[17px] font-bold mt-1" style={{ color: G }}>{pesos(actual.oferta.precio_oferta)}</p>
                 </div>
               </div>
-              <button onClick={() => onQuieroOferta(actual.oferta)}
-                className="w-full py-4 rounded-2xl font-bold text-[15px] border-2 transition-all"
-                style={{ borderColor: G, color: G, background: G_LITE }}>
-                Mejor sí la quiero
-              </button>
+              {/* Cambiar de opinión es la acción destacada; seguir sin él es el
+                  botón secundario de abajo ("No, gracias" / "Sí, enviar ahora"). */}
+              <motion.button onClick={() => onQuieroOferta(actual.oferta)} whileTap={{ scale: 0.98 }}
+                className="w-full py-4 rounded-2xl font-bold text-[16px] text-white transition-all flex items-center justify-center gap-2"
+                style={{ background: G }}>
+                <Check size={18} strokeWidth={3} /> Sí lo quiero
+              </motion.button>
             </>
           )}
 
           <div className="space-y-2 pt-1">
+            {/* En el paso de una oferta rechazada el protagonismo lo tiene
+                "Sí lo quiero": seguir sin ella es la opción discreta. */}
             <button onClick={avanzar}
-              className="w-full py-4 rounded-2xl font-bold text-white text-[16px] transition-all"
-              style={{ background: G }}>
-              {esUltimo ? 'Sí, enviar ahora' : 'Sí, confirmo'}
+              className="w-full py-4 rounded-2xl font-bold text-[16px] transition-all border-2"
+              style={actual.tipo === 'oferta'
+                ? { borderColor: BORD, color: '#6B7280', background: 'white' }
+                : { borderColor: G, background: G, color: '#fff' }}>
+              {actual.tipo === 'oferta'
+                ? (esUltimo ? 'No, gracias · enviar ahora' : 'No, gracias · continuar')
+                : esUltimo ? 'Sí, enviar ahora' : 'Sí, confirmo'}
             </button>
             <button onClick={onCancelar}
               className="w-full py-3 rounded-2xl font-semibold text-[14px] text-gray-500">
