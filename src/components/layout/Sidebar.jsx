@@ -5,6 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
+  MessageCircle,
 } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -36,6 +37,7 @@ const ALL_NAV_GROUPS = [
   {
     label: 'CLIENTES',
     items: [
+      { path: '/whatsapp',     label: 'WhatsApp',         icon: MessageCircle, badge: 'whatsapp' },
       { path: '/gestion',      label: 'Gestión',         icon: Users },
       { path: '/nps',          label: 'NPS & Postventa',  icon: Star,  badge: 'nps' },
       { path: '/digitales',    label: 'Digitales',        icon: Film },

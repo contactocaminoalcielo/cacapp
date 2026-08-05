@@ -18,6 +18,7 @@ const PAGE_META = {
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/ofertas':      { title: 'Ofertas',                sub: 'Anuncios que ve el cliente en el portal de fotos' },
+  '/whatsapp':     { title: 'WhatsApp',               sub: 'Línea de veterinarias — conversaciones y respuestas' },
   '/reportes':     { title: 'Reportes',               sub: 'Análisis operacional y financiero' },
   '/presequiales': { title: 'Pre-Exequiales', sub: 'Anuales y vitalicias · contratos y renovaciones' },
   '/configuracion':  { title: 'Configuración',        sub: 'Planes, recordatorios y catálogos' },

@@ -22,8 +22,19 @@ import {
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
+import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
+import { listarConversaciones, hilo, marcarLeido, enviarTexto } from './whatsapp-cloud.js'
 
 const app = express()
+
+// ⚠️ ORDEN CRÍTICO — va ANTES del express.json() global.
+// El webhook de WhatsApp Cloud API firma el cuerpo CRUDO de la petición; si
+// express.json() lo parsea primero, el buffer original se pierde y la firma solo
+// podría validarse contra un JSON reserializado (que no coincide byte a byte).
+// express.raw() marca el body como leído, así que el express.json() de abajo lo
+// salta solo y el resto de Orbit no se entera.
+app.use('/webhook/whatsapp', express.raw({ type: '*/*', limit: '1mb' }))
+
 app.use(express.json())
 
 // CORS para el frontend (mismo criterio que las funciones existentes)
@@ -55,6 +66,70 @@ app.get('/health', async (_req, res) => {
     await pool.query('SELECT 1')
     res.json({ ok: true, ts: new Date().toISOString(), tz: process.env.TZ || 'UTC' })
   } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── WhatsApp Cloud API — receptor de webhooks (línea de veterinarias) ──
+// Público a propósito: lo llama Meta, no un usuario. La autenticación es la
+// firma HMAC del cuerpo (POST) y el verify token (GET). Ver migración 086.
+// Lo que ya opera en Zolutium NO se toca: el filtro por phone_number_id
+// descarta en silencio cualquier número que no esté en WHATSAPP_ALLOWED_PHONE_IDS.
+app.get('/webhook/whatsapp', verificarWebhook)
+app.post('/webhook/whatsapp', recibirWebhook)
+
+// Ventana de diagnóstico mientras se conecta el número: ver qué está llegando
+// sin entrar a la base de datos. Solo lectura.
+app.get('/webhook/whatsapp/eventos', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    res.json(await listarEventos({ limite: req.query.limite, numero: req.query.numero || null }))
+  } catch (e) {
+    log('[wa-webhook/eventos] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Bandeja de WhatsApp (migración 087) ──
+// La línea de vets es de coordinación: mismo rol que el resto de la operación.
+const rolBandeja = requireRol('COORDINADOR', 'ADMIN')
+
+app.get('/whatsapp/conversaciones', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    res.json(await listarConversaciones({ q: req.query.q || null }))
+  } catch (e) {
+    log('[wa-bandeja/conversaciones] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/whatsapp/conversaciones/:contacto', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await hilo({ contacto: req.params.contacto, limite: req.query.limite })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/hilo] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await marcarLeido({ contacto: req.params.contacto })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/leido] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await enviarTexto({
+      contacto: req.params.contacto, texto: req.body?.texto, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/enviar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })
