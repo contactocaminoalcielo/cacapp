@@ -38,7 +38,17 @@ async function main() {
     posY: num(payload.posY, 50, 0, 100),
   }
 
-  const composition = await selectComposition({ serveUrl, id: compositionId, inputProps })
+  // El default de Remotion son 30 s para el primer fotograma. En este VPS el
+  // render va por software (swiftshader, sin GPU) y compite con todo Supabase:
+  // bajo carga, montar el componente inicial (4 fuentes + la foto del cliente)
+  // se pasa de 30 s y aborta con "Timeout exceeded rendering the component
+  // initially" aunque no haya nada roto — reintentar funcionaba. Un render lento
+  // no es un fallo.
+  const timeoutInMilliseconds = parseInt(process.env.MEMORIAL_TIMEOUT_MS || '120000') || 120000
+
+  const composition = await selectComposition({
+    serveUrl, id: compositionId, inputProps, timeoutInMilliseconds,
+  })
 
   await renderMedia({
     composition,
@@ -47,6 +57,7 @@ async function main() {
     crf: 18,
     outputLocation: outPath,
     inputProps,
+    timeoutInMilliseconds,
     // Headless sin GPU (VPS): swiftshader es el backend seguro.
     chromiumOptions: { gl: 'swiftshader' },
     concurrency: parseInt(process.env.MEMORIAL_CONCURRENCY || '2') || 2,

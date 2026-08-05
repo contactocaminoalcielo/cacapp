@@ -414,9 +414,22 @@ export async function generarMemorial({ servicioId, personalId, formato: formato
     throw e
   } finally { client.release() }
 
-  // Render fuera de la transacción y sin bloquear la respuesta.
-  runRender(piezaId, payload).catch(err => log('[digitales] runRender ERROR', err.message))
+  // Render fuera de la transacción y sin bloquear la respuesta (en cola, de a uno).
+  encolarRender(piezaId, payload).catch(err => log('[digitales] runRender ERROR', err.message))
   return { status: 200, body: { ok: true, id: piezaId, estado: 'GENERANDO' } }
+}
+
+// Cola de renders: uno a la vez.
+// Cada render abre su propio Chrome headless con 2 hilos, y el VPS tiene 6
+// núcleos compartidos con todo Supabase. Sin cola, varios "Generar" seguidos se
+// estrangulaban entre sí hasta pasarse del timeout del render. En fila tardan
+// más en arrancar, pero dejan de fallar por contención.
+let colaRender = Promise.resolve()
+function encolarRender(piezaId, payload) {
+  const turno = colaRender.then(() => runRender(piezaId, payload))
+  // La cola nunca se rompe: un render que falla no puede frenar a los siguientes.
+  colaRender = turno.catch(() => {})
+  return turno
 }
 
 async function runRender(piezaId, payload) {
