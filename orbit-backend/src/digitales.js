@@ -222,7 +222,11 @@ export async function listarCandidatos() {
          AND s.estado <> 'CANCELADO'
          AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
          AND (mem.id IS NULL OR mem.estado IN ('ERROR', 'DESCARTADO'))
-       ORDER BY COALESCE(d.declinado, false) ASC, s.fecha_imagenes_recibidas DESC
+       -- fecha_imagenes_recibidas es DATE: hasta ~30 servicios comparten el mismo
+       -- día. Sin desempate, el orden entre empatados es arbitrario y el LIMIT
+       -- corta filas distintas en cada carga (ver listarServicios).
+       ORDER BY COALESCE(d.declinado, false) ASC, s.fecha_imagenes_recibidas DESC,
+                s.created_at DESC, s.id DESC
        LIMIT 300`,
       [excl, recMemorial]
     )
@@ -269,8 +273,12 @@ export async function listarServicios() {
          AND (e.rec_ids IS NOT NULL
               OR na.rec_ids IS NOT NULL
               OR EXISTS (SELECT 1 FROM public.piezas_digitales pd WHERE pd.servicio_id = s.id))
-       ORDER BY s.fecha_imagenes_recibidas DESC
-       LIMIT 200`,
+       -- El LIMIT de 200 escondía todo lo anterior a ~14-jul (127 servicios) y,
+       -- peor, fecha_imagenes_recibidas es DATE: los ~27 servicios que comparten
+       -- el día del corte quedaban en orden arbitrario, así que unos entraban y
+       -- otros no en CADA carga ("a veces aparece"). Desempate estable + tope alto.
+       ORDER BY s.fecha_imagenes_recibidas DESC, s.created_at DESC, s.id DESC
+       LIMIT 1000`,
       [recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000'], uuidOrNull(mapa.MEMORIAL)]
     )
 
