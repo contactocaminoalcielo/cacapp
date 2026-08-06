@@ -1,0 +1,496 @@
+// Configuración del agente de WhatsApp de la línea de veterinarias.
+//
+// El agente es AISLADO: no consulta la operación (servicios, clientes, aliados).
+// Todo lo que sabe sale de lo que se escribe aquí — el contexto y la base de
+// conocimiento — y de nada más. Esta pantalla es su única fuente.
+//
+// Los datos NO vienen de Supabase: las tablas `agente_wa*` no están expuestas
+// por PostgREST. Todo entra por orbit-backend con JWT + rol. Ver lib/agenteApi.js.
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import Topbar from '@/components/layout/Topbar'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  cargarAgente, guardarAgente, agregarPieza, actualizarPieza, borrarPieza, archivoPieza,
+  leerBase64, leerTexto, csvAMarkdown, tokensAprox, TIPOS_KB, EFFORT_OPCIONES,
+} from '@/lib/agenteApi'
+import {
+  Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
+  FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check,
+} from 'lucide-react'
+
+const ICONO_TIPO = { TEXTO: FileText, TABLA: Table2, IMAGEN: ImageIcon, DOCUMENTO: FileType }
+
+export default function AgenteWhatsapp() {
+  const [agente, setAgente]         = useState(null)
+  const [kb, setKb]                 = useState([])
+  const [resumen, setResumen]       = useState(null)
+  const [cargando, setCargando]     = useState(true)
+  const [error, setError]           = useState(null)
+
+  const [instrucciones, setInstrucciones] = useState('')
+  const [ajustes, setAjustes]             = useState(null)
+  const [guardando, setGuardando]         = useState(false)
+  const [guardado, setGuardado]           = useState(false)
+
+  const [nueva, setNueva]           = useState(null)
+  const [subiendo, setSubiendo]     = useState(false)
+  const [errorPieza, setErrorPieza] = useState(null)
+  const [previews, setPreviews]     = useState({})
+  const fileRef = useRef(null)
+
+  const refrescar = useCallback(async () => {
+    try {
+      const r = await cargarAgente()
+      setAgente(r.agente)
+      setKb(r.conocimiento || [])
+      setResumen(r.resumen || null)
+      setInstrucciones(r.agente.instrucciones || '')
+      setAjustes({
+        modelo:           r.agente.modelo,
+        effort:           r.agente.effort,
+        max_turnos:       r.agente.max_turnos,
+        phone_number_ids: (r.agente.phone_number_ids || []).join(', '),
+      })
+      setError(null)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCargando(false)
+    }
+  }, [])
+
+  useEffect(() => { refrescar() }, [refrescar])
+
+  const sucio = useMemo(() => {
+    if (!agente || !ajustes) return false
+    return instrucciones !== (agente.instrucciones || '')
+      || ajustes.modelo !== agente.modelo
+      || ajustes.effort !== agente.effort
+      || Number(ajustes.max_turnos) !== agente.max_turnos
+      || ajustes.phone_number_ids !== (agente.phone_number_ids || []).join(', ')
+  }, [agente, ajustes, instrucciones])
+
+  const guardar = async () => {
+    setGuardando(true); setError(null)
+    try {
+      const ids = ajustes.phone_number_ids.split(',').map(s => s.trim()).filter(Boolean)
+      const r = await guardarAgente(agente.clave, {
+        instrucciones,
+        modelo:           ajustes.modelo,
+        effort:           ajustes.effort,
+        max_turnos:       Number(ajustes.max_turnos),
+        phone_number_ids: ids,
+      })
+      setAgente(a => ({ ...a, ...r.agente }))
+      setGuardado(true); setTimeout(() => setGuardado(false), 2500)
+      refrescar()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  const alternarEncendido = async () => {
+    const encender = !agente.activo
+    if (encender && !(agente.phone_number_ids || []).length) {
+      setError('Asigna al menos una línea antes de encenderlo, o no responderá a nadie.')
+      return
+    }
+    try {
+      const r = await guardarAgente(agente.clave, { activo: encender })
+      setAgente(a => ({ ...a, ...r.agente }))
+      setError(null)
+    } catch (e) { setError(e.message) }
+  }
+
+  // ── Base de conocimiento ──
+
+  const abrirNueva = (tipo) => { setNueva({ tipo, titulo: '', texto: '', archivo_base64: null, mime: null, nombreArchivo: null }); setErrorPieza(null) }
+
+  const tomarArchivo = async (file) => {
+    if (!file) return
+    setErrorPieza(null)
+    try {
+      if (nueva.tipo === 'IMAGEN') {
+        if (file.size > 5 * 1024 * 1024) {
+          setErrorPieza(`Pesa ${(file.size / 1048576).toFixed(1)} MB y el tope son 5 MB. Recórtala antes de subirla.`)
+          return
+        }
+        setNueva(n => ({
+          ...n, archivo_base64: null, mime: file.type, nombreArchivo: file.name,
+          titulo: n.titulo || file.name.replace(/\.[^.]+$/, ''),
+        }))
+        const b64 = await leerBase64(file)
+        setNueva(n => ({ ...n, archivo_base64: b64 }))
+      } else {
+        const txt = await leerTexto(file)
+        const esCsv = /\.csv$/i.test(file.name)
+        setNueva(n => ({
+          ...n,
+          texto: esCsv ? csvAMarkdown(txt) : txt,
+          nombreArchivo: file.name,
+          titulo: n.titulo || file.name.replace(/\.[^.]+$/, ''),
+        }))
+      }
+    } catch (e) { setErrorPieza(e.message) }
+  }
+
+  const guardarPieza = async () => {
+    setSubiendo(true); setErrorPieza(null)
+    try {
+      await agregarPieza(agente.id, {
+        tipo:  nueva.tipo,
+        titulo: nueva.titulo,
+        texto:  nueva.tipo === 'IMAGEN' ? undefined : nueva.texto,
+        archivo_base64: nueva.tipo === 'IMAGEN' ? nueva.archivo_base64 : undefined,
+        mime:   nueva.tipo === 'IMAGEN' ? nueva.mime : undefined,
+      })
+      setNueva(null)
+      refrescar()
+    } catch (e) { setErrorPieza(e.message) } finally { setSubiendo(false) }
+  }
+
+  const alternarPieza = async (p) => {
+    try { await actualizarPieza(p.id, { activo: !p.activo }); refrescar() }
+    catch (e) { setError(e.message) }
+  }
+
+  const eliminarPieza = async (p) => {
+    if (!window.confirm(`¿Eliminar "${p.titulo}" de la base de conocimiento?`)) return
+    try { await borrarPieza(p.id); refrescar() }
+    catch (e) { setError(e.message) }
+  }
+
+  const verImagen = async (p) => {
+    if (previews[p.id]) { setPreviews(v => ({ ...v, [p.id]: null })); return }
+    try {
+      const r = await archivoPieza(p.id)
+      setPreviews(v => ({ ...v, [p.id]: `data:${r.mime};base64,${r.base64}` }))
+    } catch (e) { setError(e.message) }
+  }
+
+  if (cargando) {
+    return (
+      <>
+        <Topbar titulo="Agente de WhatsApp" />
+        <div className="flex items-center justify-center py-24 text-neutral-400">
+          <Loader2 className="w-6 h-6 animate-spin" />
+        </div>
+      </>
+    )
+  }
+
+  if (!agente) {
+    return (
+      <>
+        <Topbar titulo="Agente de WhatsApp" />
+        <div className="p-6"><Aviso tono="error">{error || 'No se pudo cargar el agente.'}</Aviso></div>
+      </>
+    )
+  }
+
+  const tokens = resumen ? tokensAprox(resumen) : 0
+
+  return (
+    <>
+      <Topbar titulo="Agente de WhatsApp" />
+
+      <div className="p-4 md:p-6 space-y-6 max-w-5xl mx-auto">
+        {error && <Aviso tono="error" onCerrar={() => setError(null)}>{error}</Aviso>}
+
+        {/* ── Estado ── */}
+        <motion.section
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl border bg-white p-5 shadow-sm"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className={`rounded-xl p-2.5 ${agente.activo ? 'bg-emerald-50 text-emerald-600' : 'bg-neutral-100 text-neutral-400'}`}>
+                <Bot className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-neutral-900">{agente.nombre}</h2>
+                <p className="text-sm text-neutral-500">
+                  {agente.activo
+                    ? 'Encendido: responde solo a las veterinarias en las líneas asignadas.'
+                    : 'Apagado: no responde nada. La bandeja funciona con normalidad.'}
+                </p>
+              </div>
+            </div>
+            <Button
+              onClick={alternarEncendido}
+              className={agente.activo
+                ? 'bg-neutral-900 hover:bg-neutral-800'
+                : 'bg-emerald-600 hover:bg-emerald-700'}
+            >
+              <Power className="w-4 h-4 mr-2" />
+              {agente.activo ? 'Apagar' : 'Encender'}
+            </Button>
+          </div>
+
+          {agente.activo && (
+            <div className="mt-4 rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900 flex gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Está hablando con veterinarias reales. Lo que responda sale a nombre de Camino al
+                Cielo — revisa la bitácora con frecuencia los primeros días.
+              </span>
+            </div>
+          )}
+        </motion.section>
+
+        {/* ── Contexto ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-3">
+          <Cabecera icono={BookOpen} titulo="Contexto"
+            sub="Quién es, cómo habla y qué puede o no puede decir. Es lo primero que lee en cada conversación." />
+          <Textarea
+            value={instrucciones}
+            onChange={e => setInstrucciones(e.target.value)}
+            rows={12}
+            className="font-mono text-sm leading-relaxed"
+            placeholder="Eres el asistente de WhatsApp de Camino al Cielo para veterinarias aliadas…"
+          />
+          <p className="text-xs text-neutral-500">
+            {instrucciones.length.toLocaleString('es-CO')} caracteres. Sé concreto: el agente sigue
+            estas instrucciones al pie de la letra y no sabe nada que no esté aquí o en la base de
+            conocimiento.
+          </p>
+        </section>
+
+        {/* ── Base de conocimiento ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <Cabecera icono={BookOpen} titulo="Base de conocimiento"
+            sub="Lo que puede consultar para responder. Si no está aquí, no lo sabe." />
+
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(TIPOS_KB).map(([tipo, meta]) => {
+              const Icono = ICONO_TIPO[tipo]
+              return (
+                <Button key={tipo} variant="outline" size="sm" onClick={() => abrirNueva(tipo)}>
+                  <Icono className="w-4 h-4 mr-1.5" /><Plus className="w-3 h-3 mr-1" />{meta.label}
+                </Button>
+              )
+            })}
+          </div>
+
+          <AnimatePresence>
+            {nueva && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                  <p className="text-sm font-medium text-neutral-800">
+                    Nueva pieza — {TIPOS_KB[nueva.tipo].label}
+                  </p>
+                  <p className="text-xs text-neutral-500">{TIPOS_KB[nueva.tipo].ayuda}</p>
+
+                  <Input
+                    value={nueva.titulo}
+                    onChange={e => setNueva(n => ({ ...n, titulo: e.target.value }))}
+                    placeholder="Título (para que lo reconozcas después)"
+                  />
+
+                  {nueva.tipo === 'IMAGEN' ? (
+                    <div className="space-y-2">
+                      <input
+                        ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                        className="hidden"
+                        onChange={e => tomarArchivo(e.target.files?.[0])}
+                      />
+                      <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                        <Upload className="w-4 h-4 mr-1.5" />
+                        {nueva.nombreArchivo || 'Elegir imagen'}
+                      </Button>
+                      {nueva.archivo_base64 && (
+                        <img
+                          src={`data:${nueva.mime};base64,${nueva.archivo_base64}`}
+                          alt="" className="max-h-48 rounded-lg border"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <input
+                        ref={fileRef} type="file" accept=".txt,.md,.csv,text/plain,text/markdown,text/csv"
+                        className="hidden"
+                        onChange={e => tomarArchivo(e.target.files?.[0])}
+                      />
+                      <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                        <Upload className="w-4 h-4 mr-1.5" />
+                        {nueva.nombreArchivo || 'Subir .txt / .md / .csv'}
+                      </Button>
+                      <Textarea
+                        value={nueva.texto}
+                        onChange={e => setNueva(n => ({ ...n, texto: e.target.value }))}
+                        rows={8} className="font-mono text-xs"
+                        placeholder="…o pega el contenido aquí"
+                      />
+                    </div>
+                  )}
+
+                  {errorPieza && <Aviso tono="error">{errorPieza}</Aviso>}
+
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={guardarPieza} disabled={subiendo}>
+                      {subiendo ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Plus className="w-4 h-4 mr-1.5" />}
+                      Agregar
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setNueva(null)}>Cancelar</Button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {!kb.length ? (
+            <p className="text-sm text-neutral-500 py-6 text-center">
+              Todavía no hay nada cargado. El agente solo sabrá lo que digas en el contexto.
+            </p>
+          ) : (
+            <ul className="divide-y rounded-xl border">
+              {kb.map(p => {
+                const Icono = ICONO_TIPO[p.tipo]
+                return (
+                  <li key={p.id} className={`p-3 ${p.activo ? '' : 'bg-neutral-50'}`}>
+                    <div className="flex items-start gap-3">
+                      <Icono className={`w-4 h-4 mt-1 shrink-0 ${p.activo ? 'text-neutral-500' : 'text-neutral-300'}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm font-medium truncate ${p.activo ? 'text-neutral-900' : 'text-neutral-400'}`}>
+                          {p.titulo}
+                        </p>
+                        <p className="text-xs text-neutral-500">
+                          {TIPOS_KB[p.tipo].label}
+                          {p.tipo === 'IMAGEN'
+                            ? ` · ${(p.bytes / 1024).toFixed(0)} kB`
+                            : ` · ${(p.texto?.length || 0).toLocaleString('es-CO')} caracteres`}
+                          {!p.activo && ' · desactivada'}
+                        </p>
+                        {previews[p.id] && (
+                          <img src={previews[p.id]} alt="" className="mt-2 max-h-56 rounded-lg border" />
+                        )}
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        {p.tipo === 'IMAGEN' && (
+                          <Button variant="ghost" size="sm" onClick={() => verImagen(p)} title="Ver">
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="sm" onClick={() => alternarPieza(p)}
+                          title={p.activo ? 'Desactivar' : 'Activar'}>
+                          {p.activo ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => eliminarPieza(p)} title="Eliminar">
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          {resumen && (
+            <p className="text-xs text-neutral-500">
+              Contexto activo: <strong>{resumen.piezas_activas}</strong> piezas ·{' '}
+              <strong>{resumen.caracteres_texto.toLocaleString('es-CO')}</strong> caracteres ·{' '}
+              <strong>{resumen.imagenes}</strong> imágenes · ≈{' '}
+              <strong>{tokens.toLocaleString('es-CO')}</strong> tokens por conversación.
+            </p>
+          )}
+        </section>
+
+        {/* ── Ajustes ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Campo label="Profundidad de razonamiento"
+              ayuda={EFFORT_OPCIONES.find(o => o.valor === ajustes.effort)?.ayuda}>
+              <select
+                value={ajustes.effort}
+                onChange={e => setAjustes(a => ({ ...a, effort: e.target.value }))}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+              >
+                {EFFORT_OPCIONES.map(o => <option key={o.valor} value={o.valor}>{o.label}</option>)}
+              </select>
+            </Campo>
+
+            <Campo label="Tope de respuestas por conversación"
+              ayuda="Al superarlo deja de responder y la conversación queda para una persona.">
+              <Input type="number" min={1} max={200} value={ajustes.max_turnos}
+                onChange={e => setAjustes(a => ({ ...a, max_turnos: e.target.value }))} />
+            </Campo>
+
+            <Campo label="Líneas donde responde" className="sm:col-span-2"
+              ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna.">
+              <Input value={ajustes.phone_number_ids}
+                onChange={e => setAjustes(a => ({ ...a, phone_number_ids: e.target.value }))}
+                placeholder="805890339283619" />
+            </Campo>
+          </div>
+        </section>
+
+        {/* ── Guardar ── */}
+        <div className="sticky bottom-4 flex justify-end">
+          <AnimatePresence>
+            {(sucio || guardado) && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
+              >
+                <Button onClick={guardar} disabled={guardando || !sucio}
+                  className="shadow-lg bg-neutral-900 hover:bg-neutral-800">
+                  {guardando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    : guardado ? <Check className="w-4 h-4 mr-2" />
+                    : <Save className="w-4 h-4 mr-2" />}
+                  {guardado ? 'Guardado' : 'Guardar cambios'}
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Piezas de presentación ──
+
+function Cabecera({ icono: Icono, titulo, sub }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <Icono className="w-5 h-5 text-neutral-400 mt-0.5 shrink-0" />
+      <div>
+        <h3 className="font-semibold text-neutral-900">{titulo}</h3>
+        <p className="text-sm text-neutral-500">{sub}</p>
+      </div>
+    </div>
+  )
+}
+
+function Campo({ label, ayuda, children, className = '' }) {
+  return (
+    <div className={className}>
+      <label className="block text-sm font-medium text-neutral-700 mb-1">{label}</label>
+      {children}
+      {ayuda && <p className="mt-1 text-xs text-neutral-500">{ayuda}</p>}
+    </div>
+  )
+}
+
+function Aviso({ tono = 'error', children, onCerrar }) {
+  const estilos = tono === 'error'
+    ? 'bg-red-50 border-red-200 text-red-800'
+    : 'bg-amber-50 border-amber-200 text-amber-900'
+  return (
+    <div className={`rounded-xl border p-3 text-sm flex gap-2 ${estilos}`}>
+      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+      <span className="flex-1">{children}</span>
+      {onCerrar && (
+        <button onClick={onCerrar} className="text-xs underline shrink-0">cerrar</button>
+      )}
+    </div>
+  )
+}

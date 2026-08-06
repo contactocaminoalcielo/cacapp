@@ -24,6 +24,10 @@ import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
 import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
 import { listarConversaciones, hilo, marcarLeido, enviarTexto } from './whatsapp-cloud.js'
+import {
+  obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
+  borrarConocimiento, archivoConocimiento, listarEjecuciones,
+} from './agente-config.js'
 
 const app = express()
 
@@ -34,6 +38,12 @@ const app = express()
 // express.raw() marca el body como leído, así que el express.json() de abajo lo
 // salta solo y el resto de Orbit no se entera.
 app.use('/webhook/whatsapp', express.raw({ type: '*/*', limit: '1mb' }))
+
+// La base de conocimiento del agente admite imágenes de hasta 5 MB, que viajan
+// en base64 (≈ +33 %). Con el límite por defecto de express.json() (100 kB) la
+// subida fallaría con un 413 sin mensaje útil. Va ANTES del json global, igual
+// que el webhook: el primer parser que coincide gana y el global lo salta.
+app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
 
 app.use(express.json())
 
@@ -132,6 +142,66 @@ app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, a
     log('[wa-bandeja/enviar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+// ── Configuración del agente de WhatsApp (migración 088) ──
+// Las tablas del agente NO están expuestas por PostgREST: esta es la única
+// puerta. Mismo rol que la bandeja — quien atiende la línea es quien la ajusta.
+const rolAgente = requireRol('COORDINADOR', 'ADMIN')
+
+app.get('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await obtenerAgente({ clave: req.params.clave })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/obtener', e) }
+})
+
+app.post('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await guardarAgente({
+      clave: req.params.clave, datos: req.body || {}, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/guardar', e) }
+})
+
+app.post('/agente/conocimiento/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await agregarConocimiento({
+      agenteId: Number(req.params.agenteId), datos: req.body || {}, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/kb-agregar', e) }
+})
+
+app.patch('/agente/conocimiento/pieza/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await actualizarConocimiento({ id: Number(req.params.id), datos: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/kb-actualizar', e) }
+})
+
+app.delete('/agente/conocimiento/pieza/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await borrarConocimiento({ id: Number(req.params.id) })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/kb-borrar', e) }
+})
+
+app.get('/agente/conocimiento/pieza/:id/archivo', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await archivoConocimiento({ id: Number(req.params.id) })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/kb-archivo', e) }
+})
+
+app.get('/agente/:agenteId/ejecuciones', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await listarEjecuciones({
+      agenteId: Number(req.params.agenteId), limite: req.query.limite,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/ejecuciones', e) }
 })
 
 // ── Jobs (los dispara el cron del VPS a diario; cada job decide si aplica) ──
