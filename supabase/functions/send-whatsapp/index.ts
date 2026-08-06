@@ -60,7 +60,12 @@ Deno.serve(async (req) => {
       'Content-Type': 'application/json',
     }
 
-    const { telefono, nombre = '', mensaje, pdfUrl, fromNumber } = await req.json()
+    // La línea emisora NO es elegible por el cliente: toda la comunicación automática con
+    // clientes sale por la 315 989 1247. Se ignora cualquier `fromNumber` que llegue en el
+    // cuerpo (el frontend viejo aún lo manda) — ver orbit-backend/src/linea-wa.js.
+    const LINEA_WA_ID = '967346343135405'   // phone_number_id de Meta de la +573159891247
+
+    const { telefono, nombre = '', mensaje, pdfUrl } = await req.json()
     const numero = normalizarTelefono(telefono)
     if (!numero) {
       return new Response(JSON.stringify({ error: `Teléfono inválido: ${telefono}` }), {
@@ -98,7 +103,9 @@ Deno.serve(async (req) => {
     // ── 2. Enviar mensaje ──
     const body: Record<string, unknown> = { type: 'WhatsApp', contactId, message: mensaje }
     if (pdfUrl) body.attachments = [pdfUrl]
-    if (fromNumber) body.fromNumber = fromNumber
+    // ⚠️ `type` es obligatorio dentro del bloque: sin él GHL responde 422 sin explicar qué
+    // falta. Y `fromNumberId` en la raíz se acepta pero se IGNORA (probado con tráfico real).
+    body.whatsapp = { type: 'text', fromNumberId: LINEA_WA_ID, toNumber: numero }
 
     const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
       method: 'POST',

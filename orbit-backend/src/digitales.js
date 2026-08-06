@@ -748,7 +748,8 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
       category: plantilla.categoria,
       mensaje,
       bodyParams,
-      // Sin fromNumber: GHL/Zolutium lo ignora para números WABA y rutea por el canal por defecto.
+      // La línea la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`; sin eso
+      // GHL rutea por la línea del último entrante del contacto. Ver linea-wa.js.
     })
   } catch (e) {
     envioErr = (e.message || 'Error enviando por Zolutium').slice(0, 900)

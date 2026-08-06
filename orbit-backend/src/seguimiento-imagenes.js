@@ -185,8 +185,8 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
       mensaje:  reserva.mensaje,
       bodyParams:   reserva.bodyParams,
       headerParams: reserva.headerParams,
-      // Sin fromNumber: GHL lo IGNORA para números WABA y rutea por el canal por
-      // defecto de la cuenta (la línea se fija en la configuración de Zolutium).
+      // La línea la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`; sin eso
+      // GHL rutea por la línea del último entrante del contacto. Ver linea-wa.js.
     })
   } catch (e) {
     envioErr = (e.message || 'Error enviando por Zolutium').slice(0, 900)

@@ -6,7 +6,18 @@
 // Requiere en /opt/orbit-backend/.env:
 //   GHL_TOKEN=...           (el mismo de la Edge Function)
 //   GHL_LOCATION_ID=...
+import { LINEA_WA_ID } from './linea-wa.js'
+
 const GHL_BASE = 'https://services.leadconnectorhq.com'
+
+// Bloque que fija la línea emisora. Va DENTRO de `whatsapp` y lleva el phone_number_id
+// de Meta — `fromNumber` en la raíz lo ignora GHL para números importados de Meta.
+// Ver linea-wa.js para el porqué y la medición del daño.
+// ⚠️ El bloque exige `type`: sin él GHL responde 422 con `message: []` (sin decir qué falta),
+// y `fromNumberId` en la RAÍZ se acepta pero se ignora en silencio — probado 2026-08-06.
+function lineaEmisora(numero, fromNumberId) {
+  return fromNumberId ? { fromNumberId, toNumber: numero } : {}
+}
 
 function normalizarTelefono(tel) {
   const solo = (tel || '').replace(/\D/g, '')
@@ -22,7 +33,7 @@ function normalizarTelefono(tel) {
  * @returns {{ messageId, contactId }}
  * @throws  Error con mensaje legible si GHL falla (lo captura el endpoint y lo persiste).
  */
-export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl, fromNumber }) {
+export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl, fromNumberId = LINEA_WA_ID }) {
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
   if (!GHL_TOKEN || !GHL_LOCATION) throw new Error('GHL no configurado en el backend (GHL_TOKEN/GHL_LOCATION_ID)')
@@ -64,8 +75,11 @@ export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl
 
   // 2. Enviar mensaje
   const body = { type: 'WhatsApp', contactId, message: mensaje }
-  if (pdfUrl)     body.attachments = [pdfUrl]
-  if (fromNumber) body.fromNumber  = fromNumber
+  if (pdfUrl) body.attachments = [pdfUrl]
+  // Verificado 2026-08-06 con tráfico real: forzando la línea de veterinarias sobre un
+  // contacto cuya ruta natural era la 315, el mensaje salió por veterinarias. El `type`
+  // es obligatorio aquí (ver lineaEmisora).
+  if (fromNumberId) body.whatsapp = { type: 'text', ...lineaEmisora(numero, fromNumberId) }
 
   const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
     method: 'POST', headers, body: JSON.stringify(body),
@@ -90,6 +104,7 @@ export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl
  */
 export async function enviarPlantillaGHL({
   telefono, propietario = '', petName = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY', pdfUrl, pdfFilename,
+  fromNumberId = LINEA_WA_ID,
 }) {
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
@@ -129,7 +144,7 @@ export async function enviarPlantillaGHL({
     contactId = creado.contact?.id
   }
 
-  const body = construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename })
+  const body = construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename, numero, fromNumberId })
   const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
     method: 'POST', headers, body: JSON.stringify(body),
   })
@@ -157,7 +172,7 @@ export async function enviarPlantillaGHL({
  */
 export async function enviarPlantillaGenerica({
   telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
-  mensaje, bodyParams = [], headerParams = [], fromNumber,
+  mensaje, bodyParams = [], headerParams = [], fromNumberId = LINEA_WA_ID,
 }) {
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
@@ -206,9 +221,9 @@ export async function enviarPlantillaGenerica({
       type: 'template',
       template: { name: plantillaNombre, lang: idioma, category },
       placeholders: { header: headerParams, body: bodyParams, buttons: [] },
+      ...lineaEmisora(numero, fromNumberId),
     },
   }
-  if (fromNumber) body.fromNumber = fromNumber
 
   const envio = await fetch(`${GHL_BASE}/conversations/messages`, {
     method: 'POST', headers, body: JSON.stringify(body),
@@ -238,7 +253,7 @@ export async function consultarEstadoMensajeGHL(messageId) {
 // Payload EXACTO que usa el UI de Zolutium contra /conversations/messages
 // (capturado por DevTools): message + whatsapp.placeholders con valores resueltos
 // y el PDF en el header tipo document.
-function construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename }) {
+function construirPayloadPlantilla({ contactId, plantillaNombre, idioma, category, propietario, petName, pdfUrl, pdfFilename, numero, fromNumberId }) {
   return {
     MessageType: 19,
     type:        'WhatsApp',
@@ -254,6 +269,7 @@ function construirPayloadPlantilla({ contactId, plantillaNombre, idioma, categor
         body:    [propietario, petName],  // valores resueltos → ContentVariables {{1}},{{2}}
         buttons: [],
       },
+      ...lineaEmisora(numero, fromNumberId),
     },
   }
 }

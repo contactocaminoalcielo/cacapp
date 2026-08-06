@@ -454,9 +454,12 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
           pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
         })
       } else {
+        // Sin `fromNumber`: GHL lo ignora. La línea la fija `enviarWhatsAppGHL` con
+        // `whatsapp.fromNumberId` (ver linea-wa.js). El `body.fromNumber` que aún manda
+        // el frontend se descarta a propósito: la línea no es elegible por el usuario.
         envioOk = await enviarWhatsAppGHL({
           telefono: item.canal_destino, nombre: item.propietario_nombre,
-          mensaje, pdfUrl, fromNumber: body.fromNumber,
+          mensaje, pdfUrl,
         })
       }
     } catch (e) { envioErr = e.message }

@@ -3,21 +3,22 @@
 import { callEdgeFunction } from '@/lib/supabase'
 
 // ─── Enviar mensaje WhatsApp con adjunto (URL pública al PDF) ────────────────
-export async function enviarWhatsApp({ telefono, nombre, mensaje, pdfUrl, fromNumber }) {
+// La línea emisora ya NO se manda desde el cliente: la fija el servidor. Se acepta y se
+// ignora `fromNumber` para no romper a los llamadores viejos.
+export async function enviarWhatsApp({ telefono, nombre, mensaje, pdfUrl }) {
   const { messageId } = await callEdgeFunction('send-whatsapp', {
-    telefono, nombre, mensaje, pdfUrl, fromNumber,
+    telefono, nombre, mensaje, pdfUrl,
   })
   return messageId
 }
 
 // ─── Línea WhatsApp Business OFICIAL en Zolutium (no es secreto) ─────────────
-// Única línea desde la que sale TODA la gestión (David 2026-07-24). Antes había
-// una segunda línea (+573180967711 / 318 096 7711) y algunos mensajes salían por
-// ahí; se retiró para forzar una sola emisora en todos los flujos que respetan
-// fromNumber (Certificados, recibo del técnico, reportes grupales).
-// ⚠️ Para las PLANTILLAS WABA (contactos/imágenes/digitales) GHL IGNORA fromNumber
-// y rutea por el "canal por defecto" del panel de Zolutium: esa unicidad se
-// garantiza dejando la 315 como canal por defecto en Zolutium, no desde aquí.
+// Única línea desde la que sale TODA la gestión (David 2026-07-24). Quitar la segunda
+// línea de esta lista NO bastó: GHL ignora `fromNumber` y rutea por la línea del último
+// entrante del contacto, así que el 6,9 % de los envíos salía por la de veterinarias o
+// la de HoyFarma. Desde 2026-08-06 la línea se fuerza server-side con
+// `whatsapp.fromNumberId` — ver orbit-backend/src/linea-wa.js.
+// Esta lista queda solo para MOSTRAR la línea en pantalla, no para elegirla.
 export const LINEAS_WHATSAPP = [
   { numero: '+573159891247', label: '315 989 1247' },
 ]

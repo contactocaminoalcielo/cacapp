@@ -19,6 +19,7 @@ import {
   registrarVistasOfertas,
 } from './ofertas.js'
 import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
+import { LINEA_WA_NUMERO } from './linea-wa.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
@@ -119,7 +120,10 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
     )
     const codigo = cod[0].codigo_fotos
     const enlace = construirEnlace(codigo)
-    const linea  = body.fromNumber || config.linea_default
+    // `linea_wa` debe registrar la línea REAL por la que sale, no la que pidió quien llama:
+    // durante meses dijo "+573159891247" en los 621 registros mientras el 6,9 % salía por
+    // otra línea, y eso hizo el problema invisible. Ahora la línea es única y forzada.
+    const linea  = LINEA_WA_NUMERO
 
     // Sin plantilla aprobada → NO se envía. Se deja en POR_VALIDAR sin tocar estado.
     if (!usarPlantilla || !config.plantilla_nombre) {
@@ -149,10 +153,10 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         // Plantilla aprobada `solicitud_imagenes_cliente`: 2 variables → {{1}} mascota, {{2}} enlace.
         // El enlace lleva el código embebido (/#/fotos/CODIGO); el cliente entra sin teclear código.
         bodyParams: [sol.mascota || '', enlace],
-        // No se pasa fromNumber: GHL/Zolutium lo IGNORA para números de WhatsApp
-        // importados de Meta (WABA) y rutea por el canal por defecto de la cuenta.
-        // La línea emisora se fija en la configuración de Zolutium. linea_wa queda
-        // solo como registro de la línea esperada (= linea_default).
+        // La línea emisora la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`
+        // (phone_number_id de Meta). Sin eso, GHL rutea por la línea del último entrante
+        // del contacto y el mensaje puede salir por la de veterinarias o la de HoyFarma.
+        // Ver linea-wa.js. `fromNumber` en la raíz NO sirve: GHL lo ignora.
       })
     } catch (e) { envioErr = e.message }
 
