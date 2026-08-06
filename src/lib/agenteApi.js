@@ -12,6 +12,47 @@ export const TIPOS_KB = {
   IMAGEN:    { label: 'Imagen',     ayuda: 'Fotos, diagramas, capturas. Máximo 5 MB.' },
 }
 
+/**
+ * Modelos disponibles, con su tarifa en USD por millón de tokens.
+ * El modelo es la palanca que más mueve la factura: entre el más caro y el más
+ * barato hay 5x. Los precios se muestran en la pantalla para que la decisión se
+ * tome con el número delante y no a ciegas.
+ * ⚠️ Tarifas de referencia — confirmar contra la facturación real de Anthropic.
+ */
+export const MODELOS = [
+  {
+    valor: 'claude-haiku-4-5', label: 'Haiku 4.5', entrada: 1, salida: 5,
+    ayuda: 'El más barato y rápido. Suele bastar para responder desde una base de conocimiento.',
+  },
+  {
+    valor: 'claude-sonnet-5', label: 'Sonnet 5', entrada: 3, salida: 15,
+    ayuda: 'Equilibrado. Mejor criterio en conversaciones que se salen del guion.',
+  },
+  {
+    valor: 'claude-opus-5', label: 'Opus 5', entrada: 5, salida: 25,
+    ayuda: 'El más capaz y el más caro. Solo si los otros se quedan cortos.',
+  },
+]
+
+/**
+ * Costo aproximado de una conversación, en USD.
+ * Supuestos declarados a propósito: son de servilleta hasta que la bitácora dé
+ * los tokens reales. `contexto` viaja en cada turno (con descuento de caché).
+ */
+export function costoConversacion({ modelo, contexto = 0, turnos = 6 }) {
+  const m = MODELOS.find(x => x.valor === modelo) || MODELOS[2]
+  const SALIDA_POR_TURNO  = 250   // tokens de una respuesta típica
+  const HISTORIAL_POR_TURNO = 800 // lo que crece la conversación
+
+  // El primer turno paga el contexto completo con premio de escritura de caché;
+  // los siguientes lo leen a una décima parte.
+  const primerTurno = contexto * 1.25 * (m.entrada / 1e6)
+  const resto       = (turnos - 1) * contexto * 0.1 * (m.entrada / 1e6)
+  const nuevo       = turnos * HISTORIAL_POR_TURNO * (m.entrada / 1e6)
+  const salida      = turnos * SALIDA_POR_TURNO * (m.salida / 1e6)
+  return primerTurno + resto + nuevo + salida
+}
+
 export const EFFORT_OPCIONES = [
   { valor: 'low',    label: 'Bajo',     ayuda: 'Respuestas rápidas y baratas. Para preguntas simples.' },
   { valor: 'medium', label: 'Medio',    ayuda: 'Equilibrio entre calidad y coste. Recomendado.' },

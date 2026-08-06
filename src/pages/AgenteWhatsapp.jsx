@@ -14,7 +14,8 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
   cargarAgente, guardarAgente, agregarPieza, actualizarPieza, borrarPieza, archivoPieza,
-  leerBase64, leerTexto, csvAMarkdown, tokensAprox, TIPOS_KB, EFFORT_OPCIONES,
+  leerBase64, leerTexto, csvAMarkdown, tokensAprox, costoConversacion,
+  TIPOS_KB, EFFORT_OPCIONES, MODELOS,
 } from '@/lib/agenteApi'
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
@@ -407,6 +408,39 @@ export default function AgenteWhatsapp() {
           <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
 
           <div className="grid gap-4 sm:grid-cols-2">
+            <Campo label="Modelo" className="sm:col-span-2"
+              ayuda={MODELOS.find(m => m.valor === ajustes.modelo)?.ayuda}>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {MODELOS.map(m => {
+                  const elegido = ajustes.modelo === m.valor
+                  const costo   = costoConversacion({ modelo: m.valor, contexto: tokens })
+                  return (
+                    <button
+                      key={m.valor} type="button"
+                      onClick={() => setAjustes(a => ({ ...a, modelo: m.valor }))}
+                      className={`rounded-xl border p-3 text-left transition ${
+                        elegido
+                          ? 'border-neutral-900 bg-neutral-900 text-white'
+                          : 'border-neutral-200 hover:border-neutral-400'
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold">{m.label}</span>
+                      <span className={`block text-xs ${elegido ? 'text-neutral-300' : 'text-neutral-500'}`}>
+                        ${m.entrada} / ${m.salida} por millón
+                      </span>
+                      <span className={`block text-xs mt-1 ${elegido ? 'text-white' : 'text-neutral-700'}`}>
+                        ≈ {pesos(costo)} por conversación
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="mt-2 text-xs text-neutral-500">
+                Estimado sobre 6 respuestas y el contexto actual ({tokens.toLocaleString('es-CO')} tokens).
+                Es una cuenta de servilleta: la bitácora guarda los tokens reales de cada conversación.
+              </p>
+            </Campo>
+
             <Campo label="Profundidad de razonamiento"
               ayuda={EFFORT_OPCIONES.find(o => o.valor === ajustes.effort)?.ayuda}>
               <select
@@ -454,6 +488,15 @@ export default function AgenteWhatsapp() {
       </div>
     </>
   )
+}
+
+// Anthropic factura en dólares; el peso es solo para dar magnitud, por eso la
+// tasa es aproximada y se muestran las dos cifras en vez de esconder la de USD.
+const TRM_APROX = 4000
+
+function pesos(usd) {
+  const cop = Math.round(usd * TRM_APROX)
+  return `US$${usd.toFixed(3)} · ${cop.toLocaleString('es-CO')} COP`
 }
 
 // ── Piezas de presentación ──
