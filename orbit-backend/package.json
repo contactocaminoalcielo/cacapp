@@ -9,6 +9,7 @@
     "ensure-browser": "node memorial/ensure-browser.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
     "@remotion/bundler": "4.0.484",
     "@remotion/renderer": "4.0.484",
     "express": "^4.21.2",

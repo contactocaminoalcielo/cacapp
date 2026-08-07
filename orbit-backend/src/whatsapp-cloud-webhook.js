@@ -22,6 +22,7 @@
 //   WHATSAPP_ALLOWED_PHONE_IDS — phone_number_id permitidos, separados por coma
 import crypto from 'node:crypto'
 import { pool, log } from './db.js'
+import { responderSiAplica } from './agente-wa.js'
 
 const MOD = '[wa-webhook]'
 
@@ -308,6 +309,17 @@ async function normalizar(ev) {
           [ev.fromNumber, ev.perfilNombre]
         )
       }
+
+      // ── Agente (migración 088) ──
+      // Solo llega aquí un mensaje ENTRANTE y nuevo: los acuses de lo que
+      // enviamos nosotros salen por la otra rama, y los duplicados ya se
+      // descartaron antes. Sin esa doble condición el agente se respondería a
+      // sí mismo en bucle.
+      // Va sin await a propósito: Meta reintenta si tardamos más de 5s, y el
+      // agente puede tomarse varios segundos. `responderSiAplica` nunca lanza.
+      responderSiAplica({
+        phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo,
+      })
       return
     }
 

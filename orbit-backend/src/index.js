@@ -28,6 +28,7 @@ import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
 } from './agente-config.js'
+import { probar as probarAgente } from './agente-wa.js'
 
 const app = express()
 
@@ -193,6 +194,15 @@ app.get('/agente/conocimiento/pieza/:id/archivo', requireAuth, rolAgente, async 
     const r = await archivoConocimiento({ id: Number(req.params.id) })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'agente/kb-archivo', e) }
+})
+
+// Probar sin enviar nada por WhatsApp. No comprueba si el agente está activo:
+// probar es justo lo que se hace ANTES de encenderlo.
+app.post('/agente/:clave/probar', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await probarAgente({ clave: req.params.clave, mensaje: req.body?.mensaje })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/probar', e) }
 })
 
 app.get('/agente/:agenteId/ejecuciones', requireAuth, rolAgente, async (req, res) => {
