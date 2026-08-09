@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
@@ -57,13 +57,22 @@ const ALL_NAV_GROUPS = [
   },
 ]
 
-const BG        = '#0B1D4F'
-const ACTIVE_BG = 'rgba(255,255,255,0.12)'
-const HOVER_BG  = 'rgba(255,255,255,0.06)'
+const GOLD      = '#F5C842'
 const TEXT_ON   = '#FFFFFF'
-const TEXT_OFF  = 'rgba(255,255,255,0.55)'
-const LABEL_CLR = 'rgba(255,255,255,0.25)'
-const BORDER    = 'rgba(255,255,255,0.08)'
+const TEXT_OFF  = 'rgba(255,255,255,0.72)'
+const LABEL_CLR = 'rgba(255,255,255,0.42)'
+const BORDER    = 'rgba(255,255,255,0.09)'
+
+// Pastilla del ítem activo: se desplaza de un ítem a otro con `layoutId` en vez
+// de aparecer y desaparecer. Es la única animación "grande" del menú.
+const PILL_SPRING = { type: 'spring', stiffness: 420, damping: 34, mass: 0.7 }
+
+// Entrada escalonada de los ítems (solo al montar el menú, una vez por sesión)
+const navContainerVariants = { animate: { transition: { staggerChildren: 0.028, delayChildren: 0.04 } } }
+const navItemVariants = {
+  initial: { opacity: 0, x: -10 },
+  animate: { opacity: 1, x: 0, transition: { duration: 0.24, ease: [0.4, 0, 0.2, 1] } },
+}
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(
@@ -81,6 +90,7 @@ function useIsDesktop() {
 export default function Sidebar({ isOpen, onClose, collapsed = false }) {
   const badges      = useBadges()
   const isDesktop   = useIsDesktop()
+  const sinMovimiento = useReducedMotion()   // respeta "reducir movimiento" del sistema
   const { personalData, logout } = useAuth()
   // Visible si: en desktop no está colapsado; en móvil si está abierto.
   const visible = isDesktop ? !collapsed : isOpen
@@ -98,31 +108,46 @@ export default function Sidebar({ isOpen, onClose, collapsed = false }) {
 
   return (
     <motion.nav
-      className="fixed top-0 left-0 bottom-0 z-50 flex flex-col w-[240px]"
+      aria-label="Menú principal"
+      className="sidebar-glass fixed top-0 left-0 bottom-0 z-50 flex flex-col w-[240px] overflow-hidden"
       initial={false}
       animate={{ x: visible ? 0 : -240 }}
       transition={SIDEBAR_SPRING}
-      style={{ backgroundColor: BG }}
     >
-      {/* Logo + close */}
-      <div
-        className="flex items-center gap-3 px-4 py-4"
-        style={{ borderBottom: `1px solid ${BORDER}` }}
-      >
+      {/* Aurora: dos manchas de luz de marca detrás del vidrio. Es lo que hace
+          que el panel se lea como vidrio y no como un bloque azul plano. */}
+      <div aria-hidden className="absolute inset-0 pointer-events-none" style={{
+        background:
+          'radial-gradient(120% 55% at 0% 0%,   rgba(26,92,216,0.42) 0%, transparent 62%),' +
+          'radial-gradient(95% 45% at 100% 100%, rgba(245,200,66,0.13) 0%, transparent 65%)',
+      }} />
+      {/* Filo superior iluminado — el brillo del borde del vidrio */}
+      <div aria-hidden className="absolute top-0 left-0 right-0 h-px pointer-events-none" style={{
+        background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent)',
+      }} />
+
+      {/* Logo + cerrar */}
+      <div className="relative flex items-center gap-3 px-4 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
         <motion.div
           className="flex-shrink-0"
-          whileHover={{ scale: 1.05 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+          whileHover={sinMovimiento ? undefined : { scale: 1.06, rotate: -2 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 18 }}
         >
           <img
             src="/orbit-logo.png"
             alt="ORBIT"
             className="rounded-xl object-contain"
-            style={{ width: 44, height: 44, background: 'white', padding: 3 }}
+            style={{
+              width: 44, height: 44, background: 'white', padding: 3,
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.16), 0 8px 20px rgba(11,29,79,0.45)',
+            }}
           />
         </motion.div>
         <div className="flex-1 min-w-0">
-          <div className="text-[14px] font-bold text-white leading-tight tracking-wide">
+          <div className="text-[14px] font-bold leading-tight tracking-wide" style={{
+            background: `linear-gradient(90deg, ${TEXT_ON} 30%, ${GOLD} 140%)`,
+            WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
+          }}>
             ORBIT
           </div>
           <div className="text-[10px] font-medium mt-0.5 truncate" style={{ color: LABEL_CLR }}>
@@ -130,11 +155,8 @@ export default function Sidebar({ isOpen, onClose, collapsed = false }) {
           </div>
         </div>
         <motion.button
-          whileTap={{ scale: 0.88 }}
-          className="lg:hidden w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
-          style={{ color: TEXT_OFF }}
-          onMouseEnter={e => { e.currentTarget.style.backgroundColor = HOVER_BG }}
-          onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent' }}
+          whileTap={sinMovimiento ? undefined : { scale: 0.88 }}
+          className="nav-link lg:hidden w-7 h-7 flex items-center justify-center rounded-lg"
           onClick={onClose}
           aria-label="Cerrar menú"
         >
@@ -142,15 +164,23 @@ export default function Sidebar({ isOpen, onClose, collapsed = false }) {
         </motion.button>
       </div>
 
-      {/* Nav */}
-      <div className="flex-1 overflow-y-auto py-4 px-3 space-y-5">
+      {/* Navegación */}
+      <motion.div
+        className="nav-scroll relative flex-1 overflow-y-auto py-4 px-3 space-y-5"
+        variants={sinMovimiento ? undefined : navContainerVariants}
+        initial={sinMovimiento ? false : 'initial'}
+        animate="animate"
+      >
         {navGroups.map(group => (
           <div key={group.label}>
-            <div
-              className="text-[9px] font-bold tracking-[0.15em] uppercase px-3 mb-1.5 select-none"
-              style={{ color: LABEL_CLR }}
-            >
-              {group.label}
+            {/* Etiqueta del grupo + hairline que rellena el ancho sobrante */}
+            <div className="flex items-center gap-2 px-3 mb-1.5 select-none">
+              <span className="text-[9px] font-bold tracking-[0.15em] uppercase" style={{ color: LABEL_CLR }}>
+                {group.label}
+              </span>
+              <span aria-hidden className="flex-1 h-px" style={{
+                background: 'linear-gradient(90deg, rgba(255,255,255,0.12), transparent)',
+              }} />
             </div>
 
             <div className="space-y-0.5">
@@ -158,82 +188,97 @@ export default function Sidebar({ isOpen, onClose, collapsed = false }) {
                 const Icon  = item.icon
                 const count = item.badge ? badges[item.badge] : 0
                 return (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end={item.end}
-                    onClick={onClose}
-                    className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium no-underline transition-colors duration-100"
-                    style={({ isActive }) => ({
-                      backgroundColor: isActive ? ACTIVE_BG : 'transparent',
-                      color:           isActive ? TEXT_ON   : TEXT_OFF,
-                      fontWeight:      isActive ? 600       : 500,
-                    })}
-                    onMouseEnter={e => {
-                      if (e.currentTarget.getAttribute('aria-current') !== 'page') {
-                        e.currentTarget.style.backgroundColor = HOVER_BG
-                        e.currentTarget.style.color = 'rgba(255,255,255,0.85)'
-                      }
-                    }}
-                    onMouseLeave={e => {
-                      if (e.currentTarget.getAttribute('aria-current') !== 'page') {
-                        e.currentTarget.style.backgroundColor = 'transparent'
-                        e.currentTarget.style.color = TEXT_OFF
-                      }
-                    }}
-                  >
-                    <Icon size={15} className="flex-shrink-0" style={{ opacity: 0.72 }} />
-                    <span className="flex-1 truncate">{item.label}</span>
-                    {count > 0 && (
-                      <motion.span
-                        key={count}
-                        initial={{ scale: 0.7, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 25 }}
-                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center tabular-nums leading-none"
-                        style={{ backgroundColor: '#F5C842', color: '#0B1D4F' }}
-                      >
-                        {count}
-                      </motion.span>
-                    )}
-                  </NavLink>
+                  <motion.div key={item.path} variants={sinMovimiento ? undefined : navItemVariants}>
+                    <NavLink
+                      to={item.path}
+                      end={item.end}
+                      onClick={onClose}
+                      className="nav-link relative flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] font-medium no-underline"
+                    >
+                      {({ isActive }) => (
+                        <>
+                          {isActive && (
+                            <motion.span
+                              aria-hidden
+                              layoutId={sinMovimiento ? undefined : 'nav-activo'}
+                              transition={PILL_SPRING}
+                              className="absolute inset-0 rounded-xl overflow-hidden"
+                              style={{
+                                background: 'linear-gradient(90deg, rgba(26,92,216,0.60) 0%, rgba(26,92,216,0.14) 100%)',
+                                border: '1px solid rgba(255,255,255,0.12)',
+                                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10)',
+                              }}
+                            >
+                              {/* Riel dorado: marca dónde está parado sin depender solo del color de fondo */}
+                              <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full" style={{
+                                background: GOLD, boxShadow: `0 0 10px ${GOLD}99`,
+                              }} />
+                            </motion.span>
+                          )}
+                          <Icon size={15} className="nav-icon relative flex-shrink-0" />
+                          <span className="relative flex-1 truncate" style={{ fontWeight: isActive ? 600 : 500 }}>
+                            {item.label}
+                          </span>
+                          {count > 0 && (
+                            <motion.span
+                              key={count}
+                              initial={sinMovimiento ? false : { scale: 0.7, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                              className="relative text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center tabular-nums leading-none"
+                              style={{ backgroundColor: GOLD, color: '#0B1D4F', boxShadow: `0 0 12px ${GOLD}55` }}
+                            >
+                              {count}
+                            </motion.span>
+                          )}
+                        </>
+                      )}
+                    </NavLink>
+                  </motion.div>
                 )
               })}
             </div>
           </div>
         ))}
-      </div>
+      </motion.div>
 
-      {/* Usuario + Logout */}
-      <div style={{ borderTop: `1px solid ${BORDER}` }}>
+      {/* Usuario + salir */}
+      <div className="relative" style={{ borderTop: `1px solid ${BORDER}` }}>
         {personalData && (
-          <div className="px-4 py-3 flex items-center gap-3">
-            {/* Avatar */}
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
-              style={{ backgroundColor: '#1A5CD8', color: '#FFFFFF' }}
-            >
-              {nombreCorto.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+          <div className="px-3 pt-3 pb-1">
+            <div className="flex items-center gap-3 px-2.5 py-2 rounded-xl" style={{
+              background: 'rgba(255,255,255,0.05)', border: `1px solid ${BORDER}`,
+            }}>
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
+                style={{
+                  background: 'linear-gradient(135deg, #1A5CD8, #0B1D4F)',
+                  color: TEXT_ON, boxShadow: '0 0 0 1px rgba(255,255,255,0.18)',
+                }}
+              >
+                {nombreCorto.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-semibold text-white truncate">{nombreCorto}</div>
+                <div className="text-[10px] truncate" style={{ color: LABEL_CLR }}>{rol}</div>
+              </div>
+              <motion.button
+                whileTap={sinMovimiento ? undefined : { scale: 0.88 }}
+                onClick={handleLogout}
+                title="Cerrar sesión"
+                aria-label="Cerrar sesión"
+                className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors flex-shrink-0"
+                style={{ color: TEXT_OFF }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(220,38,38,0.18)'; e.currentTarget.style.color = '#FCA5A5' }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = TEXT_OFF }}
+              >
+                <LogOut size={14} />
+              </motion.button>
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[12px] font-semibold text-white truncate">{nombreCorto}</div>
-              <div className="text-[10px]" style={{ color: LABEL_CLR }}>{rol}</div>
-            </div>
-            <motion.button
-              whileTap={{ scale: 0.88 }}
-              onClick={handleLogout}
-              title="Cerrar sesión"
-              className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors flex-shrink-0"
-              style={{ color: TEXT_OFF }}
-              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(255,60,60,0.15)'; e.currentTarget.style.color = '#FCA5A5' }}
-              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = TEXT_OFF }}
-            >
-              <LogOut size={14} />
-            </motion.button>
           </div>
         )}
-        <div className="px-5 pb-3">
-          <div className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.15)' }}>
+        <div className="px-5 py-2.5">
+          <div className="text-[10px] font-medium" style={{ color: 'rgba(255,255,255,0.22)' }}>
             ORBIT v2.0 · © 2026
           </div>
         </div>
