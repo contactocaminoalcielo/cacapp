@@ -6,7 +6,9 @@ export function Modal({ open, onClose, title, children, footer, maxWidth = 'max-
   return (
     <Dialog.Root open={open} onOpenChange={v => !v && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px] flex items-center justify-center p-4">
+        {/* Fondo del modal: tinte de marca en vez de negro puro + más difuminado.
+            El contenido de atrás se aleja y el modal se lee como una capa aparte. */}
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[#0B1D4F]/35 backdrop-blur-[5px] flex items-center justify-center p-4">
           <Dialog.Content
             className={cn(
               'bg-white rounded-2xl shadow-xl w-full max-h-[90vh] overflow-y-auto relative',

@@ -119,7 +119,8 @@ export default function AppShell({ children }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+            className="fixed inset-0 z-40 lg:hidden backdrop-blur-[3px]"
+            style={{ background: 'rgba(11,29,79,0.42)' }}
             onClick={() => setSidebarOpen(false)}
           />
         )}
@@ -130,10 +131,7 @@ export default function AppShell({ children }) {
       {/* Main content */}
       <div className={`flex-1 flex flex-col min-h-screen overflow-x-hidden transition-[margin] duration-300 ${collapsed ? 'lg:ml-0' : 'lg:ml-[240px]'}`}>
         {/* Topbar — siempre visible */}
-        <div
-          className="sticky top-0 z-50 flex items-center gap-3 bg-white px-4 h-14"
-          style={{ borderBottom: '1px solid #F0F2F0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
-        >
+        <div className="bar-glass sticky top-0 z-50 flex items-center gap-3 px-4 h-14">
           {/* Hamburger solo en móvil */}
           <motion.button
             whileTap={{ scale: 0.88 }}

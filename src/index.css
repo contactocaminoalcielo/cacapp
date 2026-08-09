@@ -169,6 +169,20 @@ a, button, [role="button"] {
   .sidebar-glass { background-color: rgba(11, 29, 79, 0.97); }
 }
 
+/* Barras superiores (la de la app y la de cada página) — mismo vidrio, en claro.
+   El contenido pasa por debajo al hacer scroll y se ve difuminado. Solo se aplica
+   al "marco" de la app: tarjetas y tablas siguen opacas, que ahí manda el dato. */
+.bar-glass {
+  background-color: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border-bottom: 1px solid rgba(11, 29, 79, 0.07);
+  box-shadow: 0 1px 4px rgba(11, 29, 79, 0.05);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bar-glass { background-color: #FFFFFF; }
+}
+
 /* Ítems del menú: el hover vive en CSS (antes eran handlers de JS por ítem) */
 .nav-link {
   color: rgba(255, 255, 255, 0.72);

@@ -78,8 +78,8 @@ export default function Topbar({ actions }) {
 
   return (
     <header
-      className="sticky top-14 z-30 bg-white flex items-center px-4 sm:px-6 gap-4"
-      style={{ height: 56, borderBottom: '1px solid #F0F2F0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+      className="bar-glass sticky top-14 z-30 flex items-center px-4 sm:px-6 gap-4"
+      style={{ height: 56 }}
     >
       <div className="flex flex-col justify-center">
         <span className="text-[15px] font-semibold text-gray-900 leading-tight">{title}</span>
