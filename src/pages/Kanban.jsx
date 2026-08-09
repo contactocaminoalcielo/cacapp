@@ -436,6 +436,17 @@ export default function Kanban() {
     try { localStorage.setItem(ALERTA_FOTOS_KEY, alertaFotosAbierta ? '1' : '0') } catch (_) {}
   }, [alertaFotosAbierta])
 
+  // La franja roja (técnico que declina o se vara en ruta) se pliega igual, pero
+  // arranca ABIERTA: es una recogida sin técnico y hay que reasignarla ya. Si el
+  // coordinador la pliega, se respeta; el renglón con el conteo nunca se oculta.
+  const ALERTA_DECLINAS_KEY = 'kanban_alerta_declinas_abierta'
+  const [alertaDeclinasAbierta, setAlertaDeclinasAbierta] = useState(() => {
+    try { return localStorage.getItem(ALERTA_DECLINAS_KEY) !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(ALERTA_DECLINAS_KEY, alertaDeclinasAbierta ? '1' : '0') } catch (_) {}
+  }, [alertaDeclinasAbierta])
+
   // ── Reloj para alertas por hora de recogida (amarillo ≤15 min, rojo vencida) ─
   const [ahoraTick, setAhoraTick]         = useState(() => Date.now())
 
@@ -2132,17 +2143,30 @@ export default function Kanban() {
         })()}
 
         {/* ── Alertas técnico declina / problema en ruta ───────────────────── */}
+        {/* Plegable igual que la de fotos. OJO: esta es urgente (un técnico se
+            cayó de una recogida), por eso el renglón del conteo NUNCA se oculta
+            y arranca desplegada mientras haya alertas sin atender. */}
         {alertasDeclinas.length > 0 && (
-          <div className="rounded-xl border-2 px-4 py-3 flex items-start gap-3" style={{ borderColor: '#FECACA', background: '#FEF2F2' }}>
-            <UserX size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <div className="text-[12px] font-bold text-red-800 mb-1.5">
+          <div className="rounded-xl border-2" style={{ borderColor: '#FECACA', background: '#FEF2F2' }}>
+            <button
+              onClick={() => setAlertaDeclinasAbierta(v => !v)}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-left"
+              title={alertaDeclinasAbierta ? 'Ocultar la lista' : 'Ver cuáles son'}>
+              <UserX size={16} className="text-red-500 flex-shrink-0" />
+              <span className="text-[12px] font-bold text-red-800 flex-1 min-w-0 truncate">
                 Reasignación urgente — {alertasDeclinas.length} alerta{alertasDeclinas.length > 1 ? 's' : ''}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+              </span>
+              <span className="text-[11px] font-semibold text-red-700/80 flex items-center gap-1 flex-shrink-0">
+                {alertaDeclinasAbierta ? 'Ocultar' : 'Ver cuáles'}
+                {alertaDeclinasAbierta ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              </span>
+            </button>
+            {alertaDeclinasAbierta && (
+              <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-0.5">
                 {alertasDeclinas.map(n => {
                   const svc = servicios.find(s => s.servicio_id === n.servicio_id)
                   const esProblema = n.tipo === 'TECNICO_PROBLEMA_RUTA'
+                  const Icono = esProblema ? AlertTriangle : UserX
                   return (
                     <button key={n.id}
                       onClick={async () => {
@@ -2150,16 +2174,26 @@ export default function Kanban() {
                         setAlertasDeclinas(prev => prev.filter(a => a.id !== n.id))
                         if (svc) irAlServicio(svc)
                       }}
-                      className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all hover:opacity-80 flex items-center gap-1"
+                      title={`${n.titulo}${svc ? ` — ${svc.mascota}` : ''} · abrir para reasignar`}
+                      className="group text-[11px] font-semibold pl-2.5 pr-1.5 py-1 rounded-full border transition-all hover:shadow-sm flex items-center gap-1.5"
                       style={esProblema
                         ? { background: '#FFF7ED', color: '#92400E', borderColor: '#FED7AA' }
                         : { background: '#FEE2E2', color: '#991B1B', borderColor: '#FECACA' }}>
-                      {esProblema ? '⚠️' : '❌'} {n.titulo} · Reasignar
+                      <Icono size={12} className="flex-shrink-0" />
+                      <span className="underline decoration-dotted underline-offset-2">{n.titulo}</span>
+                      {svc && <span className="font-medium opacity-70">· {svc.mascota}</span>}
+                      <span className="text-[10px] font-bold px-1.5 py-px rounded-full"
+                        style={esProblema
+                          ? { background: '#FED7AA', color: '#7C2D12' }
+                          : { background: '#FECACA', color: '#7F1D1D' }}>
+                        Reasignar
+                      </span>
+                      <ChevronRight size={12} className="opacity-50 group-hover:opacity-100 transition-opacity" />
                     </button>
                   )
                 })}
               </div>
-            </div>
+            )}
           </div>
         )}
 
