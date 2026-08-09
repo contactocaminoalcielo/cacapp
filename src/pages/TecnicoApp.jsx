@@ -67,7 +67,7 @@ function DireccionLink({ direccion, barrio, ciudad }) {
 
       {open && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end"
-          style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setOpen(false)}>
+          style={{ background: 'rgba(11,29,79,0.55)' }} onClick={() => setOpen(false)}>
           <div className="bg-white rounded-t-3xl px-5 pt-4 pb-10"
             onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
@@ -203,7 +203,7 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end"
-      style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+      style={{ background: 'rgba(11,29,79,0.58)' }} onClick={onClose}>
       <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10 shadow-2xl"
         onClick={e => e.stopPropagation()}>
         <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
@@ -692,7 +692,7 @@ function ContactoSheet({ modal, onClose }) {
   const numero = String(modal.numero || '').replace(/\D/g, '')
   return (
     <div className="fixed inset-0 z-[80] flex flex-col justify-end"
-      style={{ background: 'rgba(0,0,0,0.45)' }}
+      style={{ background: 'rgba(11,29,79,0.50)' }}
       onClick={onClose}>
       <div className="rounded-t-3xl bg-white px-5 pt-5 pb-8 safe-area-bottom"
         onClick={e => e.stopPropagation()}>
@@ -949,7 +949,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
 
         {/* Modal declinar */}
         {declinarOpen && (
-          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(11,29,79,0.58)' }}
             onClick={() => setDeclinarOpen(false)}>
             <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
@@ -979,7 +979,7 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
 
         {/* Modal problema en ruta */}
         {problemaOpen && (
-          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+          <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(11,29,79,0.58)' }}
             onClick={() => { if (!enviandoProblema) setProblemaOpen(false) }}>
             <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
               <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />
@@ -2372,26 +2372,43 @@ export default function TecnicoApp() {
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
 
       {/* ── Header ── */}
-      <div style={{ background: '#0B1D4F' }} className="px-5 pb-4 pt-safe pt-3">
-        <div className="flex items-center justify-between">
+      {/* Mismo lenguaje del menú del escritorio, pero SIN backdrop-filter: aquí
+          el header no tiene nada detrás que difuminar (no es sticky), así que la
+          aurora se pinta y sale gratis en celulares de gama baja. */}
+      <div style={{ background: '#0B1D4F' }} className="relative overflow-hidden px-5 pb-4 pt-safe pt-3">
+        <div aria-hidden className="absolute inset-0 pointer-events-none" style={{
+          background:
+            'radial-gradient(120% 95% at 0% 0%,   rgba(26,92,216,0.55) 0%, transparent 66%),' +
+            'radial-gradient(90% 85% at 100% 100%, rgba(196,168,122,0.20) 0%, transparent 70%)',
+        }} />
+        <div aria-hidden className="absolute bottom-0 left-0 right-0 h-px pointer-events-none" style={{
+          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.30), transparent)',
+        }} />
+        <div className="relative flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-black"
-              style={{ background: '#C4A87A', color: '#0B1D4F' }}>
+              style={{
+                background: 'linear-gradient(135deg, #E8C88A, #C4A87A)', color: '#0B1D4F',
+                boxShadow: '0 0 0 1px rgba(255,255,255,0.22), 0 6px 14px rgba(0,0,0,0.30)',
+              }}>
               🐾
             </div>
             <div>
               <div className="text-white font-bold text-[15px] leading-tight">{tecnico.nombre} {tecnico.apellido}</div>
-              <div className="text-[11px]" style={{ color: '#C4A87A' }}>
+              <div className="text-[11px]" style={{ color: '#DCC69A' }}>
                 Técnico · Camino al Cielo{tecnico.tipo_vehiculo ? ` · ${tecnico.tipo_vehiculo}` : ''}
-                <span style={{ opacity: 0.55 }}> · v{typeof __ORBIT_BUILD__ !== 'undefined' ? __ORBIT_BUILD__ : 'dev'}</span>
+                <span style={{ opacity: 0.6 }}> · v{typeof __ORBIT_BUILD__ !== 'undefined' ? __ORBIT_BUILD__ : 'dev'}</span>
               </div>
             </div>
           </div>
+          {/* Antes gris #9CA3AF sobre azul marino: casi invisible al sol. */}
           <div className="flex items-center gap-1">
-            <button onClick={() => cargar()} className="p-2 rounded-full active:opacity-70" style={{ color: '#9CA3AF' }}>
+            <button onClick={() => cargar()} aria-label="Actualizar"
+              className="p-2 rounded-full active:opacity-70" style={{ color: 'rgba(255,255,255,0.68)' }}>
               <RefreshCw size={16} />
             </button>
-            <button onClick={logout} className="p-2 rounded-full active:opacity-70" style={{ color: '#9CA3AF' }}>
+            <button onClick={logout} aria-label="Cerrar sesión"
+              className="p-2 rounded-full active:opacity-70" style={{ color: 'rgba(255,255,255,0.68)' }}>
               <LogOut size={16} />
             </button>
           </div>
@@ -2500,7 +2517,7 @@ export default function TecnicoApp() {
           + `. Ya tengo ${sinCuadrar.total} servicios sin cuadrar en Orbit. ¿Cuándo podríamos reunirnos para cuadrar cuentas?`
         return (
           <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4"
-            style={{ background: 'rgba(0,0,0,0.55)' }}
+            style={{ background: 'rgba(11,29,79,0.58)' }}
             onClick={e => { if (e.target === e.currentTarget) cerrarPorHoy() }}>
             <div className="w-full max-w-sm rounded-3xl bg-white overflow-hidden shadow-2xl">
               <div className="px-5 pt-6 pb-5 text-center" style={{ background: '#FFFBEB' }}>
@@ -2690,28 +2707,42 @@ export default function TecnicoApp() {
       </div>
 
       {/* ── Nav inferior fija ── */}
-      <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full"
-        style={{ maxWidth: 520, background: '#fff', borderTop: '1px solid #E5E7EB', paddingBottom: 'env(safe-area-inset-bottom, 8px)' }}>
+      <div className="tec-nav-glass fixed bottom-0 left-1/2 -translate-x-1/2 w-full"
+        style={{ maxWidth: 520, paddingBottom: 'env(safe-area-inset-bottom, 8px)' }}>
         <div className="flex">
-          {TABS.map(({ key, Icon, count, color }) => (
-            <button key={key} onClick={() => setTab(key)}
-              className="flex-1 py-3 flex flex-col items-center justify-center gap-0.5 relative transition-colors"
-              style={{ color: tab === key ? color : '#9CA3AF' }}>
-              <div className="relative">
-                <Icon size={22} />
-                {count > 0 && (
-                  <span className="absolute -top-1.5 -right-2 text-[9px] font-bold min-w-[16px] h-[16px] rounded-full inline-flex items-center justify-center px-0.5"
-                    style={{ background: color, color: '#fff' }}>
-                    {count}
-                  </span>
+          {TABS.map(({ key, Icon, count, color }) => {
+            const activo = tab === key
+            return (
+              <button key={key} onClick={() => setTab(key)}
+                aria-current={activo ? 'page' : undefined}
+                className="flex-1 py-3 flex flex-col items-center justify-center gap-0.5 relative"
+                style={{ color: activo ? color : '#9CA3AF', transition: 'color .2s ease' }}>
+                {/* Pastilla del tab activo — el color no es el único indicador:
+                    la barrita de arriba sigue estando (regla de accesibilidad). */}
+                <span aria-hidden
+                  className="absolute left-1/2 rounded-2xl"
+                  style={{
+                    top: 6, bottom: 6, width: 46,
+                    background: activo ? `${color}1F` : 'transparent',
+                    transform: `translateX(-50%) scale(${activo ? 1 : 0.8})`,
+                    transition: 'background-color .2s ease, transform .2s ease',
+                  }} />
+                <div className="relative">
+                  <Icon size={22} />
+                  {count > 0 && (
+                    <span className="absolute -top-1.5 -right-2 text-[9px] font-bold min-w-[16px] h-[16px] rounded-full inline-flex items-center justify-center px-0.5"
+                      style={{ background: color, color: '#fff', boxShadow: `0 0 8px ${color}66` }}>
+                      {count}
+                    </span>
+                  )}
+                </div>
+                {activo && (
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full"
+                    style={{ background: color, boxShadow: `0 0 8px ${color}99` }} />
                 )}
-              </div>
-              {tab === key && (
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full"
-                  style={{ background: color }} />
-              )}
-            </button>
-          ))}
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -3497,7 +3528,7 @@ function AjusteModal({ fila, tecnico, onClose, onSaved }) {
   )
 
   return (
-    <div className="fixed inset-0 z-[80] flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex flex-col justify-end" style={{ background: 'rgba(11,29,79,0.58)' }} onClick={onClose}>
       <div className="bg-white rounded-t-3xl px-6 pt-4 pb-8 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />
         <div className="mb-1">
@@ -3762,7 +3793,7 @@ function MisCuartoFrioSection({ misCF, tecnico, neverasList = NEVERAS_DEFAULT, o
 
       {/* Bottom sheet cambiar nevera */}
       {editando && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.55)' }}
+        <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: 'rgba(11,29,79,0.58)' }}
           onClick={() => setEditando(null)}>
           <div className="bg-white rounded-t-3xl px-6 pt-4 pb-10" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-5" />

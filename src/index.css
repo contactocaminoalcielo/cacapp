@@ -183,6 +183,22 @@ a, button, [role="button"] {
   .bar-glass { background-color: #FFFFFF; }
 }
 
+/* Barra inferior de la app del técnico. Lleva vidrio, pero con blur CORTO (12px)
+   y a 88 % de blanco: es una franja de 520×64 px, no una superficie grande, y
+   corre en celulares de gama baja. NO ampliar el radio ni llevar backdrop-filter
+   a las hojas de abajo ni al fondo de la app: ahí sí se siente en el scroll.
+   Si algún día raspa en campo, quitar backdrop-filter aquí lo devuelve a sólido. */
+.tec-nav-glass {
+  background-color: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border-top: 1px solid rgba(11, 29, 79, 0.08);
+  box-shadow: 0 -4px 18px rgba(11, 29, 79, 0.07);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tec-nav-glass { background-color: #FFFFFF; }
+}
+
 /* Ítems del menú: el hover vive en CSS (antes eran handlers de JS por ítem) */
 .nav-link {
   color: rgba(255, 255, 255, 0.72);
