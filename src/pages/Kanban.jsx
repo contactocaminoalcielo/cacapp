@@ -19,7 +19,7 @@ import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
-  LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown,
+  LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown, ChevronRight,
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
@@ -422,6 +422,19 @@ export default function Kanban() {
 
   // ── Alertas inicio ruta ───────────────────────────────────────────────────
   const [alertasRuta, setAlertasRuta]     = useState([])   // notificaciones TECNICO_INICIO_RUTA pendientes (toasts en esquina)
+
+  // ── Franja de fotos pendientes: plegable ──────────────────────────────────
+  // Con muchos servicios sin fotos la franja crecía a varias filas de pastillas
+  // y empujaba las columnas fuera de la pantalla. Plegada deja solo el renglón
+  // con el conteo (la alerta sigue a la vista, pero ocupa una línea). Arranca
+  // plegada y recuerda cómo la dejó el coordinador.
+  const ALERTA_FOTOS_KEY = 'kanban_alerta_fotos_abierta'
+  const [alertaFotosAbierta, setAlertaFotosAbierta] = useState(() => {
+    try { return localStorage.getItem(ALERTA_FOTOS_KEY) === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(ALERTA_FOTOS_KEY, alertaFotosAbierta ? '1' : '0') } catch (_) {}
+  }, [alertaFotosAbierta])
 
   // ── Reloj para alertas por hora de recogida (amarillo ≤15 min, rojo vencida) ─
   const [ahoraTick, setAhoraTick]         = useState(() => Date.now())
@@ -1919,6 +1932,21 @@ export default function Kanban() {
       : String(vb).localeCompare(String(va), 'es', { numeric: true })
   })
 
+  // Ir a un servicio desde una alerta: lo abre en su detalle y, además, deja el
+  // tablero parado donde vive (Coordinación o Producción) con los filtros que lo
+  // esconderían apagados — si no, al cerrar el detalle la tarjeta no aparecía por
+  // ningún lado y tocaba buscarla a mano.
+  function irAlServicio(s) {
+    if ((esAdmin || esCoord) && !COLUMNAS.includes(s.estado))
+      setTableroActivo(COLS_PRODUCCION.includes(s.estado) ? 'produccion' : 'coordinacion')
+    if (soloHoy && s.fecha_ingreso !== hoyStr)                    setSoloHoy(false)
+    if (fechaDesde && (s.fecha_ingreso || '') < fechaDesde)       setFechaDesde('')
+    if (fechaHasta && (s.fecha_ingreso || '') > fechaHasta)       setFechaHasta('')
+    if (filtroEstado !== 'todos' && s.estado !== filtroEstado)    setFiltroEstado('todos')
+    if (filtroPlanes.length && !filtroPlanes.includes(s.plan))    setFiltroPlanes([])
+    abrirModal(s)
+  }
+
   // ── DnD handlers ─────────────────────────────────────────────────────────
   function onDragStart(e, svc) { e.dataTransfer.setData('svc_id', svc.servicio_id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(svc.servicio_id) }
   function onDragEnd() { setDraggingId(null); setDragOverCol(null) }
@@ -2060,26 +2088,45 @@ export default function Kanban() {
       <div className={`p-5 flex flex-col gap-4 ${vista === 'kanban' ? 'flex-1 min-h-0' : ''}`}>
 
         {/* ── Alerta fotos pendientes (3+ días hábiles sin subir) ──────────── */}
+        {/* Plegable: el renglón del conteo siempre se ve; las pastillas solo si
+            el coordinador las despliega. Cada pastilla lleva al detalle de esa
+            mascota y para el tablero donde esté (ver `irAlServicio`). */}
         {(() => {
           const pendientes = servicios.filter(s => s.alerta_fotos_pendientes)
           if (!pendientes.length) return null
           return (
-            <div className="rounded-xl border-2 px-4 py-3 flex items-start gap-3" style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
-              <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[12px] font-bold text-amber-800 mb-1">
+            <div className="rounded-xl border-2" style={{ borderColor: '#FDE68A', background: '#FFFBEB' }}>
+              <button
+                onClick={() => setAlertaFotosAbierta(v => !v)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left"
+                title={alertaFotosAbierta ? 'Ocultar la lista' : 'Ver cuáles son'}>
+                <AlertTriangle size={16} className="text-amber-500 flex-shrink-0" />
+                <span className="text-[12px] font-bold text-amber-800 flex-1 min-w-0 truncate">
                   {pendientes.length} servicio{pendientes.length > 1 ? 's' : ''} sin fotos ({'>'}3 días hábiles)
-                </div>
-                <div className="flex flex-wrap gap-1.5">
+                </span>
+                <span className="text-[11px] font-semibold text-amber-700/80 flex items-center gap-1 flex-shrink-0">
+                  {alertaFotosAbierta ? 'Ocultar' : 'Ver cuáles'}
+                  {alertaFotosAbierta ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </span>
+              </button>
+              {alertaFotosAbierta && (
+                <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-0.5">
                   {pendientes.map(s => (
-                    <button key={s.servicio_id} onClick={() => { const item = servicios.find(x => x.servicio_id === s.servicio_id); if (item) abrirModal(item) }}
-                      className="text-[11px] font-semibold px-2 py-0.5 rounded-full border transition-all hover:opacity-80"
+                    <button key={s.servicio_id} onClick={() => irAlServicio(s)}
+                      title={`Ver el detalle de ${s.mascota} — ${ESTADO_LABEL[s.estado] || s.estado}`}
+                      className="group text-[11px] font-semibold pl-2.5 pr-1.5 py-1 rounded-full border transition-all hover:shadow-sm flex items-center gap-1.5"
                       style={{ background: '#FEF3C7', color: '#92400E', borderColor: '#FDE68A' }}>
-                      {s.mascota} · {s.cliente.split(' ')[0]}
+                      <span className="underline decoration-dotted underline-offset-2">{s.mascota}</span>
+                      <span className="font-medium opacity-70">· {(s.cliente || '').split(' ')[0]}</span>
+                      <span className="text-[10px] font-bold px-1.5 py-px rounded-full"
+                        style={{ background: '#FDE68A', color: '#7C2D12' }}>
+                        {ESTADO_LABEL[s.estado] || s.estado}
+                      </span>
+                      <ChevronRight size={12} className="opacity-50 group-hover:opacity-100 transition-opacity" />
                     </button>
                   ))}
                 </div>
-              </div>
+              )}
             </div>
           )
         })()}
@@ -2101,7 +2148,7 @@ export default function Kanban() {
                       onClick={async () => {
                         await marcarLeida(n.id)
                         setAlertasDeclinas(prev => prev.filter(a => a.id !== n.id))
-                        if (svc) abrirModal(svc)
+                        if (svc) irAlServicio(svc)
                       }}
                       className="text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all hover:opacity-80 flex items-center gap-1"
                       style={esProblema
