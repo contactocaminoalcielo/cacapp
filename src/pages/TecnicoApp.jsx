@@ -4698,9 +4698,21 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // ── Estado: declarados ANTES de useEffects para evitar TDZ en sus dependency arrays ──
   const montoClienteDefault = aliadoFactMensual ? 0
     : comisionFueDescontada ? precioOriginal : saldoPendiente
-  const [tipoRecibo, setTipoRecibo]   = useState(reciboExistente?.tipo || 'CLIENTE')
-  const [form, setForm] = useState(() => {
-    const base = {
+
+  // Campos del recibo que salen del SERVICIO (DB), no del teclado del técnico.
+  // Si el coordinador cambia el plan o el precio DESPUÉS de que el técnico abrió
+  // el recibo, estos tienen que refrescarse: el draft de localStorage los
+  // congelaba y el técnico seguía viendo —y podía guardar— el plan y el valor
+  // viejos (queja LUKAS 2026-08-09: Compostaje → Eco-grupal). `fecha`, `hora` y
+  // `numero_recibo` quedan FUERA a propósito: marcan cuándo se empezó el recibo.
+  const CAMPOS_DEL_SERVICIO = [
+    'mascota_nombre', 'peso', 'especie', 'veterinaria', 'propietario',
+    'email', 'telefono', 'casa', 'servicio', 'valor_servicio', 'total_recibido',
+  ]
+  // Declarada como función (no const) para poder llamarla desde el inicializador
+  // del useState y desde los efectos del draft sin problemas de orden.
+  function baseDelServicio() {
+    return {
       fecha:              fechaHoy,
       hora:               horaActual,
       numero_recibo:      numeroRecibo,
@@ -4722,6 +4734,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       confirmacion_foto:  false,
       observaciones:      '',
     }
+  }
+
+  const [tipoRecibo, setTipoRecibo]   = useState(reciboExistente?.tipo || 'CLIENTE')
+  const [form, setForm] = useState(() => {
+    const base = baseDelServicio()
     // Recibo ya guardado en DB (reabierto desde Recibos): restaurar sus datos
     if (reciboExistente?.datos_form) {
       const { pago_pendiente: _pp, ...datos } = reciboExistente.datos_form
@@ -4741,6 +4758,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [sobrepagoMotivo, setSobrepagoMotivo] = useState(reciboExistente?.datos_form?.sobrepago_motivo || '')
 
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
+  // El draft restaura SOLO lo que escribió el técnico. Los campos que vienen del
+  // servicio se recomparan contra `draft.base` (la foto del servicio en el momento
+  // de guardar el draft): si el técnico no los tocó, mandan los valores frescos de
+  // la DB. Así un cambio de plan hecho por coordinación se ve al reabrir el recibo.
   const DRAFT_KEY = `recibo_draft_${servicioSel.id}`
   useEffect(() => {
     if (reciboExistente) return
@@ -4748,8 +4769,31 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       const raw = localStorage.getItem(DRAFT_KEY)
       if (!raw) return
       const draft = JSON.parse(raw)
-      if (draft.form)                         setForm(f => ({ ...f, ...draft.form }))
-      if (draft.mediosPago)                   setMediosPago(draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false })))
+      if (draft.form) {
+        const restaurar = {}
+        for (const [k, v] of Object.entries(draft.form)) {
+          if (!CAMPOS_DEL_SERVICIO.includes(k)) { restaurar[k] = v; continue }
+          // Solo se respeta lo que el técnico editó a mano (difiere de la base
+          // que tenía el servicio al guardar el draft). En drafts viejos sin
+          // `base` no hay forma de saberlo → manda el servicio.
+          if (draft.base && String(v) !== String(draft.base[k])) restaurar[k] = v
+        }
+        setForm(f => ({ ...f, ...restaurar }))
+      }
+      if (draft.mediosPago) {
+        const medios = draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false }))
+        // El monto prellenado del medio único también sale del servicio: si sigue
+        // siendo el default de entonces, se re-prellena con el vigente (si no, el
+        // técnico cobraría el valor del plan viejo). En drafts viejos sin
+        // `montoDefault` se compara contra el valor del recibo de entonces: si
+        // coinciden era el prellenado, no algo que el técnico haya escrito.
+        const montoDefaultPrevio = draft.montoDefault !== undefined
+          ? draft.montoDefault : draft.form?.valor_servicio
+        const soloDefault = medios.length === 1 && !medios[0].referencia && !medios[0].comprobanteUrl
+          && montoDefaultPrevio !== undefined
+          && Number(medios[0].monto) === Number(montoDefaultPrevio)
+        setMediosPago(soloDefault ? [{ ...medios[0], monto: montoClienteDefault }] : medios)
+      }
       if (draft.tipoRecibo)                   setTipoRecibo(draft.tipoRecibo)
       if (draft.pagoPendiente !== undefined)  setPagoPendiente(draft.pagoPendiente)
     } catch (_) {}
@@ -4758,8 +4802,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   useEffect(() => {
     if (guardado) { localStorage.removeItem(DRAFT_KEY); return }
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, mediosPago, tipoRecibo, pagoPendiente }))
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        form, mediosPago, tipoRecibo, pagoPendiente,
+        base: baseDelServicio(), montoDefault: montoClienteDefault,
+      }))
     } catch (_) {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente])
 
   // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
