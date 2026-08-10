@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { db } from '@/lib/supabase'
 import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 import { portalDatos, portalRecibir } from '@/lib/imagenes'
+import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift } from 'lucide-react'
 
 const G      = '#1A5CD8'
@@ -1043,7 +1044,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           <CampoEntrega label="Dirección de entrega" required value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
           <div className="grid grid-cols-2 gap-3">
             <CampoEntrega label="Barrio" value={entrega.barrio} onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
-            <CampoEntrega label="Localidad" value={entrega.localidad} onChange={v => setE('localidad', v)} placeholder="Localidad" />
+            <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
           </div>
           <CampoEntrega label="¿Quién recibe?" required value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
           <div className="grid grid-cols-2 gap-3">
@@ -1289,6 +1290,42 @@ function PantallaInfo({ emoji, titulo, texto, cta }) {
       <p className="text-[15px] text-gray-500 max-w-xs text-center leading-relaxed">{texto}</p>
       {cta && <button onClick={cta.fn} className="mt-6 px-8 py-4 rounded-2xl font-bold text-white text-[16px]" style={{ background: G }}>{cta.label}</button>}
     </Centrado>
+  )
+}
+
+// Localidad como lista, no como texto libre: escrita a mano llegaba mal (con
+// faltas, con el barrio en su lugar, o inventada) y la entrega se planifica con
+// ese dato. Se usa un <select> NATIVO a propósito, no el combobox del admin: en
+// el portal el que responde es el cliente desde el celular, y el selector del
+// sistema operativo es más grande, más rápido y no pelea con el scroll del
+// formulario. La lista viene del módulo compartido — una sola fuente.
+//
+// FUERA_BOGOTA es la válvula de escape: las localidades son de Bogotá, y sin
+// una salida explícita alguien de Soacha o Chía elegiría cualquiera con tal de
+// llenar el campo, que es peor que dejarlo vacío.
+const FUERA_BOGOTA = 'Fuera de Bogotá'
+
+function CampoLocalidad({ value, onChange }) {
+  const lleno = !!String(value || '').trim()
+  return (
+    <div>
+      <label className="text-[13px] font-bold text-gray-600 block mb-2">Localidad</label>
+      {/* Se deja la flecha NATIVA del navegador: es la señal de que esto se
+          despliega. Sin ella el campo se ve igual que "Barrio" y el cliente
+          intenta escribir encima. */}
+      <select value={value || ''} onChange={e => onChange(e.target.value)}
+        className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none transition-colors"
+        style={{
+          borderColor: lleno ? G : BORD, background: '#FAFCFA',
+          color: lleno ? '#111827' : '#9CA3AF',
+        }}
+        onFocus={e => e.target.style.borderColor = G}
+        onBlur={e  => e.target.style.borderColor = lleno ? G : BORD}>
+        <option value="">Selecciona tu localidad…</option>
+        {LOCALIDADES_BOGOTA.map(l => <option key={l} value={l}>{l}</option>)}
+        <option value={FUERA_BOGOTA}>{FUERA_BOGOTA}</option>
+      </select>
+    </div>
   )
 }
 
