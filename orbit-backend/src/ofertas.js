@@ -194,8 +194,13 @@ export async function aplicarOfertaAceptada(client, { servicioId, oferta, entry 
   const srId = srRows[0].id
 
   // Dinero. El precio sale de la fila `ofertas`, jamás del payload del cliente.
+  // Se captura el antes/después para la traza de valor (migración 089): la
+  // pantalla de pago marca como "cambio sin registrar" todo movimiento que no
+  // la deje, y una oferta aceptada es una venta legítima que debe verse como tal.
+  let valorAntes = null
+  let valorDespues = null
   if (precio > 0) {
-    await client.query(
+    const { rows: svRows } = await client.query(
       `UPDATE public.servicios
           SET valor_total = COALESCE(valor_total, 0) + $2,
               -- NULL significa "este servicio no lleva desglose de adicionales";
@@ -206,18 +211,28 @@ export async function aplicarOfertaAceptada(client, { servicioId, oferta, entry 
                 WHEN COALESCE(valor_pagado, 0) >= COALESCE(valor_total, 0) + $2 THEN 'COMPLETO'
                 WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
                 ELSE 'PENDIENTE' END
-        WHERE id = $1`,
+        WHERE id = $1
+     RETURNING valor_total`,
       [servicioId, precio]
     )
+    const despues = Number(svRows[0]?.valor_total)
+    if (Number.isFinite(despues)) {
+      valorDespues = despues
+      valorAntes   = despues - precio   // exacto: lo que acabamos de sumar
+    }
   }
 
   await client.query(
-    `INSERT INTO public.novedades_servicio (servicio_id, tipo_novedad, descripcion, valor_ajuste)
-     VALUES ($1, 'NOTA', $2, $3)`,
+    `INSERT INTO public.novedades_servicio
+       (servicio_id, tipo_novedad, descripcion, valor_ajuste, valor_antes, valor_despues, motivo_valor)
+     VALUES ($1, 'NOTA', $2, $3, $4, $5, $6)`,
     [servicioId,
      `Oferta aceptada por el cliente en el portal de fotos: ${oferta.titulo} — ` +
      `${oferta.recordatorio.nombre} por $${precio.toLocaleString('es-CO')}. Pendiente de cobro en la entrega.`,
-     precio]
+     precio,
+     valorAntes, valorDespues,
+     // El CHECK de la 089 exige antes/después en pareja; sin cambio de valor van los tres en NULL.
+     valorAntes == null ? null : 'ADICIONAL']
   )
 
   await client.query(
