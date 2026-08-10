@@ -10,6 +10,7 @@ import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
 import { Star, MessageCircle, RefreshCw } from 'lucide-react'
+import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 
 const FILTROS = [
   { key: 'todos', label: 'Todos' },
@@ -35,7 +36,7 @@ export default function Nps() {
     try {
       setLoading(true)
       const { data, error: err } = await db.from('nps_seguimiento')
-        .select('*, servicios!inner(mascotas(nombre,clientes(nombre,apellido,whatsapp)),planes(nombre))')
+        .select('*, servicios!inner(aliados:aliado_origen_id(vip),mascotas(nombre,clientes(nombre,apellido,whatsapp)),planes(nombre))')
         .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('fecha_programada', { ascending: true })
       if (err) throw err
@@ -129,7 +130,10 @@ export default function Nps() {
                     <Td>
                       <div className="flex items-center gap-2">
                         <div>
-                          <div className="font-semibold text-ink">{m?.nombre || '-'}</div>
+                          <div className="flex items-center gap-1">
+                            <span className="font-semibold text-ink">{m?.nombre || '-'}</span>
+                            {esAliadoVip(s.servicios) && <VipStar size={12} />}
+                          </div>
                           <div className="text-[10px] text-ink3">{c?.nombre} {c?.apellido}</div>
                         </div>
                       </div>

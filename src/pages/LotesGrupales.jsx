@@ -15,6 +15,7 @@ import {
   CheckCircle2, Archive, AlertTriangle,
   Flame, Leaf, ChevronDown, ChevronUp, Award
 } from 'lucide-react'
+import { esAliadoVip, VipStar, VIP_ORO } from '@/components/servicio/VipAliado'
 
 // ─── Constantes ────────────────────────────────────────────────────────────────
 const CAPACIDAD_MAX = 20
@@ -95,11 +96,16 @@ function CapacidadGauge({ ocupados, grupalesPendientes }) {
 function SvcRow({ svc, accion, accionLabel, accionIcon: AIcon, accionVariant = 'secondary' }) {
   const dias = diasDesde(svc.fecha_ingreso)
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-white hover:bg-gray-50 transition-colors"
-      style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border hover:bg-gray-50 transition-colors"
+      style={esAliadoVip(svc)
+        ? { borderColor: VIP_ORO.borde, background: VIP_ORO.bg }
+        : { borderColor: 'rgba(30,80,40,0.1)', background: '#fff' }}>
       <div className="text-xl flex-shrink-0">{petEmoji(svc.especie)}</div>
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-semibold text-gray-900 truncate">{svc.mascota}</p>
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-[13px] font-semibold text-gray-900 truncate">{svc.mascota}</span>
+          {esAliadoVip(svc) && <VipStar size={12} />}
+        </div>
         <p className="text-[11px] text-gray-500 truncate">{svc.cliente}</p>
       </div>
       <div className="text-right flex-shrink-0">
@@ -431,7 +437,7 @@ export default function LotesGrupales() {
       // 2. Servicios grupales activos via v_kanban
       const { data: vk } = await db
         .from('v_kanban')
-        .select('servicio_id,mascota,especie,cliente,cliente_wa,fecha_ingreso,estado,tipo_proceso,plan,codigo_plan')
+        .select('servicio_id,mascota,especie,cliente,cliente_wa,fecha_ingreso,estado,tipo_proceso,plan,codigo_plan,aliado_vip')
         .in('tipo_proceso', ['CREMACION_GRUPAL', 'COMPOSTAJE_GRUPAL'])
         .not('estado', 'in', '(CANCELADO,ENTREGADO)')
         .gte('fecha_ingreso', FECHA_CORTE)
@@ -490,7 +496,7 @@ export default function LotesGrupales() {
         const histIds = hist.map(l => l.id)
         const { data: svcsH } = await db
           .from('servicios')
-          .select('id, lote_id, fecha_ingreso, mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido))')
+          .select('id, lote_id, fecha_ingreso, aliados:aliado_origen_id(vip), mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido))')
           .in('lote_id', histIds)
           .gte('fecha_ingreso', FECHA_CORTE)
 
@@ -499,6 +505,9 @@ export default function LotesGrupales() {
           if (!histMap[lId]) histMap[lId] = []
           histMap[lId].push({
             servicio_id:  s.id,
+            // Se guarda con el MISMO nombre que trae v_kanban para que `SvcRow`
+            // sirva igual venga de donde venga (pendientes vs. historial).
+            aliado_vip:   esAliadoVip(s),
             mascota:      s.mascotas?.nombre || '-',
             especie:      s.mascotas?.especies?.nombre || '-',
             cliente:      `${s.mascotas?.clientes?.nombre || ''} ${s.mascotas?.clientes?.apellido || ''}`.trim() || '-',

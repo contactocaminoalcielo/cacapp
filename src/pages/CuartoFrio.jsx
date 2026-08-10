@@ -16,6 +16,7 @@ import {
   History, ChevronDown, ChevronUp, Plus, Trash2, Thermometer,
   Search, X, AlertTriangle,
 } from 'lucide-react'
+import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
 
 function fmtFechaHora(ts) {
   if (!ts) return '—'
@@ -208,10 +209,16 @@ function DetalleModal({ registro: r, onClose, onEdit, movimientos }) {
       <div className="space-y-4">
 
         {/* Mascota */}
-        <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
+        <div className="flex items-start gap-3 p-3 rounded-xl"
+          style={esAliadoVip(r.servicios)
+            ? { background: VIP_ORO.bg, border: `1px solid ${VIP_ORO.borde}` }
+            : { background: '#F9FAFB' }}>
           <span className="text-4xl">{petEmoji(m?.especies?.nombre)}</span>
           <div className="flex-1 min-w-0">
-            <div className="font-bold text-gray-900 text-[16px]">{m?.nombre || '—'}</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-bold text-gray-900 text-[16px]">{m?.nombre || '—'}</span>
+              {esAliadoVip(r.servicios) && <VipBadge />}
+            </div>
             <div className="text-[12px] text-gray-500">
               {m?.especies?.nombre}{m?.peso_kg ? ` · ${m.peso_kg} kg` : ''}
             </div>
@@ -509,6 +516,7 @@ export default function CuartoFrio() {
         db.from('cuarto_frio')
           .select(`*, registrador:registrado_por(nombre,apellido), servicios!inner(
             mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),
+            aliados:aliado_origen_id(vip),
             planes(nombre,codigo,tipo_proceso),
             recogidas(foto_recogida_url),
             tecnico:tecnico_id(nombre,apellido)
@@ -766,13 +774,18 @@ export default function CuartoFrio() {
                 const t = r.servicios?.tecnico
                 return (
                   <div key={r.id}
-                    className="bg-white border-2 rounded-2xl p-4 cursor-pointer hover:shadow-md transition-all"
-                    style={{ borderColor: '#FDE68A' }}
+                    className="border-2 rounded-2xl p-4 cursor-pointer hover:shadow-md transition-all"
+                    style={esAliadoVip(r.servicios)
+                      ? { borderColor: VIP_ORO.borde, background: VIP_ORO.bg }
+                      : { borderColor: '#FDE68A', background: '#fff' }}
                     onClick={() => verDetalle(r)}>
                     <div className="flex items-start gap-3 mb-3">
                       <span className="text-3xl">{petEmoji(m?.especies?.nombre)}</span>
                       <div className="flex-1 min-w-0">
-                        <div className="font-bold text-gray-900 text-[14px] truncate">{m?.nombre || '—'}</div>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="font-bold text-gray-900 text-[14px] truncate">{m?.nombre || '—'}</span>
+                          {esAliadoVip(r.servicios) && <VipStar />}
+                        </div>
                         <div className="text-[11px] text-gray-500 truncate">{c?.nombre} {c?.apellido}</div>
                         <div className="text-[11px] text-gray-400 truncate">{p?.nombre}</div>
                       </div>
@@ -824,7 +837,10 @@ export default function CuartoFrio() {
                             onClick={() => verDetalle(r)}>
                             <span className="text-xl leading-none">{petEmoji(m?.especies?.nombre)}</span>
                             <div className="flex-1 min-w-0">
-                              <div className="text-[13px] font-semibold text-gray-900 truncate">{m?.nombre || '—'}</div>
+                              <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-[13px] font-semibold text-gray-900 truncate">{m?.nombre || '—'}</span>
+                                {esAliadoVip(r.servicios) && <VipStar size={12} />}
+                              </div>
                               <div className="text-[10px] text-gray-400 truncate">{c?.nombre} {c?.apellido}</div>
                             </div>
                             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -889,12 +905,16 @@ export default function CuartoFrio() {
                   return (
                     <tr key={r.id}
                       className="hover:bg-gray-50/70 cursor-pointer transition-colors"
-                      style={{ borderBottom: i < registrosFiltrados.length - 1 ? '1px solid #F9FAFB' : 'none' }}
+                      style={{
+                        borderBottom: i < registrosFiltrados.length - 1 ? '1px solid #F9FAFB' : 'none',
+                        background: esAliadoVip(r.servicios) ? VIP_ORO.bg : undefined,
+                      }}
                       onClick={() => verDetalle(r)}>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="text-xl leading-none">{petEmoji(m?.especies?.nombre)}</span>
                           <span className="font-semibold text-gray-900 text-[13px]">{m?.nombre || '—'}</span>
+                          {esAliadoVip(r.servicios) && <VipStar size={12} />}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-[12px] text-gray-600">{c?.nombre} {c?.apellido}</td>

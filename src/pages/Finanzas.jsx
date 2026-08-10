@@ -1,3 +1,4 @@
+import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -3426,7 +3427,7 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
         const [{ data: s, error: se }, rg, cf, en, nv, ad] = await Promise.all([
           db.from('servicios')
             .select(`*, mascotas ( nombre, especies ( nombre ), clientes ( nombre, apellido, whatsapp ) ),
-              planes ( nombre ), aliados:aliado_origen_id ( nombre )`)
+              planes ( nombre ), aliados:aliado_origen_id ( nombre, vip )`)
             .eq('id', servicioId).single(),
           db.from('recogidas').select('id, foto_recogida_url, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, notas').eq('servicio_id', servicioId),
           db.from('cuarto_frio').select('nevera_codigo, posicion, peso_kg, foto_pesaje_url, created_at').eq('servicio_id', servicioId),
@@ -3556,6 +3557,7 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[15px] font-bold text-gray-900">{m.nombre || 'Mascota'}</span>
+                {esAliadoVip(svc) && <VipBadge />}
                 <RecatBadges recat={recatModal} />
               </div>
               <div className="text-[11px] text-gray-400">{m.especies?.nombre || ''}{svc?.codigo ? ` · ${svc.codigo}` : ''}</div>

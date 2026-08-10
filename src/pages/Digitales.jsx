@@ -13,6 +13,7 @@ import {
   Loader2, AlertTriangle, X, Crop, Link2, Send, Copy, MessageCircle, History, Search,
   Eye, PawPrint, Phone, Ban,
 } from 'lucide-react'
+import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
 
@@ -620,7 +621,7 @@ function ServicioCard({
               ? <img src={s.foto_url} alt={s.mascota ? 'Foto de ' + s.mascota : 'Foto de mascota'} className="w-11 h-11 rounded-xl object-cover shrink-0" />
               : <div className="w-11 h-11 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center shrink-0"><PawPrint size={18} /></div>}
             <div className="min-w-0">
-              <div className="font-semibold text-[#263218] truncate">{s.mascota}</div>
+              <div className="font-semibold text-[#263218] truncate flex items-center gap-1">{s.mascota}{esAliadoVip(s) && <VipStar size={12} />}</div>
               <div className="text-[12px] text-gray-400 truncate">
                 {s.propietario || 'Sin propietario'}{s.telefono ? ` · ${s.telefono}` : ''} · {s.plan_nombre || s.plan_codigo || 'Sin plan'} · imágenes {s.fecha_imagenes}
               </div>
@@ -811,7 +812,7 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
       <CardContent className="py-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="font-semibold text-[#263218] truncate flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {s.mascota}</div>
+            <div className="font-semibold text-[#263218] truncate flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {s.mascota}{esAliadoVip(s) && <VipStar size={12} />}</div>
             <div className="text-[12px] text-gray-400 truncate">{s.propietario || 'Sin propietario'} · {s.plan_nombre || s.plan_codigo || ''}</div>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
@@ -1064,7 +1065,7 @@ function CandidatoDatos({ c, apagado = false }) {
   return (
     <div className="min-w-0">
       <div className={`font-semibold truncate ${apagado ? 'text-gray-500' : 'text-[#263218]'}`}>
-        <span className="inline-flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {c.mascota}</span>
+        <span className="inline-flex items-center gap-1.5"><PawPrint size={14} className="text-gray-400 shrink-0" /> {c.mascota}{esAliadoVip(c) && <VipStar size={12} />}</span>
       </div>
       <div className={`text-[13px] truncate ${apagado ? 'text-gray-400' : 'text-gray-500'}`}>
         {c.propietario || 'Sin propietario'} · {c.plan_nombre || c.plan_codigo} · imágenes {c.fecha_imagenes}

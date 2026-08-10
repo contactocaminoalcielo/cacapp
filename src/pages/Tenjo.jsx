@@ -24,6 +24,7 @@ import CubiculosTab from '@/pages/tenjo/CubiculosTab'
 import VisitasTab from '@/pages/tenjo/VisitasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Clock, History } from 'lucide-react'
+import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 
 function fmtFecha(s) {
   if (!s) return '-'
@@ -239,25 +240,25 @@ export default function Tenjo() {
       if (primeraCarga.current) setLoading(true)
       const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: per }, { data: procComp }] = await Promise.all([
         db.from('traslados_tenjo')
-          .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
+          .select('*, servicios!inner(aliados:aliado_origen_id(vip),mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo)), tecnico:tecnico_id(nombre,apellido)')
           .in('estado', ['PROGRAMADO','EN_CAMINO'])
           .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_traslado', { ascending: true }),
         // Traslados completados donde servicio aún está EN_PROCESO → contar 5 días
         db.from('traslados_tenjo')
-          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
+          .select('*, servicios!inner(id,estado,aliados:aliado_origen_id(vip),mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
           .eq('estado', 'COMPLETADO')
           .eq('servicios.estado', 'EN_PROCESO')
           .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_completado', { ascending: true }),
         db.from('cuarto_frio')
-          .select('*, servicios!inner(mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
+          .select('*, servicios!inner(aliados:aliado_origen_id(vip),mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso))')
           .eq('estado', 'REFRIGERADO')
           .gte('servicios.fecha_ingreso', FECHA_CORTE),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         // Individuales procesados (cenizas ya confirmadas) — para emitir certificados
         db.from('traslados_tenjo')
-          .select('*, servicios!inner(id,estado,mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
+          .select('*, servicios!inner(id,estado,aliados:aliado_origen_id(vip),mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido)),planes(nombre,codigo,tipo_proceso)), tecnico:tecnico_id(nombre,apellido)')
           .eq('estado', 'COMPLETADO')
           .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('fecha_completado', { ascending: false })
@@ -571,7 +572,7 @@ export default function Tenjo() {
                     style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                     <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
                     <div className="flex-1">
-                      <div className="font-semibold text-ink">{m?.nombre}</div>
+                      <div className="flex items-center gap-1"><span className="font-semibold text-ink">{m?.nombre}</span>{esAliadoVip(t.servicios) && <VipStar size={12} />}</div>
                       <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
                       <div className="text-[11px] text-ink2 mt-0.5">
                         {t.fecha_traslado && `Programado: ${new Date(t.fecha_traslado + 'T12:00:00').toLocaleDateString('es-CO')}`}
@@ -621,7 +622,7 @@ export default function Tenjo() {
                     <div className="flex items-center gap-3 mb-3">
                       <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
                       <div className="flex-1">
-                        <div className="font-semibold text-ink">{m?.nombre}</div>
+                        <div className="flex items-center gap-1"><span className="font-semibold text-ink">{m?.nombre}</span>{esAliadoVip(t.servicios) && <VipStar size={12} />}</div>
                         <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
                       </div>
                       <div className="text-right">
@@ -664,7 +665,7 @@ export default function Tenjo() {
                     style={{ borderColor: 'rgba(192,48,48,0.15)', background: '#FFF8F8' }}>
                     <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
                     <div className="flex-1">
-                      <div className="font-semibold text-ink">{m?.nombre}</div>
+                      <div className="flex items-center gap-1"><span className="font-semibold text-ink">{m?.nombre}</span>{esAliadoVip(t.servicios) && <VipStar size={12} />}</div>
                       <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
                       <div className="text-[11px] mt-0.5" style={{ color: '#C03030' }}>
                         Cremado el {fmtFecha(t.fecha_completado)} · {t.diasDesde} días transcurridos
@@ -759,7 +760,7 @@ export default function Tenjo() {
                     style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
                     <span className="text-2xl">{esEco ? '🌿' : '🔥'}</span>
                     <div className="flex-1">
-                      <div className="font-semibold text-ink">{m?.nombre}</div>
+                      <div className="flex items-center gap-1"><span className="font-semibold text-ink">{m?.nombre}</span>{esAliadoVip(t.servicios) && <VipStar size={12} />}</div>
                       <div className="text-[11px] text-ink3">{c?.nombre} {c?.apellido} · {p?.nombre}</div>
                       <div className="text-[11px] text-ink2 mt-0.5">
                         Procesado: {fmtFecha(t.fecha_completado)}

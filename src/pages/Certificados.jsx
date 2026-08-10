@@ -23,6 +23,7 @@ import {
   FileText, RefreshCw, CheckCircle2, Printer, MessageCircle,
   ChevronDown, ChevronUp, Award, Flame, Send, AlertTriangle, Clock, XCircle, Sparkles,
 } from 'lucide-react'
+import { esAliadoVip, VipStar, VIP_ORO } from '@/components/servicio/VipAliado'
 
 function fmtFecha(s) {
   if (!s) return '-'
@@ -215,7 +216,7 @@ export default function Certificados() {
       // 2. Certificados individuales (flujo previo, sin cambios)
       const { data: traslados } = await db
         .from('traslados_tenjo')
-        .select('id, fecha_completado, servicio_id, servicios!inner(id, estado, mascotas(nombre, peso_kg, especie_id, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, tipo_proceso))')
+        .select('id, fecha_completado, servicio_id, servicios!inner(id, estado, aliados:aliado_origen_id(vip), mascotas(nombre, peso_kg, especie_id, especies(nombre), clientes(nombre, apellido, whatsapp)), planes(nombre, tipo_proceso))')
         .eq('estado', 'COMPLETADO')
         .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('fecha_completado', { ascending: false })
@@ -231,6 +232,7 @@ export default function Certificados() {
           const svc = t.servicios, m = svc?.mascotas, c = m?.clientes
           return {
             servicio_id: svc?.id, traslado: t, tipo: svc?.planes?.tipo_proceso,
+            vip: esAliadoVip(svc),
             mascota: m?.nombre || '-', especie: m?.especies?.nombre || '-', peso_kg: m?.peso_kg,
             cliente: `${c?.nombre || ''} ${c?.apellido || ''}`.trim() || '-',
             whatsapp: c?.whatsapp || null, cert: null,
@@ -467,11 +469,15 @@ export default function Certificados() {
                     const cfg = TIPO_CFG[item.tipo] || {}
                     const yaEnviado = item.cert?.enviado_whatsapp
                     return (
-                      <div key={item.servicio_id} className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-white" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                      <div key={item.servicio_id} className="flex items-center gap-3 px-4 py-3 rounded-xl border"
+                        style={item.vip
+                          ? { borderColor: VIP_ORO.borde, background: VIP_ORO.bg }
+                          : { borderColor: 'rgba(30,80,40,0.1)', background: '#fff' }}>
                         <span className="text-xl">{petEmoji(item.especie)}</span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[13px] font-semibold text-gray-900">{item.mascota}</span>
+                            {item.vip && <VipStar />}
                             <Pill cfg={cfg} />
                             {yaEnviado && <span className="text-[10px] text-green-700 bg-green-100 px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 size={9} /> Enviado</span>}
                           </div>

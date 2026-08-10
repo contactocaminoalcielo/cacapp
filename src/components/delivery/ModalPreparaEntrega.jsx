@@ -5,6 +5,7 @@ import { fmt, waLink } from '@/lib/utils'
 import { crearNotificacion } from '@/lib/notificaciones'
 import { generarCertificadoEntrega } from '@/lib/certificadoEntrega'
 import { X, Truck, MapPin, User, Calendar, MessageCircle, Download, Check, AlertCircle } from 'lucide-react'
+import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
 
 export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado }) {
   const { personalData: yo } = useAuth()
@@ -141,7 +142,7 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
           : Promise.resolve({ data: null }),
         svcRaw?.aliado_origen_id
           ? db.from('aliados')
-              .select('id_aliado, nombre, direccion, barrio, localidad, ciudad, contacto_nombre, whatsapp, telefono')
+              .select('id_aliado, nombre, direccion, barrio, localidad, ciudad, contacto_nombre, whatsapp, telefono, vip')
               .eq('id_aliado', svcRaw.aliado_origen_id).maybeSingle()
           : Promise.resolve({ data: null }),
       ])
@@ -368,8 +369,9 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                 style={{ background: '#F4F7F4', border: '1px solid rgba(30,80,40,0.08)' }}>
                 <div>
                   <div className="text-[10px] font-bold text-gray-400 uppercase">Mascota</div>
-                  <div className="font-semibold text-gray-800">
-                    {svc.mascotas?.nombre} · {svc.mascotas?.especies?.nombre}
+                  <div className="font-semibold text-gray-800 flex items-center gap-1.5 flex-wrap">
+                    <span>{svc.mascotas?.nombre} · {svc.mascotas?.especies?.nombre}</span>
+                    {esAliadoVip(svc) && <VipBadge />}
                   </div>
                 </div>
                 <div>

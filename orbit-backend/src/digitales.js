@@ -199,7 +199,7 @@ export async function listarCandidatos() {
     const { rows } = await client.query(
       `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
-              m.nombre AS mascota, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
+              m.nombre AS mascota, COALESCE(al.vip, false) AS aliado_vip, p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
               COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
               f.foto_url,
@@ -207,6 +207,7 @@ export async function listarCandidatos() {
        FROM public.servicios s
        JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.aliados al   ON al.id_aliado = s.aliado_origen_id
        LEFT JOIN public.planes p    ON p.id = s.plan_id
        LEFT JOIN public.piezas_digitales mem
          ON mem.servicio_id = s.id AND mem.tipo = 'MEMORIAL'
@@ -247,7 +248,7 @@ export async function listarServicios() {
     const { rows: servicios } = await client.query(
       `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
-              m.nombre AS mascota,
+              m.nombre AS mascota, COALESCE(al.vip, false) AS aliado_vip,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
               COALESCE(NULLIF(TRIM(c.whatsapp), ''), NULLIF(TRIM(c.telefono), ''), NULLIF(TRIM(c.telefono2), '')) AS telefono,
               p.codigo AS plan_codigo, p.nombre AS plan_nombre,
@@ -257,6 +258,7 @@ export async function listarServicios() {
        FROM public.servicios s
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.aliados al  ON al.id_aliado = s.aliado_origen_id
        LEFT JOIN public.planes p   ON p.id = s.plan_id
        ${fotoLateral('$2')}
        LEFT JOIN LATERAL (
