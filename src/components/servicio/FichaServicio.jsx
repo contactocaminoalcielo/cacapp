@@ -7,6 +7,7 @@ import { etapaContacto } from '@/lib/imagenes'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import HistorialValor from '@/components/servicio/HistorialValor'
+import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
 import {
   User, MapPin, CreditCard, Clock, Camera, Truck, Package, Snowflake, PawPrint,
 } from 'lucide-react'
@@ -72,7 +73,7 @@ export default function FichaServicio({ servicioId, onClose }) {
             .select(`*,
               mascotas:mascota_id(*, especies(nombre), clientes:cliente_id(*)),
               planes:plan_id(nombre, codigo, tipo_proceso),
-              aliados:aliado_origen_id(nombre, modalidad_comision, telefono, whatsapp),
+              aliados:aliado_origen_id(nombre, modalidad_comision, telefono, whatsapp, vip),
               tecnico:tecnico_id(nombre, apellido),
               registrador:registrado_por(nombre, apellido)`)
             .eq('id', servicioId).single(),
@@ -158,6 +159,9 @@ export default function FichaServicio({ servicioId, onClose }) {
 
           {/* Chips de estado */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Va PRIMERO, antes del estado: es quién es la mascota, no en qué
+                punto del proceso está — y esta ficha se usa desde varios módulos. */}
+            {esAliadoVip(svc) && <VipBadge />}
             <span className="text-[11px] font-bold px-2.5 py-1 rounded-full"
               style={{ background: ec.bg || '#F3F4F6', color: ec.text || '#374151', border: `1px solid ${ec.border || ec.bg || '#E5E7EB'}` }}>
               {ESTADO_LABEL[svc?.estado] || svc?.estado || '—'}

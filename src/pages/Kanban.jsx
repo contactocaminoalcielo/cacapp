@@ -14,6 +14,7 @@ import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificac
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
+import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
 import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
@@ -1225,7 +1226,7 @@ export default function Kanban() {
     }
     // Cargar horario del aliado si viene de veterinaria
     if (svcFull?.aliado_origen_id) {
-      db.from('aliados').select('nombre, horario, telefono, whatsapp')
+      db.from('aliados').select('nombre, horario, telefono, whatsapp, vip')
         .eq('id_aliado', svcFull.aliado_origen_id).maybeSingle()
         .then(({ data }) => { if (data) setAliadoHorario(data) })
     }
@@ -1623,7 +1624,7 @@ export default function Kanban() {
         : s
       ))
       if (novInserted?.[0]) setNovedades(prev => [...prev, novInserted[0]])
-      db.from('aliados').select('nombre, horario, telefono, whatsapp')
+      db.from('aliados').select('nombre, horario, telefono, whatsapp, vip')
         .eq('id_aliado', asignaAliadoId).maybeSingle()
         .then(({ data }) => { if (data) setAliadoHorario(data) })
       setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
@@ -2499,8 +2500,15 @@ export default function Kanban() {
                           const tiempoAlert = minRec == null ? null : minRec < 0 ? 'vencida' : minRec <= 15 ? 'proxima' : null
                           // Prioridad visual: hora vencida (rojo) > pendientes (rojizo)
                           // > hora próxima (amarillo) > alerta SLA existente
-                          let cardBg     = '#fff'
-                          let cardBorder = al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : '#F3F4F6'
+                          // VIP: la tarjeta arranca dorada. Es el color BASE, no el
+                          // final — los avisos de abajo (vencida, pendientes) lo
+                          // pisan a propósito: el oro dice QUIÉN es, el rojo dice
+                          // QUÉ pasa, y lo urgente no se puede perder de vista. La
+                          // estrella sí se mantiene siempre, así que la marca de VIP
+                          // nunca desaparece aunque el servicio vaya tarde.
+                          const esVip = esAliadoVip(s)
+                          let cardBg     = esVip ? VIP_ORO.bg : '#fff'
+                          let cardBorder = al === 'vencido' ? '#FECACA' : al === 'hoy' ? '#FDE68A' : (esVip ? VIP_ORO.borde : '#F3F4F6')
                           if (tiempoAlert === 'proxima') { cardBg = '#FFFBEB'; cardBorder = '#FCD34D' }
                           if (pend.length)               { cardBg = '#FEF2F2'; cardBorder = '#FCA5A5' }
                           if (tiempoAlert === 'vencida') { cardBg = '#FEE2E2'; cardBorder = '#F87171' }
@@ -2515,7 +2523,10 @@ export default function Kanban() {
                               <div className="flex items-start gap-2 mb-2">
                                 <span className="text-xl leading-none flex-shrink-0">{petEmoji(s.especie)}</span>
                                 <div className="flex-1 min-w-0">
-                                  <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</div>
+                                  <div className="flex items-center gap-1 min-w-0">
+                                    <span className="text-[13px] font-bold text-gray-900 truncate leading-tight">{s.mascota}</span>
+                                    {esVip && <VipStar />}
+                                  </div>
                                   <div className="text-[11px] text-gray-400 truncate mt-0.5">{s.cliente}</div>
                                   <RecatBadges recat={recatMap[s.servicio_id]} size="xs" className="mt-1" />
                                 </div>
@@ -2741,12 +2752,22 @@ export default function Kanban() {
                     const al  = alertLevel(s)
                     const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
                     return (
-                      <tr key={s.servicio_id} className="hover:bg-gray-50/70 transition-colors cursor-pointer" style={{ borderBottom: i < sorted.length - 1 ? '1px solid #F9FAFB' : 'none' }} onClick={() => abrirModal(s)}>
+                      <tr key={s.servicio_id} className="hover:bg-gray-50/70 transition-colors cursor-pointer"
+                        style={{
+                          borderBottom: i < sorted.length - 1 ? '1px solid #F9FAFB' : 'none',
+                          // En tabla no hay tarjeta que pintar: el oro va como fondo
+                          // de la fila, suave para no romper la lectura de la lista.
+                          background: esAliadoVip(s) ? VIP_ORO.bg : undefined,
+                        }}
+                        onClick={() => abrirModal(s)}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
                             <span className="text-xl leading-none">{petEmoji(s.especie)}</span>
                             <div>
-                              <div className="text-[13px] font-semibold text-gray-900">{s.mascota}</div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-[13px] font-semibold text-gray-900">{s.mascota}</span>
+                                {esAliadoVip(s) && <VipStar size={12} />}
+                              </div>
                               <div className="text-[11px] text-gray-400">{s.especie}</div>
                             </div>
                           </div>
@@ -2807,6 +2828,9 @@ export default function Kanban() {
             {/* Cabecera: estado + fechas */}
             <div className="flex flex-wrap items-center gap-3">
               <EstadoBadge estado={selected.estado} />
+              {/* `selected` viene de v_kanban (aliado_vip); si el detalle ya cargó
+                  el aliado, esa también sirve — el helper entiende las dos. */}
+              {(esAliadoVip(selected) || esAliadoVip({ aliado: aliadoHorario })) && <VipBadge />}
               {selected.fecha_imagenes_recibidas && selected.estado === 'EN_PROCESO' && (
                 <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">
                   <Camera size={11} /> Imágenes recibidas

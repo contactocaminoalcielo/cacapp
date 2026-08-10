@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db, dbIn } from '@/lib/supabase'
+import { esAliadoVip, VipStar, VIP_ORO } from '@/components/servicio/VipAliado'
 import { agruparRefresco } from '@/lib/realtime'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
@@ -374,14 +375,26 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         const svcEstado = servicio?.estado
         const todoListo = svcEstado === 'LISTO'
 
+        // VIP: tarjeta dorada. El verde de "todo listo" manda sobre el borde —
+        // es el estado del trabajo, que aquí es lo que se está mirando— pero el
+        // fondo dorado y la estrella se mantienen, así que la marca no se pierde.
+        const esVip = esAliadoVip(servicio)
+
         return (
           <div key={sId} className="bg-surface border rounded-2xl p-4 shadow-sm"
-            style={{ borderColor: todoListo ? '#6EE7B7' : 'rgba(30,80,40,0.1)', borderWidth: todoListo ? 2 : 1 }}>
+            style={{
+              borderColor: todoListo ? '#6EE7B7' : (esVip ? VIP_ORO.borde : 'rgba(30,80,40,0.1)'),
+              borderWidth: todoListo || esVip ? 2 : 1,
+              background:  esVip ? VIP_ORO.bg : undefined,
+            }}>
             {/* Header */}
             <div className="flex items-start gap-2 mb-2.5">
               <span className="text-xl mt-0.5">{petEmoji(mascota?.especies?.nombre)}</span>
               <div className="flex-1 min-w-0">
-                <div className="font-bold text-ink text-[13px] truncate">{mascota?.nombre || 'Sin nombre'}</div>
+                <div className="flex items-center gap-1 min-w-0">
+                  <span className="font-bold text-ink text-[13px] truncate">{mascota?.nombre || 'Sin nombre'}</span>
+                  {esVip && <VipStar />}
+                </div>
                 <div className="text-[11px] text-ink3 truncate">{plan?.nombre}</div>
               </div>
               <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
@@ -974,7 +987,8 @@ export default function Produccion() {
                             maquinas_produccion ( id, nombre ) ),
             servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
-                        planes ( nombre, codigo ) )
+                        planes ( nombre, codigo ),
+                        aliados:aliado_origen_id ( vip ) )
           `)
           .neq('origen', 'REMOVIDO')
           .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])
