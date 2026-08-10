@@ -379,6 +379,14 @@ export default function Kanban() {
   // ── Solicitudes de clientes ───────────────────────────────────────────────
   const [solicitudes,    setSolicitudes]    = useState([])
   const [selSolicitud,   setSelSolicitud]   = useState(null)
+  // Transporte de la conversión. Hasta ahora el flujo público guardaba SIEMPRE
+  // valor_transporte = 0, lo que abría dos huecos: no se le cobraba al cliente la
+  // recogida fuera de Bogotá y —más grave— aunque el coordinador subiera el total
+  // a mano, el cuadre saca de `valor_transporte` lo que se le RECONOCE al técnico,
+  // así que el viaje no se le pagaba. Se precarga desde la tarifa y queda editable.
+  const [tarifasTransporte, setTarifasTransporte] = useState([])
+  const [convTransporte,    setConvTransporte]    = useState('')
+  const convTransporteTocado = useRef(false)
   const [convirtiendo,   setConvirtiendo]   = useState(false)
   const [planesKanban,   setPlanesKanban]   = useState([])
   const [especiesKanban, setEspeciesKanban] = useState([])
@@ -555,6 +563,33 @@ export default function Kanban() {
     return aliados.find(a => String(a.id_aliado) === String(aliadoId))
   }
 
+  // Ciudad de la recogida tal como quedará al convertir. La del enlace público es
+  // TEXTO LIBRE ("soacha", "SOACHA", "Bogota D.C."), así que la tarifa se busca
+  // normalizada — el mismo problema que hacía caer el transporte a $0 en Registro.
+  const normCiudad = s => String(s || '').trim().toLowerCase()
+    .replace(/[áàä]/g, 'a').replace(/[éèë]/g, 'e').replace(/[íìï]/g, 'i')
+    .replace(/[óòö]/g, 'o').replace(/[úùü]/g, 'u')
+
+  const convEsVet     = convForm.tipo_recogida === 'veterinaria'
+  const convAliado    = aliadoPorId(selSolicitud?.aliado_id) || aliadoSolData
+  const convCiudad    = convEsVet
+    ? (convAliado?.ciudad || convForm.ciudad || 'Bogotá')
+    : (convForm.ciudad || convForm.cliente_ciudad || 'Bogotá')
+  const convTarifa    = tarifasTransporte.find(t => normCiudad(t.ciudad) === normCiudad(convCiudad)) || null
+  // El vehículo sale del perfil del técnico asignado (igual que el cuadre). Sin
+  // técnico todavía, se sugiere la de moto: es la menor, y subirla es más fácil
+  // de justificar que devolverle plata al cliente.
+  const convVehiculo  = ([...tecnicos, ...mensajeros].find(p => p.id === convForm.tecnico_id)?.tipo_vehiculo) || 'MOTO'
+  const convTarifaSug = convTarifa
+    ? (convVehiculo === 'MOTO' ? (convTarifa.tarifa_moto || 0) : (convTarifa.tarifa_camioneta || 0))
+    : 0
+
+  // Mientras el coordinador no toque el campo, sigue a la ciudad y al vehículo.
+  useEffect(() => {
+    if (!selSolicitud || convTransporteTocado.current) return
+    setConvTransporte(convTarifaSug > 0 ? String(convTarifaSug) : '')
+  }, [selSolicitud, convTarifaSug])
+
   async function calcularPrecioPara(planId, pesoKgRaw, especieIdRaw) {
     const pesoKg = parseFloat(pesoKgRaw) || 0
     if (!planId || pesoKg <= 0) return null
@@ -622,6 +657,8 @@ export default function Kanban() {
     // Consultar datos completos del aliado si el cliente seleccionó una vet registrada
     let aliado = null
     setComisionSol(0); setComisionSolPct(0); setAliadoSolData(null); setPagoEnVet(false)
+    // El transporte vuelve a seguir la ciudad hasta que alguien lo toque a mano
+    convTransporteTocado.current = false; setConvTransporte('')
     if (s.aliado_id) {
       const { data } = await db.from('aliados')
         .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision')
@@ -784,7 +821,9 @@ export default function Kanban() {
         && (esVeterinaria || pagoEnVet)
         && ['DESCUENTO_INMEDIATO', 'FACTURACION_MENSUAL'].includes(modalidadComision)
         && comisionActual > 0
-      const valorTotal = Math.max(0, valorBruto - (descuentaComision ? comisionActual : 0))
+      // El transporte se SUMA al plan (no comisiona: la comisión es sobre el plan).
+      const transporteNum = Math.max(0, parseFloat(convTransporte) || 0)
+      const valorTotal = Math.max(0, valorBruto + transporteNum - (descuentaComision ? comisionActual : 0))
       const clienteCompleto = `${convForm.cliente_nombre} ${convForm.cliente_apellido || ''}`.trim()
       const direccionRecogida = esVeterinaria
         ? (aliadoActual?.direccion || convForm.direccion || null)
@@ -839,11 +878,13 @@ export default function Kanban() {
         comision_aliado:       comisionActual,
         comision_descontada:   descuentaComision,
         notas:                 notasServicio,
-        // Desglose congelado (migración 010). El flujo público NO cobra transporte
-        // ni adicionales: el valor es solo el plan → transporte = 0 (no "sin dato").
+        // Desglose congelado (migración 010). El flujo público no cobra
+        // adicionales, pero el TRANSPORTE sí: antes iba fijo en 0 y las recogidas
+        // fuera de Bogotá salían sin cobrar, además de dejar al técnico sin el
+        // reconocimiento del viaje (el cuadre lo saca de esta columna).
         valor_plan:            valorBruto,
         valor_adicionales:     0,
-        valor_transporte:      0,
+        valor_transporte:      transporteNum,
         recargo_nocturno:      0,
       }).select('id')
       if (se) throw se
@@ -894,12 +935,14 @@ export default function Kanban() {
       db.from('planes').select('id,nombre,codigo,tipo_proceso').order('nombre'),
       db.from('especies').select('id,nombre').order('nombre'),
       db.from('aliados').select('id_aliado,nombre,direccion,ciudad,localidad,barrio,contacto_nombre,whatsapp,telefono,vip,modalidad_comision').eq('activo', true).order('nombre'),
-    ]).then(([p, e, a]) => {
+      db.from('tarifas_transporte').select('ciudad,tarifa_moto,tarifa_camioneta').eq('activo', true).order('ciudad'),
+    ]).then(([p, e, a, t]) => {
       setPlanesKanban(p.data || [])
       setEspeciesKanban(e.data || [])
       setAliados(a.data || [])
+      setTarifasTransporte(t.data || [])
     })
-    db.from('personal').select('id,nombre,apellido,rol_principal_id,whatsapp')
+    db.from('personal').select('id,nombre,apellido,rol_principal_id,tipo_vehiculo,whatsapp')
       .eq('activo', true).order('nombre')
       .then(({ data }) => {
         const all = data || []
@@ -3911,10 +3954,48 @@ export default function Kanban() {
                   </select>
                 </div>
                 <div>
-                  <label className={SOL_LABL}>Valor total (COP)</label>
+                  {/* Es el valor del PLAN: el transporte se suma aparte (abajo) y la
+                      comisión se descuenta al guardar si el pago pasa por la vet. */}
+                  <label className={SOL_LABL}>Valor del plan (COP)</label>
                   <input type="number" className={SOL_INP} placeholder="0" value={cf.valor_total}
                     onChange={e => set('valor_total', e.target.value)} />
                 </div>
+
+                {/* Transporte fuera de Bogotá. El flujo público lo guardaba fijo en
+                    0: ni se le cobraba al cliente ni se le reconocía el viaje al
+                    técnico (el cuadre lo lee de `valor_transporte`). Se precarga
+                    desde la tarifa de la ciudad y el coordinador puede ajustarlo
+                    o dejarlo en 0 si ya le prometió un precio al cliente. */}
+                {convTarifa && (
+                  <div className="col-span-2">
+                    <div className="rounded-xl p-3 space-y-2" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-amber-800">
+                            🚚 Recogida en {convTarifa.ciudad} — transporte
+                          </p>
+                          <p className="text-[10px] text-amber-600 mt-0.5">
+                            Tarifa {convVehiculo.toLowerCase()}: {fmt(convTarifaSug)}
+                            {convForm.tecnico_id ? '' : ' (aún sin técnico asignado, se asume moto)'}.
+                            Se suma al plan y se le reconoce al técnico en su cuadre. Déjalo en 0 si no lo vas a cobrar.
+                          </p>
+                        </div>
+                        <input type="number" min="0"
+                          className="w-28 px-3 py-2 text-[13px] font-bold text-amber-800 bg-white border border-amber-300 rounded-lg outline-none focus:border-amber-500 text-right"
+                          value={convTransporte}
+                          onChange={e => { convTransporteTocado.current = true; setConvTransporte(e.target.value) }}
+                        />
+                      </div>
+                      {(parseFloat(cf.valor_total) || 0) > 0 && (
+                        <p className="text-[10px] text-amber-700">
+                          Plan {fmt(parseFloat(cf.valor_total) || 0)} + transporte {fmt(parseFloat(convTransporte) || 0)} ={' '}
+                          <b>{fmt((parseFloat(cf.valor_total) || 0) + (parseFloat(convTransporte) || 0))}</b>
+                          {comisionSol > 0 ? ' (antes de la comisión)' : ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Comisión aliado — solo visible si hay aliado en la solicitud */}
                 {selSolicitud?.aliado_id && (
