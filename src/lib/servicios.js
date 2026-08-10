@@ -2,6 +2,51 @@
 import { db, dbIn } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
 
+// ── Trazabilidad del VALOR del servicio (migración 089) ────────────────────
+// El valor se mueve desde varios lados y antes cada uno dejaba —cuando dejaba—
+// una frase distinta en texto libre; el interruptor de comisión de Gestión no
+// dejaba nada y el valor cambiaba en silencio. Estos dos helpers son el par:
+// `trazaValor` para ESCRIBIR el antes/después en la novedad, y
+// `trazaValorServicio` para LEER la cadena y mostrarla en la parte de pago.
+
+export const MOTIVO_VALOR_LABEL = {
+  PESO:         'Recálculo por peso',
+  PLAN:         'Cambio de plan',
+  ADICIONAL:    'Adicional agregado',
+  ITEM_QUITADO: 'Ítem retirado',
+  COMISION:     'Comisión de la veterinaria',
+  CORRECCION:   'Corrección manual',
+}
+
+/**
+ * Campos de traza para incrustar en un insert de `novedades_servicio`.
+ * Devuelve `{}` cuando el valor no se movió: una novedad que no cambia plata no
+ * ensucia la cadena (y el CHECK de la 089 exige antes/después en pareja).
+ */
+export function trazaValor(antes, despues, motivo) {
+  const a = Number(antes)
+  const d = Number(despues)
+  if (!Number.isFinite(a) || !Number.isFinite(d) || Math.abs(d - a) < 0.5) return {}
+  return { valor_antes: a, valor_despues: d, motivo_valor: motivo }
+}
+
+/**
+ * Cadena de cambios de valor de un servicio, de más viejo a más nuevo.
+ * Best-effort: ante error devuelve [] (nunca tumba la vista de pago).
+ */
+export async function trazaValorServicio(servicioId) {
+  if (!servicioId) return []
+  try {
+    const { data, error } = await db.from('novedades_servicio')
+      .select('id, descripcion, motivo_valor, valor_antes, valor_despues, created_at, personal:registrado_por(nombre, apellido)')
+      .eq('servicio_id', servicioId)
+      .not('valor_antes', 'is', null)
+      .order('created_at', { ascending: true })
+    if (error) throw error
+    return data || []
+  } catch { return [] }
+}
+
 // Detecta qué servicios fueron RECATEGORIZADOS (cambio de plan o recálculo de
 // precio por peso), leyendo novedades_servicio. Para mostrar una etiqueta de
 // alerta en la mascota. Devuelve { [servicioId]: { plan, peso, detallePlan,
@@ -120,6 +165,7 @@ export async function quitarItemServicio({ servicio, item = null, monto, motivo 
     descripcion,
     valor_ajuste:   descuento > 0 ? -descuento : null,
     registrado_por: personalId,
+    ...trazaValor(valorTotal, nuevoTotal, 'ITEM_QUITADO'),
   }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
   if (novErr) throw novErr
 

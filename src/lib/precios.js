@@ -1,6 +1,6 @@
 import { db } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
-import { calcularEstadoPago } from '@/lib/servicios'
+import { calcularEstadoPago, trazaValor } from '@/lib/servicios'
 
 /**
  * Planes que NUNCA generan comisión de aliado.
@@ -258,6 +258,9 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
         servicio_id:  svc.id,
         tipo_novedad: 'RECATEGORIZACION_PESO',
         descripcion:  `${causa} (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
+        // Traza del valor como NÚMERO (migración 089), para poder mostrar la
+        // cadena "antes valía X → ahora Y" en la parte de pago sin leer texto.
+        ...trazaValor(svc.valor_total, nuevoValorTotal, 'PESO'),
       })
     } catch (_) { /* best-effort */ }
 

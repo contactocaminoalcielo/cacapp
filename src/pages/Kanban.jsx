@@ -11,8 +11,9 @@ import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
-import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
+import HistorialValor from '@/components/servicio/HistorialValor'
 import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
@@ -1300,7 +1301,7 @@ export default function Kanban() {
         // el plan y se perdían → el recibo reconstruía un bruto inflado y la
         // comisión salía sobre un total que no era el real (queja 2026-07-23).
         const { data: sv } = await db.from('servicios')
-          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
+          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_total, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
           .eq('id', selected.servicio_id).maybeSingle()
         svActual = sv
         const descontada = sv?.comision_descontada === true
@@ -1378,6 +1379,9 @@ export default function Kanban() {
                         (saldoTrasCambio < 0 ? ` · El cliente pagó ${fmt(-saldoTrasCambio)} de más` : '') +
                         '. Cambio realizado por coordinador.',
         registrado_por: personalData?.id || null,
+        // El texto dice el precio del PLAN; la traza guarda lo que de verdad
+        // cambió el cobro (valor_total, ya con extras y comisión aplicados).
+        ...trazaValor(svActual?.valor_total, updates.valor_total, 'PLAN'),
       }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
 
       // Recargar recordatorios frescos
@@ -1486,6 +1490,7 @@ export default function Kanban() {
                           : 'Pendiente de cobro en entrega.'),
         valor_ajuste:   subtotal,
         registrado_por: personalData?.id || null,
+        ...trazaValor(selected.valor_total || 0, nuevoTotal, 'ADICIONAL'),
       }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
 
       // Recargar ítems
@@ -3222,6 +3227,16 @@ export default function Kanban() {
                       <option value="COMPLETO">Completo</option>
                     </Select>
                   </div>
+
+                  {/* De cuánto partió el servicio, qué movió el precio y en cuánto
+                      quedó. Va aquí, en la parte de pago, que es donde alguien
+                      pregunta "¿por qué cobra esto?". Se remonta solo cuando cambia
+                      el total (key) para releer la traza tras un recálculo. */}
+                  <HistorialValor
+                    key={`${selected.servicio_id}-${selected.valor_total}`}
+                    servicioId={selected.servicio_id}
+                    valorTotal={selected.valor_total}
+                  />
 
                   {/* El valor guardado y la bandera de comisión se contradicen: el
                       servicio dice "valor ya neto" pero trae el bruto. Se avisa

@@ -6,6 +6,7 @@ import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
+import HistorialValor from '@/components/servicio/HistorialValor'
 import {
   User, MapPin, CreditCard, Clock, Camera, Truck, Package, Snowflake, PawPrint,
 } from 'lucide-react'
@@ -322,6 +323,7 @@ export default function FichaServicio({ servicioId, onClose }) {
                   {fmt(svc.comision_aliado)} {svc.comision_descontada ? '(descontada del recibo)' : '(se cuadra aparte)'}
                 </Dato>
               )}
+              <HistorialValor servicioId={svc?.id} valorTotal={svc?.valor_total} className="mt-2" />
             </Box>
           </div>
 

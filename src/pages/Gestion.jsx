@@ -16,7 +16,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
 import { aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { edadALaFecha } from '@/lib/afiliaciones'
-import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, trazaValor } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
@@ -1624,6 +1624,22 @@ function TabHistorialServicios({ canEdit }) {
     }).eq('id', editServ.id)
     setSavingCom(false)
     if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+
+    // Este interruptor mueve el valor a cobrar y hasta ahora no dejaba NINGÚN
+    // rastro: el precio del servicio cambiaba en silencio y después no había
+    // cómo saber quién ni cuándo. Best-effort, el cambio ya quedó guardado.
+    try {
+      await db.from('novedades_servicio').insert({
+        servicio_id:    editServ.id,
+        tipo_novedad:   'NOTA',
+        descripcion:    cobroVet
+          ? `Se marcó que el cobro se hace en la veterinaria: la comisión de ${fmt(com)} se descuenta del valor a cobrar.`
+          : `Se quitó la marca de cobro en la veterinaria: el cliente paga el valor completo y la comisión de ${fmt(com)} queda pendiente de cuadrar con el aliado.`,
+        registrado_por: personalData?.id || null,
+        ...trazaValor(editServ.valor_total, nuevoTotal, 'COMISION'),
+      })
+    } catch (_) { /* best-effort */ }
+
     setEditServ(null)
     cargar(0)
   }
