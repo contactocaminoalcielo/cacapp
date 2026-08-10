@@ -41,7 +41,13 @@ export async function trazaValorServicio(servicioId) {
       .select('id, descripcion, motivo_valor, valor_antes, valor_despues, created_at, personal:registrado_por(nombre, apellido)')
       .eq('servicio_id', servicioId)
       .not('valor_antes', 'is', null)
+      // Desempate por id OBLIGATORIO: dos novedades pueden compartir created_at
+      // al milisegundo (dos ofertas aceptadas en el mismo envío del portal), y
+      // sin él el orden que devuelve PostgREST no es estable. La cadena se
+      // renderizaría al revés y aparecerían dos saltos "sin registrar" que no
+      // existen. Es el mismo orden con el que se armó el backfill.
       .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
     if (error) throw error
     return data || []
   } catch { return [] }
