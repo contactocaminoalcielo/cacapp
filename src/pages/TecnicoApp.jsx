@@ -4979,12 +4979,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Al cambiar el tipo de recibo el monto por defecto es distinto: el CLIENTE paga
   // el precio del servicio; la VETERINARIA paga el neto (precio − comisión). Sin
   // esto, al pasar de cliente a veterinaria quedaba el valor del cliente en el
-  // recibo de la vet. Reseteamos a un único medio con el monto correcto del tipo.
+  // recibo de la vet. Se reajusta SOLO EL MONTO.
+  // ⚠️ Antes esto reseteaba el medio a `{ metodo: 'EFECTIVO' }` y perdía método,
+  // referencia y comprobante: el destinatario del DOCUMENTO cambió, no la forma en
+  // que el cliente pagó. Un pago por Nequi quedaba grabado como efectivo y el
+  // cuadre se lo cobraba al técnico como plata en mano que ya estaba en la cuenta
+  // de la empresa (caso ZEUS GONZALEZ, 07-08-2026: NEQUI $141.750 con comprobante
+  // que terminó como EFECTIVO tras alternar VET→CLIENTE→VET).
+  // Pago dividido (más de un medio): no se toca, porque el monto nuevo no se puede
+  // repartir solo — mismo criterio del efecto de abajo que ajusta el neto.
   function cambiarTipo(nuevoTipo) {
     if (nuevoTipo === tipoRecibo) return
     setTipoRecibo(nuevoTipo)
     const monto = nuevoTipo === 'VETERINARIA' ? valorVet : montoClienteDefault
-    setMediosPago([{ metodo: 'EFECTIVO', monto, referencia: '', comprobanteUrl: '', subiendoComprobante: false }])
+    setMediosPago(prev => prev.length === 1 ? [{ ...prev[0], monto }] : prev)
   }
 
   // En recibo de veterinaria el monto a cobrar es el neto (valorVet); si el técnico
