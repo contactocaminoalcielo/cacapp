@@ -15,7 +15,7 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
-import { aplicarRecalculoPorPeso, planComisiona } from '@/lib/precios'
+import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 
 const POLL = 30_000
@@ -4090,7 +4090,8 @@ function ReciboTab({ tecnico }) {
     try {
       const { data, error } = await db.from('servicios')
         .select(`
-          id, plan_id, valor_total, valor_pagado, estado_pago, comision_aliado, comision_descontada, tipo_acompanamiento,
+          id, plan_id, valor_pagado, estado_pago, tipo_acompanamiento,
+          ${COLS_CONSISTENCIA_COMISION},
           mascotas:mascota_id (
             nombre, peso_kg, especie_id, sexo,
             especies(nombre),
@@ -4722,7 +4723,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // e inflaba el efectivo del técnico en el cuadre (migración 068).
   const aliadoFactMensual   = modalidad === 'FACTURACION_MENSUAL'
 
-  const precioOriginal = comisionFueDescontada
+  // Red de seguridad: si `valor_total` YA es el bruto (llega al plan + extras),
+  // la bandera `comision_descontada` está mintiendo y reconstruir el bruto le
+  // sumaría la comisión al cliente en vez de descontársela — el técnico cobraría
+  // de más sin manera de notarlo (caso BRUNO 07-08-2026, ver lib/precios.js).
+  // Ante la duda NO se infla: se toma el valor guardado tal cual y se avisa.
+  const valorYaEsBruto  = comisionInconsistente(svcData)
+  const precioOriginal = (comisionFueDescontada && !valorYaEsBruto)
     ? (svcData.valor_total || 0) + comisionGuardada  // reconstruimos bruto
     : (svcData.valor_total || 0)                      // ya es el precio completo
 
@@ -5878,6 +5885,19 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           </span>
         )}
       </div>
+
+      {/* El servicio dice "comisión ya descontada" pero trae el precio completo.
+          El recibo NO infla el valor (ver precioOriginal), pero el técnico tiene
+          que saber que el dato viene torcido antes de cobrar. */}
+      {valorYaEsBruto && (
+        <div className="mb-3 px-3 py-2.5 rounded-xl text-[11px] leading-relaxed"
+          style={{ background: '#FEF3C7', border: '1.5px solid #FCD34D', color: '#78350F' }}>
+          <span className="font-bold">⚠️ Revisa el valor con coordinación.</span> Este servicio
+          tiene la comisión de la veterinaria marcada como ya descontada, pero el valor guardado
+          ({fmt(svcData.valor_total || 0)}) es el precio completo. Se está cobrando ese valor tal
+          cual, <b>sin sumarle la comisión</b>. Si el cobro no cuadra, avisa antes de guardar.
+        </div>
+      )}
 
       {/* Selector tipo de recibo — se oculta tras guardar */}
       {!tipoFijado ? (

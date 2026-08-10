@@ -14,7 +14,7 @@ import { db } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
-import { aplicarRecalculoPorPeso } from '@/lib/precios'
+import { aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { edadALaFecha } from '@/lib/afiliaciones'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
@@ -1431,9 +1431,9 @@ const PAGO_COLOR = {
 }
 
 const SELECT_HISTORIAL = `
-  id, estado, fecha_ingreso, valor_total, valor_pagado, estado_pago,
+  id, estado, fecha_ingreso, valor_pagado, estado_pago,
   canal_entrada, ciudad_recogida, punto_recogida,
-  aliado_origen_id, comision_aliado, comision_descontada,
+  aliado_origen_id, ${COLS_CONSISTENCIA_COMISION},
   mascotas:mascota_id(
     nombre, peso_kg, raza,
     especies(nombre),
@@ -1912,6 +1912,17 @@ function TabHistorialServicios({ canEdit }) {
                                 {s.comision_descontada ? '✓ Descuenta' : 'Cobra completo'}
                               </button>
                             ) : null}
+                            {/* El valor guardado contradice la bandera: dice "ya
+                                neto" pero trae el bruto → el recibo del técnico
+                                sumaría la comisión en vez de descontarla. */}
+                            {comisionInconsistente(s) && (
+                              <span
+                                className="text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap cursor-help"
+                                style={{ background: '#FEF3C7', color: '#92400E', borderColor: '#FCD34D' }}
+                                title={`El valor guardado (${COP(s.valor_total)}) es el precio completo, pero el servicio está marcado como comisión ya descontada. El neto debería ser ${COP((Number(s.valor_total) || 0) - (Number(s.comision_aliado) || 0))}. Revísalo antes de que se emita el recibo.`}>
+                                ⚠ Valor sin descontar
+                              </span>
+                            )}
                             <button
                               onClick={e => { e.stopPropagation(); abrirItems(s) }}
                               className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 text-ink2 hover:bg-gray-50 transition-colors"

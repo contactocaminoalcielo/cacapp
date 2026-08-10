@@ -125,7 +125,11 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
  * peso en TODOS los puntos donde éste se edita (Gestión, báscula del técnico).
  *
  * Aplica directamente (sin confirmación) y devuelve la lista de cambios
- * realizados, para que el llamador decida si informa al usuario.
+ * realizados, para que el llamador decida si informa al usuario. Con
+ * `{ dryRun: true }` NO escribe nada y devuelve los mismos cambios: sirve para
+ * previsualizar en un confirm y aplicar después con EXACTAMENTE la misma
+ * cuenta. Que la vista previa y la escritura salgan de aquí es a propósito —
+ * el botón del Kanban tenía su propia cuenta a mano y se desvió (ver abajo).
  *
  * También corre al corregir la ESPECIE: la especie decide si el servicio paga
  * tarifa felino o tarifa por peso, así que reclasificar una mascota mueve el
@@ -134,7 +138,7 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
  *
  * @returns {Promise<Array<{servicioId, planNombre, valorAntes, valorDespues, comisionAntes, comisionDespues}>>}
  */
-export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw, motivo = 'peso') {
+export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw, motivo = 'peso', { dryRun = false } = {}) {
   const especieId = parseInt(especieIdRaw) || 0
   const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
     db.from('servicios')
@@ -216,6 +220,21 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (svc.comision_aliado ?? 0)) > 0.5
     if (!cambioPrecio && !cambioComision) continue
 
+    const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
+
+    // Vista previa: se calcula todo igual pero no se escribe ni se deja novedad.
+    if (dryRun) {
+      cambios.push({
+        servicioId:      svc.id,
+        planNombre,
+        valorAntes:      svc.valor_total,
+        valorDespues:    nuevoValorTotal,
+        comisionAntes:   svc.comision_aliado,
+        comisionDespues: cambioComision ? nuevaComision : null,
+      })
+      continue
+    }
+
     const updates = { valor_total: nuevoValorTotal, valor_plan: nuevoPrecioBase }
     if (cambioComision) updates.comision_aliado = nuevaComision
     // Al mover el total, lo ya pagado deja de cuadrar: si el servicio se queda en
@@ -224,8 +243,6 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     if (cambioPrecio) updates.estado_pago = calcularEstadoPago(nuevoValorTotal, svc.valor_pagado)
     const { error } = await db.from('servicios').update(updates).eq('id', svc.id)
     if (error) continue
-
-    const planNombre = planesData.find(p => String(p.id) === String(svc.plan_id))?.nombre || 'Plan'
 
     // Deja rastro del recálculo (antes cambiaba el precio en silencio) para que
     // la mascota muestre la etiqueta "recategorizado por peso". Best-effort:
@@ -254,4 +271,41 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     })
   }
   return cambios
+}
+
+// Columnas mínimas que necesita `comisionInconsistente`. Para que quien la use
+// no tenga que adivinar qué traer en el select.
+export const COLS_CONSISTENCIA_COMISION =
+  'valor_total, valor_plan, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, comision_aliado, comision_descontada'
+
+/**
+ * ¿`valor_total` y `comision_descontada` se están contradiciendo?
+ *
+ * `comision_descontada = true` significa "valor_total ya viene NETO", y el neto
+ * es siempre el bruto MENOS la comisión (que es > 0). Así que un valor_total que
+ * alcanza el bruto (plan + adicionales + transporte + recargos − descuento) es
+ * imposible: los dos campos están diciendo cosas distintas.
+ *
+ * Importa porque el recibo del técnico usa la bandera como fuente de verdad y
+ * reconstruye el bruto como `valor_total + comisión` (TecnicoApp). Con el par
+ * roto eso SUMA la comisión en vez de descontarla y le cobra de más al cliente
+ * (caso BRUNO 07-08-2026).
+ *
+ * Los servicios viejos sin `valor_plan` no se pueden juzgar → devuelve false.
+ */
+export function comisionInconsistente(svc) {
+  if (!svc || svc.comision_descontada !== true) return false
+  const comision = Number(svc.comision_aliado) || 0
+  if (!(comision > 0)) return false
+  const plan = Number(svc.valor_plan)
+  if (!(plan > 0)) return false
+  // Hay servicios que guardaron la comisión DENTRO de `descuento_adicional`
+  // (quedó anotada como un descuento más). Ahí el valor sí está neto, y restar
+  // ese descuento otra vez lo haría parecer inflado — falsos positivos reales en
+  // prod (HANNA y KEILA). Si el descuento es exactamente la comisión, no cuenta.
+  const descuento = Number(svc.descuento_adicional) || 0
+  const extras = (Number(svc.valor_adicionales) || 0) + (Number(svc.valor_transporte) || 0)
+               + (Number(svc.recargo_nocturno)  || 0)
+               - (Math.abs(descuento - comision) < 0.5 ? 0 : descuento)
+  return (Number(svc.valor_total) || 0) >= plan + extras - 0.5
 }

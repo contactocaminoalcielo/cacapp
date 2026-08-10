@@ -13,7 +13,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
-import { planComisiona } from '@/lib/precios'
+import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
@@ -1146,7 +1146,7 @@ export default function Kanban() {
 
     const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }] = await Promise.all([
       db.from('servicios')
-        .select('punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, comision_aliado, comision_descontada, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at')
+        .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, ${COLS_CONSISTENCIA_COMISION}`)
         .eq('id', s.servicio_id).maybeSingle(),
       db.from('recogidas')
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
@@ -3223,71 +3223,89 @@ export default function Kanban() {
                     </Select>
                   </div>
 
-                  {/* Recalcular precio y comisión según peso actual de la mascota */}
-                  {(esAdmin || rol === 'COORDINADOR') && mascotaParaPlan?.peso_kg > 0 && detalle?.plan_id && !['ENTREGADO','CANCELADO'].includes(selected.estado) && (
+                  {/* El valor guardado y la bandera de comisión se contradicen: el
+                      servicio dice "valor ya neto" pero trae el bruto. Se avisa
+                      aquí porque es el punto donde se toca el precio, y sin aviso
+                      el error solo se ve cuando el recibo ya le cobró de más al
+                      cliente. */}
+                  {comisionInconsistente(detalle) && (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 leading-relaxed">
+                      <span className="font-bold">⚠️ El valor y la comisión no cuadran.</span>{' '}
+                      El servicio está marcado como <b>comisión ya descontada</b> (el valor debería venir
+                      neto), pero <b>{fmt(detalle.valor_total)}</b> es el precio completo. Así, el recibo
+                      del técnico reconstruye{' '}
+                      <b>{fmt((Number(detalle.valor_total) || 0) + (Number(detalle.comision_aliado) || 0))}</b>{' '}
+                      y le <b>suma</b> la comisión en vez de descontarla. El valor neto debería ser{' '}
+                      <b>{fmt((Number(detalle.valor_total) || 0) - (Number(detalle.comision_aliado) || 0))}</b>.
+                    </div>
+                  )}
+
+                  {/* Recalcular precio y comisión según peso actual de la mascota.
+                      La cuenta la hace SIEMPRE `aplicarRecalculoPorPeso` (dryRun
+                      para la vista previa, real para aplicar), nunca este botón.
+                      Antes tenía su propia versión a mano y se desvió: escribía el
+                      precio de LISTA sobre `valor_total` ignorando
+                      `comision_descontada`, así que en un aliado con descuento
+                      inmediato metía la comisión DENTRO del valor y el recibo del
+                      técnico terminaba sumándola en vez de descontarla (caso BRUNO
+                      07-08-2026: 141.750 → 189.000 y el recibo cobraba 236.250).
+                      De paso borraba adicionales/transporte/recargos de
+                      `valor_total`, dejaba `valor_plan` viejo, no recalculaba
+                      `estado_pago` y no dejaba novedad — por eso el cambio era
+                      invisible. Si algún día hay que tocar la cuenta, se toca en
+                      lib/precios.js y este botón la hereda. */}
+                  {(esAdmin || rol === 'COORDINADOR') && mascotaParaPlan?.peso_kg > 0 && detalle?.plan_id && detalle?.mascota_id && !['ENTREGADO','CANCELADO'].includes(selected.estado) && (
                     <button
                       onClick={async () => {
-                        const nuevoPrecioBase = await calcularPrecioPlan(detalle.plan_id)
-                        if (!nuevoPrecioBase) { await showAlert('No se pudo calcular el precio para este peso y plan.', { title: 'Sin precio' }); return }
-
-                        // Recalcular comisión si hay aliado con comisión registrada
-                        let nuevaComision = null
-                        const codigoPlanDet = planPorId(detalle.plan_id)?.codigo
-                        if (!planComisiona(codigoPlanDet)) {
-                          // Desamparado: sin comisión. Si traía una, se limpia.
-                          if ((detalle?.comision_aliado ?? 0) > 0) nuevaComision = 0
-                        } else if (detalle?.aliado_origen_id && (detalle?.comision_aliado ?? 0) > 0) {
-                          const hoy = new Date()
-                          const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
-                          // aliado va primero y separado: usarlo dentro del mismo
-                          // destructuring del Promise.all lanza ReferenceError (TDZ)
-                          const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', detalle.aliado_origen_id).maybeSingle()
-                          const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
-                            db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', detalle.aliado_origen_id).gte('fecha_ingreso', inicioMes),
-                            db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
-                          ])
-                          const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
-                          const match = (filas || [])
-                            .filter(c =>
-                              (c.plan_id === detalle.plan_id || c.plan_id === null) &&
-                              c.rango_min <= serviciosMes &&
-                              (c.rango_max === null || c.rango_max >= serviciosMes)
-                            )
-                            .sort((a, b) => {
-                              if (a.plan_id && !b.plan_id) return -1
-                              if (!a.plan_id && b.plan_id) return 1
-                              return b.rango_min - a.rango_min
-                            })[0]
-                          const pct = parseFloat(match?.porcentaje) || 0
-                          if (pct > 0) nuevaComision = Math.round(nuevoPrecioBase * pct / 100)
+                        const args = [detalle.mascota_id, mascotaParaPlan.peso_kg, mascotaParaPlan.especie_id]
+                        let previa = []
+                        try {
+                          previa = await aplicarRecalculoPorPeso(...args, 'peso', { dryRun: true })
+                        } catch (e) {
+                          await showAlert(parsearErrorDB(e), { title: 'No se pudo calcular' }); return
                         }
-
-                        const cambioPrecio   = Math.abs(nuevoPrecioBase - selected.valor_total) > 0.5
-                        const cambioComision = nuevaComision != null && Math.abs(nuevaComision - (detalle?.comision_aliado ?? 0)) > 0.5
-                        if (!cambioPrecio && !cambioComision) {
+                        if (!previa.length) {
                           await showAlert(`Los valores ya están correctos para el peso actual (${mascotaParaPlan.peso_kg} kg).`, { title: 'Sin cambios' })
                           return
                         }
-
-                        const lineas = []
-                        if (cambioPrecio)   lineas.push(`Precio: ${fmt(selected.valor_total)} → ${fmt(nuevoPrecioBase)}`)
-                        if (cambioComision) lineas.push(`Comisión aliado: ${fmt(detalle.comision_aliado)} → ${fmt(nuevaComision)}`)
+                        // El recálculo es por MASCOTA: si tuviera más de un servicio
+                        // activo se listan todos, para que nadie acepte a ciegas.
+                        const lineas = previa.map(c => [
+                          previa.length > 1 ? `${c.planNombre}:` : null,
+                          Math.abs((c.valorDespues ?? 0) - (c.valorAntes ?? 0)) > 0.5
+                            ? `Valor: ${fmt(c.valorAntes)} → ${fmt(c.valorDespues)}` : null,
+                          c.comisionDespues != null
+                            ? `Comisión aliado: ${fmt(c.comisionAntes)} → ${fmt(c.comisionDespues)}` : null,
+                        ].filter(Boolean).join('\n'))
 
                         const ok = await confirm(
-                          `Recalcular según peso actual (${mascotaParaPlan.peso_kg} kg):\n\n${lineas.join('\n')}\n\n¿Actualizar?`,
+                          `Recalcular según peso actual (${mascotaParaPlan.peso_kg} kg):\n\n${lineas.join('\n\n')}\n\n¿Actualizar?`,
                           { title: 'Recalcular precio por peso', confirmLabel: 'Sí, actualizar' }
                         )
                         if (!ok) return
 
-                        const updates = {}
-                        if (cambioPrecio)   updates.valor_total     = nuevoPrecioBase
-                        if (cambioComision) updates.comision_aliado = nuevaComision
-
-                        const { error } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
-                        if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
-                        setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...updates } : s))
-                        setSelected(prev => ({ ...prev, ...updates }))
-                        if (cambioComision) setDetalle(prev => prev ? { ...prev, comision_aliado: nuevaComision } : prev)
+                        try {
+                          await aplicarRecalculoPorPeso(...args, 'peso')
+                        } catch (e) {
+                          await showAlert(parsearErrorDB(e), { title: 'Error' }); return
+                        }
+                        // Releer el servicio en vez de reconstruirlo aquí: el
+                        // recálculo mueve valor_total, valor_plan, comisión y
+                        // estado_pago a la vez, y rehacer esa cuenta en el front es
+                        // justo la copia que causó el bug.
+                        const { data: sv } = await db.from('servicios')
+                          .select('valor_total, valor_plan, comision_aliado, estado_pago, valor_pagado')
+                          .eq('id', selected.servicio_id).maybeSingle()
+                        if (sv) {
+                          const upd = {
+                            valor_total:     sv.valor_total,
+                            estado_pago:     sv.estado_pago,
+                            saldo_pendiente: (sv.valor_total || 0) - (sv.valor_pagado || 0),
+                          }
+                          setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
+                          setSelected(prev => ({ ...prev, ...upd }))
+                          setDetalle(prev => prev ? { ...prev, ...sv } : prev)
+                        }
                       }}
                       className="w-full py-1.5 px-3 rounded-lg border border-gray-200 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition flex items-center justify-center gap-1.5"
                     >
