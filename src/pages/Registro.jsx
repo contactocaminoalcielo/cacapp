@@ -353,8 +353,23 @@ export default function Registro() {
   const valorAdicionales = adicionales.reduce((s, a) => s + ((a.precio_base || 0) * (a.cantidad || 1)), 0)
   const valorBruto       = valorBase + valorAdicionales
   const ciudadesList     = [BOGOTA_OPCION, ...tarifasTransporte.map(t => ({ value: t.ciudad, label: t.ciudad, tarifa_moto: t.tarifa_moto, tarifa_camioneta: t.tarifa_camioneta }))]
-  const ciudadInfo       = ciudadesList.find(c => c.value === formRecogida.ciudad_recogida) || ciudadesList[0]
-  const recargoCiudad    = ciudadInfo.value !== 'Bogotá'
+  // La ciudad NO siempre viene del selector: la copia el registro del aliado
+  // (`aliados.ciudad`, que a veces está en MAYÚSCULAS), la del cliente o la
+  // extracción con IA. Comparar con `===` contra la tarifa ('Soacha') no casaba
+  // con 'SOACHA', y el viejo `|| ciudadesList[0]` la hacía caer a Bogotá →
+  // transporte $0 guardado en silencio, con el selector mostrando "Bogotá"
+  // aunque el estado dijera otra cosa (6 recogidas de Soacha sin cobrar el
+  // transporte). Ahora se compara normalizado y NO hay caída a Bogotá: si la
+  // ciudad no tiene tarifa se avisa en pantalla en vez de valer cero callado.
+  const normCiudad       = s => String(s || '').trim().toLowerCase()
+    .replace(/[áàä]/g, 'a').replace(/[éèë]/g, 'e').replace(/[íìï]/g, 'i')
+    .replace(/[óòö]/g, 'o').replace(/[úùü]/g, 'u')
+  const ciudadInfo       = ciudadesList.find(c => normCiudad(c.value) === normCiudad(formRecogida.ciudad_recogida)) || null
+  const ciudadSinTarifa  = !!formRecogida.ciudad_recogida && !ciudadInfo
+  // Nombre canónico de la tarifa: es el que se guarda, para que no vuelvan a
+  // quedar filas 'SOACHA' que ningún cálculo posterior reconoce.
+  const ciudadCanonica   = ciudadInfo?.value || formRecogida.ciudad_recogida
+  const recargoCiudad    = (ciudadInfo && ciudadInfo.value !== 'Bogotá')
     ? (vehiculoTipo === 'MOTO' ? (ciudadInfo.tarifa_moto || 0) : (ciudadInfo.tarifa_camioneta || 0))
     : 0
   const modalidadComision  = aliadoSeleccionado?.modalidad_comision
@@ -862,7 +877,7 @@ export default function Registro() {
         metodo_pago:          formRecogida.metodo_pago || null,
         punto_recogida:       formRecogida.tipo_lugar,
         direccion_recogida:   formRecogida.direccion_recogida,
-        ciudad_recogida:      formRecogida.ciudad_recogida,
+        ciudad_recogida:      ciudadCanonica,
         barrio_recogida:      formRecogida.barrio_recogida || null,
         indicaciones_recogida: formRecogida.notas || null,
         tecnico_id:           tecnicoSeleccionado?.id || null,
@@ -939,7 +954,7 @@ export default function Registro() {
           mascota_id:       mascotaId,
           peso_kg:          pesoKg || null,
           direccion:        formRecogida.direccion_recogida || null,
-          ciudad:           formRecogida.ciudad_recogida || null,
+          ciudad:           ciudadCanonica || null,
           fecha_solicitada: eutanasiaFecha || null,
           hora_solicitada:  eutanasiaHora || null,
           veterinario_id:   eutanasiaVetId || null,
@@ -1670,8 +1685,25 @@ export default function Registro() {
                 </div>
               </div>
 
+              {/* La ciudad que traía el registro del aliado (o el cliente, o la IA)
+                  no corresponde a ninguna tarifa. Antes esto valía $0 en silencio
+                  y el selector seguía mostrando "Bogotá": el coordinador no tenía
+                  cómo enterarse de que no se estaba cobrando el transporte. */}
+              {ciudadSinTarifa && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3">
+                  <div className="text-[12px] font-bold text-amber-800 mb-1">
+                    ⚠️ "{formRecogida.ciudad_recogida}" no tiene tarifa de transporte
+                  </div>
+                  <p className="text-[11px] text-amber-700 leading-snug">
+                    Este servicio se va a guardar <b>sin cobrar transporte</b>. Si la recogida es
+                    fuera de Bogotá, elige el municipio en la lista de arriba; si el municipio no
+                    aparece, hay que crear su tarifa en Configuración.
+                  </p>
+                </div>
+              )}
+
               {/* Recargo transporte fuera de Bogotá */}
-              {formRecogida.ciudad_recogida !== 'Bogotá' && ciudadInfo && (
+              {ciudadInfo && ciudadInfo.value !== 'Bogotá' && (
                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <Truck size={14} className="text-amber-600" />
