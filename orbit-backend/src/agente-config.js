@@ -56,8 +56,55 @@ export async function obtenerAgente({ clave = 'VETERINARIAS' } = {}) {
         imagenes:        activos.filter(k => k.tipo === 'IMAGEN').length,
         caracteres_texto: activos.reduce((n, k) => n + (k.texto?.length || 0), 0)
                           + (agente.instrucciones?.length || 0),
+        precios: await revisarPrecios(activos),
       },
     },
+  }
+}
+
+/**
+ * ¿Los precios que el agente tiene escritos siguen siendo los del catálogo?
+ *
+ * La base de conocimiento es TEXTO congelado: se escribió con los precios de un
+ * día y nada la actualiza. El día que alguien cambie una tarifa en
+ * Configuración, el agente va a seguir cotizando la vieja a todas las
+ * veterinarias — en silencio, y sin que nadie lo note hasta el reclamo. Es la
+ * misma familia de errores de dinero que ya nos ha mordido varias veces.
+ *
+ * No intenta adivinar QUÉ precio corresponde a qué plan (eso obligaría a
+ * entender el formato del texto y se rompería al reescribirlo). Solo comprueba
+ * lo verificable: que cada cifra con pinta de precio que aparece escrita exista
+ * hoy en el catálogo. Si aparece una que ya nadie cobra, está desactualizada.
+ */
+async function revisarPrecios(piezas) {
+  try {
+    const { rows } = await pool.query('SELECT DISTINCT precio FROM public.v_precios_por_peso')
+    if (!rows.length) return null
+
+    const vigentes = new Set(rows.map(r => Math.round(Number(r.precio))))
+    // Solo las piezas que de verdad listan tarifas: buscar cifras en el texto de
+    // operación (donde vive el recargo de $10.000) daría falsos positivos.
+    const texto = piezas
+      .filter(p => /tarifa|precio/i.test(p.titulo || '') && p.texto)
+      .map(p => p.texto).join('\n')
+    if (!texto) return null
+
+    // Los grupos de miles se toman COMPLETOS (`1.049.000`, no `049.000`): con un
+    // patrón de un solo grupo, los precios del millón se partían y se reportaban
+    // como desfasados dos cifras que nadie había escrito nunca.
+    const escritos = [...new Set(
+      (texto.match(/\d{1,3}(?:\.\d{3})+/g) || []).map(s => Number(s.replace(/\./g, '')))
+    )]
+    const desfasados = escritos.filter(n => !vigentes.has(n))
+
+    return {
+      revisados: escritos.length,
+      desfasados: desfasados.sort((a, b) => a - b),
+    }
+  } catch (e) {
+    // Un chequeo informativo no puede tumbar la pantalla de configuración.
+    log('[agente/precios] no se pudo revisar —', e.message)
+    return null
   }
 }
 

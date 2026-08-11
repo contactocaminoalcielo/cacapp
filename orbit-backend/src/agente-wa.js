@@ -360,14 +360,53 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo }) {
       [agente.id, contacto]
     )
     if (n >= agente.max_turnos) {
+      // Callarse sin más dejaba a la vet esperando: para ella el agente
+      // simplemente dejó de contestar. La etiqueta la pone en Novedades.
       log(MOD, `tope de ${agente.max_turnos} alcanzado en ${contacto} — queda para un humano`)
+      await avisarQueQuedoSinRespuesta(contacto, `Llegó al tope de ${agente.max_turnos} respuestas en esta conversación`)
       return
     }
 
-    const r = await ejecutar({ agente, contacto, origen: 'WHATSAPP' })
-    if (r.texto) await enviarTexto({ contacto, texto: r.texto, personalId: null })
+    let r = await ejecutar({ agente, contacto, origen: 'WHATSAPP' })
+
+    // Un reintento, y solo uno. La mayoría de los fallos son pasajeros (un 429,
+    // un corte de red); insistir más sería castigar a la vet con la espera.
+    if (r.error) {
+      log(MOD, `reintentando ${contacto} tras: ${r.error}`)
+      await new Promise(res => setTimeout(res, 1500))
+      r = await ejecutar({ agente, contacto, origen: 'WHATSAPP' })
+    }
+
+    if (r.texto) {
+      await enviarTexto({ contacto, texto: r.texto, personalId: null })
+      return
+    }
+
+    // Llegar aquí es el fallo mudo: la vet escribió y no va a recibir nada.
+    // ANTES no dejaba rastro fuera de la bitácora, que nadie mira.
+    await avisarQueQuedoSinRespuesta(contacto, r.error || 'El agente no produjo respuesta')
   } catch (e) {
     log(MOD, 'ERROR respondiendo a', contacto, '—', e.message)
+    await avisarQueQuedoSinRespuesta(contacto, e.message).catch(() => {})
+  }
+}
+
+/**
+ * Marca la conversación para que aparezca en Novedades de la bandeja.
+ *
+ * Es la diferencia entre "el agente falló" y "una veterinaria se quedó
+ * esperando y nadie se enteró". Nunca lanza: si hasta esto falla, al menos
+ * queda en el log.
+ */
+async function avisarQueQuedoSinRespuesta(contacto, motivo) {
+  try {
+    await etiquetar({
+      contacto, clave: 'FALLO_AGENTE', origen: 'AGENTE',
+      motivo: String(motivo || '').slice(0, 300),
+    })
+    log(MOD, `${contacto} marcado para coordinación — ${motivo}`)
+  } catch (e) {
+    log(MOD, 'no se pudo marcar el fallo de', contacto, '—', e.message)
   }
 }
 

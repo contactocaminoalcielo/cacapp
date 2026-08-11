@@ -265,6 +265,19 @@ export default function AgenteWhatsapp() {
           )}
         </motion.section>
 
+        {/* Los precios de la base de conocimiento son texto congelado: si alguien
+            cambia una tarifa en Configuración, el agente sigue cotizando la vieja
+            a todas las veterinarias y nadie se entera hasta el reclamo. */}
+        {resumen?.precios?.desfasados?.length > 0 && (
+          <Aviso tono="error">
+            <strong>Hay precios desactualizados en la base de conocimiento.</strong>{' '}
+            {resumen.precios.desfasados.length === 1 ? 'Esta cifra ya no existe' : 'Estas cifras ya no existen'} en
+            el catálogo:{' '}
+            {resumen.precios.desfasados.map(n => `$${n.toLocaleString('es-CO')}`).join(', ')}.
+            {' '}El agente se las está cotizando a las veterinarias — actualiza la pieza de tarifas.
+          </Aviso>
+        )}
+
         {/* ── Contexto ── */}
         <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-3">
           <Cabecera icono={BookOpen} titulo="Contexto"
