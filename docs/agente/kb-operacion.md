@@ -13,6 +13,10 @@ se valida si hay disponibilidad esa misma noche; si no la hay, **la recogida que
 mañana siguiente, con seguridad**. Eso último se puede decir con confianza: no queda en el
 aire.
 
+**Los servicios recogidos después de las 9:00 p.m. llevan un recargo nocturno**, que se suma
+al valor del plan. El agente avisa que aplica, pero **no da la cifra**: la confirma
+coordinación junto con la disponibilidad de esa noche.
+
 ## Cuánto tarda la recogida
 
 **Entre 2 y 3 horas** desde que se solicita, normalmente. Si la ruta está muy saturada, se
