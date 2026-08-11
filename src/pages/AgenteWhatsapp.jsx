@@ -15,11 +15,13 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   cargarAgente, guardarAgente, agregarPieza, actualizarPieza, borrarPieza, archivoPieza,
   leerBase64, leerTexto, csvAMarkdown, tokensAprox, costoConversacion,
+  cargarEjecuciones, vaciosDeConocimiento,
   TIPOS_KB, EFFORT_OPCIONES, MODELOS,
 } from '@/lib/agenteApi'
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
   FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check,
+  History, HelpCircle, RefreshCw, User, MessageSquare,
 } from 'lucide-react'
 
 const ICONO_TIPO = { TEXTO: FileText, TABLA: Table2, IMAGEN: ImageIcon, DOCUMENTO: FileType }
@@ -41,6 +43,10 @@ export default function AgenteWhatsapp() {
   const [errorPieza, setErrorPieza] = useState(null)
   const [previews, setPreviews]     = useState({})
   const fileRef = useRef(null)
+
+  const [ejecuciones, setEjecuciones]   = useState([])
+  const [cargandoBit, setCargandoBit]   = useState(false)
+  const [verBitacora, setVerBitacora]   = useState(false)
 
   const refrescar = useCallback(async () => {
     try {
@@ -64,6 +70,25 @@ export default function AgenteWhatsapp() {
   }, [])
 
   useEffect(() => { refrescar() }, [refrescar])
+
+  // La bitácora se pide aparte y solo cuando se abre: son hasta 200 conversaciones
+  // con su texto completo y no tiene sentido cargarlas para ver los ajustes.
+  const cargarBitacora = useCallback(async () => {
+    if (!agente?.id) return
+    setCargandoBit(true)
+    try {
+      const r = await cargarEjecuciones(agente.id, 200)
+      setEjecuciones(r.ejecuciones || [])
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCargandoBit(false)
+    }
+  }, [agente?.id])
+
+  useEffect(() => { if (verBitacora) cargarBitacora() }, [verBitacora, cargarBitacora])
+
+  const vacios = useMemo(() => vaciosDeConocimiento(ejecuciones), [ejecuciones])
 
   const sucio = useMemo(() => {
     if (!agente || !ajustes) return false
@@ -467,6 +492,76 @@ export default function AgenteWhatsapp() {
           </div>
         </section>
 
+        {/* ── Bitácora ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <Cabecera icono={History} titulo="Lo que ha respondido"
+              sub="Cada conversación que atendió, con lo que le preguntaron y lo que contestó. Es donde se ve si está haciendo bien el trabajo." />
+            <div className="flex items-center gap-2 shrink-0">
+              {verBitacora && (
+                <button onClick={cargarBitacora} title="Actualizar"
+                  className="p-1.5 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 cursor-pointer">
+                  <RefreshCw className={`w-4 h-4 ${cargandoBit ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+              <Button variant="secondary" onClick={() => setVerBitacora(v => !v)}>
+                {verBitacora ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+                {verBitacora ? 'Ocultar' : 'Ver'}
+              </Button>
+            </div>
+          </div>
+
+          {verBitacora && (cargandoBit && !ejecuciones.length ? (
+            <p className="text-sm text-neutral-400 flex items-center gap-2 py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
+            </p>
+          ) : !ejecuciones.length ? (
+            <p className="text-sm text-neutral-500 py-4">
+              Todavía no ha respondido nada. Aparecerá aquí en cuanto atienda su primera conversación.
+            </p>
+          ) : (
+            <>
+              {/* Lo que no supo: es la razón de ser de esta pantalla */}
+              <div className={`rounded-xl border p-4 ${vacios.length ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-neutral-50'}`}>
+                <div className="flex items-start gap-2.5">
+                  <HelpCircle className={`w-5 h-5 shrink-0 mt-0.5 ${vacios.length ? 'text-orange-600' : 'text-neutral-400'}`} />
+                  <div className="min-w-0 flex-1">
+                    <h4 className="font-semibold text-neutral-900 text-sm">
+                      Lo que no supo responder{vacios.length > 0 && ` · ${vacios.length}`}
+                    </h4>
+                    {vacios.length === 0 ? (
+                      <p className="text-sm text-neutral-500 mt-1">
+                        Nada pendiente: respondió todo con lo que tiene cargado.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-[13px] text-neutral-600 mt-1 mb-3">
+                          Preguntas reales que tuvo que pasar a una persona. Escribe la respuesta
+                          arriba, en la base de conocimiento, y deja de escalarlas.
+                        </p>
+                        <ul className="space-y-2">
+                          {vacios.map(v => (
+                            <li key={v.id} className="rounded-lg bg-white border border-orange-200 px-3 py-2">
+                              <p className="text-sm text-neutral-900">{v.pregunta}</p>
+                              <p className="text-[11px] text-neutral-400 mt-0.5">
+                                {v.contacto} · {new Date(v.cuando).toLocaleString('es-CO')}
+                              </p>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {ejecuciones.map(e => <Ejecucion key={e.id} e={e} />)}
+              </div>
+            </>
+          ))}
+        </section>
+
         {/* ── Guardar ── */}
         <div className="sticky bottom-4 flex justify-end">
           <AnimatePresence>
@@ -497,6 +592,56 @@ const TRM_APROX = 4000
 function pesos(usd) {
   const cop = Math.round(usd * TRM_APROX)
   return `US$${usd.toFixed(3)} · ${cop.toLocaleString('es-CO')} COP`
+}
+
+/** Una conversación de la bitácora: qué le dijeron, qué respondió y qué hizo. */
+function Ejecucion({ e }) {
+  const etiquetas = e.herramientas?.etiquetas || []
+  const fallo = !!e.error
+  return (
+    <div className={`rounded-xl border p-3.5 ${fallo ? 'border-red-200 bg-red-50' : 'border-neutral-200'}`}>
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <span className="text-[11px] text-neutral-400 flex items-center gap-1.5">
+          <User className="w-3 h-3" />
+          {e.origen === 'PRUEBA' ? 'Prueba desde esta pantalla' : e.contacto}
+          {' · '}{new Date(e.creado_en).toLocaleString('es-CO')}
+        </span>
+        <span className="text-[11px] text-neutral-400 shrink-0">
+          {(e.tokens_entrada || 0).toLocaleString('es-CO')} tokens
+        </span>
+      </div>
+
+      {e.entrada && (
+        <p className="text-sm text-neutral-600 mb-2 pl-3 border-l-2 border-neutral-200 whitespace-pre-wrap">
+          {e.entrada}
+        </p>
+      )}
+
+      {fallo ? (
+        <p className="text-sm text-red-700 flex gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>No pudo responder: {e.error}</span>
+        </p>
+      ) : (
+        <p className="text-sm text-neutral-900 whitespace-pre-wrap">{e.salida || '—'}</p>
+      )}
+
+      {(etiquetas.length > 0 || (e.herramientas?.usadas || []).length > 0) && (
+        <div className="flex flex-wrap gap-1.5 mt-2.5">
+          {etiquetas.map((x, i) => (
+            <span key={i} className="px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-600 text-[10px] font-semibold">
+              {x.clave}
+            </span>
+          ))}
+          {(e.herramientas?.usadas || []).map((u, i) => (
+            <span key={`u${i}`} className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-semibold flex items-center gap-1">
+              <MessageSquare className="w-2.5 h-2.5" />{u}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Piezas de presentación ──

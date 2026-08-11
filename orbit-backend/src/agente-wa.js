@@ -379,6 +379,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo }) {
 export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePrueba = null }) {
   const inicio = Date.now()
   const usadas = []
+  const etiquetas = []
   const textos = []
   let entrada = mensajePrueba
   let salida = null
@@ -449,6 +450,10 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
             if (out.ok) await clasificarConversacion({ entrada: { etiqueta: 'SOLICITUD' }, contacto }).catch(() => {})
           } else if (bloque.name === 'clasificar_conversacion') {
             out = await clasificarConversacion({ entrada: bloque.input, contacto })
+            // Se guarda en la bitácora, no solo en la conversación: la etiqueta
+            // de la conversación es única y se pisa, y lo que hace falta para
+            // aprender es el HISTORIAL de lo que no supo responder.
+            if (out.ok) etiquetas.push({ clave: bloque.input?.etiqueta, motivo: bloque.input?.motivo || null })
           } else {
             out = { ok: false, error: `Herramienta desconocida: ${bloque.name}` }
           }
@@ -481,7 +486,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         agente.id, contacto, null, origen,
         entrada ? String(entrada).slice(0, 4000) : null,
         salida  ? String(salida).slice(0, 4000)  : null,
-        JSON.stringify({ usadas, ms: Date.now() - inicio, cache }),
+        JSON.stringify({ usadas, etiquetas, ms: Date.now() - inicio, cache }),
         tokIn, tokOut, fallo,
       ]
     ).catch(e => log(MOD, 'no se pudo escribir la bitácora —', e.message))

@@ -81,6 +81,25 @@ export const archivoPieza = (id) =>
 export const cargarEjecuciones = (agenteId, limite = 50) =>
   orbitApi(`/agente/${agenteId}/ejecuciones?limite=${limite}`)
 
+/**
+ * Lo que el agente NO supo responder, sacado de la bitácora.
+ *
+ * Es la materia prima para que aprenda: cada fila es una pregunta real que tuvo
+ * que escalar. Se agrupa por conversación y se ordena por lo más reciente; lo
+ * que se repite es lo que más urge escribirle.
+ */
+export function vaciosDeConocimiento(ejecuciones = []) {
+  return ejecuciones
+    .flatMap(e => (e.herramientas?.etiquetas || [])
+      .filter(x => x.clave === 'SIN_RESPUESTA')
+      .map(x => ({
+        id: e.id,
+        pregunta: x.motivo || e.entrada,
+        contacto: e.contacto,
+        cuando: e.creado_en,
+      })))
+}
+
 /** Lee un File del navegador como base64 sin el prefijo `data:`. */
 export function leerBase64(file) {
   return new Promise((resolve, reject) => {
