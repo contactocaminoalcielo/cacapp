@@ -162,6 +162,57 @@ export async function registrarAfiliacion({ payload = {} }) {
 // ─── Aprobar una veterinaria pendiente (Coordinador/Admin, con JWT) ─────────
 // Genera el token de acceso (si no tenía), la activa y registra quién/cuándo.
 // Idempotente: si ya estaba activa con token, devuelve el token existente.
+/**
+ * Enlace personal de un aliado YA activo, creando el token si le falta.
+ *
+ * Existe aparte de `aprobarAliado` a propósito: aquel además pone
+ * `estado='activo'` y `activo=true`, que es una decisión de coordinación. El
+ * agente de WhatsApp no puede activar a nadie — solo entregar el enlace a quien
+ * ya está aprobado. De las 196 veterinarias, la gran mayoría está activa pero
+ * sin token (los tokens se generaban uno a uno desde Configuración), así que
+ * sin este get-or-create el flujo fallaría para casi todas.
+ *
+ * Devuelve null si el aliado no existe o no está activo: el que llama decide
+ * qué hacer (escalar), nunca inventarse un enlace.
+ */
+export async function enlacePersonalAliado(aliadoId) {
+  const id = uuidOrNull(aliadoId)
+  if (!id) return null
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `SELECT id_aliado, nombre, token_acceso, activo, estado
+         FROM public.aliados WHERE id_aliado = $1 FOR UPDATE`,
+      [id]
+    )
+    const a = rows[0]
+    if (!a || !a.activo || a.estado === 'pendiente_validacion') {
+      await client.query('ROLLBACK')
+      return null
+    }
+    let token = a.token_acceso
+    if (!token) {
+      token = generarToken(a.nombre)
+      await client.query(
+        `UPDATE public.aliados SET token_acceso = $2 WHERE id_aliado = $1`,
+        [id, token]
+      )
+      log('[aliados/enlace]', id, 'token generado por el agente')
+    }
+    await client.query('COMMIT')
+    return { nombre: a.nombre, enlace: enlaceAliado(token) }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+/** El genérico de afiliación: sin token, se le puede dar a cualquiera. */
+export const enlaceAfiliacion = () => `${APP_URL}/#/aliado`
+
 export async function aprobarAliado({ aliadoId, personalId }) {
   const id = uuidOrNull(aliadoId)
   if (!id) return { status: 422, body: { ok: false, error: 'aliado_invalido' } }

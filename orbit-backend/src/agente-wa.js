@@ -11,6 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
 import { enviarTexto, etiquetar } from './whatsapp-cloud.js'
+import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
 const MOD = '[agente-wa]'
 
@@ -54,6 +55,28 @@ function anthropic() {
 // la solicitud pendiente para que decida un humano.
 
 const HERRAMIENTAS = [{
+  name: 'enviar_enlace_registro',
+  description:
+    'Consigue el enlace con el que la veterinaria registra ella misma el servicio. ' +
+    'Úsala en cuanto quede claro que quieren una recogida, ANTES de ponerte a pedir ' +
+    'datos uno por uno: por el enlace la vet elige el plan viendo los precios y la ' +
+    'solicitud llega completa.\n\n' +
+    'Tú NO sabes si el número está registrado como aliado — lo comprueba el sistema y ' +
+    'te lo dice en la respuesta:\n' +
+    '- `PERSONAL`: la clínica ya es aliada. El enlace es SUYO y queda atado a ella.\n' +
+    '- `AFILIACION`: el número no está registrado. **Pega igualmente el enlace** — es el ' +
+    'de afiliación — y explícale que coordinación la revisa. Y ADEMÁS ofrécele tomarle ' +
+    'los datos de la recogida por aquí para no hacerla esperar. Las dos cosas en el ' +
+    'mismo mensaje: sin el enlace no puede afiliarse nunca.\n' +
+    '- `ESCALAR`: algo no cuadra con esa clínica; pásalo a coordinación sin mandar nada.\n\n' +
+    '⚠️ Copia el enlace EXACTAMENTE como te llega, carácter por carácter. Nunca lo ' +
+    'reconstruyas de memoria ni te inventes uno: un enlace mal copiado no abre, y el ' +
+    'personal lleva la credencial de esa veterinaria.\n' +
+    '⚠️ El enlace va DENTRO del mismo mensaje en que lo anuncias. Nunca escribas ' +
+    '"te envío el enlace" o "ya te lo mando" sin pegarlo ahí mismo: no hay un segundo ' +
+    'mensaje: si no lo pegas, la veterinaria se queda esperando algo que no va a llegar.',
+  input_schema: { type: 'object', properties: {}, required: [] },
+}, {
   name: 'registrar_solicitud',
   description:
     'Registra una solicitud de recogida para que coordinación la revise y confirme. ' +
@@ -109,6 +132,40 @@ async function construirHerramientas() {
       required: ['etiqueta'],
     },
   }]
+}
+
+/**
+ * Decide y devuelve el enlace. **Quién es la veterinaria lo dice el número, no
+ * el agente.** Si el enlace personal se entregara por el nombre que alguien
+ * escribe en el chat, cualquiera podría pedir el de otra clínica — y ese enlace
+ * es su credencial: con él se registran servicios a su nombre y su comisión.
+ */
+async function enviarEnlaceRegistro({ contacto }) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  const { rows: [conv] } = num
+    ? await pool.query(
+        `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`, [num]
+      )
+    : { rows: [] }
+
+  if (!conv?.aliado_id) {
+    log(MOD, `enlace de AFILIACION a ${contacto} (número no registrado)`)
+    return {
+      ok: true, tipo: 'AFILIACION', enlace: enlaceAfiliacion(),
+      nota: 'Este número no está registrado como aliado. El enlace es para afiliarse; coordinación revisa y aprueba. Ofrécele tomarle los datos de la recogida por chat mientras tanto.',
+    }
+  }
+
+  const datos = await enlacePersonalAliado(conv.aliado_id)
+  if (!datos) {
+    // Existe el aliado pero no está activo (desactivado o pendiente de
+    // validación). Activarlo es decisión de coordinación, no del agente.
+    log(MOD, `enlace NO entregado a ${contacto}: aliado ${conv.aliado_id} inactivo`)
+    return { ok: true, tipo: 'ESCALAR', nota: 'La clínica figura en el sistema pero no está habilitada. No mandes ningún enlace: pásalo a coordinación.' }
+  }
+
+  log(MOD, `enlace PERSONAL a ${contacto} (${datos.nombre})`)
+  return { ok: true, tipo: 'PERSONAL', veterinaria: datos.nombre, enlace: datos.enlace }
 }
 
 async function clasificarConversacion({ entrada, contacto }) {
@@ -306,6 +363,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo }) {
 export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePrueba = null }) {
   const inicio = Date.now()
   const usadas = []
+  const textos = []
   let entrada = mensajePrueba
   let salida = null
   let tokIn = 0, tokOut = 0, fallo = null
@@ -343,6 +401,15 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
       cache.creados += u.cache_creation_input_tokens || 0
       cache.leidos  += u.cache_read_input_tokens || 0
 
+      // El texto se acumula VUELTA A VUELTA, no se lee al final: el modelo habla
+      // mientras usa herramientas (`[text, tool_use]` en la misma respuesta) y la
+      // última vuelta suele venir vacía porque ya lo dijo todo. Leyendo solo la
+      // última se perdía el mensaje entero — incluido el enlace que acababa de
+      // pedir. Se veía como "el agente no responde".
+      const dicho = (respuesta.content || [])
+        .filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+      if (dicho) textos.push(dicho)
+
       if (respuesta.stop_reason !== 'tool_use') break
 
       // Los bloques de la respuesta viajan de vuelta tal cual: quitarlos rompe
@@ -354,7 +421,12 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         usadas.push(bloque.name)
         let out
         try {
-          if (bloque.name === 'registrar_solicitud') {
+          if (bloque.name === 'enviar_enlace_registro') {
+            out = await enviarEnlaceRegistro({ contacto })
+            if (out.tipo === 'ESCALAR') {
+              await clasificarConversacion({ entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' }, contacto }).catch(() => {})
+            }
+          } else if (bloque.name === 'registrar_solicitud') {
             out = await registrarSolicitud({ entrada: bloque.input, agente, contacto })
             // La solicitud tiene su propia etiqueta: si el agente no la pone, la
             // conversación que MÁS importa quedaría fuera del tablero.
@@ -376,8 +448,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
       messages.push({ role: 'user', content: resultados })
     }
 
-    salida = (respuesta?.content || [])
-      .filter(b => b.type === 'text').map(b => b.text).join('\n').trim() || null
+    salida = textos.join('\n\n').trim() || null
 
     return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache }
   } catch (e) {
