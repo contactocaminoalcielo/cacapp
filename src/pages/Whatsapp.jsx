@@ -16,11 +16,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   listarConversaciones, abrirHilo, marcarLeido, enviarMensaje,
+  listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
 } from '@/lib/whatsappInbox'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
-  Loader2, Clock, RefreshCw, Inbox,
+  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -37,6 +38,9 @@ export default function Whatsapp() {
   const [enviando, setEnviando]   = useState(false)
   const [errorEnvio, setErrorEnvio] = useState(null)
   const [errorCarga, setErrorCarga] = useState(null)
+  const [catalogo, setCatalogo]   = useState([])
+  // Qué lista se está mirando: null = todas · 'NO_LEIDAS' · un grupo · una etiqueta.
+  const [vista, setVista]         = useState(null)
 
   const finRef      = useRef(null)
   const scrollRef   = useRef(null)
@@ -77,6 +81,28 @@ export default function Whatsapp() {
   }, [])
 
   useEffect(() => { cargarLista() }, [cargarLista])
+
+  // El catálogo se lee una vez: son nueve filas que casi nunca cambian.
+  useEffect(() => {
+    listarEtiquetas().then(r => setCatalogo(r.etiquetas || [])).catch(() => {})
+  }, [])
+
+  // ── Etiquetar a mano ───────────────────────────────────────────────────────
+  // Optimista: la lista se repinta al instante y el polling la confirma. Si el
+  // backend falla, el siguiente refresco devuelve la verdad.
+  async function alternarEtiqueta(contacto, clave, puesta) {
+    setConvs(cs => cs.map(c => c.contacto !== contacto ? c : {
+      ...c,
+      etiquetas: puesta
+        ? (c.etiquetas || []).filter(e => e.clave !== clave)
+        : [...(c.etiquetas || []), { ...catalogo.find(e => e.clave === clave), origen: 'MANUAL' }],
+    }))
+    try {
+      if (puesta) await quitarEtiqueta(contacto, clave)
+      else await ponerEtiqueta(contacto, clave)
+    } catch { /* el refresco lo corrige */ }
+    cargarLista({ silencioso: true })
+  }
 
   // Polling: se detiene con la pestaña en segundo plano (no tiene sentido
   // consultar cada 10s una pantalla que nadie está mirando).
@@ -142,6 +168,25 @@ export default function Whatsapp() {
     () => convs.reduce((a, c) => a + (c.sin_leer || 0), 0), [convs]
   )
 
+  // Las listas se cuentan sobre TODAS las conversaciones, no sobre la lista ya
+  // filtrada: si no, al entrar en "Novedades" las demás pestañas marcarían 0.
+  const conteos = useMemo(() => {
+    const n = { NO_LEIDAS: convs.filter(c => (c.sin_leer || 0) > 0).length }
+    for (const c of convs) {
+      for (const e of c.etiquetas || []) {
+        n[e.grupo] = (n[e.grupo] || 0) + 1
+        n[e.clave] = (n[e.clave] || 0) + 1
+      }
+    }
+    return n
+  }, [convs])
+
+  const visibles = useMemo(() => {
+    if (!vista) return convs
+    if (vista === 'NO_LEIDAS') return convs.filter(c => (c.sin_leer || 0) > 0)
+    return convs.filter(c => (c.etiquetas || []).some(e => e.grupo === vista || e.clave === vista))
+  }, [convs, vista])
+
   const conv = hilo?.contacto || convs.find(c => c.contacto === activo) || null
   const ventanaAbierta = conv?.ventana_abierta
   const restante = restanteVentana(conv?.ventana_hasta)
@@ -176,6 +221,9 @@ export default function Whatsapp() {
                 <Input className="pl-8" placeholder="Buscar por nombre o número..."
                        value={q} onChange={e => setQ(e.target.value)} />
               </div>
+
+              <Listas vista={vista} setVista={setVista} conteos={conteos}
+                      catalogo={catalogo} total={convs.length} />
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -191,10 +239,10 @@ export default function Whatsapp() {
                     Reintentar
                   </Button>
                 </div>
-              ) : convs.length === 0 ? (
-                <VacioLista hayFiltro={!!q.trim()} />
+              ) : visibles.length === 0 ? (
+                <VacioLista hayFiltro={!!q.trim()} hayVista={!!vista} />
               ) : (
-                convs.map(c => (
+                visibles.map(c => (
                   <ItemConversacion key={c.contacto} c={c}
                                     activo={c.contacto === activo}
                                     onClick={() => abrir(c.contacto)} />
@@ -213,7 +261,10 @@ export default function Whatsapp() {
             ) : (
               <>
                 <CabeceraHilo conv={conv} contacto={activo} restante={restante}
-                              onVolver={() => { setActivo(null); setHilo(null) }} />
+                              onVolver={() => { setActivo(null); setHilo(null) }}
+                              etiquetas={convs.find(c => c.contacto === activo)?.etiquetas || []}
+                              catalogo={catalogo}
+                              onAlternar={(clave, puesta) => alternarEtiqueta(activo, clave, puesta)} />
 
                 <div ref={scrollRef} onScroll={onScroll}
                      className="flex-1 overflow-y-auto px-4 py-4 space-y-1"
@@ -245,11 +296,94 @@ export default function Whatsapp() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function VacioLista({ hayFiltro }) {
+/**
+ * Las listas de trabajo. Sin esto la bandeja es una pila plana: con el agente
+ * respondiendo solo, coordinación necesita ver de un vistazo qué exige a una
+ * persona (Novedades) y qué es consulta de algo en curso (Servicios).
+ */
+function Listas({ vista, setVista, conteos, catalogo, total }) {
+  const [abierto, setAbierto] = useState(false)
+
+  // Solo se ofrecen etiquetas que HOY tienen conversaciones: una lista de nueve
+  // filtros en cero es ruido.
+  const conUso = catalogo.filter(e => conteos[e.clave] > 0)
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1">
+        <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todas</Pastilla>
+        <Pastilla activa={vista === 'NO_LEIDAS'} onClick={() => setVista('NO_LEIDAS')}
+                  n={conteos.NO_LEIDAS} color="#1A5CD8">Sin leer</Pastilla>
+        {GRUPOS.map(g => (
+          <Pastilla key={g.clave} activa={vista === g.clave} onClick={() => setVista(g.clave)}
+                    n={conteos[g.clave]} color={g.clave === 'NOVEDAD' ? '#DC2626' : undefined}>
+            {g.nombre}
+          </Pastilla>
+        ))}
+        {conUso.length > 0 && (
+          <button onClick={() => setAbierto(v => !v)}
+                  className="px-2 py-0.5 rounded-full border border-gray-200 text-[10.5px] font-semibold
+                             text-gray-500 hover:bg-gray-50 cursor-pointer flex items-center gap-1">
+            <Tag size={10} /> Etiquetas
+          </button>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {abierto && conUso.length > 0 && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+            <div className="flex flex-wrap gap-1 pt-0.5">
+              {conUso.map(e => (
+                <Pastilla key={e.clave} activa={vista === e.clave} color={e.color}
+                          onClick={() => setVista(vista === e.clave ? null : e.clave)}
+                          n={conteos[e.clave]}>
+                  {e.nombre}
+                </Pastilla>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+function Pastilla({ activa, onClick, n, color = '#0B1D4F', children }) {
+  return (
+    <button onClick={onClick}
+            className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold border transition-colors cursor-pointer"
+            style={activa
+              ? { background: color, borderColor: color, color: '#fff' }
+              : { background: '#fff', borderColor: '#E5E7EB', color: '#6B7280' }}>
+      {children}{n ? ` ${n}` : ''}
+    </button>
+  )
+}
+
+/** Chip de etiqueta. En la cabecera del hilo se puede quitar; en la lista, no. */
+function Chip({ e, onQuitar }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold"
+          style={{ background: `${e.color}1A`, color: e.color }}
+          title={e.motivo || (e.origen === 'AGENTE' ? 'Puesta por el agente' : undefined)}>
+      {e.nombre}
+      {onQuitar && (
+        <button onClick={onQuitar} className="hover:opacity-60 cursor-pointer" title="Quitar etiqueta">
+          <X size={9} />
+        </button>
+      )}
+    </span>
+  )
+}
+
+function VacioLista({ hayFiltro, hayVista }) {
   return (
     <div className="p-6 text-center">
       <Inbox size={26} className="mx-auto mb-3 text-gray-300" strokeWidth={1.4} />
-      {hayFiltro ? (
+      {hayVista ? (
+        <p className="text-[12px] text-gray-500">Nada pendiente en esta lista.</p>
+      ) : hayFiltro ? (
         <p className="text-[12px] text-gray-500">Ningún contacto coincide con la búsqueda.</p>
       ) : (
         <>
@@ -301,6 +435,12 @@ function ItemConversacion({ c, activo, onClick }) {
             )}
           </div>
 
+          {(c.etiquetas || []).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {c.etiquetas.map(e => <Chip key={e.clave} e={e} />)}
+            </div>
+          )}
+
           {/* Solo se anuncia el nombre cuando lo resolvió contra el catálogo: si
               es un número desconocido no hay nada útil que mostrar aquí. */}
           {c.nombre && (
@@ -315,36 +455,73 @@ function ItemConversacion({ c, activo, onClick }) {
   )
 }
 
-function CabeceraHilo({ conv, contacto, restante, onVolver }) {
+function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar }) {
   const esAliado = conv?.tipo_contacto === 'ALIADO'
+  const [eligiendo, setEligiendo] = useState(false)
+  const puestas = new Set(etiquetas.map(e => e.clave))
+
   return (
-    <div className="px-3 py-2.5 border-b border-gray-200 flex items-center gap-3 bg-white">
-      <button onClick={onVolver}
-              className="md:hidden p-1 rounded-md text-gray-500 hover:bg-gray-100 cursor-pointer">
-        <ArrowLeft size={17} />
-      </button>
+    <div className="px-3 py-2.5 border-b border-gray-200 bg-white">
+      <div className="flex items-center gap-3">
+        <button onClick={onVolver}
+                className="md:hidden p-1 rounded-md text-gray-500 hover:bg-gray-100 cursor-pointer">
+          <ArrowLeft size={17} />
+        </button>
 
-      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
-                       ${esAliado ? 'bg-[#0B1D4F]' : 'bg-gray-300'}`}>
-        {esAliado ? <Building2 size={14} className="text-white" /> : <User size={14} className="text-white" />}
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
+                         ${esAliado ? 'bg-[#0B1D4F]' : 'bg-gray-300'}`}>
+          {esAliado ? <Building2 size={14} className="text-white" /> : <User size={14} className="text-white" />}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-bold text-[#0B1D4F] truncate">
+            {conv?.nombre || formatearNumero(contacto)}
+          </p>
+          <p className="text-[11px] text-gray-400 truncate">
+            {formatearNumero(contacto)}
+            {conv?.nombre_perfil && conv.nombre_perfil !== conv.nombre && ` · ${conv.nombre_perfil}`}
+          </p>
+        </div>
+
+        {restante && (
+          <span className="hidden sm:flex items-center gap-1 text-[10.5px] text-gray-400 flex-shrink-0"
+                title="Tiempo restante para responder con texto libre">
+            <Clock size={11} /> {restante}
+          </span>
+        )}
       </div>
 
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-bold text-[#0B1D4F] truncate">
-          {conv?.nombre || formatearNumero(contacto)}
-        </p>
-        <p className="text-[11px] text-gray-400 truncate">
-          {formatearNumero(contacto)}
-          {conv?.nombre_perfil && conv.nombre_perfil !== conv.nombre && ` · ${conv.nombre_perfil}`}
-        </p>
+      {/* Quitar la etiqueta es cómo se cierra una novedad: la conversación sale
+          de la lista de pendientes. Por eso vive aquí y no escondida en un menú. */}
+      <div className="flex flex-wrap items-center gap-1 mt-1.5">
+        {etiquetas.map(e => (
+          <Chip key={e.clave} e={e} onQuitar={() => onAlternar(e.clave, true)} />
+        ))}
+        <button onClick={() => setEligiendo(v => !v)}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border border-dashed
+                           border-gray-300 text-[9.5px] font-semibold text-gray-400
+                           hover:text-[#1A5CD8] hover:border-[#1A5CD8] cursor-pointer">
+          <Plus size={9} /> Etiqueta
+        </button>
       </div>
 
-      {restante && (
-        <span className="hidden sm:flex items-center gap-1 text-[10.5px] text-gray-400 flex-shrink-0"
-              title="Tiempo restante para responder con texto libre">
-          <Clock size={11} /> {restante}
-        </span>
-      )}
+      <AnimatePresence>
+        {eligiendo && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+            <div className="flex flex-wrap gap-1 pt-1.5">
+              {catalogo.filter(e => !puestas.has(e.clave)).map(e => (
+                <button key={e.clave}
+                        onClick={() => { onAlternar(e.clave, false); setEligiendo(false) }}
+                        className="px-1.5 py-0.5 rounded-full text-[9.5px] font-bold cursor-pointer hover:opacity-75"
+                        style={{ background: `${e.color}14`, color: e.color }}>
+                  {e.nombre}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

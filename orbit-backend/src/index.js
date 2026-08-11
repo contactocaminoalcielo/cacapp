@@ -23,7 +23,10 @@ import {
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
 import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
-import { listarConversaciones, hilo, marcarLeido, enviarTexto } from './whatsapp-cloud.js'
+import {
+  listarConversaciones, hilo, marcarLeido, enviarTexto,
+  listarEtiquetas, etiquetar, desetiquetar,
+} from './whatsapp-cloud.js'
 import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
@@ -141,6 +144,41 @@ app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, a
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[wa-bandeja/enviar] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Etiquetas de conversación (migración 090) ──
+// Son las listas de trabajo de la bandeja: con el agente respondiendo solo, el
+// badge de no leídos no basta para saber qué necesita a una persona.
+app.get('/whatsapp/etiquetas', requireAuth, rolBandeja, async (_req, res) => {
+  try {
+    res.json(await listarEtiquetas())
+  } catch (e) {
+    log('[wa-bandeja/etiquetas] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await etiquetar({
+      contacto: req.params.contacto, clave: req.body?.clave,
+      origen: 'MANUAL', motivo: req.body?.motivo || null, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/etiquetar] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await desetiquetar({ contacto: req.params.contacto, clave: req.params.clave })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/desetiquetar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })

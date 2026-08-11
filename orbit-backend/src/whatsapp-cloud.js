@@ -34,15 +34,28 @@ const MAX_HILO = 300
 export async function listarConversaciones({ q = null } = {}) {
   const filtro = (q || '').trim().toLowerCase() || null
 
+  // Las etiquetas viajan con cada conversación: la bandeja las pinta y arma con
+  // ellas sus listas (Novedades, Servicios, …) sin una segunda consulta. Van en
+  // un LATERAL agregado para no multiplicar filas cuando hay varias.
   const { rows } = await pool.query(
-    `SELECT contacto, nombre, nombre_perfil, tipo_contacto, aliado_id, cliente_id,
-            ultimo_mensaje_en, ultimo_entrante_en, ultimo_texto, ultima_direccion,
-            sin_leer, ventana_abierta, ventana_hasta
-       FROM public.v_whatsapp_conversaciones
+    `SELECT v.contacto, v.nombre, v.nombre_perfil, v.tipo_contacto, v.aliado_id, v.cliente_id,
+            v.ultimo_mensaje_en, v.ultimo_entrante_en, v.ultimo_texto, v.ultima_direccion,
+            v.sin_leer, v.ventana_abierta, v.ventana_hasta,
+            COALESCE(e.etiquetas, '[]'::json) AS etiquetas
+       FROM public.v_whatsapp_conversaciones v
+       LEFT JOIN LATERAL (
+         SELECT json_agg(json_build_object(
+                  'clave', t.clave, 'nombre', t.nombre, 'grupo', t.grupo,
+                  'color', t.color, 'origen', ce.origen, 'motivo', ce.motivo
+                ) ORDER BY t.orden) AS etiquetas
+           FROM public.whatsapp_conversacion_etiquetas ce
+           JOIN public.whatsapp_etiquetas t ON t.id = ce.etiqueta_id AND t.activo
+          WHERE ce.contacto = v.contacto
+       ) e ON true
       WHERE $1::text IS NULL
-         OR lower(COALESCE(nombre, '')) LIKE '%' || $1 || '%'
-         OR contacto LIKE '%' || $1 || '%'
-      ORDER BY ultimo_mensaje_en DESC NULLS LAST`,
+         OR lower(COALESCE(v.nombre, '')) LIKE '%' || $1 || '%'
+         OR v.contacto LIKE '%' || $1 || '%'
+      ORDER BY v.ultimo_mensaje_en DESC NULLS LAST`,
     [filtro]
   )
 
@@ -52,6 +65,57 @@ export async function listarConversaciones({ q = null } = {}) {
     sin_leer_total: rows.reduce((a, r) => a + Number(r.sin_leer || 0), 0),
     conversaciones: rows.map((r) => ({ ...r, sin_leer: Number(r.sin_leer || 0) })),
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Etiquetas
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** El catálogo. Es una tabla a propósito: las categorías se ajustan con el uso. */
+export async function listarEtiquetas() {
+  const { rows } = await pool.query(
+    `SELECT clave, nombre, grupo, color, descripcion, orden
+       FROM public.whatsapp_etiquetas WHERE activo ORDER BY orden, id`
+  )
+  return { ok: true, etiquetas: rows }
+}
+
+/**
+ * Pone una etiqueta en una conversación. Idempotente: repetirla no duplica ni
+ * falla — el agente puede insistir con la misma sin ensuciar nada.
+ */
+export async function etiquetar({ contacto, clave, origen = 'MANUAL', motivo = null, personalId = null }) {
+  const num = soloDigitos(contacto)
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { rows: [etq] } = await pool.query(
+    `SELECT id FROM public.whatsapp_etiquetas WHERE clave = $1 AND activo`, [clave]
+  )
+  if (!etq) return { status: 404, body: { ok: false, error: `No existe la etiqueta ${clave}` } }
+
+  await pool.query(
+    `INSERT INTO public.whatsapp_conversacion_etiquetas
+       (contacto, etiqueta_id, origen, motivo, creado_por)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (contacto, etiqueta_id) DO UPDATE
+       SET motivo = COALESCE(EXCLUDED.motivo, public.whatsapp_conversacion_etiquetas.motivo)`,
+    [num, etq.id, origen, motivo, personalId]
+  )
+  return { status: 200, body: { ok: true } }
+}
+
+/** Quitarla es cómo se cierra una novedad: la conversación sale de la lista. */
+export async function desetiquetar({ contacto, clave }) {
+  const num = soloDigitos(contacto)
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { rowCount } = await pool.query(
+    `DELETE FROM public.whatsapp_conversacion_etiquetas ce
+      USING public.whatsapp_etiquetas t
+      WHERE t.id = ce.etiqueta_id AND ce.contacto = $1 AND t.clave = $2`,
+    [num, clave]
+  )
+  return { status: 200, body: { ok: true, quitadas: rowCount } }
 }
 
 /** Hilo completo de un contacto, del más viejo al más nuevo (orden de lectura). */

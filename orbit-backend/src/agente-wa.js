@@ -10,7 +10,7 @@
 // tercero en nombre de Camino al Cielo.
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
-import { enviarTexto } from './whatsapp-cloud.js'
+import { enviarTexto, etiquetar } from './whatsapp-cloud.js'
 
 const MOD = '[agente-wa]'
 
@@ -61,6 +61,52 @@ const HERRAMIENTAS = [{
     required: ['cliente_nombre', 'cliente_whatsapp', 'mascota_nombre'],
   },
 }]
+
+/**
+ * Las herramientas se arman por ejecución porque una de ellas depende del
+ * catálogo de etiquetas, que es una tabla editable. Si se cablearan aquí, un
+ * cambio de categorías obligaría a desplegar.
+ */
+async function construirHerramientas() {
+  const { rows: etiquetas } = await pool.query(
+    `SELECT clave, nombre, descripcion FROM public.whatsapp_etiquetas
+      WHERE activo ORDER BY orden, id`
+  )
+  if (!etiquetas.length) return HERRAMIENTAS
+
+  return [...HERRAMIENTAS, {
+    name: 'clasificar_conversacion',
+    description:
+      'Etiqueta esta conversación para que coordinación sepa qué necesita atención. ' +
+      'Úsala en cuanto entiendas de qué va el mensaje, y SIEMPRE que escales algo a una ' +
+      'persona: la etiqueta es lo único que hace visible la conversación en el tablero. ' +
+      'No la repitas si ya pusiste esa misma etiqueta antes en la conversación.\n\n' +
+      'Etiquetas disponibles:\n'
+      + etiquetas.map(e => `- ${e.clave} (${e.nombre}): ${e.descripcion || ''}`).join('\n'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        etiqueta: { type: 'string', enum: etiquetas.map(e => e.clave), description: 'La que mejor describa lo que necesita esta conversación.' },
+        motivo:   { type: 'string', description: 'Una línea de contexto para el coordinador. Ej: "espera al técnico, cierran a las 7".' },
+      },
+      required: ['etiqueta'],
+    },
+  }]
+}
+
+async function clasificarConversacion({ entrada, contacto }) {
+  // En el panel de prueba no hay conversación real que etiquetar.
+  if (!/^\d+$/.test(String(contacto || ''))) {
+    return { ok: true, mensaje: `(prueba) se habría etiquetado como ${entrada.etiqueta}` }
+  }
+  const r = await etiquetar({
+    contacto, clave: entrada.etiqueta, origen: 'AGENTE',
+    motivo: entrada.motivo ? String(entrada.motivo).slice(0, 300) : null,
+  })
+  if (!r.body?.ok) return { ok: false, error: r.body?.error || 'No se pudo etiquetar' }
+  log(MOD, `conversación ${contacto} etiquetada ${entrada.etiqueta} por el agente`)
+  return { ok: true, mensaje: 'Etiquetada. Sigue atendiendo con normalidad.' }
+}
 
 async function registrarSolicitud({ entrada, agente, contacto }) {
   const tel = String(entrada.cliente_whatsapp || '').replace(/\D/g, '')
@@ -249,7 +295,9 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
   const cache = { creados: 0, leidos: 0 }
 
   try {
-    const system = await construirSistema(agente)
+    const [system, herramientas] = await Promise.all([
+      construirSistema(agente), construirHerramientas(),
+    ])
     const messages = mensajePrueba
       ? [{ role: 'user', content: mensajePrueba }]
       : await construirHistorial(contacto)
@@ -264,7 +312,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         max_tokens: 2048,
         system,
         messages,
-        tools: HERRAMIENTAS,
+        tools: herramientas,
         thinking:      { type: 'adaptive' },
         output_config: { effort: agente.effort },
       })
@@ -290,9 +338,16 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         usadas.push(bloque.name)
         let out
         try {
-          out = bloque.name === 'registrar_solicitud'
-            ? await registrarSolicitud({ entrada: bloque.input, agente, contacto })
-            : { ok: false, error: `Herramienta desconocida: ${bloque.name}` }
+          if (bloque.name === 'registrar_solicitud') {
+            out = await registrarSolicitud({ entrada: bloque.input, agente, contacto })
+            // La solicitud tiene su propia etiqueta: si el agente no la pone, la
+            // conversación que MÁS importa quedaría fuera del tablero.
+            if (out.ok) await clasificarConversacion({ entrada: { etiqueta: 'SOLICITUD' }, contacto }).catch(() => {})
+          } else if (bloque.name === 'clasificar_conversacion') {
+            out = await clasificarConversacion({ entrada: bloque.input, contacto })
+          } else {
+            out = { ok: false, error: `Herramienta desconocida: ${bloque.name}` }
+          }
         } catch (e) {
           log(MOD, `herramienta ${bloque.name} falló —`, e.message)
           out = { ok: false, error: 'No se pudo registrar. Dile que lo hará una persona del equipo.' }

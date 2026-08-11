@@ -26,6 +26,35 @@ export function enviarMensaje(contacto, texto) {
   })
 }
 
+// ── Etiquetas (migración 090) ────────────────────────────────────────────────
+// Son las listas de trabajo de la bandeja. Las pone el agente al clasificar y
+// el coordinador a mano; quitarlas es cómo se cierra una novedad.
+
+export function listarEtiquetas() {
+  return orbitApi('/whatsapp/etiquetas')
+}
+
+export function ponerEtiqueta(contacto, clave) {
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/etiquetas`, {
+    method: 'POST',
+    body: { clave },
+  })
+}
+
+export function quitarEtiqueta(contacto, clave) {
+  return orbitApi(
+    `/whatsapp/conversaciones/${encodeURIComponent(contacto)}/etiquetas/${encodeURIComponent(clave)}`,
+    { method: 'DELETE' }
+  )
+}
+
+/** Las listas que ve el coordinador, en el orden en que las mira. */
+export const GRUPOS = [
+  { clave: 'NOVEDAD',   nombre: 'Novedades' },
+  { clave: 'SERVICIO',  nombre: 'Servicios' },
+  { clave: 'COMERCIAL', nombre: 'Comercial' },
+]
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Presentación
 // ─────────────────────────────────────────────────────────────────────────────
