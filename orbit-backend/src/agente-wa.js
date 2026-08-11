@@ -46,11 +46,13 @@ const HERRAMIENTAS = [{
   input_schema: {
     type: 'object',
     properties: {
-      cliente_nombre:   { type: 'string', description: 'Nombre de la persona de contacto (la familia o la veterinaria).' },
+      cliente_nombre:   { type: 'string', description: 'SOLO el nombre de la familia dueña de la mascota. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`.' },
       cliente_whatsapp: { type: 'string', description: 'WhatsApp del contacto, solo dígitos con indicativo. Ej: 573001234567' },
       mascota_nombre:   { type: 'string', description: 'Nombre de la mascota.' },
       mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave… tal como lo dijeron.' },
       mascota_peso_kg:  { type: 'number', description: 'Peso aproximado en kilogramos.' },
+      recogida_en:      { type: 'string', enum: ['veterinaria', 'domicilio'], description: 'Dónde se recoge: en la clínica ("veterinaria") o en la casa de la familia ("domicilio"). Pregúntalo si no quedó claro — de esto depende la dirección a la que va el técnico.' },
+      veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
       direccion:        { type: 'string', description: 'Dirección de la recogida.' },
       barrio:           { type: 'string', description: 'Barrio o punto de referencia.' },
       plan:             { type: 'string', description: 'Plan elegido, si ya lo definieron.' },
@@ -64,14 +66,26 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   const tel = String(entrada.cliente_whatsapp || '').replace(/\D/g, '')
   if (!tel) return { ok: false, error: 'El WhatsApp del contacto no es válido.' }
 
+  // El aliado NO se lo preguntamos al agente ni se lo dejamos elegir: se deriva
+  // del número desde el que escriben, que la bandeja ya cruza contra `aliados`.
+  // Así el agente sigue aislado (no consulta la operación) y la solicitud llega
+  // con vet asociada. Sin esto el Kanban convierte con `aliado_origen_id` NULL
+  // y `canal_entrada='DIRECTO'` (Kanban.jsx:865-867): la veterinaria pierde su
+  // comisión en silencio, que es justo lo contrario de para qué existe la línea.
+  const { rows: [conv] } = await pool.query(
+    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
+    [String(contacto || '').replace(/\D/g, '')]
+  )
+
   // `origen` se queda en ALIADO — la solicitud viene de una veterinaria. Meter
   // un valor nuevo rompería el aviso a coordinación y, al convertir, la
   // comisión del aliado. El canal va en `agente_id`. Ver migración 088.
   const { rows } = await pool.query(
     `INSERT INTO public.solicitudes_servicio
        (cliente_nombre, cliente_whatsapp, mascota_nombre, mascota_peso_kg,
-        direccion, barrio, notas_cliente, origen, estado, agente_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'ALIADO','PENDIENTE',$8)
+        direccion, barrio, notas_cliente, origen, estado, agente_id,
+        aliado_id, aliado_nombre_otro, tipo_recogida)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'ALIADO','PENDIENTE',$8,$9,$10,$11)
      RETURNING id`,
     [
       String(entrada.cliente_nombre).slice(0, 120),
@@ -86,11 +100,18 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
         entrada.plan            ? `Plan mencionado: ${entrada.plan}`    : null,
         entrada.notas           || null,
         `Registrada por el agente de WhatsApp desde ${contacto}.`,
+        conv?.aliado_id ? null : 'Este número NO está asociado a ninguna veterinaria en el sistema: verificar la vet antes de convertir, o la comisión se pierde.',
       ].filter(Boolean).join('\n').slice(0, 2000),
       agente.id,
+      conv?.aliado_id || null,
+      // Solo si el número no resolvió: con `aliado_id` la vet ya está
+      // identificada y el nombre suelto duplicaría la nota en el Kanban.
+      !conv?.aliado_id && entrada.veterinaria ? String(entrada.veterinaria).slice(0, 160) : null,
+      entrada.recogida_en === 'veterinaria' ? 'veterinaria' : 'domicilio',
     ]
   )
-  log(MOD, `solicitud ${rows[0].id} creada por el agente desde ${contacto}`)
+  log(MOD, `solicitud ${rows[0].id} creada por el agente desde ${contacto}`
+    + (conv?.aliado_id ? ` (aliado ${conv.aliado_id})` : ' — SIN aliado asociado'))
   return { ok: true, mensaje: 'Solicitud registrada. Coordinación la revisa y confirma la hora.' }
 }
 
