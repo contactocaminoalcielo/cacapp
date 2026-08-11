@@ -209,10 +209,18 @@ export async function enviarTexto({ contacto, texto, personalId }) {
 
   // Responder implica haber leído: evita que la conversación quede marcada
   // como no leída justo después de contestarla.
-  await pool.query(
-    `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now() WHERE contacto = $1`,
-    [num]
-  )
+  //
+  // ⚠️ Solo cuando responde una PERSONA (`personalId`). El agente también envía
+  // por aquí, y si sus respuestas marcaran leído, cada conversación que atienda
+  // quedaría en cero no leídos: el badge de coordinación se apagaría y las que
+  // el agente dice que va a escalar no las vería nadie. La vet oye "coordinación
+  // te escribe en seguida" y no le escribe nadie.
+  if (personalId) {
+    await pool.query(
+      `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now() WHERE contacto = $1`,
+      [num]
+    )
+  }
 
   log(MOD, `enviado a ${num} por ${desde} (wamid=${wamid || '-'}, ${cuerpo.length} chars)`)
   return { status: 200, body: { ok: true, mensaje: guardado[0] || null, wa_message_id: wamid } }
