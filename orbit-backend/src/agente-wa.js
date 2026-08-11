@@ -20,6 +20,23 @@ const HISTORIAL = 20
 /** Tope de vueltas del ciclo de herramientas dentro de UNA respuesta. */
 const MAX_VUELTAS = 5
 
+/**
+ * `thinking: adaptive` y `output_config.effort` son de la familia Claude 5
+ * (y Opus/Sonnet 4.6+). **Haiku 4.5 rechaza los dos con un 400**, y la pantalla
+ * ofrece Haiku como la opción barata — que es justo la que uno prueba primero.
+ * Mandarlos siempre dejaba al agente mudo: recibía el mensaje, fallaba al
+ * llamar a Claude y la veterinaria no veía respuesta ninguna.
+ *
+ * Se decide por modelo, no por una lista de modelos "malos": así un modelo
+ * nuevo de la familia 5 funciona sin tocar esto.
+ */
+function razonamientoPara(modelo, effort) {
+  const familia5 = /^claude-(opus|sonnet|fable|mythos)-5\b/.test(modelo)
+  const cuatroSeis = /^claude-(opus|sonnet)-4-(6|7|8)\b/.test(modelo)
+  if (!familia5 && !cuatroSeis) return {}
+  return { thinking: { type: 'adaptive' }, output_config: { effort } }
+}
+
 let cliente = null
 function anthropic() {
   if (!cliente) {
@@ -313,8 +330,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         system,
         messages,
         tools: herramientas,
-        thinking:      { type: 'adaptive' },
-        output_config: { effort: agente.effort },
+        ...razonamientoPara(agente.modelo, agente.effort),
       })
       // `input_tokens` NO incluye lo que vino de la caché: el contexto (que es
       // el grueso) se reporta aparte en cache_creation/cache_read. Sumar solo
