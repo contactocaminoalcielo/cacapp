@@ -268,6 +268,16 @@ async function construirSistema(agente) {
     })
   }
 
+  // Nota operativa, no de negocio: va aquí (dentro del prefijo cacheado) y no en
+  // el contexto editable, porque es del motor y no algo que David deba mantener.
+  bloques.push({
+    type: 'text',
+    text: 'Cuando necesites más de una herramienta, pídelas JUNTAS en la misma '
+      + 'respuesta en vez de una por turno. Cada turno extra vuelve a procesar toda '
+      + 'la conversación desde el principio, así que agruparlas es más rápido para '
+      + 'la veterinaria que está esperando.',
+  })
+
   for (const img of piezas.filter(p => p.tipo === 'IMAGEN' && p.archivo)) {
     bloques.push({ type: 'text', text: `Imagen de referencia: ${img.titulo}` })
     bloques.push({
@@ -276,7 +286,13 @@ async function construirSistema(agente) {
     })
   }
 
-  bloques[bloques.length - 1].cache_control = { type: 'ephemeral' }
+  // TTL de 1 hora, no el de 5 minutos por defecto. Medido en la bitácora: con 5
+  // minutos la caché se vencía entre mensajes —una vet tarda más que eso en
+  // contestar— y cada vencimiento reescribía el contexto entero (11 mil tokens
+  // a 1,25×). La escritura de 1 h cuesta 2× en vez de 1,25×, pero se amortiza
+  // desde la tercera lectura y aquí el prefijo es el MISMO para todas las
+  // conversaciones: cualquiera que escriba en la hora siguiente lo lee barato.
+  bloques[bloques.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' }
   return bloques
 }
 
