@@ -23,7 +23,7 @@
 import crypto from 'node:crypto'
 import { pool, log } from './db.js'
 import { responderSiAplica } from './agente-wa.js'
-import { guardarMedia } from './whatsapp-media.js'
+import { guardarMedia, transcribir, esVoz } from './whatsapp-media.js'
 
 const MOD = '[wa-webhook]'
 
@@ -316,9 +316,18 @@ async function normalizar(ev) {
       // No hay prisa aquí: a Meta ya se le respondió 200 antes de entrar en
       // este bloque, así que los 5 s de su reintento no corren.
       if (ev.mediaId && fila?.id) {
-        await guardarMedia({
+        const guardado = await guardarMedia({
           mensajeId: fila.id, waMediaId: ev.mediaId, mimeDeclarado: ev.mediaMime,
         })
+
+        // Nota de voz: Claude no oye audio, así que pasa por Whisper (que corre
+        // en este mismo servidor) ANTES de despertar al agente. Tarda más o
+        // menos lo que dure el audio; la veterinaria ve el "escribiendo…"
+        // mientras tanto. Si falla, el mensaje se queda como "[audio]" y el
+        // agente lo trata como algo que no puede oír.
+        if (guardado.ok && esVoz(guardado.mime)) {
+          await transcribir({ mensajeId: fila.id })
+        }
       }
 
       if (ev.perfilNombre) {

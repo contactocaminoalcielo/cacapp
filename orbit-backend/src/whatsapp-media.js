@@ -34,6 +34,102 @@ export function elModeloPuedeVerlo(mime) {
   return MIRABLES.has(String(mime || '').split(';')[0].trim().toLowerCase())
 }
 
+/** Las notas de voz de WhatsApp llegan como audio/ogg con códec opus. */
+export function esVoz(mime) {
+  return /^audio\//i.test(String(mime || '').trim())
+}
+
+/**
+ * Dónde vive Whisper. Es un contenedor vecino en la red de Docker, sin puerto
+ * publicado: lo que viaja son notas de voz de clínicas y familias, y no tiene
+ * por qué ser alcanzable desde fuera del servidor.
+ */
+const WHISPER = process.env.WHISPER_URL || 'http://orbit-whisper:8788'
+
+/**
+ * Transcribe la nota de voz de un mensaje y la deja escrita en los dos sitios
+ * que importan: `whatsapp_media.transcripcion` (la evidencia, sin tocar) y
+ * `whatsapp_mensajes.texto` (lo que leen la bandeja y el agente).
+ *
+ * Nunca lanza. Si Whisper está caído o no entiende nada, el mensaje se queda
+ * como "[audio]" y el agente lo trata como lo que no puede oír — se disculpa y
+ * lo pasa a una persona. Degradar así es correcto; inventar contenido no.
+ */
+export async function transcribir({ mensajeId }) {
+  const id = parseInt(mensajeId, 10)
+  if (!Number.isFinite(id)) return { ok: false, error: 'mensaje inválido' }
+
+  try {
+    const { rows: [fila] } = await pool.query(
+      `SELECT archivo, mime FROM public.whatsapp_media WHERE mensaje_id = $1`, [id]
+    )
+    if (!fila?.archivo) return { ok: false, error: 'no hay audio guardado' }
+
+    const inicio = Date.now()
+    const r = await fetch(`${WHISPER}/transcribir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: fila.archivo,
+    })
+    const out = await r.json().catch(() => ({}))
+
+    if (!r.ok || !out.ok || !out.texto) {
+      const motivo = out.error || (r.ok ? 'no se entendió nada' : `Error ${r.status}`)
+      await pool.query(
+        `UPDATE public.whatsapp_media SET error = $2 WHERE mensaje_id = $1`,
+        [id, `transcripción: ${motivo}`]
+      ).catch(() => {})
+      log(MOD, `no se pudo transcribir el mensaje ${id} — ${motivo}`)
+      return { ok: false, error: motivo }
+    }
+
+    const texto = String(out.texto).slice(0, 4000)
+    await pool.query(
+      `UPDATE public.whatsapp_media SET transcripcion = $2 WHERE mensaje_id = $1`,
+      [id, texto]
+    )
+    // El prefijo NO es decorativo: es lo que le dice al agente (y al coordinador)
+    // que esto lo entendió una máquina y puede estar mal.
+    await pool.query(
+      `UPDATE public.whatsapp_mensajes SET texto = $2 WHERE id = $1`,
+      [id, `[nota de voz] ${texto}`]
+    )
+
+    log(MOD, `mensaje ${id} transcrito en ${((Date.now() - inicio) / 1000).toFixed(1)}s`
+      + ` (${out.duracion}s de audio): ${texto.slice(0, 60)}`)
+    return { ok: true, texto }
+  } catch (e) {
+    log(MOD, `ERROR transcribiendo el mensaje ${id} —`, e.message)
+    await pool.query(
+      `UPDATE public.whatsapp_media SET error = $2 WHERE mensaje_id = $1`,
+      [id, `transcripción: ${e.message}`]
+    ).catch(() => {})
+    return { ok: false, error: e.message }
+  }
+}
+
+/**
+ * De ESTOS mensajes, cuántas notas de voz se pudieron transcribir y cuántas no.
+ * Mismo criterio que `revisarImagenes`: se pregunta por id y no "¿hay algún
+ * audio reciente?", para no responder sobre una nota de voz que en realidad
+ * nadie entendió.
+ */
+export async function revisarAudios(mensajeIds) {
+  const ids = (mensajeIds || []).map(Number).filter(Number.isFinite)
+  if (!ids.length) return { transcritos: 0, fallidos: 0 }
+
+  const { rows: [r] } = await pool.query(
+    `SELECT
+       count(*) FILTER (WHERE md.transcripcion IS NOT NULL)::int AS transcritos,
+       count(*) FILTER (WHERE md.transcripcion IS NULL)::int     AS fallidos
+       FROM public.whatsapp_mensajes w
+       LEFT JOIN public.whatsapp_media md ON md.mensaje_id = w.id
+      WHERE w.id = ANY($1) AND w.tipo = 'audio'`,
+    [ids]
+  )
+  return { transcritos: r?.transcritos || 0, fallidos: r?.fallidos || 0 }
+}
+
 /**
  * Baja el archivo de un mensaje y lo guarda. Nunca lanza: que no se pueda bajar
  * una foto no puede tumbar la recepción del mensaje ni al agente. Deja el motivo

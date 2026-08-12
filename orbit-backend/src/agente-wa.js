@@ -11,7 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
 import { enviarTexto, etiquetar, acusarLectura } from './whatsapp-cloud.js'
-import { imagenesRecientes, revisarImagenes } from './whatsapp-media.js'
+import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
 const MOD = '[agente-wa]'
@@ -348,7 +348,15 @@ async function construirSistema(agente) {
       + 'Con las fotos ten dos cuidados: no diagnostiques ni opines sobre el estado del '
       + 'cuerpo de la mascota —eso es del equipo, y a la familia le duele—, y si la '
       + 'imagen trae datos que hay que registrar (una dirección escrita a mano, un peso '
-      + 'en una báscula), léelos en voz alta y pide que te los confirmen antes de usarlos.',
+      + 'en una báscula), léelos en voz alta y pide que te los confirmen antes de usarlos.\n\n'
+      + 'NOTAS DE VOZ. Un mensaje que empieza por "[nota de voz]" es una grabación que '
+      + 'transcribió una máquina, no algo que la persona escribió. Casi siempre acierta, '
+      + 'pero se equivoca justo donde más duele: números, nombres propios y direcciones. '
+      + 'Trátalo como lo que dijeron, sin mencionar que viene de una transcripción, y '
+      + 'antes de registrar o cotizar cualquier cifra que venga de ahí —peso, dirección, '
+      + 'teléfono, plan— repítela en tu respuesta y pide que te la confirmen. Si lo '
+      + 'transcrito no tiene sentido o llega cortado, dilo con naturalidad y pide que te '
+      + 'lo escriban.',
   })
 
   for (const img of piezas.filter(p => p.tipo === 'IMAGEN' && p.archivo)) {
@@ -600,6 +608,16 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
     if (!fallidas) noTexto = noTexto.filter(t => t !== 'image')
   }
 
+  // Las notas de voz siguen la misma regla desde la migración 095: si Whisper
+  // la entendió, su texto ya está en el historial y el agente responde; si no,
+  // se trata como lo que es —algo que nadie pudo oír— y se pasa a una persona.
+  let oyeLaVoz = false
+  if (noTexto.includes('audio')) {
+    const { transcritos, fallidos } = await revisarAudios(mensajeIds).catch(() => ({ transcritos: 0, fallidos: 1 }))
+    oyeLaVoz = transcritos > 0
+    if (!fallidos) noTexto = noTexto.filter(t => t !== 'audio')
+  }
+
   if (noTexto.length) {
     // `etiquetar` NO lanza si la etiqueta no existe: devuelve un 404 en el
     // cuerpo. Sin mirarlo, una migración sin aplicar dejaría esto sin efecto y
@@ -618,9 +636,10 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   }
 
   // Si solo mandó adjuntos que nadie puede leer, ya está: el resto es cosa de la
-  // persona que abra la conversación. Una foto que el modelo SÍ ve no cuenta
-  // como eso — ahí hay conversación que seguir aunque no venga una sola letra.
-  if (!tipos.has('text') && !veLaFoto) return
+  // persona que abra la conversación. Una foto que el modelo SÍ ve, o una nota
+  // de voz transcrita, no cuentan como eso — ahí hay conversación que seguir
+  // aunque no venga una sola letra escrita.
+  if (!tipos.has('text') && !veLaFoto && !oyeLaVoz) return
 
   // ── Tope de turnos, dentro de la ventana ──
   const { rows: [{ n }] } = await pool.query(

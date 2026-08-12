@@ -1,0 +1,29 @@
+# Whisper — transcribe las notas de voz de WhatsApp sin que salgan del servidor.
+#
+# NO expone puerto al host: solo lo alcanza orbit-backend por la red interna de
+# Docker (http://orbit-whisper:8788). Lo que viaja aquí son notas de voz de
+# clínicas y de familias — no tiene por qué ser accesible desde fuera.
+services:
+  orbit-whisper:
+    build: .
+    container_name: orbit-whisper
+    restart: unless-stopped
+    environment:
+      - TZ=America/Bogota
+      # Cambiar a `medium` mejora el acierto y triplica el tiempo. Con `small`
+      # una nota de 30 s se transcribe en unos 10 s en esta máquina.
+      - WHISPER_MODELO=small
+      # 4 de los 6 núcleos: Postgres y el backend necesitan los otros.
+      - WHISPER_HILOS=4
+    volumes:
+      # El modelo pesa ~0,5 GB y se baja una sola vez.
+      - whisper_models:/models
+    networks:
+      - supabase_default
+
+networks:
+  supabase_default:
+    external: true
+
+volumes:
+  whisper_models:
