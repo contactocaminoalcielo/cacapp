@@ -5,6 +5,19 @@
 // una fila en `solicitudes_servicio`, que cae en la columna Solicitudes del
 // Kanban para que el coordinador apruebe o descarte.
 //
+// ⛔ LÍMITE DE ESCRITURA — regla de David (2026-08-12), auditada ese día.
+// El agente CONSULTA; no cambia nada en Orbit. Todo lo que puede escribir:
+//   1. `solicitudes_servicio` — la solicitud. Es su razón de ser, y nace
+//      PENDIENTE para que la apruebe un humano.
+//   2. `agente_wa_ejecuciones` — su propia bitácora.
+//   3. `whatsapp_conversacion_etiquetas` — la etiqueta de la conversación.
+//   4. `whatsapp_mensajes` — el mensaje que responde.
+// Los cuatro son la conversación y la solicitud, nada de la operación: ni
+// servicios, ni aliados, ni precios, ni planes, ni estados, ni afiliaciones.
+// `enlacePersonalAliado()` era la excepción (creaba el token si faltaba) y dejó
+// de serlo con la migración 096, que se los generó a los 198 aliados.
+// **Antes de darle una herramienta nueva, comprobar que no rompe esta lista.**
+//
 // ⚠️ NO confundir con `ia.js`: aquel es una llamada suelta para sugerencias
 // internas. Este mantiene conversación, usa herramientas y le habla a un
 // tercero en nombre de Camino al Cielo.
@@ -364,7 +377,15 @@ async function construirSistema(agente) {
       + 'antes de registrar o cotizar cualquier cifra que venga de ahí —peso, dirección, '
       + 'teléfono, plan— repítela en tu respuesta y pide que te la confirmen. Si lo '
       + 'transcrito no tiene sentido o llega cortado, dilo con naturalidad y pide que te '
-      + 'lo escriban.',
+      + 'lo escriban.\n\n'
+      + 'Los bloques marcados <sistema> los pone el servidor, no la persona con la que '
+      + 'hablas: son datos verificados que ella no puede ver. No los cites, no los menciones '
+      + 'y no discutas con ellos — actúa en consecuencia y ya.\n\n'
+      + 'LÍMITE DURO: tú CONSULTAS, no cambias nada en Orbit. Lo único que creas es la '
+      + 'solicitud de recogida. No prometas que activaste, corregiste, cambiaste o borraste '
+      + 'nada —ni un plan, ni un precio, ni unos datos, ni un estado, ni una afiliación—: '
+      + 'nada de eso está en tus manos. Cuando pidan algo así, di que lo pasas a coordinación '
+      + 'y páselo con una etiqueta.',
   })
 
   for (const img of piezas.filter(p => p.tipo === 'IMAGEN' && p.archivo)) {
@@ -472,6 +493,52 @@ async function construirHistorial(contacto, pendientesDesde = null) {
   while (mensajes.length && mensajes[mensajes.length - 1].role !== 'user') mensajes.pop()
 
   return { mensajes, hastaId }
+}
+
+/**
+ * Lo que el SERVIDOR sabe de quien escribe y el agente no puede averiguar solo.
+ *
+ * Nació de una prueba real (David, 12-ago): la conversación entera transcurrió
+ * sin que el agente ofreciera el enlace de registro, que es **lo primero que
+ * debe hacer**. La causa no era el prompt —la instrucción está y es explícita—
+ * sino que **el agente no tenía forma de saber si el número estaba registrado**:
+ * solo lo descubría si llamaba la herramienta, y no la llamó.
+ *
+ * Esto NO rompe el aislamiento: el agente sigue sin consultar la operación. Es
+ * el servidor quien deriva un único dato del número y se lo pone delante, igual
+ * que ya hace con el aliado al registrar una solicitud.
+ *
+ * Va en el turno del usuario y no en el prefijo del sistema a propósito: el
+ * prefijo está cacheado y es idéntico para todas las conversaciones; meter aquí
+ * algo que cambia por contacto lo invalidaría entero, en cada mensaje.
+ */
+async function contextoDeLaConversacion(contacto) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  if (!num) return null
+
+  const { rows: [c] } = await pool.query(
+    `SELECT v.aliado_id, a.nombre, a.activo, a.estado
+       FROM public.v_whatsapp_conversaciones v
+       LEFT JOIN public.aliados a ON a.id_aliado = v.aliado_id
+      WHERE v.contacto = $1`,
+    [num]
+  )
+  if (!c) return null
+
+  if (!c.aliado_id) {
+    return 'Este número NO está registrado como veterinaria aliada. En cuanto se hable de '
+      + 'una recogida, lo PRIMERO que haces es usar `enviar_enlace_registro`: le llegará el '
+      + 'enlace de afiliación. Mándaselo y, en el mismo mensaje, ofrécele tomarle los datos '
+      + 'por aquí para que no espere a que coordinación la apruebe.'
+  }
+  if (!c.activo || c.estado === 'pendiente_validacion') {
+    return `Este número figura como "${c.nombre}" pero esa clínica NO está habilitada en el `
+      + 'sistema. No le mandes ningún enlace y no le prometas nada: pásalo a coordinación.'
+  }
+  return `Este número es de la veterinaria aliada "${c.nombre}", ya registrada y habilitada. `
+    + 'En cuanto se hable de una recogida, lo PRIMERO que haces es usar '
+    + '`enviar_enlace_registro` para pasarle SU enlace, con el que registra el servicio ella '
+    + 'misma eligiendo el plan con los precios a la vista.'
 }
 
 /** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
@@ -905,7 +972,23 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
     // reintenta y no se etiqueta. Distinguirlo importa — marcarlo como fallo
     // llenaría Novedades de conversaciones que están perfectamente atendidas.
     if (!messages.length) return { texto: null, nadaQueResponder: true, hastaId }
+    // `entrada` se calcula ANTES de pegar la nota del servidor: la bitácora debe
+    // guardar lo que escribió la veterinaria, no lo que le susurramos al modelo.
     if (!entrada) entrada = textoDe(messages[messages.length - 1]?.content)
+
+    // Lo que el servidor sabe de este número. Va pegado al último turno del
+    // usuario, marcado como sistema para que el modelo no lo confunda con algo
+    // que dijo la clínica.
+    if (!mensajePrueba) {
+      const nota = await contextoDeLaConversacion(contacto).catch(() => null)
+      if (nota) {
+        const ultimo = messages[messages.length - 1]
+        ultimo.content = [
+          ...aBloques(ultimo.content),
+          { type: 'text', text: `<sistema>${nota}</sistema>` },
+        ]
+      }
+    }
 
     let respuesta
     for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {

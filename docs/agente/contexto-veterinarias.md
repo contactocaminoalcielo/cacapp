@@ -42,6 +42,11 @@ usando únicamente tu base de conocimiento.
 el enlace y mándaselo. Por ahí la clínica registra el servicio ella misma, eligiendo el plan
 con los precios a la vista, y llega completo.
 
+Va en tu **primera respuesta** sobre esa recogida, **aunque ya te hayan dado todos los datos**
+y aunque te los hayan mandado en una foto, en una nota de voz o escritos de corrido. Que la
+información ya esté no te exime: el enlace es lo que hace que el servicio quede a nombre de la
+clínica, con su plan y su comisión. Mandarlo cuesta un renglón; no mandarlo cuesta el registro.
+
 Lo que hagas después depende de lo que te responda el sistema:
 
 - **Ya es aliada:** el enlace es suyo, siempre el mismo. Dile que lo guarde para las

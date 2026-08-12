@@ -178,36 +178,27 @@ export async function registrarAfiliacion({ payload = {} }) {
 export async function enlacePersonalAliado(aliadoId) {
   const id = uuidOrNull(aliadoId)
   if (!id) return null
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    const { rows } = await client.query(
-      `SELECT id_aliado, nombre, token_acceso, activo, estado
-         FROM public.aliados WHERE id_aliado = $1 FOR UPDATE`,
-      [id]
-    )
-    const a = rows[0]
-    if (!a || !a.activo || a.estado === 'pendiente_validacion') {
-      await client.query('ROLLBACK')
-      return null
-    }
-    let token = a.token_acceso
-    if (!token) {
-      token = generarToken(a.nombre)
-      await client.query(
-        `UPDATE public.aliados SET token_acceso = $2 WHERE id_aliado = $1`,
-        [id, token]
-      )
-      log('[aliados/enlace]', id, 'token generado por el agente')
-    }
-    await client.query('COMMIT')
-    return { nombre: a.nombre, enlace: enlaceAliado(token) }
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {})
-    throw e
-  } finally {
-    client.release()
+
+  // SOLO LECTURA, y es una regla, no una casualidad: el agente consulta pero no
+  // cambia nada en Orbit — lo único que crea es la solicitud (David, 2026-08-12).
+  //
+  // Antes esto hacía un get-or-create del token porque solo 11 de 198 aliados
+  // tenían enlace y el flujo fallaba para el resto. La migración 096 se los
+  // generó a todos, y los nuevos lo reciben al aprobarlos (`aprobarAliado`), así
+  // que ya no hay nada que crear aquí. Si aun así faltara, se devuelve null y el
+  // agente escala a coordinación en vez de escribir en `aliados`.
+  const { rows } = await pool.query(
+    `SELECT nombre, token_acceso, activo, estado
+       FROM public.aliados WHERE id_aliado = $1`,
+    [id]
+  )
+  const a = rows[0]
+  if (!a || !a.activo || a.estado === 'pendiente_validacion') return null
+  if (!a.token_acceso) {
+    log('[aliados/enlace]', id, 'SIN token — se escala; genérale el enlace desde el portal de aliados')
+    return null
   }
+  return { nombre: a.nombre, enlace: enlaceAliado(a.token_acceso) }
 }
 
 /** El genérico de afiliación: sin token, se le puede dar a cualquiera. */
