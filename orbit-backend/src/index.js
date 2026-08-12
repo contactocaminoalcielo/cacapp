@@ -29,6 +29,9 @@ import {
 } from './whatsapp-cloud.js'
 import { leerMedia } from './whatsapp-media.js'
 import {
+  listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
+} from './whatsapp-plantillas.js'
+import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
 } from './agente-config.js'
@@ -182,6 +185,48 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, r
     log('[wa-bandeja/desetiquetar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+// ── Plantillas de WhatsApp ──
+// Son el único modo de escribirle a alguien fuera de la ventana de 24h. Viven
+// en la WABA (`WHATSAPP_WABA_ID`), no en Orbit: la lista siempre viene de Meta,
+// que es quien manda sobre el estado de aprobación.
+app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (_req, res) => {
+  try {
+    const r = await listarPlantillas()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/listar', e) }
+})
+
+app.post('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await crearPlantilla({
+      nombre: req.body?.nombre, idioma: req.body?.idioma,
+      categoria: req.body?.categoria, componentes: req.body?.componentes,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/crear', e) }
+})
+
+app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await borrarPlantilla({ nombre: req.params.nombre })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/borrar', e) }
+})
+
+app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await enviarPlantilla({
+      nombre: req.params.nombre,
+      contacto: req.body?.contacto,
+      idioma: req.body?.idioma,
+      variables: Array.isArray(req.body?.variables) ? req.body.variables : [],
+      variablesBoton: Array.isArray(req.body?.variablesBoton) ? req.body.variablesBoton : [],
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/enviar', e) }
 })
 
 // ── Archivos recibidos por WhatsApp (migración 094) ──
