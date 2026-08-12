@@ -39,10 +39,12 @@ const MAX_IMAGENES = 2
  * renglón disparaba una respuesta propia, todas a la vez y cada una calculada
  * sobre un pedazo distinto de la conversación.
  *
- * 8 s es el punto medio medido a ojo: más corto parte los mensajes de quien
- * escribe pausado, más largo se siente abandono. Ajustable sin desplegar.
+ * Subido de 8 a 12 s con tráfico real (David, 12-ago): con 8 el agente contestaba
+ * mientras él seguía escribiendo el siguiente mensaje. En esa prueba los huecos
+ * dentro de una misma idea fueron de 3, 5, 7 y 11 segundos — 8 partía la ráfaga
+ * justo en el hueco de 11. Más largo empieza a sentirse abandono.
  */
-const ESPERA_MS = Math.max(0, Number(process.env.AGENTE_WA_ESPERA_MS || 8000))
+const ESPERA_MS = Math.max(0, Number(process.env.AGENTE_WA_ESPERA_MS || 12000))
 
 /**
  * Techo de la espera, contado desde el PRIMER mensaje sin responder.
@@ -383,15 +385,39 @@ async function construirSistema(agente) {
   return bloques
 }
 
-/** El hilo reciente, traducido a turnos de conversación. */
-async function construirHistorial(contacto) {
-  const { rows } = await pool.query(
+/**
+ * El hilo reciente, traducido a turnos de conversación.
+ *
+ * `pendientesDesde` es el último mensaje que vio la ejecución anterior. Los
+ * entrantes POSTERIORES a ese punto son los que llegaron mientras el agente
+ * escribía: la vet los mandó antes de recibir la respuesta, así que en el orden
+ * del reloj quedan ENTRE su pregunta y nuestra respuesta, y el hilo termina
+ * hablando el agente. La API rechaza eso ("must end with a user message") y la
+ * vet se queda sin respuesta a lo que escribió de más — pasó en la prueba del
+ * 12-ago y tuvo que repetirlo.
+ *
+ * Se mueven al final. No es cosmético: es lo que hace que el modelo vea "yo dije
+ * esto, y ella además dijo esto otro" y conteste lo que falta, en vez de repetir
+ * lo que ya había dicho.
+ */
+async function construirHistorial(contacto, pendientesDesde = null) {
+  const { rows: crudas } = await pool.query(
     `SELECT id, direccion, texto, enviado_por FROM public.whatsapp_mensajes
       WHERE contacto = $1 AND texto IS NOT NULL AND texto <> ''
       ORDER BY ocurrido_en DESC, id DESC
       LIMIT $2`,
     [contacto, HISTORIAL]
   )
+
+  const ordenadas = crudas.slice().reverse()
+  const desde = Number(pendientesDesde) || 0
+  const esPendiente = m => desde > 0 && m.direccion === 'IN' && Number(m.id) > desde
+  const rows = desde > 0
+    ? [...ordenadas.filter(m => !esPendiente(m)), ...ordenadas.filter(esPendiente)]
+    : ordenadas
+
+  // Lo último que se leyó, para que la siguiente vuelta sepa qué quedó pendiente.
+  const hastaId = ordenadas.length ? Number(ordenadas[ordenadas.length - 1].id) : 0
 
   // Las fotos que el modelo puede mirar, indexadas por mensaje. Vienen ya
   // limitadas a las últimas: cada imagen son ~1.500 tokens y el historial NO se
@@ -405,7 +431,7 @@ async function construirHistorial(contacto) {
   }
 
   const mensajes = []
-  for (const m of rows.reverse()) {
+  for (const m of rows) {
     const role = m.direccion === 'IN' ? 'user' : 'assistant'
     // Por la misma línea salen dos voces: el agente y el coordinador. Sin
     // marcarlo, el modelo lee lo que escribió una persona como si lo hubiera
@@ -437,13 +463,35 @@ async function construirHistorial(contacto) {
   }
   // Tiene que empezar por el usuario.
   while (mensajes.length && mensajes[0].role !== 'user') mensajes.shift()
-  return mensajes
+
+  // Y tiene que TERMINAR hablando el usuario. Si acaba en el agente es que no
+  // hay nada nuevo que contestar: la vuelta anterior ya respondió todo. Se
+  // devuelve vacío para no llamar al modelo — llamarlo devolvería un 400
+  // ("does not support assistant message prefill") que además se registraría
+  // como un fallo del agente cuando en realidad no había nada que hacer.
+  while (mensajes.length && mensajes[mensajes.length - 1].role !== 'user') mensajes.pop()
+
+  return { mensajes, hastaId }
 }
 
 /** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
 function aBloques(contenido) {
   if (Array.isArray(contenido)) return contenido
   return [{ type: 'text', text: String(contenido) }]
+}
+
+/**
+ * El texto de un turno, venga como cadena o como bloques. Sin esto, un turno con
+ * foto se guardaba en la bitácora como "[object Object]" — que es exactamente el
+ * turno que uno querría poder leer al revisar qué entendió el agente.
+ */
+function textoDe(contenido) {
+  if (contenido == null) return null
+  if (typeof contenido === 'string') return contenido
+  if (!Array.isArray(contenido)) return String(contenido)
+  const partes = contenido.filter(b => b?.type === 'text').map(b => b.text)
+  const fotos = contenido.filter(b => b?.type === 'image').length
+  return [fotos ? `[${fotos} imagen(es)]` : null, ...partes].filter(Boolean).join(' ') || null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -595,7 +643,13 @@ async function atender(num) {
   p.desde = null
 
   try {
-    await responder({ num, tipos, mensajeIds, phoneNumberId: p.phoneNumberId, waMessageId: p.waMessageId })
+    // `hastaId` es hasta dónde leyó esta vuelta. La siguiente lo usa para saber
+    // qué entró mientras respondíamos y ponerlo al final del hilo.
+    const hastaId = await responder({
+      num, tipos, mensajeIds, pendientesDesde: p.hastaId || null,
+      phoneNumberId: p.phoneNumberId, waMessageId: p.waMessageId,
+    })
+    if (hastaId) p.hastaId = hastaId
   } catch (e) {
     log(MOD, 'ERROR atendiendo', num, '—', e.message)
     await avisarQueQuedoSinRespuesta(num, e.message).catch(() => {})
@@ -615,7 +669,7 @@ async function atender(num) {
 }
 
 /** Una respuesta completa a lo que se acumuló de un número. */
-async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessageId }) {
+async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessageId, pendientesDesde = null }) {
   const agente = await agenteParaLinea(phoneNumberId)
   if (!agente) return
 
@@ -704,24 +758,46 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // Refresca el "escribiendo…" (dura 25 s) justo antes de la parte lenta.
   acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
 
-  let r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP' })
+  let r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP', pendientesDesde })
 
-  // Un reintento, y solo uno. La mayoría de los fallos son pasajeros (un 429,
-  // un corte de red); insistir más sería castigar a la vet con la espera.
-  if (r.error) {
+  // Un reintento, y solo uno, y SOLO si tiene sentido reintentar. Un 400 es un
+  // error nuestro en la petición: repetirlo da exactamente el mismo 400, hace
+  // esperar de más a la vet y ensucia la bitácora con el doble de ruido —
+  // pasó en la prueba del 12-ago. Los pasajeros (429, 5xx, red) sí se reintentan.
+  if (r.error && esReintentable(r.error)) {
     log(MOD, `reintentando ${num} tras: ${r.error}`)
     await new Promise(res => setTimeout(res, 1500))
-    r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP' })
+    r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP', pendientesDesde })
+  }
+
+  // No había nada nuevo que contestar. Silencio correcto, no fallo.
+  if (r.nadaQueResponder) {
+    log(MOD, `${num} sin nada nuevo que responder`)
+    return r.hastaId || null
   }
 
   if (r.texto) {
     await enviarTexto({ contacto: num, texto: r.texto, personalId: null })
-    return
+    return r.hastaId || null
   }
 
   // Llegar aquí es el fallo mudo: la vet escribió y no va a recibir nada.
   // ANTES no dejaba rastro fuera de la bitácora, que nadie mira.
   await avisarQueQuedoSinRespuesta(num, r.error || 'El agente no produjo respuesta')
+  return r.hastaId || null
+}
+
+/**
+ * ¿Vale la pena repetir esta llamada? Los 4xx los provoca la petición y volver
+ * a mandarla da el mismo error; el resto (429, 5xx, red) suele ser pasajero.
+ * El 429 es un 4xx y sí se reintenta: ahí el problema es el ritmo, no la forma.
+ */
+function esReintentable(error) {
+  const m = String(error || '').match(/\b(4\d\d|5\d\d)\b/)
+  if (!m) return true              // sin código: red o algo raro — se intenta
+  const codigo = Number(m[1])
+  if (codigo === 429) return true
+  return codigo >= 500
 }
 
 /**
@@ -801,7 +877,7 @@ async function avisarQueQuedoSinRespuesta(contacto, motivo) {
  * si las pide y devuelve el texto final. Deja rastro en la bitácora pase lo
  * que pase — sin eso no hay forma de ajustar el contexto con evidencia.
  */
-export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePrueba = null }) {
+export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null }) {
   const inicio = Date.now()
   const usadas = []
   const etiquetas = []
@@ -815,12 +891,21 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
     const [system, herramientas] = await Promise.all([
       construirSistema(agente), construirHerramientas(),
     ])
-    const messages = mensajePrueba
-      ? [{ role: 'user', content: mensajePrueba }]
-      : await construirHistorial(contacto)
+    let hastaId = 0
+    let messages
+    if (mensajePrueba) {
+      messages = [{ role: 'user', content: mensajePrueba }]
+    } else {
+      const hist = await construirHistorial(contacto, pendientesDesde)
+      messages = hist.mensajes
+      hastaId = hist.hastaId
+    }
 
-    if (!messages.length) return { texto: null }
-    if (!entrada) entrada = messages[messages.length - 1]?.content || null
+    // Sin nada nuevo del otro lado no hay a qué responder. NO es un fallo: no se
+    // reintenta y no se etiqueta. Distinguirlo importa — marcarlo como fallo
+    // llenaría Novedades de conversaciones que están perfectamente atendidas.
+    if (!messages.length) return { texto: null, nadaQueResponder: true, hastaId }
+    if (!entrada) entrada = textoDe(messages[messages.length - 1]?.content)
 
     let respuesta
     for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
@@ -896,7 +981,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
 
     salida = textos.join('\n\n').trim() || null
 
-    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache }
+    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId }
   } catch (e) {
     fallo = e.message
     log(MOD, 'ERROR ejecutando —', e.message)
