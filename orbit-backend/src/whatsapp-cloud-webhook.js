@@ -22,7 +22,7 @@
 //   WHATSAPP_ALLOWED_PHONE_IDS — phone_number_id permitidos, separados por coma
 import crypto from 'node:crypto'
 import { pool, log } from './db.js'
-import { responderSiAplica } from './agente-wa.js'
+import { responderSiAplica, mantenerEscribiendo } from './agente-wa.js'
 import { guardarMedia, transcribir, esVoz } from './whatsapp-media.js'
 
 const MOD = '[wa-webhook]'
@@ -316,17 +316,26 @@ async function normalizar(ev) {
       // No hay prisa aquí: a Meta ya se le respondió 200 antes de entrar en
       // este bloque, así que los 5 s de su reintento no corren.
       if (ev.mediaId && fila?.id) {
-        const guardado = await guardarMedia({
-          mensajeId: fila.id, waMediaId: ev.mediaId, mimeDeclarado: ev.mediaMime,
+        // Bajar el archivo y transcribirlo puede llevar más de un minuto, y todo
+        // eso pasa ANTES de que el agente arranque. Sin el "escribiendo…" la
+        // veterinaria no vería una sola señal en todo ese rato.
+        const dejarDeEscribir = await mantenerEscribiendo({
+          phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, waMessageId: ev.waMessageId,
         })
+        try {
+          const guardado = await guardarMedia({
+            mensajeId: fila.id, waMediaId: ev.mediaId, mimeDeclarado: ev.mediaMime,
+          })
 
-        // Nota de voz: Claude no oye audio, así que pasa por Whisper (que corre
-        // en este mismo servidor) ANTES de despertar al agente. Tarda más o
-        // menos lo que dure el audio; la veterinaria ve el "escribiendo…"
-        // mientras tanto. Si falla, el mensaje se queda como "[audio]" y el
-        // agente lo trata como algo que no puede oír.
-        if (guardado.ok && esVoz(guardado.mime)) {
-          await transcribir({ mensajeId: fila.id })
+          // Nota de voz: Claude no oye audio, así que pasa por Whisper (que
+          // corre en este mismo servidor) antes de despertar al agente. Si
+          // falla, el mensaje se queda como "[audio]" y el agente lo trata como
+          // algo que no puede oír.
+          if (guardado.ok && esVoz(guardado.mime)) {
+            await transcribir({ mensajeId: fila.id })
+          }
+        } finally {
+          dejarDeEscribir()
         }
       }
 

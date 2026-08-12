@@ -10,10 +10,13 @@ services:
     restart: unless-stopped
     environment:
       - TZ=America/Bogota
-      # Cambiar a `medium` mejora el acierto y triplica el tiempo. Con `small`
-      # una nota de 30 s se transcribe en unos 10 s en esta máquina.
-      - WHISPER_MODELO=small
-      # 4 de los 6 núcleos: Postgres y el backend necesitan los otros.
+      # `medium` frente a `small`: 3 veces más lento y vale la pena igual. Sobre
+      # el mismo audio, `small` convirtió "treinta y dos kilos" en "30 y los
+      # kilos" y "Exclusivo videollamada" en "exclusivo y neoyamada"; `medium`
+      # acertó los dos. El peso es el campo que decide el precio.
+      - WHISPER_MODELO=medium
+      # 4 de los 6 núcleos, MEDIDO: con 6 tarda MÁS (40 s contra 34 s), porque
+      # compite con Postgres por los mismos núcleos. Subirlo no es gratis.
       - WHISPER_HILOS=4
     volumes:
       # El modelo pesa ~0,5 GB y se baja una sola vez.

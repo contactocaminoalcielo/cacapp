@@ -74,6 +74,12 @@ const VENTANA_TOPE_HORAS = 24
 const PAUSA_TRAS_HUMANO_HORAS = 12
 
 /**
+ * Cada cuánto se refresca el "escribiendo…" durante una espera larga. El
+ * indicador de Meta dura 25 s; 20 deja margen para la latencia de la llamada.
+ */
+const ESCRIBIENDO_MS = 20000
+
+/**
  * `thinking: adaptive` y `output_config.effort` son de la familia Claude 5
  * (y Opus/Sonnet 4.6+). **Haiku 4.5 rechaza los dos con un 400**, y la pantalla
  * ofrece Haiku como la opción barata — que es justo la que uno prueba primero.
@@ -530,6 +536,43 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     p.timer.unref?.()
   } catch (e) {
     log(MOD, 'ERROR programando respuesta a', contacto, '—', e.message)
+  }
+}
+
+/**
+ * Sostiene el "escribiendo…" mientras el servidor hace algo lento ANTES de que
+ * el agente pueda siquiera empezar: bajar el archivo y, sobre todo, transcribir
+ * una nota de voz, que tarda varias veces lo que dura el audio.
+ *
+ * Sin esto la veterinaria manda una nota de voz y no ve absolutamente nada
+ * durante un minuto largo — ni leído, ni escribiendo. El indicador de Meta dura
+ * 25 s, así que se refresca en bucle hasta que quien llamó lo suelte.
+ *
+ * Se aplican las mismas dos compuertas que al responder: si no hay agente en la
+ * línea o la conversación la lleva una persona, no se acusa nada — un doble
+ * check azul sin respuesta detrás es peor que el silencio.
+ *
+ * @returns {Promise<() => void>} la función que apaga el latido. Llamarla SIEMPRE.
+ */
+export async function mantenerEscribiendo({ phoneNumberId, contacto, waMessageId }) {
+  const parar = () => {}
+  try {
+    const num = String(contacto || '').replace(/\D/g, '')
+    if (!num || !waMessageId) return parar
+
+    const agente = await agenteParaLinea(phoneNumberId)
+    if (!agente) return parar
+    if (await laLlevaUnHumano(num)) return parar
+
+    acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
+    const latido = setInterval(() => {
+      acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
+    }, ESCRIBIENDO_MS)
+    latido.unref?.()
+    return () => clearInterval(latido)
+  } catch (e) {
+    log(MOD, 'no se pudo sostener el escribiendo —', e.message)
+    return parar
   }
 }
 
