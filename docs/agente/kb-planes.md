@@ -50,7 +50,7 @@ Evidencias de conservación · Herramientas de superación de duelo · Huella co
 mechón · Memopet · Memorial digital · Reporte de cremación · Soporte lazos de amor · Tarjeta
 de oración
 
-**Standard** — Afiche · Altar de vida · Asesoría de duelo · Audio de despedida · Certificado ·
+**Standard** — Afiche · Altar de vida · Asesoría de duelo · Audio de despedida ·
 Cojín personalizado · Cristal con foto · Lámpara Catrina · Medallón de vida · Memorial
 digital · Planta bonsái · Postal personalizada (x2) · Reporte de cremación · Short de
 YouTube · Tarjeta de oración · Video conmemorativo
@@ -70,9 +70,13 @@ de vida · Memorial digital · Photobook · Pin esperanza · Postal personalizad
 YouTube · Soporte lazos de amor · Tarjeta de oración · Video conmemorativo
 
 **Premium** — Afiche · Altar de vida · Asesoría de duelo · Audio de despedida · **Cenizario** ·
-Certificado · Cojín personalizado · Cristal con foto · Lámpara Catrina · Medallón de vida ·
+Cojín personalizado · Cristal con foto · Lámpara Catrina · Medallón de vida ·
 Memorial digital · Pin esperanza · Planta bonsái · Postal personalizada (x2) · Reporte de
 cremación · Retablo · Short de YouTube · Souvenir · Tarjeta de oración · Video conmemorativo
+
+**Ni Standard ni Premium llevan certificado de compostaje** (confirmado por David el
+2026-08-12): los dos son planes de cremación y su comprobante es el **reporte de cremación**.
+El certificado de compostaje es de la línea Compets y del Eco-grupal.
 
 ### Los planes "sin recordatorios"
 
