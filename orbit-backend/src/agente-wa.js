@@ -10,7 +10,7 @@
 // tercero en nombre de Camino al Cielo.
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
-import { enviarTexto, etiquetar } from './whatsapp-cloud.js'
+import { enviarTexto, etiquetar, acusarLectura } from './whatsapp-cloud.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
 const MOD = '[agente-wa]'
@@ -20,6 +20,47 @@ const HISTORIAL = 20
 
 /** Tope de vueltas del ciclo de herramientas dentro de UNA respuesta. */
 const MAX_VUELTAS = 5
+
+/**
+ * Cuánto se espera, tras el último mensaje, a que la veterinaria termine de
+ * escribir. Nadie escribe un párrafo en WhatsApp: escribe "Hola" / "buenas" /
+ * "necesito una recogida" / "es un labrador de 30 kilos". Sin esta espera cada
+ * renglón disparaba una respuesta propia, todas a la vez y cada una calculada
+ * sobre un pedazo distinto de la conversación.
+ *
+ * 8 s es el punto medio medido a ojo: más corto parte los mensajes de quien
+ * escribe pausado, más largo se siente abandono. Ajustable sin desplegar.
+ */
+const ESPERA_MS = Math.max(0, Number(process.env.AGENTE_WA_ESPERA_MS || 8000))
+
+/**
+ * Techo de la espera, contado desde el PRIMER mensaje sin responder.
+ *
+ * Sin esto la espera se renueva con cada renglón: alguien que escriba sin pausas
+ * largas no recibiría respuesta nunca, y el agente parecería muerto justo con
+ * quien más está escribiendo. A los 30 s se contesta con lo que haya llegado.
+ */
+const ESPERA_MAX_MS = Math.max(ESPERA_MS, Number(process.env.AGENTE_WA_ESPERA_MAX_MS || 30000))
+
+/**
+ * El tope de turnos es por VENTANA, no de por vida.
+ *
+ * Antes se contaban todas las respuestas dadas a ese contacto desde siempre, sin
+ * filtro de fecha: una veterinaria activa gastaba sus 20 en la primera semana y
+ * el agente no le volvía a contestar nunca. El freno existe para cortar un bucle
+ * (que quema 20 en minutos), no para caducar a un cliente.
+ */
+const VENTANA_TOPE_HORAS = 24
+
+/**
+ * Cuando una persona del equipo escribe en la conversación, el agente se aparta.
+ * Dos voces del mismo negocio contestando a la vez —y pudiendo contradecirse— es
+ * lo peor que puede ver una clínica.
+ *
+ * Apartarse no es desatender: la conversación sigue contando como NO leída en la
+ * bandeja (el agente nunca apaga ese badge), así que quien la tomó la ve.
+ */
+const PAUSA_TRAS_HUMANO_HORAS = 12
 
 /**
  * `thinking: adaptive` y `output_config.effort` son de la familia Claude 5
@@ -108,9 +149,14 @@ const HERRAMIENTAS = [{
  * cambio de categorías obligaría a desplegar.
  */
 async function construirHerramientas() {
+  // `solo_sistema` fuera: esas las pone el servidor (FALLO_AGENTE cuando el
+  // agente revienta, AUDIO_O_IMAGEN cuando llega algo que no puede leer). Si
+  // entraran en el enum, el modelo podría marcar "el agente no pudo responder"
+  // en una conversación que está atendiendo bien, y coordinación dejaría de
+  // creerle a la única señal que avisa de los fallos mudos. Ver migración 093.
   const { rows: etiquetas } = await pool.query(
     `SELECT clave, nombre, descripcion FROM public.whatsapp_etiquetas
-      WHERE activo ORDER BY orden, id`
+      WHERE activo AND NOT solo_sistema ORDER BY orden, id`
   )
   if (!etiquetas.length) return HERRAMIENTAS
 
@@ -275,7 +321,15 @@ async function construirSistema(agente) {
     text: 'Cuando necesites más de una herramienta, pídelas JUNTAS en la misma '
       + 'respuesta en vez de una por turno. Cada turno extra vuelve a procesar toda '
       + 'la conversación desde el principio, así que agruparlas es más rápido para '
-      + 'la veterinaria que está esperando.',
+      + 'la veterinaria que está esperando.\n\n'
+      + 'En el historial verás mensajes tuyos que empiezan por "[coordinación]". Esos '
+      + 'NO los escribiste tú: los escribió una persona del equipo por esta misma '
+      + 'línea. Trátalos como lo que son —lo que el equipo ya le dijo a la clínica— y '
+      + 'nunca los contradigas ni los repitas: si coordinación ya resolvió algo, das '
+      + 'eso por bueno.\n\n'
+      + 'La veterinaria suele escribir en varios mensajes cortos seguidos. Te llegan '
+      + 'todos juntos: léelos como un solo mensaje y responde UNA vez a todo, no una '
+      + 'vez por línea.',
   })
 
   for (const img of piezas.filter(p => p.tipo === 'IMAGEN' && p.archivo)) {
@@ -299,7 +353,7 @@ async function construirSistema(agente) {
 /** El hilo reciente, traducido a turnos de conversación. */
 async function construirHistorial(contacto) {
   const { rows } = await pool.query(
-    `SELECT direccion, texto FROM public.whatsapp_mensajes
+    `SELECT direccion, texto, enviado_por FROM public.whatsapp_mensajes
       WHERE contacto = $1 AND texto IS NOT NULL AND texto <> ''
       ORDER BY ocurrido_en DESC, id DESC
       LIMIT $2`,
@@ -309,11 +363,19 @@ async function construirHistorial(contacto) {
   const mensajes = []
   for (const m of rows.reverse()) {
     const role = m.direccion === 'IN' ? 'user' : 'assistant'
+    // Por la misma línea salen dos voces: el agente y el coordinador. Sin
+    // marcarlo, el modelo lee lo que escribió una persona como si lo hubiera
+    // dicho él — y da por suyos compromisos que no hizo, o repite lo que
+    // coordinación acaba de resolver. El prefijo es la única forma de que
+    // distinga, porque la API solo tiene dos roles.
+    const texto = role === 'assistant' && m.enviado_por
+      ? `[coordinación] ${m.texto}`
+      : m.texto
     // La API rechaza turnos consecutivos del mismo rol; se fusionan.
     if (mensajes.length && mensajes[mensajes.length - 1].role === role) {
-      mensajes[mensajes.length - 1].content += `\n${m.texto}`
+      mensajes[mensajes.length - 1].content += `\n${texto}`
     } else {
-      mensajes.push({ role, content: m.texto })
+      mensajes.push({ role, content: texto })
     }
   }
   // Tiene que empezar por el usuario.
@@ -341,54 +403,233 @@ async function agenteParaLinea(phoneNumberId) {
 }
 
 /**
+ * Conversaciones esperando respuesta, por número.
+ *
+ * ⚠️ Vive en memoria del proceso, y eso impone dos límites que hay que tener
+ * presentes:
+ *  1. **Un solo proceso.** Si algún día el backend corre con dos réplicas, cada
+ *     una tendría su propio mapa y la veterinaria recibiría dos respuestas. Hoy
+ *     es un contenedor único (`orbit-backend`); si eso cambia, esto se muda a la
+ *     base de datos ANTES.
+ *  2. **Un reinicio en mitad de la espera pierde ese turno.** La ventana son
+ *     segundos y el mensaje queda SIN LEER en la bandeja —el agente nunca apaga
+ *     ese badge—, así que lo ve un humano. Es una red de seguridad real, no una
+ *     suposición.
+ */
+const enEspera = new Map()
+
+/**
  * Punto de entrada desde el webhook. NUNCA lanza: si algo falla, la bandeja
  * sigue funcionando y el coordinador responde a mano — un agente caído no
  * puede tumbar la recepción de mensajes.
+ *
+ * No responde aquí: acusa recibo y programa. Lo que responde es `atender()`,
+ * cuando la veterinaria lleva `ESPERA_MS` sin escribir.
  */
-export async function responderSiAplica({ phoneNumberId, contacto, tipo }) {
+export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessageId }) {
   try {
-    // Solo texto. Un audio o una imagen entran a la bandeja y los ve un humano.
-    if (tipo && tipo !== 'text') return
+    const num = String(contacto || '').replace(/\D/g, '')
+    if (!num) return
 
+    // Las dos comprobaciones van ANTES de acusar recibo, y ese orden importa:
+    // marcar leído pinta el doble check AZUL en el teléfono de la veterinaria.
+    // Si después el agente se callara, ella vería su mensaje leído y sin
+    // respuesta — peor que no haberlo marcado. Solo se acusa lo que se va a
+    // contestar.
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return
 
-    // Tope por conversación: cuenta lo que YA respondió el agente aquí.
-    const { rows: [{ n }] } = await pool.query(
-      `SELECT count(*)::int AS n FROM public.agente_wa_ejecuciones
-        WHERE agente_id = $1 AND contacto = $2 AND origen = 'WHATSAPP' AND error IS NULL`,
-      [agente.id, contacto]
-    )
-    if (n >= agente.max_turnos) {
-      // Callarse sin más dejaba a la vet esperando: para ella el agente
-      // simplemente dejó de contestar. La etiqueta la pone en Novedades.
-      log(MOD, `tope de ${agente.max_turnos} alcanzado en ${contacto} — queda para un humano`)
-      await avisarQueQuedoSinRespuesta(contacto, `Llegó al tope de ${agente.max_turnos} respuestas en esta conversación`)
+    if (await laLlevaUnHumano(num)) {
+      log(MOD, `${num} la lleva una persona — el agente ni acusa recibo`)
       return
     }
 
-    let r = await ejecutar({ agente, contacto, origen: 'WHATSAPP' })
+    // Inmediato y sin await: el doble check azul y el "escribiendo…" son lo que
+    // convierte la espera en atención. Es cosmético — si falla, da igual.
+    acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
 
-    // Un reintento, y solo uno. La mayoría de los fallos son pasajeros (un 429,
-    // un corte de red); insistir más sería castigar a la vet con la espera.
-    if (r.error) {
-      log(MOD, `reintentando ${contacto} tras: ${r.error}`)
-      await new Promise(res => setTimeout(res, 1500))
-      r = await ejecutar({ agente, contacto, origen: 'WHATSAPP' })
-    }
+    const p = enEspera.get(num) || { tipos: new Set(), ejecutando: false, timer: null }
+    p.phoneNumberId = phoneNumberId
+    if (waMessageId) p.waMessageId = waMessageId
+    if (!p.desde) p.desde = Date.now()
+    p.tipos.add(tipo || 'text')
+    enEspera.set(num, p)
 
-    if (r.texto) {
-      await enviarTexto({ contacto, texto: r.texto, personalId: null })
-      return
-    }
+    // Si ya está respondiendo, no se programa nada: lo que llegue ahora se
+    // atiende en cuanto termine (ver el `finally` de `atender`). Sin esto se
+    // solaparían dos ejecuciones sobre la misma conversación.
+    if (p.ejecutando) return
 
-    // Llegar aquí es el fallo mudo: la vet escribió y no va a recibir nada.
-    // ANTES no dejaba rastro fuera de la bitácora, que nadie mira.
-    await avisarQueQuedoSinRespuesta(contacto, r.error || 'El agente no produjo respuesta')
+    if (p.timer) clearTimeout(p.timer)
+    // El silencio de siempre, pero sin pasarse del techo desde el primer
+    // mensaje: quien escribe sin pausas también merece respuesta.
+    const espera = Math.max(0, Math.min(ESPERA_MS, p.desde + ESPERA_MAX_MS - Date.now()))
+    p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
+    // Que un temporizador pendiente no impida al proceso apagarse limpio.
+    p.timer.unref?.()
   } catch (e) {
-    log(MOD, 'ERROR respondiendo a', contacto, '—', e.message)
-    await avisarQueQuedoSinRespuesta(contacto, e.message).catch(() => {})
+    log(MOD, 'ERROR programando respuesta a', contacto, '—', e.message)
   }
+}
+
+/**
+ * Atiende todo lo acumulado de un número. Nunca corre dos veces a la vez para
+ * el mismo contacto, y lo que llegue mientras responde se atiende después.
+ */
+async function atender(num) {
+  const p = enEspera.get(num)
+  if (!p || p.ejecutando) return
+
+  p.timer = null
+  p.ejecutando = true
+  // Se toma lo acumulado y se vacía: lo que entre a partir de ahora pertenece
+  // a la siguiente vuelta, no a esta — incluido el reloj del techo de espera.
+  const tipos = new Set(p.tipos)
+  p.tipos.clear()
+  p.desde = null
+
+  try {
+    await responder({ num, tipos, phoneNumberId: p.phoneNumberId, waMessageId: p.waMessageId })
+  } catch (e) {
+    log(MOD, 'ERROR atendiendo', num, '—', e.message)
+    await avisarQueQuedoSinRespuesta(num, e.message).catch(() => {})
+  } finally {
+    p.ejecutando = false
+    if (p.tipos.size) {
+      // Llegó algo mientras respondíamos. Se vuelve a esperar el silencio: si la
+      // vet sigue escribiendo, no la interrumpimos a media frase. Con el mismo
+      // techo que en la programación normal.
+      const espera = Math.max(0, Math.min(ESPERA_MS, (p.desde || Date.now()) + ESPERA_MAX_MS - Date.now()))
+      p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
+      p.timer.unref?.()
+    } else {
+      enEspera.delete(num)
+    }
+  }
+}
+
+/** Una respuesta completa a lo que se acumuló de un número. */
+async function responder({ num, tipos, phoneNumberId, waMessageId }) {
+  const agente = await agenteParaLinea(phoneNumberId)
+  if (!agente) return
+
+  // ── ¿La lleva una persona? ──
+  // Se vuelve a preguntar aquí, aunque ya se preguntó al programar: entre una
+  // cosa y otra pasan los segundos de espera, que es JUSTO cuando el coordinador
+  // ve el mensaje entrar y contesta. Sin esta segunda comprobación, el caso más
+  // probable de todos —los dos contestando— se colaría.
+  if (await laLlevaUnHumano(num)) {
+    log(MOD, `${num} la tomó una persona mientras esperábamos — el agente se aparta`)
+    return
+  }
+
+  // ── Lo que el agente no puede leer ──
+  // Antes se descartaba con un `return` mudo: la veterinaria mandaba una nota de
+  // voz y no pasaba absolutamente nada, ni respuesta ni rastro. Ahora se le
+  // contesta y la conversación entra en Novedades.
+  const noTexto = [...tipos].filter(t => t && t !== 'text')
+  if (noTexto.length) {
+    // `etiquetar` NO lanza si la etiqueta no existe: devuelve un 404 en el
+    // cuerpo. Sin mirarlo, una migración sin aplicar dejaría esto sin efecto y
+    // sin rastro — el mismo fallo mudo que estamos persiguiendo.
+    const et = await etiquetar({
+      contacto: num, clave: 'AUDIO_O_IMAGEN', origen: 'AGENTE',
+      motivo: `Llegó ${nombrarTipos(noTexto)} — el agente no puede leerlo`,
+    }).catch(e => ({ body: { ok: false, error: e.message } }))
+    if (!et.body?.ok) log(MOD, `NO se pudo marcar el adjunto de ${num} —`, et.body?.error)
+
+    const env = await enviarTexto({ contacto: num, texto: acuseDeAdjunto(noTexto), personalId: null })
+      .catch(e => ({ body: { ok: false, error: e.message } }))
+    if (!env.body?.ok) log(MOD, `NO se pudo avisar del adjunto a ${num} —`, env.body?.error)
+
+    log(MOD, `${num} envió ${nombrarTipos(noTexto)} — avisado y marcado para coordinación`)
+  }
+
+  // Si solo mandó adjuntos, ya está: el resto es cosa de la persona que lo abra.
+  if (!tipos.has('text')) return
+
+  // ── Tope de turnos, dentro de la ventana ──
+  const { rows: [{ n }] } = await pool.query(
+    `SELECT count(*)::int AS n FROM public.agente_wa_ejecuciones
+      WHERE agente_id = $1 AND contacto = $2 AND origen = 'WHATSAPP'
+        AND error IS NULL
+        AND creado_en > now() - ($3 || ' hours')::interval`,
+    [agente.id, num, VENTANA_TOPE_HORAS]
+  )
+  if (n >= agente.max_turnos) {
+    // Callarse sin más dejaba a la vet esperando: para ella el agente
+    // simplemente dejó de contestar. La etiqueta la pone en Novedades.
+    log(MOD, `tope de ${agente.max_turnos}/${VENTANA_TOPE_HORAS}h alcanzado en ${num} — queda para un humano`)
+    await avisarQueQuedoSinRespuesta(num,
+      `Llegó al tope de ${agente.max_turnos} respuestas en ${VENTANA_TOPE_HORAS} horas`)
+    return
+  }
+
+  // Refresca el "escribiendo…" (dura 25 s) justo antes de la parte lenta.
+  acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
+
+  let r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP' })
+
+  // Un reintento, y solo uno. La mayoría de los fallos son pasajeros (un 429,
+  // un corte de red); insistir más sería castigar a la vet con la espera.
+  if (r.error) {
+    log(MOD, `reintentando ${num} tras: ${r.error}`)
+    await new Promise(res => setTimeout(res, 1500))
+    r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP' })
+  }
+
+  if (r.texto) {
+    await enviarTexto({ contacto: num, texto: r.texto, personalId: null })
+    return
+  }
+
+  // Llegar aquí es el fallo mudo: la vet escribió y no va a recibir nada.
+  // ANTES no dejaba rastro fuera de la bitácora, que nadie mira.
+  await avisarQueQuedoSinRespuesta(num, r.error || 'El agente no produjo respuesta')
+}
+
+/**
+ * ¿Escribió una persona del equipo hace poco por esta conversación?
+ *
+ * Lo distingue `enviado_por`: el agente envía con NULL y el coordinador con su
+ * id. Es el mismo campo que ya usa la bandeja para mostrar quién respondió.
+ */
+async function laLlevaUnHumano(contacto) {
+  const { rowCount } = await pool.query(
+    `SELECT 1 FROM public.whatsapp_mensajes
+      WHERE contacto = $1 AND direccion = 'OUT' AND enviado_por IS NOT NULL
+        AND ocurrido_en > now() - ($2 || ' hours')::interval
+      LIMIT 1`,
+    [contacto, PAUSA_TRAS_HUMANO_HORAS]
+  )
+  return rowCount > 0
+}
+
+/** Cómo se llama en cristiano lo que llegó, para el aviso y la etiqueta. */
+function nombrarTipos(tipos) {
+  const NOMBRES = {
+    audio: 'una nota de voz', voice: 'una nota de voz',
+    image: 'una imagen', sticker: 'un sticker', video: 'un video',
+    document: 'un documento', location: 'una ubicación', contacts: 'un contacto',
+  }
+  const vistos = [...new Set(tipos.map(t => NOMBRES[t] || 'un archivo'))]
+  if (vistos.length === 1) return vistos[0]
+  return vistos.slice(0, -1).join(', ') + ' y ' + vistos[vistos.length - 1]
+}
+
+/**
+ * Lo que se le responde a la veterinaria cuando manda algo que el agente no
+ * puede leer. Decir la verdad —"no puedo oírlo"— es mejor que el silencio y
+ * mejor que fingir que se entendió.
+ */
+function acuseDeAdjunto(tipos) {
+  const soloVoz = tipos.every(t => t === 'audio' || t === 'voice')
+  const que = nombrarTipos(tipos)
+  return soloVoz
+    ? `Recibí ${que}, pero por aquí no puedo escucharla. Ya queda avisado el equipo y te responden en seguida. `
+      + 'Si prefieres, escríbeme por texto lo que necesitas y seguimos al momento.'
+    : `Recibí ${que}, pero por aquí no puedo abrirlo. Ya queda avisado el equipo y te responden en seguida. `
+      + 'Si prefieres, cuéntame por texto lo que necesitas y seguimos al momento.'
 }
 
 /**
@@ -400,10 +641,17 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo }) {
  */
 async function avisarQueQuedoSinRespuesta(contacto, motivo) {
   try {
-    await etiquetar({
+    const r = await etiquetar({
       contacto, clave: 'FALLO_AGENTE', origen: 'AGENTE',
       motivo: String(motivo || '').slice(0, 300),
     })
+    // `etiquetar` devuelve el error en el cuerpo en vez de lanzarlo: si la
+    // etiqueta no existiera, el `try` pasaría limpio y el aviso se perdería sin
+    // una sola línea de log. Justo lo que este aviso viene a evitar.
+    if (!r.body?.ok) {
+      log(MOD, `NO SE PUDO AVISAR del fallo de ${contacto} —`, r.body?.error, '— motivo original:', motivo)
+      return
+    }
     log(MOD, `${contacto} marcado para coordinación — ${motivo}`)
   } catch (e) {
     log(MOD, 'no se pudo marcar el fallo de', contacto, '—', e.message)

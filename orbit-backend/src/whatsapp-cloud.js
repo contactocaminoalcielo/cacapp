@@ -156,6 +156,55 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
   }
 }
 
+/**
+ * Le dice a WhatsApp que leímos el mensaje y que estamos escribiendo.
+ *
+ * ⚠️ NO confundir con `marcarLeido()`, que está justo debajo. Son dos cosas
+ * distintas que suenan igual:
+ *   · esto  → el doble check AZUL y el "escribiendo…" que ve la veterinaria
+ *   · aquel → `ultimo_leido_en`, el badge de no leídos de NUESTRA bandeja
+ * Mezclarlas fue el bug del 11-ago: el agente apagaba el badge de coordinación
+ * al responder. Aquí no se toca la base de datos a propósito — una conversación
+ * que atendió el agente sigue contando como no leída para el coordinador.
+ *
+ * El indicador dura hasta 25 s o hasta que se envía el mensaje, lo que pase
+ * antes; por eso se refresca justo antes de llamar al modelo.
+ *
+ * Nunca lanza y nunca bloquea: si Meta rechaza esto, la respuesta tiene que
+ * salir igual. Es cosmético — importante para la percepción, pero cosmético.
+ */
+export async function acusarLectura({ phoneNumberId, contacto, waMessageId, escribiendo = true }) {
+  const num = soloDigitos(contacto)
+  const token = process.env.WHATSAPP_ACCESS_TOKEN
+  if (!num || !waMessageId || !token) return false
+
+  const desde = phoneNumberId || primerPhoneIdPermitido()
+  if (!desde) return false
+
+  const version = process.env.WHATSAPP_API_VERSION || 'v26.0'
+  try {
+    const r = await fetch(`${GRAPH}/${version}/${desde}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: waMessageId,
+        ...(escribiendo ? { typing_indicator: { type: 'text' } } : {}),
+      }),
+    })
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}))
+      log(MOD, `acuse de lectura rechazado para ${num} —`, data?.error?.message || `Error ${r.status}`)
+      return false
+    }
+    return true
+  } catch (e) {
+    log(MOD, 'no se pudo acusar lectura a', num, '—', e.message)
+    return false
+  }
+}
+
 /** Marca la conversación como leída hasta ahora. */
 export async function marcarLeido({ contacto }) {
   const num = soloDigitos(contacto)

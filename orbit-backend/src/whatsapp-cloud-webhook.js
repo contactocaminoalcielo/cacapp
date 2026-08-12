@@ -317,8 +317,11 @@ async function normalizar(ev) {
       // sí mismo en bucle.
       // Va sin await a propósito: Meta reintenta si tardamos más de 5s, y el
       // agente puede tomarse varios segundos. `responderSiAplica` nunca lanza.
+      // `waMessageId` es lo que Meta pide para marcar leído y mostrar el
+      // "escribiendo…" — sin él la vet no ve señal de vida mientras se piensa.
       responderSiAplica({
         phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo,
+        waMessageId: ev.waMessageId,
       })
       return
     }
