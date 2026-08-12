@@ -164,7 +164,8 @@ const HERRAMIENTAS = [{
   input_schema: {
     type: 'object',
     properties: {
-      cliente_nombre:   { type: 'string', description: 'SOLO el nombre de la familia dueña de la mascota. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`.' },
+      cliente_nombre:   { type: 'string', description: 'SOLO el NOMBRE de pila de quien responde por la mascota. El apellido va aparte. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`.' },
+      cliente_apellido: { type: 'string', description: 'Apellido, SOLO si te dan nombre y apellido por separado ("Marta Gómez" → nombre "Marta", apellido "Gómez"). Si solo dicen "la familia Ruiz", eso va entero en `cliente_nombre` y este campo se deja vacío: los dos se concatenan al crear el cliente y repetirlo produce "Familia Ruiz Ruiz".' },
       cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA, solo dígitos con indicativo. Ej: 573001234567. Es a ese número al que se le mandan las fotos y el memorial: no pongas el de la clínica.' },
       mascota_nombre:   { type: 'string', description: 'Nombre de la mascota.' },
       mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave, Hámster, Cobayo, Reptil, Pez u Otro. Se valida contra el catálogo: la especie decide si la tarifa es por peso o única.' },
@@ -174,8 +175,13 @@ const HERRAMIENTAS = [{
       quien_paga:       { type: 'string', enum: ['veterinaria', 'propietario'], description: 'Quién paga el servicio. Pregúntalo SIEMPRE, no lo asumas: cambia toda la operación posterior.' },
       refrigeracion:    { type: 'boolean', description: '¿La clínica tiene posibilidad de refrigeración? Determina cuánto puede esperar el cuerpo.' },
       murio_de_cancer:  { type: 'boolean', description: '¿La mascota falleció por cáncer? Si fue así hay que notificarlo.' },
+      mascota_sexo:     { type: 'string', enum: ['macho', 'hembra'], description: 'Sexo de la mascota. Se usa al escribirle a la familia y en el certificado; si te lo dicen de pasada ("la gata", "el perrito"), tómalo de ahí sin volver a preguntar.' },
+      mascota_raza:     { type: 'string', description: 'Raza, si la mencionan. No la deduzcas.' },
       direccion:        { type: 'string', description: 'Dirección exacta de la recogida. OBLIGATORIA si la recogida es a domicilio.' },
+      ciudad:           { type: 'string', description: 'Ciudad o municipio de la recogida. OBLIGATORIA a domicilio: de ella sale el cobro del transporte, y si falta el sistema asume Bogotá y cobra $0. Pregúntala aunque parezca obvia.' },
       barrio:           { type: 'string', description: 'Barrio o punto de referencia.' },
+      localidad:        { type: 'string', description: 'Localidad, si es en Bogotá y la mencionan.' },
+      hora_aproximada:  { type: 'string', description: 'Hora o franja que pidan ("hoy antes de las 6", "mañana temprano"). No la prometas tú: solo recoge lo que ellos digan.' },
       veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
       notas:            { type: 'string', description: 'Indicaciones especiales, horarios preferidos, cualquier detalle relevante.' },
     },
@@ -336,6 +342,20 @@ async function resolverPlan(dicho) {
 }
 
 async function registrarSolicitud({ entrada, agente, contacto }) {
+  // El aliado NO se lo preguntamos al agente ni se lo dejamos elegir: se deriva
+  // del número desde el que escriben, que la bandeja ya cruza contra `aliados`.
+  // Así el agente sigue aislado (no consulta la operación) y la solicitud llega
+  // con vet asociada. Sin esto el Kanban convierte con `aliado_origen_id` NULL
+  // y `canal_entrada='DIRECTO'` (Kanban.jsx:865-867): la veterinaria pierde su
+  // comisión en silencio, que es justo lo contrario de para qué existe la línea.
+  //
+  // Va lo PRIMERO porque la validación de abajo lo necesita: con recogida en la
+  // clínica, la ciudad la aporta el aliado y no hay que pedirla.
+  const { rows: [conv] } = await pool.query(
+    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
+    [String(contacto || '').replace(/\D/g, '')]
+  )
+
   // ── La compuerta que el enlace de registro tiene y el chat no ──
   // Por el portal el sistema OBLIGA a elegir plan y a llenarlo todo. Por chat no
   // hay quien obligue, y lo que pasa de verdad es que se olvida el plan, el
@@ -357,6 +377,31 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   }
   if (entrada.recogida_en === 'domicilio' && !String(entrada.direccion || '').trim()) {
     falta.push('la dirección exacta de la casa, con punto de referencia')
+  }
+
+  // 🩸 CIUDAD — bug de dinero, silencioso. Al convertir, `Kanban.jsx` hace
+  // `convForm.ciudad || 'Bogotá'`: sin ciudad la recogida se da por bogotana y
+  // **el transporte se cobra en $0**. Es el mismo agujero de
+  // `bug_transporte_ciudad_sin_tarifa`, ahora por la puerta del agente.
+  //
+  // Recogiendo en la clínica la ciudad sale del aliado, así que solo hace falta
+  // preguntarla cuando no hay aliado que la aporte.
+  // Al convertir, el Kanban arma el nombre del cliente como `nombre + apellido`.
+  // Si vienen "Familia Ruiz" y "Ruiz" —que es lo que sale cuando la vet solo
+  // dice el apellido— el cliente queda como "Familia Ruiz Ruiz". Se descarta el
+  // apellido cuando ya está contenido en el nombre.
+  const nombrePila = String(entrada.cliente_nombre || '').trim()
+  const apellidoDicho = String(entrada.cliente_apellido || '').trim()
+  const apellido = apellidoDicho
+    && !sinTildes(nombrePila).includes(sinTildes(apellidoDicho))
+    ? apellidoDicho.slice(0, 120)
+    : null
+
+  const esDomicilio = entrada.recogida_en === 'domicilio'
+  const ciudadLaPoneElAliado = !esDomicilio && !!conv?.aliado_id
+  const ciudad = String(entrada.ciudad || '').trim().slice(0, 120) || null
+  if (!ciudadLaPoneElAliado && !ciudad) {
+    falta.push('la ciudad o municipio de la recogida (de ahí sale el cobro del transporte)')
   }
   if (!['veterinaria', 'propietario'].includes(entrada.quien_paga)) {
     falta.push('quién paga: la clínica o el propietario')
@@ -389,17 +434,6 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
     }
   }
 
-  // El aliado NO se lo preguntamos al agente ni se lo dejamos elegir: se deriva
-  // del número desde el que escriben, que la bandeja ya cruza contra `aliados`.
-  // Así el agente sigue aislado (no consulta la operación) y la solicitud llega
-  // con vet asociada. Sin esto el Kanban convierte con `aliado_origen_id` NULL
-  // y `canal_entrada='DIRECTO'` (Kanban.jsx:865-867): la veterinaria pierde su
-  // comisión en silencio, que es justo lo contrario de para qué existe la línea.
-  const { rows: [conv] } = await pool.query(
-    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
-    [String(contacto || '').replace(/\D/g, '')]
-  )
-
   // `origen` se queda en ALIADO — la solicitud viene de una veterinaria. Meter
   // un valor nuevo rompería el aviso a coordinación y, al convertir, la
   // comisión del aliado. El canal va en `agente_id`. Ver migración 088.
@@ -409,20 +443,37 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // si la tarifa es por peso o única.
   const { rows } = await pool.query(
     `INSERT INTO public.solicitudes_servicio
-       (cliente_nombre, cliente_whatsapp, mascota_nombre, mascota_peso_kg,
-        especie_id, plan_id, direccion, barrio, notas_cliente, origen, estado,
-        agente_id, aliado_id, aliado_nombre_otro, tipo_recogida)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ALIADO','PENDIENTE',$10,$11,$12,$13)
+       (cliente_nombre, cliente_apellido, cliente_whatsapp,
+        mascota_nombre, mascota_peso_kg, mascota_sexo, mascota_raza,
+        especie_id, plan_id,
+        ciudad, localidad, barrio, direccion, hora_aproximada,
+        cliente_ciudad, cliente_barrio, cliente_direccion,
+        notas_cliente, origen, estado, agente_id, aliado_id,
+        aliado_nombre_otro, tipo_recogida)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+             'ALIADO','PENDIENTE',$19,$20,$21,$22)
      RETURNING id`,
     [
       String(entrada.cliente_nombre).slice(0, 120),
+      apellido,
       tel.slice(0, 25),
       String(entrada.mascota_nombre).slice(0, 120),
       peso,
+      ['macho', 'hembra'].includes(entrada.mascota_sexo) ? entrada.mascota_sexo : null,
+      entrada.mascota_raza ? String(entrada.mascota_raza).slice(0, 120) : null,
       especie.id,
       plan.id,
-      entrada.direccion ? String(entrada.direccion).slice(0, 250) : null,
+      ciudad,
+      entrada.localidad ? String(entrada.localidad).slice(0, 120) : null,
       entrada.barrio ? String(entrada.barrio).slice(0, 120) : null,
+      entrada.direccion ? String(entrada.direccion).slice(0, 250) : null,
+      entrada.hora_aproximada ? String(entrada.hora_aproximada).slice(0, 120) : null,
+      // Los `cliente_*` son los datos de la FAMILIA, y solo se conocen cuando la
+      // recogida es en su casa. Recogiendo en la clínica, esa dirección es la de
+      // la veterinaria: copiarla al cliente le inventaría un domicilio.
+      esDomicilio ? ciudad : null,
+      esDomicilio && entrada.barrio ? String(entrada.barrio).slice(0, 120) : null,
+      esDomicilio && entrada.direccion ? String(entrada.direccion).slice(0, 250) : null,
       [
         `Paga: ${entrada.quien_paga === 'veterinaria' ? 'la veterinaria' : 'el propietario'}.`,
         `Refrigeración en la clínica: ${entrada.refrigeracion ? 'SÍ' : 'NO'}.`,
