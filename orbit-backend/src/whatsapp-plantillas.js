@@ -227,6 +227,140 @@ export async function borrarPlantilla({ nombre }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Qué dato de Orbit va en cada variable (migración 097)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Catálogo CERRADO de lo que puede ir en un {{n}}.
+ *
+ * Es una lista fija a propósito. La alternativa —guardar la expresión que
+ * escriba quien edita la plantilla— sería dejar que se escriban consultas desde
+ * una pantalla; aquí lo que se guarda es una clave de esta tabla y nada más.
+ *
+ * `col` es el alias que devuelve `RESOLVER`, no una columna suelta: si algún día
+ * cambia el modelo de datos, se arregla la consulta y las plantillas siguen
+ * funcionando sin tocarlas.
+ */
+const CAMPOS = [
+  { clave: 'mascota.nombre',    etiqueta: 'Mascota — nombre',            col: 'mascota_nombre',    ejemplo: 'Toby' },
+  { clave: 'mascota.especie',   etiqueta: 'Mascota — especie',           col: 'mascota_especie',   ejemplo: 'Perro' },
+  { clave: 'mascota.peso',      etiqueta: 'Mascota — peso (kg)',         col: 'mascota_peso',      ejemplo: '18' },
+  { clave: 'cliente.nombre',    etiqueta: 'Familia — nombre',            col: 'cliente_nombre',    ejemplo: 'Marta' },
+  { clave: 'cliente.completo',  etiqueta: 'Familia — nombre y apellido', col: 'cliente_completo',  ejemplo: 'Marta Gómez' },
+  { clave: 'cliente.whatsapp',  etiqueta: 'Familia — WhatsApp',          col: 'cliente_whatsapp',  ejemplo: '573001234567' },
+  { clave: 'plan.nombre',       etiqueta: 'Plan contratado',             col: 'plan_nombre',       ejemplo: 'Standard' },
+  { clave: 'aliado.nombre',     etiqueta: 'Veterinaria aliada',          col: 'aliado_nombre',     ejemplo: 'Veterinaria Patitas' },
+  { clave: 'servicio.codigo',   etiqueta: 'Código de fotos',             col: 'codigo_fotos',      ejemplo: 'AB12CD' },
+  { clave: 'servicio.estado',   etiqueta: 'Estado del servicio',         col: 'estado',            ejemplo: 'EN_PRODUCCION' },
+  { clave: 'servicio.entrega',  etiqueta: 'Fecha límite de entrega',     col: 'fecha_limite_entrega', ejemplo: '2026-08-20' },
+]
+
+const campoPorClave = c => CAMPOS.find(x => x.clave === c)
+
+/**
+ * Todo lo que un servicio puede aportar, en una sola fila.
+ *
+ * El cliente cuelga de la MASCOTA, no del servicio — por eso el join va
+ * `servicios → mascotas → clientes` y no directo.
+ */
+const RESOLVER = `
+  SELECT m.nombre                                   AS mascota_nombre,
+         e.nombre                                   AS mascota_especie,
+         m.peso_kg::text                            AS mascota_peso,
+         c.nombre                                   AS cliente_nombre,
+         TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS cliente_completo,
+         c.whatsapp                                 AS cliente_whatsapp,
+         p.nombre                                   AS plan_nombre,
+         a.nombre                                   AS aliado_nombre,
+         s.codigo_fotos                             AS codigo_fotos,
+         s.estado                                   AS estado,
+         s.fecha_limite_entrega::text               AS fecha_limite_entrega
+    FROM public.servicios s
+    LEFT JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+    LEFT JOIN public.especies e ON e.id = m.especie_id
+    LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+    LEFT JOIN public.planes   p ON p.id = s.plan_id
+    LEFT JOIN public.aliados  a ON a.id_aliado = s.aliado_origen_id
+   WHERE s.id = $1`
+
+export function camposDisponibles() {
+  return { status: 200, body: { ok: true, campos: CAMPOS.map(({ col, ...c }) => c) } }
+}
+
+export async function variablesDe({ plantilla, idioma = 'es_MX' }) {
+  const { rows } = await pool.query(
+    `SELECT destino, posicion, campo FROM public.whatsapp_plantilla_variables
+      WHERE plantilla = $1 AND idioma = $2 ORDER BY destino, posicion`,
+    [plantilla, idioma]
+  )
+  return { status: 200, body: { ok: true, variables: rows } }
+}
+
+/** Reemplaza el mapeo entero: es más simple de razonar que ir campo por campo. */
+export async function guardarVariables({ plantilla, idioma = 'es_MX', variables = [], personalId = null }) {
+  if (!NOMBRE_VALIDO.test(String(plantilla || ''))) {
+    return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
+  }
+  const malo = variables.find(v => !campoPorClave(v?.campo))
+  if (malo) {
+    return { status: 422, body: { ok: false, error: `El dato "${malo.campo}" no está en el catálogo` } }
+  }
+
+  const cliente = await pool.connect()
+  try {
+    await cliente.query('BEGIN')
+    await cliente.query(
+      `DELETE FROM public.whatsapp_plantilla_variables WHERE plantilla = $1 AND idioma = $2`,
+      [plantilla, idioma]
+    )
+    for (const v of variables) {
+      await cliente.query(
+        `INSERT INTO public.whatsapp_plantilla_variables (plantilla, idioma, destino, posicion, campo, creado_por)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [plantilla, idioma, v.destino || 'BODY', Number(v.posicion), v.campo, personalId]
+      )
+    }
+    await cliente.query('COMMIT')
+    log(MOD, `${plantilla}: ${variables.length} variable(s) asignada(s)`)
+    return { status: 200, body: { ok: true } }
+  } catch (e) {
+    await cliente.query('ROLLBACK').catch(() => {})
+    return { status: 500, body: { ok: false, error: e.message } }
+  } finally {
+    cliente.release()
+  }
+}
+
+/**
+ * Los valores de un servicio para una plantilla, en el orden de sus {{n}}.
+ *
+ * Devuelve también los huecos SIN asignar: mandar una plantilla con un {{2}}
+ * vacío le llega a la persona con un espacio en blanco en mitad de la frase, y
+ * es mejor decirlo antes de enviar que después.
+ */
+export async function valoresPara({ plantilla, idioma = 'es_MX', servicioId }) {
+  const { body: { variables } } = await variablesDe({ plantilla, idioma })
+  if (!variables.length) {
+    return { status: 200, body: { ok: true, variables: [], valores: {}, sinAsignar: [] } }
+  }
+
+  const { rows: [datos] } = await pool.query(RESOLVER, [servicioId])
+  if (!datos) return { status: 404, body: { ok: false, error: 'No se encontró ese servicio' } }
+
+  const valores = {}
+  const sinAsignar = []
+  for (const v of variables) {
+    const campo = campoPorClave(v.campo)
+    const valor = campo ? datos[campo.col] : null
+    valores[`${v.destino}:${v.posicion}`] = valor ?? ''
+    if (valor === null || valor === undefined || valor === '') {
+      sinAsignar.push(`${campo?.etiqueta || v.campo} (${v.destino} {{${v.posicion}}})`)
+    }
+  }
+  return { status: 200, body: { ok: true, variables, valores, sinAsignar } }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Enviar
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -238,8 +372,28 @@ export async function borrarPlantilla({ nombre }) {
  * `variables` son los valores de {{1}}, {{2}}… en orden. `variablesBoton` son
  * los del botón con enlace dinámico, si lo tiene.
  */
-export async function enviarPlantilla({ contacto, nombre, idioma = 'es_MX', variables = [], variablesBoton = [], personalId = null }) {
-  const num = String(contacto || '').replace(/\D/g, '')
+export async function enviarPlantilla({ contacto, nombre, idioma = 'es_MX', variables = [], variablesBoton = [], servicioId = null, personalId = null }) {
+  let num = String(contacto || '').replace(/\D/g, '')
+
+  // Con un servicio, los valores salen de Orbit y no de lo que teclee nadie —
+  // que es el punto de asignar variables (migración 097). Lo que venga escrito a
+  // mano se respeta solo donde el mapeo no llega.
+  if (servicioId) {
+    const r = await valoresPara({ plantilla: nombre, idioma, servicioId })
+    if (!r.body.ok) return { status: r.status, body: r.body }
+    const auto = r.body.valores
+    const tope = (d) => Math.max(0, ...Object.keys(auto)
+      .filter(k => k.startsWith(d + ':')).map(k => Number(k.split(':')[1])))
+    for (let i = 1; i <= tope('BODY'); i++) {
+      if (auto[`BODY:${i}`] !== undefined) variables[i - 1] = auto[`BODY:${i}`]
+    }
+    for (let i = 1; i <= tope('BUTTON'); i++) {
+      if (auto[`BUTTON:${i}`] !== undefined) variablesBoton[i - 1] = auto[`BUTTON:${i}`]
+    }
+    // Si no dieron número, se usa el de la familia de ese servicio.
+    if (num.length < 10 && auto['__whatsapp']) num = String(auto['__whatsapp']).replace(/\D/g, '')
+  }
+
   if (num.length < 10) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
   const token = process.env.WHATSAPP_ACCESS_TOKEN

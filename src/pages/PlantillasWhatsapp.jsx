@@ -23,10 +23,11 @@ import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
   ESTADOS, CATEGORIAS, IDIOMAS, variablesDe, componente,
   variablesDelCuerpo, variablesDelBoton, conValores,
+  camposDisponibles, variablesDePlantilla, guardarVariables, valoresDeServicio,
 } from '@/lib/plantillasWa'
 import {
   Plus, Loader2, RefreshCw, Trash2, Send, X, AlertTriangle, MessageSquare,
-  Link2, Reply, Search,
+  Link2, Reply, Search, Database, Check,
 } from 'lucide-react'
 
 const VACIA = {
@@ -43,6 +44,14 @@ export default function PlantillasWhatsapp() {
   const [busqueda, setBusqueda] = useState('')
   const [creando, setCreando] = useState(false)
   const [enviando, setEnviando] = useState(null)
+  const [mapeando, setMapeando] = useState(null)
+  const [campos, setCampos] = useState([])
+
+  // El catálogo de datos de Orbit que pueden ir en un {{n}}. Es cerrado y viene
+  // del backend: la pantalla no inventa campos.
+  useEffect(() => {
+    camposDisponibles().then(r => setCampos(r.campos || [])).catch(() => {})
+  }, [])
 
   const cargar = useCallback(async (conSpinner = true) => {
     if (conSpinner) setCargando(true)
@@ -142,7 +151,8 @@ export default function PlantillasWhatsapp() {
           <div className="grid gap-3 sm:grid-cols-2">
             {filtradas.map(p => (
               <Tarjeta key={p.id || p.name} p={p}
-                       onEnviar={() => setEnviando(p)} onBorrar={() => quitar(p)} />
+                       onEnviar={() => setEnviando(p)} onBorrar={() => quitar(p)}
+                       onMapear={() => setMapeando(p)} />
             ))}
           </div>
         )}
@@ -156,6 +166,9 @@ export default function PlantillasWhatsapp() {
         {enviando && (
           <Enviar p={enviando} onCerrar={() => setEnviando(null)} />
         )}
+        {mapeando && (
+          <Mapeo p={mapeando} campos={campos} onCerrar={() => setMapeando(null)} />
+        )}
       </AnimatePresence>
     </>
   )
@@ -163,7 +176,7 @@ export default function PlantillasWhatsapp() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Tarjeta({ p, onEnviar, onBorrar }) {
+function Tarjeta({ p, onEnviar, onBorrar, onMapear }) {
   const est = ESTADOS[p.status] || { label: p.status, clase: 'bg-gray-100 text-gray-600 border-gray-200' }
   const cuerpo = componente(p, 'BODY')?.text || ''
   const vars = variablesDelCuerpo(p)
@@ -207,6 +220,11 @@ function Tarjeta({ p, onEnviar, onBorrar }) {
         </span>
 
         <div className="ml-auto flex gap-1">
+          {vars.length > 0 && (
+            <Button size="sm" variant="outline" onClick={onMapear} title="Decir qué dato de Orbit va en cada variable">
+              <Database className="w-3.5 h-3.5 mr-1" /> Datos
+            </Button>
+          )}
           {p.status === 'APPROVED' && (
             <Button size="sm" variant="outline" onClick={onEnviar}>
               <Send className="w-3.5 h-3.5 mr-1" /> Enviar
@@ -454,6 +472,35 @@ function Enviar({ p, onCerrar }) {
   const [valores, setValores] = useState([])
   const [valoresBoton, setValoresBoton] = useState([])
   const [enviando, setEnviando] = useState(false)
+  const [servicio, setServicio] = useState('')
+  const [trayendo, setTrayendo] = useState(false)
+  const [avisoServicio, setAvisoServicio] = useState(null)
+
+  // Rellena desde Orbit lo que esté asignado. Lo que no lo esté se queda como
+  // está: el mapeo manda donde llega, y la mano manda donde el mapeo no llega.
+  async function traer() {
+    setTrayendo(true); setAvisoServicio(null)
+    try {
+      const r = await valoresDeServicio(p.name, servicio.trim(), p.language)
+      const cuerpo = [], boton = []
+      for (const [k, v] of Object.entries(r.valores || {})) {
+        const [destino, n] = k.split(':')
+        if (destino === 'BODY') cuerpo[Number(n) - 1] = v
+        if (destino === 'BUTTON') boton[Number(n) - 1] = v
+      }
+      if (cuerpo.length) setValores(prev => cuerpo.map((v, i) => v || prev[i] || ''))
+      if (boton.length) setValoresBoton(prev => boton.map((v, i) => v || prev[i] || ''))
+      if (!r.variables?.length) {
+        setAvisoServicio('Esta plantilla todavía no tiene datos asignados: usa el botón "Datos" en su tarjeta.')
+      } else if (r.sinAsignar?.length) {
+        setAvisoServicio(`Ese servicio no tiene: ${r.sinAsignar.join(', ')}. Complétalo a mano.`)
+      }
+    } catch (e) {
+      setAvisoServicio(e.message)
+    } finally {
+      setTrayendo(false)
+    }
+  }
 
   const vars = variablesDelCuerpo(p)
   const varsBoton = variablesDelBoton(p)
@@ -481,6 +528,18 @@ function Enviar({ p, onCerrar }) {
   return (
     <Modal titulo={`Enviar "${p.name}"`} onCerrar={onCerrar} ancho="max-w-lg">
       <div className="space-y-4">
+        <Campo etiqueta="Traer datos de un servicio (opcional)"
+               ayuda="Pega el id del servicio y las variables que tengan un dato asignado se rellenan solas.">
+          <div className="flex gap-2">
+            <Input value={servicio} onChange={e => setServicio(e.target.value)}
+                   placeholder="id del servicio" className="font-mono text-[12px]" />
+            <Button variant="outline" onClick={traer} disabled={!servicio.trim() || trayendo}>
+              {trayendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+            </Button>
+          </div>
+          {avisoServicio && <p className="text-[11px] text-amber-700 mt-1">{avisoServicio}</p>}
+        </Campo>
+
         <Campo etiqueta="Número de destino" ayuda="Solo dígitos, con indicativo. Ej: 573001234567">
           <Input value={contacto} onChange={e => setContacto(e.target.value)} placeholder="573001234567" />
         </Campo>
@@ -516,6 +575,113 @@ function Enviar({ p, onCerrar }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Qué dato de Orbit rellena cada {{n}}.
+ *
+ * Es lo que convierte una plantilla en reutilizable de verdad: sin esto hay que
+ * teclear el nombre de la mascota en cada envío, y de ahí a crear una plantilla
+ * por mascota hay un paso — que es exactamente lo que pasó con las 251 de la
+ * cuenta vieja.
+ */
+function Mapeo({ p, campos, onCerrar }) {
+  const { alert: showAlert } = useConfirm()
+  const [asignado, setAsignado] = useState({})
+  const [cargando, setCargando] = useState(true)
+  const [guardando, setGuardando] = useState(false)
+
+  const varsCuerpo = variablesDelCuerpo(p)
+  const varsBoton = variablesDelBoton(p)
+  const cuerpo = componente(p, 'BODY')?.text || ''
+
+  useEffect(() => {
+    variablesDePlantilla(p.name, p.language)
+      .then(r => {
+        const m = {}
+        for (const v of r.variables || []) m[`${v.destino}:${v.posicion}`] = v.campo
+        setAsignado(m)
+      })
+      .catch(() => {})
+      .finally(() => setCargando(false))
+  }, [p.name, p.language])
+
+  async function guardar() {
+    setGuardando(true)
+    try {
+      const variables = Object.entries(asignado)
+        .filter(([, campo]) => campo)
+        .map(([k, campo]) => {
+          const [destino, posicion] = k.split(':')
+          return { destino, posicion: Number(posicion), campo }
+        })
+      await guardarVariables(p.name, p.language, variables)
+      onCerrar()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo guardar' })
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  const fila = (destino, n) => {
+    const k = `${destino}:${n}`
+    return (
+      <div key={k} className="flex items-center gap-2">
+        <span className="font-mono text-[12px] text-[#1A5CD8] w-16 shrink-0">
+          {destino === 'BUTTON' ? '🔗' : ''}{`{{${n}}}`}
+        </span>
+        <select value={asignado[k] || ''}
+                onChange={e => setAsignado(a => ({ ...a, [k]: e.target.value }))}
+                className="flex-1 h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
+          <option value="">— se escribe a mano al enviar —</option>
+          {campos.map(c => <option key={c.clave} value={c.clave}>{c.etiqueta}</option>)}
+        </select>
+      </div>
+    )
+  }
+
+  const ejemploValores = varsCuerpo.map(n => {
+    const c = campos.find(x => x.clave === asignado[`BODY:${n}`])
+    return c ? c.ejemplo : null
+  })
+
+  return (
+    <Modal titulo="Qué dato va en cada variable" onCerrar={onCerrar}>
+      {cargando ? (
+        <div className="flex justify-center py-10 text-gray-400"><Loader2 className="w-5 h-5 animate-spin" /></div>
+      ) : (
+        <div className="space-y-4">
+          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+            <p className="text-[12.5px] text-gray-700 whitespace-pre-wrap">{cuerpo}</p>
+          </div>
+
+          <p className="text-[11.5px] text-gray-500">
+            Asigna un dato de Orbit a cada hueco y al enviar se rellenan solos desde el
+            servicio. Lo que dejes sin asignar habrá que escribirlo a mano cada vez.
+          </p>
+
+          <div className="space-y-2">
+            {varsCuerpo.map(n => fila('BODY', n))}
+            {varsBoton.map(n => fila('BUTTON', n))}
+          </div>
+
+          <div>
+            <p className="text-[11.5px] font-semibold text-gray-500 mb-1.5">Ejemplo con datos reales</p>
+            <VistaPrevia p={p} valores={ejemploValores} />
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-gray-100">
+        <Button variant="outline" onClick={onCerrar}>Cancelar</Button>
+        <Button onClick={guardar} disabled={guardando || cargando}>
+          {guardando ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}
+          Guardar
+        </Button>
+      </div>
+    </Modal>
+  )
+}
 
 function Campo({ etiqueta, ayuda, children }) {
   return (

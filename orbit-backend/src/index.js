@@ -30,6 +30,7 @@ import {
 import { leerMedia } from './whatsapp-media.js'
 import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
+  camposDisponibles, variablesDe, guardarVariables, valoresPara,
 } from './whatsapp-plantillas.js'
 import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
@@ -213,6 +214,40 @@ app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, 
     const r = await borrarPlantilla({ nombre: req.params.nombre })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/borrar', e) }
+})
+
+// Qué dato de Orbit va en cada {{n}} (migración 097). El catálogo es cerrado:
+// se guarda una clave, nunca una expresión escrita desde la pantalla.
+app.get('/whatsapp/plantillas-campos', requireAuth, rolBandeja, (_req, res) => {
+  const r = camposDisponibles()
+  res.status(r.status).json(r.body)
+})
+
+app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await variablesDe({ plantilla: req.params.nombre, idioma: req.query.idioma })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/variables', e) }
+})
+
+app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await guardarVariables({
+      plantilla: req.params.nombre, idioma: req.body?.idioma,
+      variables: Array.isArray(req.body?.variables) ? req.body.variables : [],
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/guardar-variables', e) }
+})
+
+app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await valoresPara({
+      plantilla: req.params.nombre, idioma: req.query.idioma, servicioId: req.params.servicioId,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/valores', e) }
 })
 
 app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (req, res) => {

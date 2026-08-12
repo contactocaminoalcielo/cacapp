@@ -88,3 +88,25 @@ export function conValores(texto, valores = []) {
     return v ? String(v) : `{{${n}}}`
   })
 }
+
+// ── Qué dato de Orbit va en cada variable (migración 097) ───────────────────
+// Sin esto hay que teclear los valores en cada envío, y es justo lo que lleva a
+// crear una plantilla por mascota con el texto quemado.
+
+export function camposDisponibles() {
+  return orbitApi('/whatsapp/plantillas-campos')
+}
+
+export function variablesDePlantilla(nombre, idioma = 'es_MX') {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/variables?idioma=${idioma}`)
+}
+
+export function guardarVariables(nombre, idioma, variables) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/variables`, {
+    method: 'PUT', body: { idioma, variables },
+  })
+}
+
+export function valoresDeServicio(nombre, servicioId, idioma = 'es_MX') {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/valores/${servicioId}?idioma=${idioma}`)
+}
