@@ -136,11 +136,19 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
     // el LIMIT corta los más viejos, que es lo que se quiere. Con ASC cortaría
     // los más nuevos y el hilo se quedaría sin lo recién llegado.
     pool.query(
+      // Los BYTES del adjunto no viajan aquí: solo si hay y de qué tipo. El hilo
+      // se recarga con el polling de la bandeja, y mandar las fotos en cada
+      // vuelta serían megabytes por refresco. La pantalla las pide una a una.
       `SELECT m.id, m.direccion, m.tipo, m.texto, m.estado, m.estado_en, m.error,
               m.ocurrido_en, m.wa_message_id,
-              TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS enviado_por_nombre
+              TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS enviado_por_nombre,
+              (md.archivo IS NOT NULL) AS tiene_archivo,
+              md.mime  AS archivo_mime,
+              md.bytes AS archivo_bytes,
+              md.error AS archivo_error
          FROM public.whatsapp_mensajes m
          LEFT JOIN public.personal p ON p.id = m.enviado_por
+         LEFT JOIN public.whatsapp_media md ON md.mensaje_id = m.id
         WHERE m.contacto = $1
         ORDER BY m.ocurrido_en DESC, m.id DESC
         LIMIT $2`,

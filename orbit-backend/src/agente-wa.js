@@ -11,6 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
 import { enviarTexto, etiquetar, acusarLectura } from './whatsapp-cloud.js'
+import { imagenesRecientes, revisarImagenes } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
 const MOD = '[agente-wa]'
@@ -20,6 +21,16 @@ const HISTORIAL = 20
 
 /** Tope de vueltas del ciclo de herramientas dentro de UNA respuesta. */
 const MAX_VUELTAS = 5
+
+/**
+ * Cuántas fotos de la conversación se le ponen delante al modelo.
+ *
+ * Dos, y no más, por dinero: cada imagen son ~1.500 tokens y el historial **no
+ * se cachea** (lo cacheado es el contexto fijo), así que una foto no se paga una
+ * vez — se vuelve a pagar en cada turno que siga viva en la ventana. Con las dos
+ * últimas alcanza: la veterinaria pregunta por lo que acaba de mandar.
+ */
+const MAX_IMAGENES = 2
 
 /**
  * Cuánto se espera, tras el último mensaje, a que la veterinaria termine de
@@ -329,7 +340,15 @@ async function construirSistema(agente) {
       + 'eso por bueno.\n\n'
       + 'La veterinaria suele escribir en varios mensajes cortos seguidos. Te llegan '
       + 'todos juntos: léelos como un solo mensaje y responde UNA vez a todo, no una '
-      + 'vez por línea.',
+      + 'vez por línea.\n\n'
+      + 'FOTOS. Si te adjuntan una imagen, la estás viendo de verdad: comenta lo que '
+      + 'ves y sigue la conversación con naturalidad. Si en cambio lees "[imagen]", '
+      + '"[audio]", "[documento]" o similar SIN que venga el archivo, eso es algo que '
+      + 'NO puedes ver ni oír: no supongas su contenido, dilo y pásalo a una persona. '
+      + 'Con las fotos ten dos cuidados: no diagnostiques ni opines sobre el estado del '
+      + 'cuerpo de la mascota —eso es del equipo, y a la familia le duele—, y si la '
+      + 'imagen trae datos que hay que registrar (una dirección escrita a mano, un peso '
+      + 'en una báscula), léelos en voz alta y pide que te los confirmen antes de usarlos.',
   })
 
   for (const img of piezas.filter(p => p.tipo === 'IMAGEN' && p.archivo)) {
@@ -353,12 +372,23 @@ async function construirSistema(agente) {
 /** El hilo reciente, traducido a turnos de conversación. */
 async function construirHistorial(contacto) {
   const { rows } = await pool.query(
-    `SELECT direccion, texto, enviado_por FROM public.whatsapp_mensajes
+    `SELECT id, direccion, texto, enviado_por FROM public.whatsapp_mensajes
       WHERE contacto = $1 AND texto IS NOT NULL AND texto <> ''
       ORDER BY ocurrido_en DESC, id DESC
       LIMIT $2`,
     [contacto, HISTORIAL]
   )
+
+  // Las fotos que el modelo puede mirar, indexadas por mensaje. Vienen ya
+  // limitadas a las últimas: cada imagen son ~1.500 tokens y el historial NO se
+  // cachea, así que una foto vieja se vuelve a pagar en CADA turno siguiente.
+  const fotos = new Map()
+  for (const f of await imagenesRecientes(contacto, MAX_IMAGENES)) {
+    fotos.set(Number(f.mensaje_id), {
+      type: 'image',
+      source: { type: 'base64', media_type: f.mime, data: f.archivo.toString('base64') },
+    })
+  }
 
   const mensajes = []
   for (const m of rows.reverse()) {
@@ -371,16 +401,35 @@ async function construirHistorial(contacto) {
     const texto = role === 'assistant' && m.enviado_por
       ? `[coordinación] ${m.texto}`
       : m.texto
-    // La API rechaza turnos consecutivos del mismo rol; se fusionan.
-    if (mensajes.length && mensajes[mensajes.length - 1].role === role) {
-      mensajes[mensajes.length - 1].content += `\n${texto}`
+
+    const foto = fotos.get(Number(m.id))
+    // Con foto, el turno deja de ser una cadena y pasa a ser bloques. Van
+    // imagen primero y pie después: es el orden que recomienda la API y el que
+    // lee natural — se mira la foto y luego lo que dijeron de ella.
+    const partes = foto
+      ? [foto, { type: 'text', text: texto }]
+      : texto
+
+    // La API rechaza turnos consecutivos del mismo rol; se fusionan. Con
+    // bloques de por medio, fusionar es concatenar listas, no cadenas: sumar
+    // una imagen a un string la convertiría en "[object Object]" y el turno se
+    // enviaría sin la foto y sin un solo error.
+    const ultimo = mensajes[mensajes.length - 1]
+    if (ultimo && ultimo.role === role) {
+      ultimo.content = [...aBloques(ultimo.content), ...aBloques(partes)]
     } else {
-      mensajes.push({ role, content: texto })
+      mensajes.push({ role, content: partes })
     }
   }
   // Tiene que empezar por el usuario.
   while (mensajes.length && mensajes[0].role !== 'user') mensajes.shift()
   return mensajes
+}
+
+/** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
+function aBloques(contenido) {
+  if (Array.isArray(contenido)) return contenido
+  return [{ type: 'text', text: String(contenido) }]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -426,7 +475,7 @@ const enEspera = new Map()
  * No responde aquí: acusa recibo y programa. Lo que responde es `atender()`,
  * cuando la veterinaria lleva `ESPERA_MS` sin escribir.
  */
-export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessageId }) {
+export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessageId, mensajeId }) {
   try {
     const num = String(contacto || '').replace(/\D/g, '')
     if (!num) return
@@ -448,11 +497,15 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // convierte la espera en atención. Es cosmético — si falla, da igual.
     acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
 
-    const p = enEspera.get(num) || { tipos: new Set(), ejecutando: false, timer: null }
+    const p = enEspera.get(num) || { tipos: new Set(), ids: [], ejecutando: false, timer: null }
     p.phoneNumberId = phoneNumberId
     if (waMessageId) p.waMessageId = waMessageId
     if (!p.desde) p.desde = Date.now()
     p.tipos.add(tipo || 'text')
+    // Los ids de ESTA tanda: con ellos se sabe qué fotos concretas llegaron y
+    // cuáles se pudieron bajar, en vez de preguntar "¿hay alguna foto reciente?"
+    // y acertar por casualidad.
+    if (mensajeId) p.ids.push(mensajeId)
     enEspera.set(num, p)
 
     // Si ya está respondiendo, no se programa nada: lo que llegue ahora se
@@ -485,11 +538,13 @@ async function atender(num) {
   // Se toma lo acumulado y se vacía: lo que entre a partir de ahora pertenece
   // a la siguiente vuelta, no a esta — incluido el reloj del techo de espera.
   const tipos = new Set(p.tipos)
+  const mensajeIds = p.ids.slice()
   p.tipos.clear()
+  p.ids.length = 0
   p.desde = null
 
   try {
-    await responder({ num, tipos, phoneNumberId: p.phoneNumberId, waMessageId: p.waMessageId })
+    await responder({ num, tipos, mensajeIds, phoneNumberId: p.phoneNumberId, waMessageId: p.waMessageId })
   } catch (e) {
     log(MOD, 'ERROR atendiendo', num, '—', e.message)
     await avisarQueQuedoSinRespuesta(num, e.message).catch(() => {})
@@ -509,7 +564,7 @@ async function atender(num) {
 }
 
 /** Una respuesta completa a lo que se acumuló de un número. */
-async function responder({ num, tipos, phoneNumberId, waMessageId }) {
+async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessageId }) {
   const agente = await agenteParaLinea(phoneNumberId)
   if (!agente) return
 
@@ -527,7 +582,24 @@ async function responder({ num, tipos, phoneNumberId, waMessageId }) {
   // Antes se descartaba con un `return` mudo: la veterinaria mandaba una nota de
   // voz y no pasaba absolutamente nada, ni respuesta ni rastro. Ahora se le
   // contesta y la conversación entra en Novedades.
-  const noTexto = [...tipos].filter(t => t && t !== 'text')
+  //
+  // Las FOTOS son la excepción desde la migración 094: el modelo sí las ve, así
+  // que no se piden disculpas por ellas — se responden. Pero solo si de verdad
+  // se pudo bajar el archivo: si la descarga falló, la foto no está delante del
+  // modelo y hay que tratarla como lo que es, algo que no puede ver. Dar por
+  // hecho que está sería la peor versión de esto: contestar sobre una imagen
+  // imaginaria.
+  let noTexto = [...tipos].filter(t => t && t !== 'text')
+  let veLaFoto = false
+  if (noTexto.includes('image')) {
+    const { visibles, fallidas } = await revisarImagenes(mensajeIds).catch(() => ({ visibles: 0, fallidas: 1 }))
+    veLaFoto = visibles > 0
+    // Solo se pide perdón por las que NO se pudieron bajar. Si de dos fotos una
+    // llegó y la otra no, pasan las dos cosas: se responde sobre la que se ve y
+    // se avisa de la que no.
+    if (!fallidas) noTexto = noTexto.filter(t => t !== 'image')
+  }
+
   if (noTexto.length) {
     // `etiquetar` NO lanza si la etiqueta no existe: devuelve un 404 en el
     // cuerpo. Sin mirarlo, una migración sin aplicar dejaría esto sin efecto y
@@ -545,8 +617,10 @@ async function responder({ num, tipos, phoneNumberId, waMessageId }) {
     log(MOD, `${num} envió ${nombrarTipos(noTexto)} — avisado y marcado para coordinación`)
   }
 
-  // Si solo mandó adjuntos, ya está: el resto es cosa de la persona que lo abra.
-  if (!tipos.has('text')) return
+  // Si solo mandó adjuntos que nadie puede leer, ya está: el resto es cosa de la
+  // persona que abra la conversación. Una foto que el modelo SÍ ve no cuenta
+  // como eso — ahí hay conversación que seguir aunque no venga una sola letra.
+  if (!tipos.has('text') && !veLaFoto) return
 
   // ── Tope de turnos, dentro de la ventana ──
   const { rows: [{ n }] } = await pool.query(
@@ -625,11 +699,13 @@ function nombrarTipos(tipos) {
 function acuseDeAdjunto(tipos) {
   const soloVoz = tipos.every(t => t === 'audio' || t === 'voice')
   const que = nombrarTipos(tipos)
+  // Sin pronombre de vuelta: "una imagen… no puedo abrirlo" y "un documento… no
+  // puedo abrirla" salían mal según lo que llegara. La frase se corta antes.
   return soloVoz
-    ? `Recibí ${que}, pero por aquí no puedo escucharla. Ya queda avisado el equipo y te responden en seguida. `
-      + 'Si prefieres, escríbeme por texto lo que necesitas y seguimos al momento.'
-    : `Recibí ${que}, pero por aquí no puedo abrirlo. Ya queda avisado el equipo y te responden en seguida. `
-      + 'Si prefieres, cuéntame por texto lo que necesitas y seguimos al momento.'
+    ? `Recibí ${que}. Por aquí no puedo escucharla, así que ya queda avisado el equipo y te responden `
+      + 'en seguida. Si prefieres, escríbeme por texto lo que necesitas y seguimos al momento.'
+    : `Recibí ${que}. Por aquí no puedo abrir archivos, así que ya queda avisado el equipo y te responden `
+      + 'en seguida. Si prefieres, cuéntame por texto lo que necesitas y seguimos al momento.'
 }
 
 /**

@@ -23,6 +23,7 @@
 import crypto from 'node:crypto'
 import { pool, log } from './db.js'
 import { responderSiAplica } from './agente-wa.js'
+import { guardarMedia } from './whatsapp-media.js'
 
 const MOD = '[wa-webhook]'
 
@@ -181,6 +182,9 @@ function extraerEventos(payload) {
       }
 
       for (const m of value?.messages ?? []) {
+        // El adjunto viaja como una referencia, no como el archivo: `{id,
+        // mime_type, sha256}`. Bajarlo es cosa de whatsapp-media.js.
+        const adj = m?.image || m?.video || m?.audio || m?.document || m?.sticker
         eventos.push({
           phoneNumberId,
           waMessageId:   m?.id ?? null,
@@ -192,6 +196,8 @@ function extraerEventos(payload) {
           texto:         textoDeMensaje(m),
           ocurridoEn:    fechaMeta(m?.timestamp),
           perfilNombre:  perfiles.get(m?.from) ?? null,
+          mediaId:       adj?.id ?? null,
+          mediaMime:     adj?.mime_type ?? null,
         })
       }
 
@@ -293,13 +299,27 @@ async function procesarPayload(payload) {
 async function normalizar(ev) {
   try {
     if (ev.eventType === 'message') {
-      await pool.query(
+      const { rows: [fila] } = await pool.query(
         `INSERT INTO public.whatsapp_mensajes
            (phone_number_id, contacto, direccion, wa_message_id, tipo, texto, ocurrido_en)
          VALUES ($1, $2, 'IN', $3, $4, $5, $6)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
         [ev.phoneNumberId, ev.fromNumber, ev.waMessageId, ev.tipo, ev.texto, ev.ocurridoEn]
       )
+
+      // ── El archivo, si lo hay (migración 094) ──
+      // Se baja CON await y ANTES de despertar al agente. Dos razones:
+      //   · la URL que da Meta vive minutos — no hay segunda oportunidad;
+      //   · si el agente arrancara antes, armaría el contexto sin la foto y
+      //     respondería "no puedo verla" a una foto que sí tenemos.
+      // No hay prisa aquí: a Meta ya se le respondió 200 antes de entrar en
+      // este bloque, así que los 5 s de su reintento no corren.
+      if (ev.mediaId && fila?.id) {
+        await guardarMedia({
+          mensajeId: fila.id, waMediaId: ev.mediaId, mimeDeclarado: ev.mediaMime,
+        })
+      }
 
       if (ev.perfilNombre) {
         // El trigger ya creó la fila del contacto; aquí solo se le pone el nombre.
@@ -321,7 +341,7 @@ async function normalizar(ev) {
       // "escribiendo…" — sin él la vet no ve señal de vida mientras se piensa.
       responderSiAplica({
         phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo,
-        waMessageId: ev.waMessageId,
+        waMessageId: ev.waMessageId, mensajeId: fila?.id,
       })
       return
     }

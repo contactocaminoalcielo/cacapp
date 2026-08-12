@@ -4,7 +4,7 @@
 // PostgREST (sin GRANT a authenticated) porque contienen teléfonos y texto libre
 // de conversaciones. El permiso se valida en el backend con JWT + rol.
 // Ver migraciones 086/087 y orbit-backend/src/whatsapp-cloud.js.
-import { orbitApi } from '@/lib/orbitApi'
+import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
 export function listarConversaciones(q) {
   const qs = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
@@ -112,6 +112,20 @@ export function restanteVentana(ventanaHasta) {
   const h = Math.floor(ms / 3600000)
   const m = Math.floor((ms % 3600000) / 60000)
   return h > 0 ? `${h} h ${m} m` : `${m} m`
+}
+
+// ── Adjuntos (migración 094) ─────────────────────────────────────────────────
+// Los bytes no viajan en el hilo (serían megabytes por refresco del polling):
+// el hilo dice `tiene_archivo` y la pantalla pide cada archivo por separado.
+
+/** Baja el archivo de un mensaje. Devuelve un Blob; el llamador hace el objectURL. */
+export function bajarAdjunto(mensajeId) {
+  return orbitApiBlob(`/whatsapp/media/${mensajeId}`)
+}
+
+/** Lo que se puede pintar como imagen en el hilo. */
+export function esImagen(mime) {
+  return /^image\/(jpeg|png|gif|webp)$/i.test(String(mime || ''))
 }
 
 /** Los 3 checks de WhatsApp, para los mensajes que enviamos nosotros. */

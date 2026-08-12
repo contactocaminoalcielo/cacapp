@@ -18,10 +18,11 @@ import {
   listarConversaciones, abrirHilo, marcarLeido, enviarMensaje,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
+  bajarAdjunto, esImagen,
 } from '@/lib/whatsappInbox'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
-  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus,
+  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -551,6 +552,72 @@ function Mensajes({ mensajes }) {
   })
 }
 
+/**
+ * El archivo que mandaron: la foto se ve, lo demás se descarga.
+ *
+ * Se baja con fetch y no con `<img src>` porque el endpoint exige sesión y rol
+ * (son fotos de conversaciones con clínicas y familias, no van por una URL
+ * pública). El object URL se libera al desmontar: sin eso, abrir varios hilos
+ * con fotos deja la memoria del navegador llena.
+ */
+function Adjunto({ m, mio }) {
+  const [url, setUrl] = useState(null)
+  const [fallo, setFallo] = useState(m.archivo_error || null)
+  const imagen = esImagen(m.archivo_mime)
+
+  useEffect(() => {
+    if (!m.tiene_archivo || !imagen) return
+    let vivo = true
+    let creada = null
+    bajarAdjunto(m.id)
+      .then(blob => {
+        if (!vivo) return
+        creada = URL.createObjectURL(blob)
+        setUrl(creada)
+      })
+      .catch(e => { if (vivo) setFallo(e.message) })
+    return () => { vivo = false; if (creada) URL.revokeObjectURL(creada) }
+  }, [m.id, m.tiene_archivo, imagen])
+
+  async function descargar() {
+    try {
+      const blob = await bajarAdjunto(m.id)
+      const u = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = u
+      a.download = `whatsapp-${m.id}`
+      a.click()
+      URL.revokeObjectURL(u)
+    } catch (e) { setFallo(e.message) }
+  }
+
+  if (fallo) {
+    return (
+      <p className={`text-[10.5px] mb-1 italic ${mio ? 'text-white/70' : 'text-amber-700'}`}>
+        No se pudo traer el archivo: {fallo}
+      </p>
+    )
+  }
+
+  if (imagen) {
+    return url
+      ? <img src={url} alt={m.texto || 'Imagen recibida'} loading="lazy"
+             onClick={() => window.open(url, '_blank')}
+             className="rounded-xl mb-1.5 max-h-72 w-auto cursor-zoom-in object-contain" />
+      : <div className="rounded-xl mb-1.5 h-32 w-44 bg-black/5 animate-pulse" />
+  }
+
+  return (
+    <button onClick={descargar}
+            className={`flex items-center gap-1.5 mb-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold
+                        ${mio ? 'bg-white/15 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+      <Download className="w-3.5 h-3.5" />
+      Descargar {m.tipo}
+      {m.archivo_bytes ? ` · ${Math.max(1, Math.round(m.archivo_bytes / 1024))} KB` : ''}
+    </button>
+  )
+}
+
 function Burbuja({ m }) {
   const mio = m.direccion === 'OUT'
   const est = mio ? ESTADO_ENVIO[m.estado] : null
@@ -565,6 +632,8 @@ function Burbuja({ m }) {
                          ? fallo ? 'bg-red-50 border border-red-200 rounded-br-sm'
                                  : 'bg-[#1A5CD8] text-white rounded-br-sm'
                          : 'bg-white border border-gray-100 rounded-bl-sm'}`}>
+        {(m.tiene_archivo || m.archivo_error) && <Adjunto m={m} mio={mio} />}
+
         <p className={`text-[13px] whitespace-pre-wrap break-words leading-snug
                        ${mio && !fallo ? 'text-white' : 'text-gray-800'}`}>
           {m.texto || <span className="italic opacity-70">[sin texto]</span>}

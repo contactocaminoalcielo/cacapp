@@ -27,6 +27,7 @@ import {
   listarConversaciones, hilo, marcarLeido, enviarTexto,
   listarEtiquetas, etiquetar, desetiquetar,
 } from './whatsapp-cloud.js'
+import { leerMedia } from './whatsapp-media.js'
 import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
@@ -179,6 +180,31 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, r
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[wa-bandeja/desetiquetar] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Archivos recibidos por WhatsApp (migración 094) ──
+// Los bytes NO salen por PostgREST ni por una URL pública: son fotos de
+// conversaciones con clínicas y familias. Se sirven aquí, con sesión y rol, y
+// por eso la bandeja los pide con fetch + Bearer y los pinta desde un blob (un
+// <img src> no puede mandar cabeceras).
+app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const m = await leerMedia(req.params.mensajeId)
+    if (!m) return res.status(404).json({ ok: false, error: 'No hay archivo para ese mensaje' })
+    if (!m.archivo) {
+      // Se intentó y no se pudo. El motivo viaja para que la bandeja lo muestre
+      // en vez de dejar un hueco que parece un error de la pantalla.
+      return res.status(410).json({ ok: false, error: m.error || 'El archivo no se pudo descargar' })
+    }
+    res.set('Content-Type', m.mime || 'application/octet-stream')
+    // Privado: es contenido de una conversación, no debe quedar en caches
+    // intermedias. En el navegador sí se puede reusar mientras dure la sesión.
+    res.set('Cache-Control', 'private, max-age=3600')
+    res.send(m.archivo)
+  } catch (e) {
+    log('[wa-bandeja/media] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })
