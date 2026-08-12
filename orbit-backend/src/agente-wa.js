@@ -152,26 +152,38 @@ const HERRAMIENTAS = [{
 }, {
   name: 'registrar_solicitud',
   description:
-    'Registra una solicitud de recogida para que coordinación la revise y confirme. ' +
-    'Úsala cuando la veterinaria haya dado, como mínimo, el nombre y el WhatsApp de la ' +
-    'persona de contacto y el nombre de la mascota. No confirma horario ni asignación: ' +
-    'después de usarla, dile que coordinación confirma la hora directamente.',
+    'Registra una solicitud de recogida para que coordinación la revise y confirme.\n\n' +
+    '⚠️ Llámala SOLO cuando tengas TODOS los datos obligatorios y se los hayas repetido a ' +
+    'la veterinaria para que los confirme. Por el enlace de registro el sistema obliga a ' +
+    'elegir plan y a llenarlo todo; por chat no hay quien obligue, y lo normal es que se ' +
+    'olvide el plan, el peso, la especie o el teléfono. Ese hueco lo tapas tú.\n\n' +
+    'Si te falta algo, NO la llames: pregunta lo que falte. Si la llamas incompleta te lo ' +
+    'devuelve diciendo qué falta — pero es mejor preguntar antes que hacer esperar.\n\n' +
+    'No confirma horario ni asignación: después de usarla, dile que coordinación confirma ' +
+    'la hora directamente.',
   input_schema: {
     type: 'object',
     properties: {
       cliente_nombre:   { type: 'string', description: 'SOLO el nombre de la familia dueña de la mascota. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`.' },
-      cliente_whatsapp: { type: 'string', description: 'WhatsApp del contacto, solo dígitos con indicativo. Ej: 573001234567' },
+      cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA, solo dígitos con indicativo. Ej: 573001234567. Es a ese número al que se le mandan las fotos y el memorial: no pongas el de la clínica.' },
       mascota_nombre:   { type: 'string', description: 'Nombre de la mascota.' },
-      mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave… tal como lo dijeron.' },
-      mascota_peso_kg:  { type: 'number', description: 'Peso aproximado en kilogramos.' },
-      recogida_en:      { type: 'string', enum: ['veterinaria', 'domicilio'], description: 'Dónde se recoge: en la clínica ("veterinaria") o en la casa de la familia ("domicilio"). Pregúntalo si no quedó claro — de esto depende la dirección a la que va el técnico.' },
-      veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
-      direccion:        { type: 'string', description: 'Dirección de la recogida.' },
+      mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave, Hámster, Cobayo, Reptil, Pez u Otro. Se valida contra el catálogo: la especie decide si la tarifa es por peso o única.' },
+      mascota_peso_kg:  { type: 'number', description: 'Peso aproximado en kilogramos. Si no lo saben exacto, pide un aproximado — de esto sale el precio, no lo inventes ni lo dejes en blanco.' },
+      plan:             { type: 'string', description: 'Plan elegido. Se valida contra el catálogo; si es ambiguo (p. ej. "Exclusivo", que tiene cuatro variantes) te lo devuelve con las opciones para que preguntes cuál.' },
+      recogida_en:      { type: 'string', enum: ['veterinaria', 'domicilio'], description: 'Dónde se recoge: en la clínica ("veterinaria") o en la casa de la familia ("domicilio"). De esto depende la dirección a la que va el técnico.' },
+      quien_paga:       { type: 'string', enum: ['veterinaria', 'propietario'], description: 'Quién paga el servicio. Pregúntalo SIEMPRE, no lo asumas: cambia toda la operación posterior.' },
+      refrigeracion:    { type: 'boolean', description: '¿La clínica tiene posibilidad de refrigeración? Determina cuánto puede esperar el cuerpo.' },
+      murio_de_cancer:  { type: 'boolean', description: '¿La mascota falleció por cáncer? Si fue así hay que notificarlo.' },
+      direccion:        { type: 'string', description: 'Dirección exacta de la recogida. OBLIGATORIA si la recogida es a domicilio.' },
       barrio:           { type: 'string', description: 'Barrio o punto de referencia.' },
-      plan:             { type: 'string', description: 'Plan elegido, si ya lo definieron.' },
+      veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
       notas:            { type: 'string', description: 'Indicaciones especiales, horarios preferidos, cualquier detalle relevante.' },
     },
-    required: ['cliente_nombre', 'cliente_whatsapp', 'mascota_nombre'],
+    required: [
+      'cliente_nombre', 'cliente_whatsapp', 'mascota_nombre', 'mascota_especie',
+      'mascota_peso_kg', 'plan', 'recogida_en', 'quien_paga', 'refrigeracion',
+      'murio_de_cancer',
+    ],
   },
 }]
 
@@ -260,9 +272,122 @@ async function clasificarConversacion({ entrada, contacto }) {
   return { ok: true, mensaje: 'Etiquetada. Sigue atendiendo con normalidad.' }
 }
 
+/** Quita tildes y mayúsculas para poder comparar lo que escriben con el catálogo. */
+const sinTildes = s => String(s || '').toLowerCase().normalize('NFD')
+  .replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * La especie que dijeron, contra el catálogo real.
+ *
+ * No es un capricho de limpieza: la especie decide si la tarifa es POR PESO o
+ * ÚNICA (`especies.tarifa_peso`), así que guardarla como texto suelto —que es lo
+ * que se hacía— deja el precio en manos de quien convierta la solicitud.
+ */
+async function resolverEspecie(dicho) {
+  const q = sinTildes(dicho)
+  if (!q) return { falta: true }
+
+  const { rows } = await pool.query(`SELECT id, nombre FROM public.especies`)
+  const norm = rows.map(r => ({ ...r, n: sinTildes(r.nombre) }))
+
+  const exacta = norm.find(r => r.n === q)
+  if (exacta) return { id: exacta.id, nombre: exacta.nombre }
+
+  // "gata", "gatico", "perrita", "canino"… Se compara por la raíz porque la
+  // gente escribe la especie en femenino y en diminutivo casi siempre.
+  const SINONIMOS = {
+    gato: ['gat', 'felin', 'michi'], perro: ['perr', 'canin', 'cachorr'],
+    conejo: ['conej'], ave: ['ave', 'pajar', 'loro', 'periquit'],
+    hamster: ['hamst'], cobayo: ['cobay', 'curi', 'cuy'],
+    reptil: ['reptil', 'iguan', 'tortug', 'serpient'], pez: ['pez', 'pec'],
+  }
+  for (const r of norm) {
+    const raices = SINONIMOS[r.n] || [r.n.slice(0, 4)]
+    if (raices.some(raiz => q.startsWith(raiz))) return { id: r.id, nombre: r.nombre }
+  }
+  return { desconocida: true, opciones: rows.map(r => r.nombre) }
+}
+
+/**
+ * El plan que dijeron, contra el catálogo de planes ACTIVOS.
+ *
+ * Devuelve las opciones cuando es ambiguo en vez de elegir por su cuenta:
+ * "Exclusivo" son cuatro planes con precios distintos, y adivinar uno sería
+ * inventar el precio del servicio.
+ */
+async function resolverPlan(dicho) {
+  const q = sinTildes(dicho).replace(/^plan\s+/, '').replace(/\s+plan$/, '')
+  if (!q) return { falta: true }
+
+  const { rows } = await pool.query(
+    `SELECT id, nombre, codigo FROM public.planes WHERE activo ORDER BY nombre`
+  )
+  const norm = rows.map(r => ({ ...r, n: sinTildes(r.nombre), c: sinTildes(r.codigo) }))
+
+  const exacto = norm.find(r => r.n === q || r.c === q || r.c === q.replace(/[\s-]+/g, '_'))
+  if (exacto) return { id: exacto.id, nombre: exacto.nombre }
+
+  const candidatos = norm.filter(r => r.n.includes(q) || q.includes(r.n))
+  if (candidatos.length === 1) return { id: candidatos[0].id, nombre: candidatos[0].nombre }
+  if (candidatos.length > 1) {
+    return { ambiguo: true, opciones: candidatos.map(r => r.nombre) }
+  }
+  return { desconocido: true, opciones: rows.map(r => r.nombre) }
+}
+
 async function registrarSolicitud({ entrada, agente, contacto }) {
+  // ── La compuerta que el enlace de registro tiene y el chat no ──
+  // Por el portal el sistema OBLIGA a elegir plan y a llenarlo todo. Por chat no
+  // hay quien obligue, y lo que pasa de verdad es que se olvida el plan, el
+  // peso, la especie o el teléfono (David, 12-ago). Antes esto se registraba
+  // igual y el hueco aparecía después, en coordinación. Ahora se devuelve al
+  // agente con la lista exacta de lo que falta para que lo pregunte.
+  const falta = []
   const tel = String(entrada.cliente_whatsapp || '').replace(/\D/g, '')
-  if (!tel) return { ok: false, error: 'El WhatsApp del contacto no es válido.' }
+  if (!String(entrada.cliente_nombre || '').trim()) falta.push('el nombre de la familia dueña de la mascota')
+  if (tel.length < 10) falta.push('el WhatsApp de la familia (con indicativo, solo dígitos)')
+  if (!String(entrada.mascota_nombre || '').trim()) falta.push('el nombre de la mascota')
+
+  const peso = Number(entrada.mascota_peso_kg)
+  if (!Number.isFinite(peso) || peso <= 0 || peso > 200) {
+    falta.push('el peso aproximado en kilos (de ahí sale el precio; pide un aproximado si no lo tienen exacto)')
+  }
+  if (!['veterinaria', 'domicilio'].includes(entrada.recogida_en)) {
+    falta.push('dónde se recoge: en la clínica o en la casa de la familia')
+  }
+  if (entrada.recogida_en === 'domicilio' && !String(entrada.direccion || '').trim()) {
+    falta.push('la dirección exacta de la casa, con punto de referencia')
+  }
+  if (!['veterinaria', 'propietario'].includes(entrada.quien_paga)) {
+    falta.push('quién paga: la clínica o el propietario')
+  }
+  if (typeof entrada.refrigeracion !== 'boolean') falta.push('si la clínica tiene posibilidad de refrigeración')
+  if (typeof entrada.murio_de_cancer !== 'boolean') falta.push('si la mascota falleció por cáncer')
+
+  const especie = await resolverEspecie(entrada.mascota_especie)
+  if (especie.falta) falta.push('la especie de la mascota')
+  else if (especie.desconocida) falta.push(`la especie (no reconocí "${entrada.mascota_especie}"; las válidas son: ${especie.opciones.join(', ')})`)
+
+  const plan = await resolverPlan(entrada.plan)
+  if (plan.falta) {
+    falta.push('el PLAN que eligieron — por chat casi nunca lo dicen y sin él no se puede cotizar ni procesar')
+  } else if (plan.ambiguo) {
+    falta.push(`cuál de estos planes exactamente: ${plan.opciones.join(' / ')}`)
+  } else if (plan.desconocido) {
+    falta.push(`el plan (no reconocí "${entrada.plan}"; los activos son: ${plan.opciones.join(', ')})`)
+  }
+
+  if (falta.length) {
+    log(MOD, `solicitud incompleta de ${contacto} — falta: ${falta.join(' · ')}`)
+    return {
+      ok: false,
+      error: 'Todavía no se puede registrar: falta información.',
+      falta,
+      instruccion: 'Pregúntale a la veterinaria SOLO lo que falta, en un mensaje corto y '
+        + 'natural, sin repetir lo que ya te dio. Cuando lo tengas, repítele el resumen '
+        + 'completo para que lo confirme y vuelve a llamar esta herramienta.',
+    }
+  }
 
   // El aliado NO se lo preguntamos al agente ni se lo dejamos elegir: se deriva
   // del número desde el que escriben, que la bandeja ya cruza contra `aliados`.
@@ -278,26 +403,32 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // `origen` se queda en ALIADO — la solicitud viene de una veterinaria. Meter
   // un valor nuevo rompería el aviso a coordinación y, al convertir, la
   // comisión del aliado. El canal va en `agente_id`. Ver migración 088.
+  // Plan y especie van a SUS columnas (`plan_id`, `especie_id`), no como texto
+  // suelto en las notas: así la conversión del Kanban los toma resueltos y nadie
+  // tiene que releer un párrafo y volver a teclearlos. La especie además decide
+  // si la tarifa es por peso o única.
   const { rows } = await pool.query(
     `INSERT INTO public.solicitudes_servicio
        (cliente_nombre, cliente_whatsapp, mascota_nombre, mascota_peso_kg,
-        direccion, barrio, notas_cliente, origen, estado, agente_id,
-        aliado_id, aliado_nombre_otro, tipo_recogida)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'ALIADO','PENDIENTE',$8,$9,$10,$11)
+        especie_id, plan_id, direccion, barrio, notas_cliente, origen, estado,
+        agente_id, aliado_id, aliado_nombre_otro, tipo_recogida)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ALIADO','PENDIENTE',$10,$11,$12,$13)
      RETURNING id`,
     [
       String(entrada.cliente_nombre).slice(0, 120),
       tel.slice(0, 25),
       String(entrada.mascota_nombre).slice(0, 120),
-      Number.isFinite(entrada.mascota_peso_kg) && entrada.mascota_peso_kg > 0
-        ? entrada.mascota_peso_kg : null,
+      peso,
+      especie.id,
+      plan.id,
       entrada.direccion ? String(entrada.direccion).slice(0, 250) : null,
       entrada.barrio ? String(entrada.barrio).slice(0, 120) : null,
       [
-        entrada.mascota_especie ? `Especie: ${entrada.mascota_especie}` : null,
-        entrada.plan            ? `Plan mencionado: ${entrada.plan}`    : null,
-        entrada.notas           || null,
-        `Registrada por el agente de WhatsApp desde ${contacto}.`,
+        `Paga: ${entrada.quien_paga === 'veterinaria' ? 'la veterinaria' : 'el propietario'}.`,
+        `Refrigeración en la clínica: ${entrada.refrigeracion ? 'SÍ' : 'NO'}.`,
+        entrada.murio_de_cancer ? '⚠️ Falleció por CÁNCER — hay que notificarlo.' : 'No falleció por cáncer.',
+        entrada.notas || null,
+        `Tomada por el agente de WhatsApp desde ${contacto} (la vet no usó el enlace de registro).`,
         conv?.aliado_id ? null : 'Este número NO está asociado a ninguna veterinaria en el sistema: verificar la vet antes de convertir, o la comisión se pierde.',
       ].filter(Boolean).join('\n').slice(0, 2000),
       agente.id,
@@ -309,8 +440,14 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
     ]
   )
   log(MOD, `solicitud ${rows[0].id} creada por el agente desde ${contacto}`
+    + ` — ${plan.nombre}, ${especie.nombre} ${peso}kg`
     + (conv?.aliado_id ? ` (aliado ${conv.aliado_id})` : ' — SIN aliado asociado'))
-  return { ok: true, mensaje: 'Solicitud registrada. Coordinación la revisa y confirma la hora.' }
+  return {
+    ok: true,
+    registrado: { plan: plan.nombre, especie: especie.nombre, peso_kg: peso },
+    mensaje: 'Solicitud registrada. Coordinación la revisa y confirma la hora. '
+      + 'Confírmaselo a la veterinaria nombrando el plan y la mascota, para que vea que quedó bien.',
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

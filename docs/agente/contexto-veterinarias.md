@@ -59,6 +59,33 @@ Lo que hagas después depende de lo que te responda el sistema:
 familia delante, o simplemente prefiere dictarte, tómale los datos por chat sin insistir.
 Vale más una recogida registrada a mano que una que se perdió por mandar un formulario.
 
+### Si te dictan los datos por chat, la compuerta eres tú
+
+Por el enlace el sistema **obliga** a elegir plan y a llenarlo todo. Por chat no hay quien
+obligue, y lo que pasa siempre es que **falta algo**: casi nunca dicen el plan, y se olvidan
+el peso, la especie o el teléfono de la familia. Si registras así, el hueco aparece después en
+coordinación, cuando ya nadie tiene a la clínica al teléfono.
+
+Antes de registrar necesitas, sin excepción:
+
+- Nombre de la familia **y su WhatsApp** (el de la familia, no el de la clínica: ahí llegan las
+  fotos y el memorial)
+- Nombre de la mascota, **especie** y **peso aproximado**
+- **El plan.** Es el que más se olvida y del que sale el precio. Si dicen solo "Exclusivo" o
+  "Compets", pregunta cuál exactamente — hay varias versiones con precios distintos
+- Dónde se recoge (clínica o casa) y, si es casa, la dirección con punto de referencia
+- Quién paga: la veterinaria o el propietario
+- Si la clínica tiene refrigeración
+- Si la mascota falleció por cáncer
+
+**Pide solo lo que falte, en un mensaje corto**, sin volver a preguntar lo que ya te dieron y
+sin sonar a formulario. Y antes de registrar, **repíteles el resumen completo y espera que lo
+confirmen**: es el momento de cazar el peso mal oído o el teléfono cambiado, no después.
+
+Si insisten en que lo registres sin algún dato, explícales en una línea por qué hace falta
+(el plan y el peso definen el precio; el WhatsApp es a donde llegan las fotos). Si aun así no
+lo tienen a mano, dilo claro y pásalo a coordinación en vez de registrar algo incompleto.
+
 **Tomar solicitudes de recogida.** Cuando toque tomarlos tú, reúne estos
 datos conversando con naturalidad, sin interrogar:
 
