@@ -160,13 +160,17 @@ const HERRAMIENTAS = [{
     'Si te falta algo, NO la llames: pregunta lo que falte. Si la llamas incompleta te lo ' +
     'devuelve diciendo qué falta — pero es mejor preguntar antes que hacer esperar.\n\n' +
     'No confirma horario ni asignación: después de usarla, dile que coordinación confirma ' +
-    'la hora directamente.',
+    'la hora directamente.\n\n' +
+    'EXCEPCIÓN DESAMPARADO: en ese plan la mascota está abandonada en la clínica y NO hay ' +
+    'familia dueña. No pidas nombre ni WhatsApp de la familia —deja los dos campos vacíos— y ' +
+    'a cambio pregunta si quieren la prioridad de 24 h, que es un cobro aparte.',
   input_schema: {
     type: 'object',
     properties: {
-      cliente_nombre:   { type: 'string', description: 'SOLO el NOMBRE de pila de quien responde por la mascota. El apellido va aparte. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`.' },
+      cliente_nombre:   { type: 'string', description: 'SOLO el NOMBRE de pila de quien responde por la mascota. El apellido va aparte. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`. En un DESAMPARADO déjalo vacío: la mascota está abandonada y el servidor pone a la clínica.' },
       cliente_apellido: { type: 'string', description: 'Apellido, SOLO si te dan nombre y apellido por separado ("Marta Gómez" → nombre "Marta", apellido "Gómez"). Si solo dicen "la familia Ruiz", eso va entero en `cliente_nombre` y este campo se deja vacío: los dos se concatenan al crear el cliente y repetirlo produce "Familia Ruiz Ruiz".' },
-      cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA, solo dígitos con indicativo. Ej: 573001234567. Es a ese número al que se le mandan las fotos y el memorial: no pongas el de la clínica.' },
+      cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA, solo dígitos con indicativo. Ej: 573001234567. Es a ese número al que se le mandan las fotos y el memorial: no pongas el de la clínica. En un DESAMPARADO déjalo vacío: no hay familia.' },
+      prioridad:        { type: 'boolean', description: 'Solo para el plan DESAMPARADO: ¿pagan la prioridad para que se recoja en las primeras 24 horas? Pregúntalo, porque su recogida normal va de 24 a 48 h. En los demás planes no lo mandes.' },
       mascota_nombre:   { type: 'string', description: 'Nombre de la mascota.' },
       mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave, Hámster, Cobayo, Reptil, Pez u Otro. Se valida contra el catálogo: la especie decide si la tarifa es por peso o única.' },
       mascota_peso_kg:  { type: 'number', description: 'Peso aproximado en kilogramos. Si no lo saben exacto, pide un aproximado — de esto sale el precio, no lo inventes ni lo dejes en blanco.' },
@@ -185,8 +189,12 @@ const HERRAMIENTAS = [{
       veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
       notas:            { type: 'string', description: 'Indicaciones especiales, horarios preferidos, cualquier detalle relevante.' },
     },
+    // `cliente_nombre` y `cliente_whatsapp` NO van aquí: en un DESAMPARADO no
+    // hay familia y exigirlos en el esquema obligaría al modelo a inventárselos.
+    // La compuerta real es el servidor, que ya sabe el plan y devuelve la lista
+    // exacta de lo que falta según cuál sea.
     required: [
-      'cliente_nombre', 'cliente_whatsapp', 'mascota_nombre', 'mascota_especie',
+      'mascota_nombre', 'mascota_especie',
       'mascota_peso_kg', 'plan', 'recogida_en', 'quien_paga', 'refrigeracion',
       'murio_de_cancer',
     ],
@@ -331,10 +339,10 @@ async function resolverPlan(dicho) {
   const norm = rows.map(r => ({ ...r, n: sinTildes(r.nombre), c: sinTildes(r.codigo) }))
 
   const exacto = norm.find(r => r.n === q || r.c === q || r.c === q.replace(/[\s-]+/g, '_'))
-  if (exacto) return { id: exacto.id, nombre: exacto.nombre }
+  if (exacto) return { id: exacto.id, nombre: exacto.nombre, codigo: exacto.codigo }
 
   const candidatos = norm.filter(r => r.n.includes(q) || q.includes(r.n))
-  if (candidatos.length === 1) return { id: candidatos[0].id, nombre: candidatos[0].nombre }
+  if (candidatos.length === 1) return { id: candidatos[0].id, nombre: candidatos[0].nombre, codigo: candidatos[0].codigo }
   if (candidatos.length > 1) {
     return { ambiguo: true, opciones: candidatos.map(r => r.nombre) }
   }
@@ -352,9 +360,24 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // Va lo PRIMERO porque la validación de abajo lo necesita: con recogida en la
   // clínica, la ciudad la aporta el aliado y no hay que pedirla.
   const { rows: [conv] } = await pool.query(
-    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
+    `SELECT aliado_id, aliado_nombre FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
     [String(contacto || '').replace(/\D/g, '')]
   )
+
+  // El plan se resuelve ANTES que nada porque decide qué es obligatorio: en un
+  // DESAMPARADO no hay familia a la que pedirle nombre ni WhatsApp. Ojo con el
+  // orden — moverlo abajo lo dejaría usándose antes de declararse (mismo patrón
+  // de TDZ que ya mordió con la derivación del aliado).
+  const plan = await resolverPlan(entrada.plan)
+
+  // 🐾 DESAMPARADO — el plan de apoyo a la clínica cuando le dejan una mascota
+  // abandonada. NO tiene familia dueña: exigirle nombre y WhatsApp de la familia
+  // haría que la herramienta rechazara para siempre el caso más frecuente de
+  // esta línea (78 servicios en los últimos 70 días). Como `cliente_nombre` y
+  // `cliente_whatsapp` son NOT NULL, se rellenan con la clínica —que es lo que
+  // coordinación viene haciendo a mano: de los 78, el "cliente" es la propia
+  // veterinaria en todos salvo un puñado.
+  const esDesamparado = plan.codigo === 'DESAMPARADO'
 
   // ── La compuerta que el enlace de registro tiene y el chat no ──
   // Por el portal el sistema OBLIGA a elegir plan y a llenarlo todo. Por chat no
@@ -363,9 +386,20 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // igual y el hueco aparecía después, en coordinación. Ahora se devuelve al
   // agente con la lista exacta de lo que falta para que lo pregunte.
   const falta = []
-  const tel = String(entrada.cliente_whatsapp || '').replace(/\D/g, '')
-  if (!String(entrada.cliente_nombre || '').trim()) falta.push('el nombre de la familia dueña de la mascota')
-  if (tel.length < 10) falta.push('el WhatsApp de la familia (con indicativo, solo dígitos)')
+  const telDicho = String(entrada.cliente_whatsapp || '').replace(/\D/g, '')
+  const contactoDigitos = String(contacto || '').replace(/\D/g, '')
+  // Sin familia, el "cliente" es la clínica y su WhatsApp es el número desde el
+  // que están escribiendo. Nunca queda vacío: las dos columnas son NOT NULL.
+  const tel = esDesamparado ? (telDicho.length >= 10 ? telDicho : contactoDigitos) : telDicho
+  const nombreCliente = esDesamparado
+    ? (String(entrada.cliente_nombre || '').trim()
+       || conv?.aliado_nombre
+       || String(entrada.veterinaria || '').trim()
+       || 'VETERINARIA')
+    : String(entrada.cliente_nombre || '').trim()
+
+  if (!esDesamparado && !nombreCliente) falta.push('el nombre de la familia dueña de la mascota')
+  if (!esDesamparado && tel.length < 10) falta.push('el WhatsApp de la familia (con indicativo, solo dígitos)')
   if (!String(entrada.mascota_nombre || '').trim()) falta.push('el nombre de la mascota')
 
   const peso = Number(entrada.mascota_peso_kg)
@@ -390,8 +424,8 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // Si vienen "Familia Ruiz" y "Ruiz" —que es lo que sale cuando la vet solo
   // dice el apellido— el cliente queda como "Familia Ruiz Ruiz". Se descarta el
   // apellido cuando ya está contenido en el nombre.
-  const nombrePila = String(entrada.cliente_nombre || '').trim()
-  const apellidoDicho = String(entrada.cliente_apellido || '').trim()
+  const nombrePila = nombreCliente
+  const apellidoDicho = esDesamparado ? '' : String(entrada.cliente_apellido || '').trim()
   const apellido = apellidoDicho
     && !sinTildes(nombrePila).includes(sinTildes(apellidoDicho))
     ? apellidoDicho.slice(0, 120)
@@ -413,7 +447,6 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   if (especie.falta) falta.push('la especie de la mascota')
   else if (especie.desconocida) falta.push(`la especie (no reconocí "${entrada.mascota_especie}"; las válidas son: ${especie.opciones.join(', ')})`)
 
-  const plan = await resolverPlan(entrada.plan)
   if (plan.falta) {
     falta.push('el PLAN que eligieron — por chat casi nunca lo dicen y sin él no se puede cotizar ni procesar')
   } else if (plan.ambiguo) {
@@ -454,7 +487,7 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
              'ALIADO','PENDIENTE',$19,$20,$21,$22)
      RETURNING id`,
     [
-      String(entrada.cliente_nombre).slice(0, 120),
+      nombreCliente.slice(0, 120),
       apellido,
       tel.slice(0, 25),
       String(entrada.mascota_nombre).slice(0, 120),
@@ -475,6 +508,15 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
       esDomicilio && entrada.barrio ? String(entrada.barrio).slice(0, 120) : null,
       esDomicilio && entrada.direccion ? String(entrada.direccion).slice(0, 250) : null,
       [
+        // El Desamparado va explícito arriba del todo: cambia el tiempo de
+        // recogida (24-48 h, no 2-3 h) y no comisiona a la vet. Que el
+        // coordinador lo lea en la primera línea, no deducido del plan.
+        esDesamparado
+          ? (entrada.prioridad
+              ? '🐾 DESAMPARADO CON PRIORIDAD PAGADA — recoger dentro de las primeras 24 h. Recargo: $16.000 (o $20.000 si cae domingo o festivo).'
+              : '🐾 DESAMPARADO — recogida de 24 a 48 h, se acomoda en la ruta. Sin prioridad pagada.')
+          : null,
+        esDesamparado ? 'Mascota abandonada en la clínica: no hay familia dueña. El "cliente" es la propia veterinaria.' : null,
         `Paga: ${entrada.quien_paga === 'veterinaria' ? 'la veterinaria' : 'el propietario'}.`,
         `Refrigeración en la clínica: ${entrada.refrigeracion ? 'SÍ' : 'NO'}.`,
         entrada.murio_de_cancer ? '⚠️ Falleció por CÁNCER — hay que notificarlo.' : 'No falleció por cáncer.',

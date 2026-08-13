@@ -142,7 +142,7 @@ Todos los valores en pesos colombianos.
 Existen en el catálogo pero no son de venta abierta. Si te preguntan por ellos, pásalo a
 coordinación:
 
-- **Plan Ángel** y **Desamparado** — casos especiales
+- **Plan Ángel** — caso especial
 - **Bronce**, **Plata**, **Oro exclusivo** — planes antiguos
 - Las variantes **"sin recordatorios"** de Básico y Exclusivo presencial
 - **Exclusivo videollamada sin recordatorios**

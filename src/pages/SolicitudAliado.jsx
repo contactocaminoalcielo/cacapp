@@ -150,6 +150,17 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
 
   function getPrecio(pid) {
     if (!pid || !masc.peso_kg) return null
+
+    // El Desamparado no tiene tarifa por rangos: se calcula con la fórmula, así
+    // que sin esto salía "Por consultar" justo en el plan que más piden las
+    // veterinarias. Espejo exacto de `precios.js` (DESAMPARADO) — si allá cambia,
+    // aquí también.
+    if (planes.find(p => p.id === pid)?.codigo === 'DESAMPARADO') {
+      const kg = parseFloat(masc.peso_kg)
+      if (!Number.isFinite(kg) || kg <= 0) return null
+      return kg <= 10 ? 46000 : Math.round(44000 + (kg - 10) * 4000)
+    }
+
     const rango = getRango(parseFloat(masc.peso_kg), parseInt(masc.especie_id))
     if (!rango) return null
     const directo = precios.find(p => p.plan_id === pid && p.rango_nombre === rango)?.precio
