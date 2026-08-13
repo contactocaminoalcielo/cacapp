@@ -538,7 +538,15 @@ async function construirSistema(agente) {
   // el contexto editable, porque es del motor y no algo que David deba mantener.
   bloques.push({
     type: 'text',
-    text: 'Cuando necesites más de una herramienta, pídelas JUNTAS en la misma '
+    text: 'UN SOLO MENSAJE. Todo lo que escribas en este turno le llega a la veterinaria '
+      + 'junto, como un único mensaje de WhatsApp — también lo que escribas ANTES de usar '
+      + 'una herramienta. Eso no es un borrador ni un pensamiento en voz alta: ella lo lee. '
+      + 'Así que redacta tu respuesta UNA sola vez: usa primero las herramientas que '
+      + 'necesites y escribe después, con el resultado en la mano. Y si ya habías escrito '
+      + 'algo antes de llamarlas, en la vuelta siguiente añade solo lo que falte en vez de '
+      + 'volver a decirlo — un mensaje que repite lo mismo dos veces se lee como un error '
+      + 'del sistema.\n\n'
+      + 'Cuando necesites más de una herramienta, pídelas JUNTAS en la misma '
       + 'respuesta en vez de una por turno. Cada turno extra vuelve a procesar toda '
       + 'la conversación desde el principio, así que agruparlas es más rápido para '
       + 'la veterinaria que está esperando.\n\n'
@@ -1248,6 +1256,20 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         })
       }
       messages.push({ role: 'user', content: resultados })
+
+      // Si la vuelta SOLO etiquetó, no hay nada que devolverle al modelo: la
+      // etiqueta es papeleo interno y la veterinaria no la ve. Darle otro turno
+      // es justo lo que producía el mensaje que dice DOS VECES lo mismo — el
+      // modelo escribe su respuesta, etiqueta, y en la vuelta siguiente vuelve a
+      // rematar ("ya quedó marcado para que coordinación…"). Medido el 13-ago:
+      // pasaba en 3 de cada 4 respuestas que escalaban.
+      // Se exige `textos.length`: si etiquetó SIN haber dicho nada todavía, el
+      // turno extra es lo único que puede producir la respuesta — cortar ahí
+      // dejaría a la vet sin contestación, que es peor que una repetición.
+      const soloEtiquetas = respuesta.content
+        .filter(b => b.type === 'tool_use')
+        .every(b => b.name === 'clasificar_conversacion')
+      if (soloEtiquetas && textos.length) break
     }
 
     salida = textos.join('\n\n').trim() || null

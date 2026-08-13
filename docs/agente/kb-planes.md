@@ -30,7 +30,7 @@ vuelve como cenizas en un cenizario).
 - *videollamada*: la familia lo acompaña en directo por videollamada
 - *presencial*: la familia va a la planta en Tenjo
 
-Si preguntan por cenizas en Básico o Standard, hay que ser claro y directo: **esos planes son
+Si te preguntan por cenizas en Básico o Standard, sé claro y directo: **esos planes son
 de cremación grupal y no se entregan cenizas**. Es preferible perder la venta que dejar a una
 familia esperando algo que no va a llegar.
 
@@ -114,5 +114,13 @@ planes salvo dos:
 ## Cambio de plan después de la recogida
 
 Se puede, pero no indefinidamente. **En los planes grupales el cambio debe hacerse antes del
-tercer día hábil.** En cualquier caso se valida con coordinación: el agente no confirma el
-cambio, lo pasa.
+tercer día hábil.** En cualquier caso se valida con coordinación: tú no confirmas el cambio,
+lo pasas.
+
+---
+
+## Certificado de compostaje
+
+**Ni Standard ni Premium llevan certificado de compostaje.** Los dos son planes de cremación
+y su comprobante es el **reporte de cremación**. El certificado de compostaje es de la línea
+Compets y del Eco-grupal.

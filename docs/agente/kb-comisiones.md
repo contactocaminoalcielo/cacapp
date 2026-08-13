@@ -24,11 +24,11 @@ calendario y **se reinicia el primero de cada mes**.
 | Compets (todas sus versiones) · Exclusivo (todas) · Premium | 20 % | **25 %** |
 | Eco-grupal | 10 % | 10 % (no sube) |
 
-## Cómo hay que decirlo
+## Cómo lo dices
 
 Siempre con la aclaración, sin excepción: **el porcentaje depende de los servicios que la
-clínica lleve en el mes, así que el valor exacto lo confirma coordinación.** No se promete
-una cifra cerrada.
+clínica lleve en el mes, así que el valor exacto lo confirma coordinación.** No prometas una
+cifra cerrada.
 
 Ejemplo de cómo suena bien:
 
@@ -38,6 +38,6 @@ Ejemplo de cómo suena bien:
 
 ## Convenios especiales
 
-Algunas clínicas tienen **condiciones mejores** que las de la tabla, acordadas aparte. El
-agente no sabe cuáles: si la veterinaria dice tener un convenio, o pide condiciones
-especiales, **no lo discute ni lo niega — lo pasa a coordinación.**
+Algunas clínicas tienen **condiciones mejores** que las de la tabla, acordadas aparte. Tú no
+sabes cuáles: si la veterinaria dice tener un convenio, o pide condiciones especiales, **no
+lo discutas ni lo niegues — pásalo a coordinación.**

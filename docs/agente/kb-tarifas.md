@@ -6,6 +6,13 @@ Precios extraídos de `v_precios_por_peso` el **2026-08-06**.
 ⚠️ **Estos precios envejecen.** Cuando cambien en el catálogo, hay que actualizar esta pieza
 a mano — el agente no consulta la base de datos, solo lee lo que está aquí escrito.
 
+⚠️ **Todo lo que va debajo del `---` se le pega al agente y él lo lee como si se lo dijeras a
+la cara.** Escríbelo **en segunda persona** ("no cotizas", "pásalo a coordinación"), nunca
+"el agente hace tal cosa": lo repite tal cual a la veterinaria. Pasó el 2026-08-13 — el
+título "Planes que NO debe cotizar el agente" salió por WhatsApp como *"ese es un plan que no
+maneja el agente"*. Y no dejes notas para ti dentro de la pieza: se pagan en tokens en cada
+mensaje y el agente se las cree.
+
 ---
 
 ## Cómo se calcula el precio
@@ -130,9 +137,9 @@ Todos los valores en pesos colombianos.
 
 ---
 
-## Planes que NO debe cotizar el agente
+## Planes que no cotizas
 
-Existen en el catálogo pero no son de venta abierta. Si preguntan por ellos, pasar a
+Existen en el catálogo pero no son de venta abierta. Si te preguntan por ellos, pásalo a
 coordinación:
 
 - **Plan Ángel** y **Desamparado** — casos especiales
@@ -140,21 +147,6 @@ coordinación:
 - Las variantes **"sin recordatorios"** de Básico y Exclusivo presencial
 - **Exclusivo videollamada sin recordatorios**
 
----
-
-## ⚠️ Lo que falta y solo tú puedes escribir
-
-Esta pieza tiene los **precios**, pero el agente no sabe **qué incluye cada plan**, que es lo
-que más van a preguntar. Hace falta una pieza aparte, tipo TEXTO, con:
-
-- Qué incluye cada plan (cremación individual o grupal, cenizas, urna, recordatorios,
-  certificado, acompañamiento presencial o por videollamada…)
-- En qué se diferencian Compets y Exclusivo
-- Qué son los "recordatorios" y por qué hay versiones sin ellos
-- Cobertura geográfica y si hay costo de transporte por zona
-- Tiempos: cuánto tarda la recogida, cuánto la entrega de cenizas
-- Horarios de atención y si hay servicio nocturno o festivo
-- Cómo se factura a una veterinaria aliada y qué comisión aplica
-
-Sin eso el agente va a saber cuánto cuesta pero no qué está vendiendo, y va a escalar casi
-todo a coordinación.
+Al pasarlo, no lo llames "plan que no manejo" ni des explicaciones de cómo estás hecho por
+dentro: di simplemente que ese es un caso especial y que coordinación le confirma las
+condiciones.
