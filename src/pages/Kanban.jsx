@@ -15,7 +15,7 @@ import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, 
 import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
-import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
+import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, volumenMesAliado, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
@@ -505,7 +505,12 @@ export default function Kanban() {
   const [aliadoSolData,   setAliadoSolData]   = useState(null) // datos del aliado de la solicitud
   const [pagoEnVet,       setPagoEnVet]       = useState(false) // recogida a domicilio pero el cliente paga en la veterinaria
 
-  async function calcularComisionPct(aliadoId, esVip, planId, tipoProceso) {
+  // `servicio` = { id, fecha_ingreso, created_at } cuando el servicio YA existe
+  // (asignarle una vet a uno que entró particular). Sin él se asume que se está
+  // creando: cuenta el mes corriente completo, igual que Registro.jsx. La
+  // diferencia importa porque un servicio existente se contaría a sí mismo y le
+  // entraría la escala del siguiente tramo — ver volumenMesAliado.
+  async function calcularComisionPct(aliadoId, esVip, planId, tipoProceso, servicio = null) {
     if (!aliadoId || !planId) return 0
     // DESAMPARADO no comisiona (ni VIP ni por volumen): la tasa fija VIP de
     // CREMACION_GRUPAL le entraba con 32 % y descontaba de un servicio social.
@@ -516,14 +521,10 @@ export default function Kanban() {
       if (['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(tipoProceso)) return 27
       return 32
     }
-    const hoy = new Date()
-    const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
-    const [{ count }, { data: filas }] = await Promise.all([
-      db.from('servicios').select('*', { count:'exact', head:true })
-        .eq('aliado_origen_id', aliadoId).gte('fecha_ingreso', inicioMes),
+    const [vol, { data: filas }] = await Promise.all([
+      volumenMesAliado(aliadoId, servicio),
       db.from('config_comisiones').select('porcentaje,plan_id,rango_min,rango_max').eq('es_vip', false),
     ])
-    const vol = count || 0
     const match = (filas || [])
       .filter(c => (c.plan_id === planId || c.plan_id === null) && c.rango_min <= vol && (c.rango_max === null || c.rango_max >= vol))
       .sort((a,b) => { if (a.plan_id && !b.plan_id) return -1; if (!a.plan_id && b.plan_id) return 1; return b.rango_min - a.rango_min })[0]
@@ -1288,22 +1289,21 @@ export default function Kanban() {
   // Comisión del aliado para un plan y su precio base (valor del plan), según la
   // tarifa vigente de config_comisiones (VIP + volumen del mes). Misma lógica que
   // el botón "recalcular por peso" y aplicarRecalculoPorPeso. Devuelve $ o null.
-  async function comisionParaPlan(aliadoId, planId, precioBase) {
+  // `servicio` = { id, fecha_ingreso, created_at } del servicio al que se le está
+  // cambiando el plan. Va siempre: aquí el servicio YA existe.
+  async function comisionParaPlan(aliadoId, planId, precioBase, servicio = null) {
     if (!aliadoId || !planId || !(precioBase > 0)) return null
     // Cambiar el plan A desamparado deja la comisión en 0 (el plan es la base
     // comisionable; si no se limpia, el cuadre la sigue sumando).
     const codigoPlanNuevo = planesKanban.find(p => String(p.id) === String(planId))?.codigo
     if (!planComisiona(codigoPlanNuevo)) return 0
-    const hoy = new Date()
-    const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
     // aliado va primero y separado: usarlo dentro del mismo destructuring del
     // Promise.all lanza ReferenceError (TDZ).
     const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', aliadoId).maybeSingle()
-    const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
-      db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', aliadoId).gte('fecha_ingreso', inicioMes),
+    const [serviciosMes, { data: filas }] = await Promise.all([
+      volumenMesAliado(aliadoId, servicio),
       db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
     ])
-    const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
     const match = (filas || [])
       .filter(c =>
         (c.plan_id === planId || c.plan_id === null) &&
@@ -1345,14 +1345,17 @@ export default function Kanban() {
         // PRESERVARLOS en valor_total: antes se recomputaba valor_total con solo
         // el plan y se perdían → el recibo reconstruía un bruto inflado y la
         // comisión salía sobre un total que no era el real (queja 2026-07-23).
+        // id/fecha_ingreso/created_at ubican al servicio en su mes para el tramo
+        // de comisión: sin ellos se cuenta a sí mismo y le entra la escala del
+        // tramo siguiente (ver volumenMesAliado).
         const { data: sv } = await db.from('servicios')
-          .select('comision_descontada, comision_aliado, aliado_origen_id, valor_total, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
+          .select('id, fecha_ingreso, created_at, comision_descontada, comision_aliado, aliado_origen_id, valor_total, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
           .eq('id', selected.servicio_id).maybeSingle()
         svActual = sv
         const descontada = sv?.comision_descontada === true
         let comisionNueva = null
         if (sv?.aliado_origen_id && (sv?.comision_aliado ?? 0) > 0)
-          comisionNueva = await comisionParaPlan(sv.aliado_origen_id, editPlanId, precioFinal)
+          comisionNueva = await comisionParaPlan(sv.aliado_origen_id, editPlanId, precioFinal, sv)
         const comisionVigente = comisionNueva != null ? comisionNueva : (sv?.comision_aliado ?? 0)
 
         // valor_plan = precio del plan nuevo (BASE comisionable). valor_total
@@ -1579,7 +1582,11 @@ export default function Kanban() {
     try {
       const al   = aliadoPorId(aliadoId)
       const plan = planPorId(detalle.plan_id)
-      const pct  = await calcularComisionPct(aliadoId, !!al?.vip, detalle.plan_id, plan?.tipo_proceso)
+      // Servicio existente: se pasa para que no se cuente a sí mismo en el tramo
+      // de volumen del aliado (ver volumenMesAliado).
+      const pct  = await calcularComisionPct(aliadoId, !!al?.vip, detalle.plan_id, plan?.tipo_proceso, {
+        id: selected?.servicio_id, fecha_ingreso: selected?.fecha_ingreso, created_at: detalle?.created_at,
+      })
       const valorPlan = await calcularPrecioPlan(detalle.plan_id)
       setAsignaComisionPct(pct)
       if (pct > 0 && valorPlan > 0) setAsignaComision(String(Math.round(valorPlan * pct / 100)))

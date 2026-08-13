@@ -71,11 +71,29 @@ export async function recategorizacionesPorServicio(servicioIds) {
         q => q.eq('tipo_novedad', 'NOTA').ilike('descripcion', 'Plan cambiado:%').order('created_at', { ascending: false })),
     ])
     const out = {}
-    const rec = id => out[id] || (out[id] = { plan: false, peso: false, detallePlan: null, detallePeso: null })
+    const rec = id => out[id] || (out[id] = { plan: false, peso: false, detallePlan: null, detallePeso: null, soloComision: false })
     for (const r of markers) {
       const e = rec(r.servicio_id)
       if (r.tipo_novedad === 'CAMBIO_PLAN') e.plan = true
-      else if (r.tipo_novedad === 'RECATEGORIZACION_PESO') { e.peso = true; if (!e.detallePeso) e.detallePeso = r.descripcion }
+      else if (r.tipo_novedad === 'RECATEGORIZACION_PESO') {
+        // Las que solo movieron la COMISIÓN no recategorizaron nada: su texto
+        // trae "comisión X → Y" y ninguna línea de valor. Se marcan aparte para
+        // no decirle "recategorizado por peso" a un gato, cuya tarifa FELINO es
+        // plana desde 1 kg (caso ORION, ago-2026). El criterio es por texto a
+        // propósito: así también acierta con las novedades ya guardadas.
+        const d = r.descripcion || ''
+        const soloCom = /comisi/i.test(d) && !/valor/i.test(d)
+        if (!e.peso) {
+          // `markers` viene ordenado desc, así que el primero es el más reciente:
+          // es el que se muestra en el tooltip.
+          e.peso = true; e.detallePeso = d; e.soloComision = soloCom
+        } else if (!soloCom) {
+          // Si ALGUNA movió el precio, manda la etiqueta de peso: es la señal
+          // fuerte y no puede quedar tapada por una recalculación de comisión
+          // posterior.
+          e.soloComision = false
+        }
+      }
     }
     for (const n of planNotas) {
       const e = rec(n.servicio_id)

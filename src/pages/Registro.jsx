@@ -13,7 +13,7 @@ import { Alert } from '@/components/ui/alert'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
-import { planComisiona } from '@/lib/precios'
+import { planComisiona, volumenMesAliado } from '@/lib/precios'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
   User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse
@@ -625,13 +625,11 @@ export default function Registro() {
 
       // ── No VIP: pisos de volumen mensual ─────────────────────────────────
       // 1. Contar servicios de este aliado en el mes actual
-      const hoy = new Date()
-      const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
-      const { data: svcsDelMes } = await db.from('servicios')
-        .select('id, planes(codigo)')
-        .eq('aliado_origen_id', aliadoSeleccionado.id_aliado)
-        .gte('fecha_ingreso', inicioMes)
-      const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+      // Servicio NUEVO: su fila todavía no existe, así que el mes corriente
+      // completo son justamente "los servicios ya hechos". Misma cuenta que usa
+      // el recálculo posterior (volumenMesAliado), que es lo que hace que la
+      // comisión no cambie sola después de emitido el recibo.
+      const serviciosMes = await volumenMesAliado(aliadoSeleccionado.id_aliado)
       // 2. Traer todas las comisiones y filtrar en JS (evita problemas con OR doble en PostgREST)
       const { data: filas } = await db.from('config_comisiones')
         .select('porcentaje, plan_id, rango_min, rango_max')

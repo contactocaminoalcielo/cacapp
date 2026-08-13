@@ -16,9 +16,12 @@ export default function RecatBadges({ recat, size = 'sm', className = '' }) {
       )}
       {recat.peso && (
         <span
-          title={recat.detallePeso || 'El precio se recalculó por un cambio de peso.'}
-          className={`${px} font-bold rounded-full bg-[#ECFEFF] text-[#0E7490] whitespace-nowrap cursor-help`}>
-          ⚖ Recategorizado por peso
+          title={recat.detallePeso || (recat.soloComision
+            ? 'Cambió la comisión del aliado; el precio del plan no se movió.'
+            : 'El precio se recalculó por un cambio de peso.')}
+          className={`${px} font-bold rounded-full whitespace-nowrap cursor-help ${
+            recat.soloComision ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#ECFEFF] text-[#0E7490]'}`}>
+          {recat.soloComision ? '💼 Comisión recalculada' : '⚖ Recategorizado por peso'}
         </span>
       )}
     </span>

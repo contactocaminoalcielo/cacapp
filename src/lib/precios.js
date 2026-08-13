@@ -50,6 +50,71 @@ function cargarTarifasEspecie() {
 export function invalidarTarifasEspecie() { promesaEspecies = null }
 
 /**
+ * Cuántos servicios llevaba el aliado en el mes ANTES de éste. Es el número que
+ * ubica el tramo de volumen en `config_comisiones`.
+ *
+ * ⚠️ La posición de un servicio dentro del mes NO cambia con el tiempo, así que
+ * esta cuenta tiene que dar lo mismo hoy que dentro de un mes. Antes no lo hacía
+ * y por eso la comisión se movía sola DESPUÉS de emitido el recibo:
+ *
+ *  · **el servicio se contaba a sí mismo.** Al registrar, su fila todavía no
+ *    existe (no se cuenta); al recalcular, ya existe (sí se cuenta) → todo corre
+ *    un puesto y al 2º servicio del mes le entra la escala del 3º. Caso ORION
+ *    (PetPals, 6-ago-2026): 25 % → 30 % dos días después del recibo.
+ *  · **se medía el mes en que corría el recálculo, no el del servicio.** Uno de
+ *    fin de mes recalculado unos días después se tarifaba contra un mes que
+ *    apenas arrancaba. Caso EIMY (Animal City, ingreso 31-jul, recalculada el
+ *    2-ago): julio tenía 13 servicios, agosto 0 → le bajó del 32 % al 27 %.
+ *
+ * Regla confirmada por David (2026-08-13): **la escala cuenta los servicios YA
+ * hechos en el mes; la nueva entra en el TERCER servicio.** Con los tramos
+ * no-VIP de Básico (`0–1`=25 %, `2+`=30 %): 1º→0→25 %, 2º→1→25 %, 3º→2→30 %.
+ *
+ * @param {string} aliadoId
+ * @param {{id?:string, fecha_ingreso?:string, created_at?:string}|null} servicio
+ *        Servicio YA existente que se está recalculando. `null` (o sin fecha)
+ *        = servicio nuevo que aún no está en la DB → cuenta el mes corriente
+ *        completo, que es exactamente lo que ve `Registro.jsx` al registrar.
+ * @returns {Promise<number>}
+ */
+export async function volumenMesAliado(aliadoId, servicio = null) {
+  if (!aliadoId) return 0
+
+  // La ventana se arma con aritmética de strings sobre la columna DATE. Meter
+  // `fecha_ingreso` en un `new Date()` la corre un día según la zona horaria
+  // (ver la nota de fechas del proyecto) y eso movería de mes a los servicios
+  // del día 1 y del último día.
+  const ymd = String(servicio?.fecha_ingreso || '').slice(0, 10)
+  const m   = /^(\d{4})-(\d{2})-\d{2}$/.exec(ymd)
+  let inicioMes, inicioMesSiguiente = null
+  if (m) {
+    const anio = Number(m[1]), mes = Number(m[2])
+    inicioMes          = `${m[1]}-${m[2]}-01`
+    inicioMesSiguiente = mes === 12
+      ? `${anio + 1}-01-01`
+      : `${anio}-${String(mes + 1).padStart(2, '0')}-01`
+  } else {
+    const hoy = new Date()
+    inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
+  }
+
+  let q = db.from('servicios')
+    .select('id, planes(codigo)')
+    .eq('aliado_origen_id', aliadoId)
+    .gte('fecha_ingreso', inicioMes)
+  // Sin tope superior se colarían los meses siguientes al recalcular en el futuro.
+  if (inicioMesSiguiente) q = q.lt('fecha_ingreso', inicioMesSiguiente)
+  // No se cuenta a sí mismo. `created_at` deja fuera además a los que entraron
+  // después: reproduce el conjunto que existía cuando éste se registró.
+  if (servicio?.id)         q = q.neq('id', servicio.id)
+  if (servicio?.created_at) q = q.lt('created_at', servicio.created_at)
+
+  const { data } = await q
+  // DESAMPARADO es social: no comisiona y tampoco sube de tramo al aliado.
+  return (data || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
+}
+
+/**
  * Calcula el precio de un plan según peso y especie.
  * @param {Array}  planes       - [{id, codigo}] cargados de la tabla `planes`
  * @param {string} planId
@@ -142,7 +207,9 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
   const especieId = parseInt(especieIdRaw) || 0
   const [{ data: svcsActivos }, { data: planesData }] = await Promise.all([
     db.from('servicios')
-      .select('id, valor_total, valor_pagado, valor_plan, plan_id, aliado_origen_id, comision_aliado, comision_descontada')
+      // fecha_ingreso y created_at ubican al servicio en su mes para el tramo de
+      // comisión (volumenMesAliado). Sin ellas se contaría a sí mismo.
+      .select('id, valor_total, valor_pagado, valor_plan, plan_id, aliado_origen_id, comision_aliado, comision_descontada, fecha_ingreso, created_at')
       .eq('mascota_id', mascotaId)
       .neq('estado', 'ENTREGADO')
       .neq('estado', 'CANCELADO'),
@@ -174,19 +241,19 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       // (si no, el cuadre la volvería a sumar sobre el valor recalculado).
       if ((svc.comision_aliado ?? 0) > 0) nuevaComision = 0
     } else if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
-      const hoy = new Date()
-      const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`
       // El fetch del aliado va PRIMERO y separado: la consulta de config_comisiones
       // depende de aliado.vip. Meter las tres en un solo Promise.all referenciando
       // `aliado` dentro del mismo destructuring lanza ReferenceError por TDZ y el
       // recálculo muere en silencio (bug real: servicios con comisión de aliado
       // nunca se recalculaban al cambiar el peso).
       const { data: aliado } = await db.from('aliados').select('vip').eq('id_aliado', svc.aliado_origen_id).maybeSingle()
-      const [{ data: svcsDelMes }, { data: filas }] = await Promise.all([
-        db.from('servicios').select('id, planes(codigo)').eq('aliado_origen_id', svc.aliado_origen_id).gte('fecha_ingreso', inicioMes),
+      // `svc` va completo: este servicio YA existe, así que no debe contarse a sí
+      // mismo ni medirse contra el mes en que corre el recálculo (ver la nota de
+      // volumenMesAliado — casos ORION y EIMY).
+      const [serviciosMes, { data: filas }] = await Promise.all([
+        volumenMesAliado(svc.aliado_origen_id, svc),
         db.from('config_comisiones').select('porcentaje, plan_id, rango_min, rango_max').eq('es_vip', aliado?.vip ?? false),
       ])
-      const serviciosMes = (svcsDelMes || []).filter(s => s.planes?.codigo !== 'DESAMPARADO').length
       const match = (filas || [])
         .filter(c =>
           (c.plan_id === svc.plan_id || c.plan_id === null) &&
@@ -251,16 +318,24 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       const partes = []
       if (cambioPrecio) partes.push(`valor ${fmt(svc.valor_total || 0)} → ${fmt(nuevoValorTotal)}`)
       if (cambioComision) partes.push(`comisión ${fmt(svc.comision_aliado || 0)} → ${fmt(nuevaComision)}`)
-      const causa = motivo === 'especie'
-        ? `🐾 Precio recategorizado por cambio de especie`
-        : `⚖️ Precio recategorizado por nuevo peso`
+      // El texto tiene que decir lo que DE VERDAD se movió. Cuando solo cambia la
+      // comisión no se recategorizó nada: decir "recategorizado por nuevo peso"
+      // mandó a investigar a un gato de 6,16 kg cuya tarifa (FELINO) es plana
+      // desde 1 kg y por lo tanto nunca cambió (ORION, ago-2026).
+      const causa = !cambioPrecio
+        ? `💼 Comisión del aliado recalculada (el precio no cambió)`
+        : motivo === 'especie'
+          ? `🐾 Precio recategorizado por cambio de especie`
+          : `⚖️ Precio recategorizado por nuevo peso`
       await db.from('novedades_servicio').insert({
         servicio_id:  svc.id,
         tipo_novedad: 'RECATEGORIZACION_PESO',
         descripcion:  `${causa} (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
         // Traza del valor como NÚMERO (migración 089), para poder mostrar la
         // cadena "antes valía X → ahora Y" en la parte de pago sin leer texto.
-        ...trazaValor(svc.valor_total, nuevoValorTotal, 'PESO'),
+        // El motivo sigue al cambio real: marcar como PESO algo que solo movió la
+        // comisión desdibuja el historial de la caja de pago.
+        ...trazaValor(svc.valor_total, nuevoValorTotal, cambioPrecio ? 'PESO' : 'COMISION'),
       })
     } catch (_) { /* best-effort */ }
 
