@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
-import { recategorizacionesPorServicio } from '@/lib/servicios'
+import { recategorizacionesPorServicio, esRecatSoloComision } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 
@@ -3462,12 +3462,18 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   const peso = cuartoFrio[0]?.peso_kg
   // Recategorización derivada de las novedades ya cargadas (sin query extra).
   const recatModal = (() => {
-    const r = { plan: false, peso: false, detallePlan: null, detallePeso: null }
+    const r = { plan: false, peso: false, detallePlan: null, detallePeso: null, soloComision: true }
     for (const n of novedades) {
       if (n.tipo_novedad === 'CAMBIO_PLAN') r.plan = true
-      else if (n.tipo_novedad === 'RECATEGORIZACION_PESO') { r.peso = true; r.detallePeso = n.descripcion }
+      else if (n.tipo_novedad === 'RECATEGORIZACION_PESO') {
+        r.peso = true; r.detallePeso = n.descripcion
+        // Si ALGUNA movió el precio, manda la etiqueta de peso (misma regla que
+        // recategorizacionesPorServicio, compartida para que no se desvíen).
+        if (!esRecatSoloComision(n.descripcion)) r.soloComision = false
+      }
       else if (n.tipo_novedad === 'NOTA' && /^Plan cambiado:/.test(n.descripcion || '')) { r.plan = true; r.detallePlan = n.descripcion }
     }
+    if (!r.peso) r.soloComision = false
     return r
   })()
   const fmtTS = ts => ts ? new Date(ts).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''

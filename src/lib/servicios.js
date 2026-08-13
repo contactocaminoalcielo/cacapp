@@ -53,6 +53,26 @@ export async function trazaValorServicio(servicioId) {
   } catch { return [] }
 }
 
+/**
+ * ¿Esta novedad de recategorización solo movió la COMISIÓN, sin tocar el precio?
+ *
+ * Su texto trae "comisión X → Y" y ninguna línea de valor. Importa porque decir
+ * "recategorizado por peso" cuando el precio no se movió mandó a investigar a un
+ * gato de 6,16 kg, cuya tarifa FELINO es plana desde 1 kg y por lo tanto nunca
+ * pudo cambiar con el peso (ORION, ago-2026).
+ *
+ * El criterio es por TEXTO a propósito: así también acierta con las novedades ya
+ * guardadas, que se escribieron todas con el mismo encabezado engañoso.
+ *
+ * Vive aquí para que Gestión/Kanban (vía `recategorizacionesPorServicio`) y el
+ * modal de Finanzas usen exactamente la misma regla — tener dos copias de una
+ * cuenta que se desvían es justo lo que causó este bug.
+ */
+export function esRecatSoloComision(descripcion) {
+  const d = descripcion || ''
+  return /comisi/i.test(d) && !/valor/i.test(d)
+}
+
 // Detecta qué servicios fueron RECATEGORIZADOS (cambio de plan o recálculo de
 // precio por peso), leyendo novedades_servicio. Para mostrar una etiqueta de
 // alerta en la mascota. Devuelve { [servicioId]: { plan, peso, detallePlan,
@@ -76,13 +96,7 @@ export async function recategorizacionesPorServicio(servicioIds) {
       const e = rec(r.servicio_id)
       if (r.tipo_novedad === 'CAMBIO_PLAN') e.plan = true
       else if (r.tipo_novedad === 'RECATEGORIZACION_PESO') {
-        // Las que solo movieron la COMISIÓN no recategorizaron nada: su texto
-        // trae "comisión X → Y" y ninguna línea de valor. Se marcan aparte para
-        // no decirle "recategorizado por peso" a un gato, cuya tarifa FELINO es
-        // plana desde 1 kg (caso ORION, ago-2026). El criterio es por texto a
-        // propósito: así también acierta con las novedades ya guardadas.
-        const d = r.descripcion || ''
-        const soloCom = /comisi/i.test(d) && !/valor/i.test(d)
+        const soloCom = esRecatSoloComision(r.descripcion)
         if (!e.peso) {
           // `markers` viene ordenado desc, así que el primero es el más reciente:
           // es el que se muestra en el tooltip.
