@@ -225,6 +225,24 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     .in('servicio_activado_id', svcsActivos.map(s => s.id))
   const deAfiliacion = new Set((activaciones || []).map(a => a.servicio_activado_id))
 
+  // Servicios que YA tienen recibo emitido: su comisión queda CONGELADA.
+  //
+  // El precio sí se sigue ajustando al peso (para eso existe esta función), pero
+  // la comisión no se vuelve a tocar. Decisión de David (2026-08-13): "estos
+  // cambios empiezan desde este momento", el pasado no se reescribe.
+  //
+  // El punto no es que la cuenta del tramo esté mal — ya se corrigió, ver
+  // volumenMesAliado. Es que la comisión NO debe moverse como EFECTO SECUNDARIO
+  // de editar el peso o la especie: el recibo ya está firmado y entregado, y una
+  // comisión distinta a la del papel es justamente el lío que destapó ORION.
+  //
+  // `recibos_tecnico.servicio_id` alcanza: verificado en prod, no hay ningún
+  // servicio que tenga recibo solo por `recibo_medios_pago`.
+  const { data: recibos } = await db.from('recibos_tecnico')
+    .select('servicio_id')
+    .in('servicio_id', svcsActivos.map(s => s.id))
+  const conRecibo = new Set((recibos || []).map(r => r.servicio_id))
+
   const cambios = []
   for (const svc of svcsActivos) {
     if (!svc.plan_id) continue
@@ -236,11 +254,20 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
     // Recalcular comisión desde config_comisiones si el servicio tiene aliado activo
     let nuevaComision = null
     const codigoPlanSvc = planesData.find(p => String(p.id) === String(svc.plan_id))?.codigo
+    // Para explicarlo en la ficha: sin esto, ver el precio moverse y la comisión
+    // quieta parece otro bug. Exige `planComisiona` porque el DESAMPARADO sí se
+    // limpia aunque haya recibo — decir ahí "no se tocó" sería mentira.
+    const comisionCongelada = planComisiona(codigoPlanSvc) && !!svc.aliado_origen_id
+                           && (svc.comision_aliado ?? 0) > 0 && conRecibo.has(svc.id)
     if (!planComisiona(codigoPlanSvc)) {
       // Desamparado: sin comisión. Si venía con una registrada, se limpia aquí
       // (si no, el cuadre la volvería a sumar sobre el valor recalculado).
+      //
+      // Este caso NO se congela aunque haya recibo: "el desamparado nunca
+      // comisiona" es una regla absoluta, no una tarifa que se mueve por tramos.
+      // Dejar una comisión viva ahí es un cobro que no existe.
       if ((svc.comision_aliado ?? 0) > 0) nuevaComision = 0
-    } else if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0) {
+    } else if (svc.aliado_origen_id && (svc.comision_aliado ?? 0) > 0 && !conRecibo.has(svc.id)) {
       // El fetch del aliado va PRIMERO y separado: la consulta de config_comisiones
       // depende de aliado.vip. Meter las tres en un solo Promise.all referenciando
       // `aliado` dentro del mismo destructuring lanza ReferenceError por TDZ y el
@@ -330,7 +357,8 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
       await db.from('novedades_servicio').insert({
         servicio_id:  svc.id,
         tipo_novedad: 'RECATEGORIZACION_PESO',
-        descripcion:  `${causa} (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`,
+        descripcion:  `${causa} (${planNombre}, ${pesoNuevo} kg): ${partes.join(' · ')}.`
+                      + (comisionCongelada ? ' La comisión del aliado NO se tocó: el recibo ya estaba emitido.' : ''),
         // Traza del valor como NÚMERO (migración 089), para poder mostrar la
         // cadena "antes valía X → ahora Y" en la parte de pago sin leer texto.
         // El motivo sigue al cambio real: marcar como PESO algo que solo movió la
