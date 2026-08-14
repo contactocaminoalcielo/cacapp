@@ -11,6 +11,7 @@
 // (es el mismo bug que ya mordió en la app del técnico).
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import ValorarRespuesta from '@/components/ValorarRespuesta'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -640,6 +641,13 @@ function Burbuja({ m }) {
         </p>
 
         <div className={`flex items-center gap-1.5 mt-1 justify-end`}>
+          {/* Lo que salió del AGENTE se puede corregir aquí mismo: `enviado_por`
+              en NULL es justo lo que lo distingue de lo que escribió una
+              persona (migración 099). No se ofrece sobre un envío fallido:
+              corregir algo que la veterinaria nunca recibió no significa nada. */}
+          {mio && !m.enviado_por && !fallo && (
+            <ValorarRespuesta mensajeId={m.id} claro />
+          )}
           {mio && m.enviado_por_nombre && (
             <span className={`text-[9.5px] ${fallo ? 'text-gray-400' : 'text-white/60'}`}>
               {m.enviado_por_nombre}

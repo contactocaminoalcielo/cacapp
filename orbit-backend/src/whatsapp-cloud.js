@@ -141,6 +141,12 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
       // vuelta serían megabytes por refresco. La pantalla las pide una a una.
       `SELECT m.id, m.direccion, m.tipo, m.texto, m.estado, m.estado_en, m.error,
               m.ocurrido_en, m.wa_message_id,
+              -- El id crudo ADEMAS del nombre: es lo que distingue una respuesta
+              -- del AGENTE (NULL) de una escrita por una persona, y de eso
+              -- depende cual se puede valorar (migracion 099). Deducirlo de la
+              -- ausencia de nombre falla con un registro de personal sin nombre
+              -- cargado: su respuesta pasaria por del agente.
+              m.enviado_por,
               TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS enviado_por_nombre,
               (md.archivo IS NOT NULL) AS tiene_archivo,
               md.mime  AS archivo_mime,
