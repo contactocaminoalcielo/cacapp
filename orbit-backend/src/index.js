@@ -35,6 +35,8 @@ import {
 import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
+  valorarRespuesta, listarValoraciones, aplicarValoracion, descartarValoracion,
+  listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
 import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
 
@@ -308,6 +310,77 @@ app.post('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'agente/guardar', e) }
+})
+
+// ── Valoraciones y reglas (migración 099) ──
+// ⚠️ TODAS cuelgan de dos segmentos a propósito: `GET /agente/:clave` y
+// `POST /agente/:clave` son de un solo segmento y se comerían cualquier ruta
+// nueva tipo `/agente/valoraciones` — Express resuelve por orden de registro y
+// el fallo sería mudo (leería "valoraciones" como el nombre del agente).
+
+app.post('/agente/valoraciones/nueva', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await valorarRespuesta({
+      mensajeId: req.body?.mensaje_id, buena: req.body?.buena,
+      correccion: req.body?.correccion, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/valorar', e) }
+})
+
+app.get('/agente/valoraciones/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await listarValoraciones({
+      agenteId: Number(req.params.agenteId), estado: req.query.estado || 'NUEVA',
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/valoraciones', e) }
+})
+
+app.post('/agente/valoraciones/:id/aplicar', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await aplicarValoracion({
+      id: req.params.id, texto: req.body?.texto, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/valoracion-aplicar', e) }
+})
+
+app.post('/agente/valoraciones/:id/descartar', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await descartarValoracion({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/valoracion-descartar', e) }
+})
+
+app.get('/agente/reglas/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await listarReglas({ agenteId: Number(req.params.agenteId) })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/reglas', e) }
+})
+
+app.post('/agente/reglas/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await crearRegla({
+      agenteId: Number(req.params.agenteId), texto: req.body?.texto, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/regla-crear', e) }
+})
+
+app.patch('/agente/reglas/regla/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await guardarRegla({ id: req.params.id, datos: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/regla-guardar', e) }
+})
+
+app.delete('/agente/reglas/regla/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await borrarRegla({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/regla-borrar', e) }
 })
 
 app.post('/agente/conocimiento/:agenteId', requireAuth, rolAgente, async (req, res) => {

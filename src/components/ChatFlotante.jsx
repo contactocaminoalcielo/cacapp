@@ -6,12 +6,13 @@
 // tenías abierto.
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { MessageCircle, X, ChevronLeft, Send, Volume2, VolumeX, Loader2 } from 'lucide-react'
+import { MessageCircle, X, ChevronLeft, Send, Volume2, VolumeX, Loader2, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { useChatWa } from '@/contexts/ChatWaContext'
 import {
   abrirHilo, enviarMensaje, marcarLeido,
   formatearNumero, haceCuanto, horaMensaje, restanteVentana,
 } from '@/lib/whatsappInbox'
+import { valorarRespuesta } from '@/lib/agenteApi'
 
 const VERDE = '#3D5A27'
 
@@ -93,6 +94,79 @@ function Lista({ conversaciones, onAbrir }) {
   )
 }
 
+/**
+ * Marcar una respuesta del agente como buena o mala, y decir qué debió decir.
+ *
+ * No cambia nada del agente por sí solo: queda como corrección para que
+ * coordinación la revise en la pantalla del agente y decida si se vuelve regla
+ * (migración 099). Aquí se marca en caliente, que es cuando uno se acuerda.
+ */
+function Valorar({ mensajeId }) {
+  const [marca, setMarca] = useState(null)      // null | true | false
+  const [abierto, setAbierto] = useState(false)
+  const [texto, setTexto] = useState('')
+  const [guardando, setGuardando] = useState(false)
+
+  async function marcar(buena, correccion = null) {
+    setGuardando(true)
+    try {
+      await valorarRespuesta(mensajeId, buena, correccion)
+      setMarca(buena)
+      setAbierto(false)
+      setTexto('')
+    } catch { /* se puede volver a intentar; no se rompe el chat */ }
+    finally { setGuardando(false) }
+  }
+
+  if (marca !== null && !abierto) {
+    return (
+      <span className="mt-0.5 text-[9px] text-gray-400">
+        {marca ? '👍 marcada como buena' : '👎 corrección enviada'}
+      </span>
+    )
+  }
+
+  return (
+    <div className="mt-0.5 flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1">
+        <button
+          type="button" disabled={guardando} onClick={() => marcar(true)}
+          title="Estuvo bien" className="p-0.5 text-gray-300 hover:text-emerald-600 transition-colors"
+        >
+          <ThumbsUp size={12} />
+        </button>
+        <button
+          type="button" disabled={guardando} onClick={() => setAbierto(a => !a)}
+          title="Estuvo mal" className={`p-0.5 transition-colors ${abierto ? 'text-red-500' : 'text-gray-300 hover:text-red-500'}`}
+        >
+          <ThumbsDown size={12} />
+        </button>
+      </div>
+      {abierto && (
+        <div className="w-[240px] rounded-xl border border-gray-200 bg-white p-2 shadow-sm">
+          <textarea
+            rows={2} value={texto} onChange={e => setTexto(e.target.value)}
+            placeholder="¿Qué debió responder?"
+            className="w-full text-[11px] rounded-lg border border-gray-200 px-2 py-1.5 resize-y outline-none focus:border-gray-400"
+          />
+          <div className="flex justify-end gap-1 mt-1">
+            <button type="button" onClick={() => setAbierto(false)}
+              className="px-2 py-1 text-[11px] text-gray-500 hover:text-gray-800">Cancelar</button>
+            <button
+              type="button" disabled={guardando || !texto.trim()}
+              onClick={() => marcar(false, texto.trim())}
+              className="px-2 py-1 text-[11px] rounded-lg text-white disabled:opacity-40"
+              style={{ backgroundColor: VERDE }}
+            >
+              Enviar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Hilo({ contacto, onVolver }) {
   const { marcarVistaLocal } = useChatWa()
   const [hilo, setHilo] = useState(null)
@@ -170,17 +244,25 @@ function Hilo({ contacto, onVolver }) {
         )}
         {!cargando && (hilo?.mensajes || []).map(m => (
           <div key={m.id} className={`flex ${m.direccion === 'OUT' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[80%] rounded-2xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap break-words ${
-                m.direccion === 'OUT' ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-200 rounded-bl-sm'
-              }`}
-              style={m.direccion === 'OUT' ? { backgroundColor: VERDE } : undefined}
-            >
-              {m.texto || <span className="italic opacity-70">[adjunto — ábrelo en WhatsApp]</span>}
-              <div className={`mt-0.5 text-[9px] ${m.direccion === 'OUT' ? 'text-white/60' : 'text-gray-400'}`}>
-                {horaMensaje(m.ocurrido_en)}
-                {m.direccion === 'OUT' && m.enviado_por == null && ' · agente'}
+            <div className={`max-w-[80%] ${m.direccion === 'OUT' ? 'items-end' : 'items-start'} flex flex-col`}>
+              <div
+                className={`rounded-2xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap break-words ${
+                  m.direccion === 'OUT' ? 'text-white rounded-br-sm' : 'bg-white text-gray-800 border border-gray-200 rounded-bl-sm'
+                }`}
+                style={m.direccion === 'OUT' ? { backgroundColor: VERDE } : undefined}
+              >
+                {m.texto || <span className="italic opacity-70">[adjunto — ábrelo en WhatsApp]</span>}
+                <div className={`mt-0.5 text-[9px] ${m.direccion === 'OUT' ? 'text-white/60' : 'text-gray-400'}`}>
+                  {horaMensaje(m.ocurrido_en)}
+                  {m.direccion === 'OUT' && m.enviado_por == null && ' · agente'}
+                </div>
               </div>
+              {/* Solo las respuestas del AGENTE: valorar lo que escribió una
+                  persona no significa nada, y `enviado_por` es justo lo que los
+                  distingue (el backend lo vuelve a comprobar). */}
+              {m.direccion === 'OUT' && m.enviado_por == null && (
+                <Valorar mensajeId={m.id} />
+              )}
             </div>
           </div>
         ))}

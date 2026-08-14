@@ -164,3 +164,35 @@ export function tokensAprox({ caracteres_texto = 0, imagenes = 0 }) {
   // ~4 caracteres por token en español; una imagen ronda los 1.500 tokens.
   return Math.round(caracteres_texto / 4) + imagenes * 1500
 }
+
+// ── Valoraciones y reglas (migración 099) ────────────────────────────────────
+// El circuito: se marca una respuesta en el chat → queda como VALORACIÓN →
+// coordinación la asciende a REGLA → las reglas activas entran en el contexto.
+// Nada asciende solo: dos correcciones que se contradigan vuelven al agente
+// errático sin que nadie lo note.
+
+export const valorarRespuesta = (mensajeId, buena, correccion) =>
+  orbitApi('/agente/valoraciones/nueva', {
+    method: 'POST',
+    body: { mensaje_id: mensajeId, buena, correccion },
+  })
+
+export const cargarValoraciones = (agenteId, estado = 'NUEVA') =>
+  orbitApi(`/agente/valoraciones/${agenteId}?estado=${encodeURIComponent(estado)}`)
+
+export const aplicarValoracion = (id, texto) =>
+  orbitApi(`/agente/valoraciones/${id}/aplicar`, { method: 'POST', body: { texto } })
+
+export const descartarValoracion = (id) =>
+  orbitApi(`/agente/valoraciones/${id}/descartar`, { method: 'POST' })
+
+export const cargarReglas = (agenteId) => orbitApi(`/agente/reglas/${agenteId}`)
+
+export const crearRegla = (agenteId, texto) =>
+  orbitApi(`/agente/reglas/${agenteId}`, { method: 'POST', body: { texto } })
+
+export const actualizarRegla = (id, datos) =>
+  orbitApi(`/agente/reglas/regla/${id}`, { method: 'PATCH', body: datos })
+
+export const borrarRegla = (id) =>
+  orbitApi(`/agente/reglas/regla/${id}`, { method: 'DELETE' })

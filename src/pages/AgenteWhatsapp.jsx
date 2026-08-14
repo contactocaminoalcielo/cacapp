@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
+import ReglasYCorrecciones from '@/components/agente/ReglasYCorrecciones'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -21,7 +22,7 @@ import {
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
   FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check,
-  History, HelpCircle, RefreshCw, User, MessageSquare,
+  History, HelpCircle, RefreshCw, User, MessageSquare, Scale,
 } from 'lucide-react'
 
 const ICONO_TIPO = { TEXTO: FileText, TABLA: Table2, IMAGEN: ImageIcon, DOCUMENTO: FileType }
@@ -60,6 +61,13 @@ export default function AgenteWhatsapp() {
         effort:           r.agente.effort,
         max_turnos:       r.agente.max_turnos,
         phone_number_ids: (r.agente.phone_number_ids || []).join(', '),
+        // Se muestran en SEGUNDOS: nadie piensa en milisegundos, y pedirlos así
+        // invita a equivocarse por un factor de mil justo en el número que
+        // decide si el agente interrumpe a media frase.
+        espera_s:         Math.round((r.agente.espera_ms ?? 12000) / 1000),
+        espera_max_s:     Math.round((r.agente.espera_max_ms ?? 30000) / 1000),
+        seg_minutos:      r.agente.seguimiento_enlace_minutos ?? 15,
+        seg_texto:        r.agente.seguimiento_enlace_texto || '',
       })
       setError(null)
     } catch (e) {
@@ -97,6 +105,10 @@ export default function AgenteWhatsapp() {
       || ajustes.effort !== agente.effort
       || Number(ajustes.max_turnos) !== agente.max_turnos
       || ajustes.phone_number_ids !== (agente.phone_number_ids || []).join(', ')
+      || Number(ajustes.espera_s) * 1000 !== (agente.espera_ms ?? 12000)
+      || Number(ajustes.espera_max_s) * 1000 !== (agente.espera_max_ms ?? 30000)
+      || Number(ajustes.seg_minutos) !== (agente.seguimiento_enlace_minutos ?? 15)
+      || ajustes.seg_texto !== (agente.seguimiento_enlace_texto || '')
   }, [agente, ajustes, instrucciones])
 
   const guardar = async () => {
@@ -109,6 +121,10 @@ export default function AgenteWhatsapp() {
         effort:           ajustes.effort,
         max_turnos:       Number(ajustes.max_turnos),
         phone_number_ids: ids,
+        espera_ms:        Math.round(Number(ajustes.espera_s) * 1000),
+        espera_max_ms:    Math.round(Number(ajustes.espera_max_s) * 1000),
+        seguimiento_enlace_minutos: Number(ajustes.seg_minutos),
+        seguimiento_enlace_texto:   ajustes.seg_texto,
       })
       setAgente(a => ({ ...a, ...r.agente }))
       setGuardado(true); setTimeout(() => setGuardado(false), 2500)
@@ -496,6 +512,31 @@ export default function AgenteWhatsapp() {
                 onChange={e => setAjustes(a => ({ ...a, max_turnos: e.target.value }))} />
             </Campo>
 
+            <Campo label="Espera antes de responder (segundos)"
+              ayuda="Las clínicas escriben de tres en tres. El agente aguarda este silencio para contestar UNA vez a todo. Corto interrumpe a media frase; largo parece abandono.">
+              <Input type="number" min={0} max={120} value={ajustes.espera_s}
+                onChange={e => setAjustes(a => ({ ...a, espera_s: e.target.value }))} />
+            </Campo>
+
+            <Campo label="Espera máxima (segundos)"
+              ayuda="Techo contado desde el primer mensaje sin responder. Sin él, quien escribe sin pausas no recibiría respuesta nunca. No puede ser menor que la espera.">
+              <Input type="number" min={0} max={300} value={ajustes.espera_max_s}
+                onChange={e => setAjustes(a => ({ ...a, espera_max_s: e.target.value }))} />
+            </Campo>
+
+            <Campo label="Volver sobre el enlace (minutos)"
+              ayuda="Si mandó el enlace de registro y nadie contestó, vuelve a preguntar una sola vez. 0 lo apaga. Se cancela solo si contestan, si llega la solicitud o si la toma una persona.">
+              <Input type="number" min={0} max={1440} value={ajustes.seg_minutos}
+                onChange={e => setAjustes(a => ({ ...a, seg_minutos: e.target.value }))} />
+            </Campo>
+
+            <Campo label="Qué dice al volver" className="sm:col-span-2"
+              ayuda="El mensaje exacto del recordatorio. Ofrecer tomar los datos por chat es lo que recupera el registro.">
+              <textarea rows={2} value={ajustes.seg_texto}
+                onChange={e => setAjustes(a => ({ ...a, seg_texto: e.target.value }))}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
+            </Campo>
+
             <Campo label="Líneas donde responde" className="sm:col-span-2"
               ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna.">
               <Input value={ajustes.phone_number_ids}
@@ -503,6 +544,13 @@ export default function AgenteWhatsapp() {
                 placeholder="805890339283619" />
             </Campo>
           </div>
+        </section>
+
+        {/* ── Correcciones y reglas (migración 099) ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <Cabecera icono={Scale} titulo="Correcciones y reglas"
+            sub="Lo que marcas en el chat llega aquí. Tú decides qué se convierte en norma para el agente." />
+          <ReglasYCorrecciones agenteId={agente.id} onCambio={refrescar} />
         </section>
 
         {/* ── Bitácora ── */}

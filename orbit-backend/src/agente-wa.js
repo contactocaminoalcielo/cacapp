@@ -69,6 +69,17 @@ const ESPERA_MS = Math.max(0, Number(process.env.AGENTE_WA_ESPERA_MS || 12000))
 const ESPERA_MAX_MS = Math.max(ESPERA_MS, Number(process.env.AGENTE_WA_ESPERA_MAX_MS || 30000))
 
 /**
+ * Los tiempos configurables de la fila del agente. Un NULL o una basura no
+ * pueden dejar el agente respondiendo al instante ni sin responder nunca: se
+ * cae al valor de siempre. `0` SÍ es válido —responder sin esperar— y por eso
+ * no vale un `||`.
+ */
+function tiempoDe(valor, porDefecto) {
+  const n = Number(valor)
+  return Number.isFinite(n) && n >= 0 ? n : porDefecto
+}
+
+/**
  * El tope de turnos es por VENTANA, no de por vida.
  *
  * Antes se contaban todas las respuestas dadas a ese contacto desde siempre, sin
@@ -565,6 +576,27 @@ async function construirSistema(agente) {
 
   const bloques = [{ type: 'text', text: agente.instrucciones || '' }]
 
+  // ── Reglas aprobadas (migración 099) ──
+  // Salen de corregir respuestas concretas en el chat, pero NINGUNA llega aquí
+  // sola: coordinación las asciende una por una. Van DESPUÉS del contexto y
+  // marcadas como correcciones para que pesen sobre él — son, literalmente, "lo
+  // que hiciste mal la última vez".
+  const { rows: reglas } = await pool.query(
+    `SELECT texto FROM public.agente_wa_reglas
+      WHERE agente_id = $1 AND activo ORDER BY orden, id`,
+    [agente.id]
+  )
+  if (reglas.length) {
+    bloques.push({
+      type: 'text',
+      text: '# Correcciones de coordinación\n\n'
+        + 'Cada una viene de una respuesta tuya que salió mal y que una persona del equipo '
+        + 'corrigió. Pesan por encima de lo anterior: si algo aquí contradice al resto, manda '
+        + 'esto.\n\n'
+        + reglas.map((r, i) => `${i + 1}. ${r.texto}`).join('\n'),
+    })
+  }
+
   const textos = piezas.filter(p => p.tipo !== 'IMAGEN' && p.texto)
   if (textos.length) {
     bloques.push({
@@ -810,7 +842,7 @@ function textoDe(contenido) {
 async function agenteParaLinea(phoneNumberId) {
   const { rows } = await pool.query(
     `SELECT id, clave, activo, instrucciones, modelo, effort, max_turnos, phone_number_ids,
-            seguimiento_enlace_minutos
+            seguimiento_enlace_minutos, espera_ms, espera_max_ms
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)
       LIMIT 1`,
@@ -883,9 +915,14 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     if (p.ejecutando) return
 
     if (p.timer) clearTimeout(p.timer)
+    // Los tiempos salen de la fila del agente (migración 099), no del `.env`:
+    // ajustarlos era recrear el contenedor. Se guardan en la entrada porque al
+    // terminar de responder hay que reprogramar y allí ya no hay agente a mano.
+    p.esperaMs    = tiempoDe(agente.espera_ms, ESPERA_MS)
+    p.esperaMaxMs = Math.max(p.esperaMs, tiempoDe(agente.espera_max_ms, ESPERA_MAX_MS))
     // El silencio de siempre, pero sin pasarse del techo desde el primer
     // mensaje: quien escribe sin pausas también merece respuesta.
-    const espera = Math.max(0, Math.min(ESPERA_MS, p.desde + ESPERA_MAX_MS - Date.now()))
+    const espera = Math.max(0, Math.min(p.esperaMs, p.desde + p.esperaMaxMs - Date.now()))
     p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
     // Que un temporizador pendiente no impida al proceso apagarse limpio.
     p.timer.unref?.()
@@ -966,7 +1003,9 @@ async function atender(num) {
       // Llegó algo mientras respondíamos. Se vuelve a esperar el silencio: si la
       // vet sigue escribiendo, no la interrumpimos a media frase. Con el mismo
       // techo que en la programación normal.
-      const espera = Math.max(0, Math.min(ESPERA_MS, (p.desde || Date.now()) + ESPERA_MAX_MS - Date.now()))
+      const esperaMs    = p.esperaMs    ?? ESPERA_MS
+      const esperaMaxMs = p.esperaMaxMs ?? ESPERA_MAX_MS
+      const espera = Math.max(0, Math.min(esperaMs, (p.desde || Date.now()) + esperaMaxMs - Date.now()))
       p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
       p.timer.unref?.()
     } else {
