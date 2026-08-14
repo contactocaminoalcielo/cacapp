@@ -809,7 +809,8 @@ function textoDe(contenido) {
  */
 async function agenteParaLinea(phoneNumberId) {
   const { rows } = await pool.query(
-    `SELECT id, clave, activo, instrucciones, modelo, effort, max_turnos, phone_number_ids
+    `SELECT id, clave, activo, instrucciones, modelo, effort, max_turnos, phone_number_ids,
+            seguimiento_enlace_minutos
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)
       LIMIT 1`,
@@ -1187,6 +1188,131 @@ async function laLlevaUnHumano(contacto) {
   return fuera ? 'ya le respondieron desde otro panel (fuera de Orbit)' : null
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Seguimiento del enlace de registro (migración 098)
+//
+// El agente mandaba el enlace y ahí se moría el hilo: no sabía si lo llenaron y
+// no volvía. Es justo donde se pierde el registro, y con él la comisión de la
+// veterinaria — para lo que existe esta línea.
+//
+// ⚠️ No se decide nada al programar: se decide AL VENCER. En quince minutos la
+// clínica puede haber contestado, haberse registrado o estar hablando con un
+// coordinador, y en los tres casos insistir queda mal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SEGUIMIENTO_CADA_MS = 60_000
+
+/**
+ * Anota que hay que volver sobre esta conversación.
+ *
+ * `ON CONFLICT DO NOTHING` contra el índice parcial de "uno vivo por
+ * conversación": si el agente manda el enlace tres veces en la misma charla, el
+ * recordatorio sigue siendo uno solo.
+ */
+async function programarSeguimiento({ agente, contacto, motivo }) {
+  // 0 = apagado desde la pantalla del agente, sin desplegar nada.
+  const minutos = Number(agente?.seguimiento_enlace_minutos ?? 0)
+  if (!minutos || !contacto) return
+
+  await pool.query(
+    `INSERT INTO public.agente_wa_seguimientos (agente_id, contacto, motivo, programado_para)
+     VALUES ($1, $2, $3, now() + ($4 || ' minutes')::interval)
+     ON CONFLICT DO NOTHING`,
+    [agente.id, contacto, motivo, minutos]
+  )
+}
+
+/**
+ * Los que vencieron. Cada uno se vuelve a evaluar contra la realidad de AHORA,
+ * y solo sale el mensaje si sigue teniendo sentido.
+ *
+ * ⚠️ Asume UN proceso, igual que la agrupación de mensajes: con dos réplicas,
+ * las dos barrerían y el recordatorio saldría por duplicado. Hoy `orbit-backend`
+ * es un contenedor único; si eso cambia, esto necesita un claim con
+ * `FOR UPDATE SKIP LOCKED`.
+ */
+async function barrerSeguimientos() {
+  const { rows } = await pool.query(
+    `SELECT s.id, s.contacto, s.creado_en, a.activo, a.seguimiento_enlace_texto
+       FROM public.agente_wa_seguimientos s
+       JOIN public.agente_wa a ON a.id = s.agente_id
+      WHERE s.estado = 'PENDIENTE' AND s.programado_para <= now()
+      ORDER BY s.programado_para
+      LIMIT 20`
+  )
+
+  for (const s of rows) {
+    const cerrar = (estado, desenlace) => pool.query(
+      `UPDATE public.agente_wa_seguimientos
+          SET estado = $2, desenlace = $3, resuelto_en = now()
+        WHERE id = $1`,
+      [s.id, estado, desenlace]
+    ).catch(e => log(MOD, `no se pudo cerrar el seguimiento ${s.id} —`, e.message))
+
+    try {
+      if (!s.activo) { await cerrar('CANCELADO', 'el agente está apagado'); continue }
+
+      // ¿Contestó cualquier cosa? Entonces la conversación siguió sola y el
+      // recordatorio sobra.
+      const { rowCount: contesto } = await pool.query(
+        `SELECT 1 FROM public.whatsapp_mensajes
+          WHERE contacto = $1 AND direccion = 'IN' AND ocurrido_en > $2 LIMIT 1`,
+        [s.contacto, s.creado_en]
+      )
+      if (contesto) { await cerrar('CANCELADO', 'la veterinaria contestó'); continue }
+
+      // ¿Ya se registró? Es el objetivo del recordatorio: preguntarle si lo
+      // llenó cuando acaba de llenarlo es quedar como el que no se entera.
+      // Si el número no resuelve contra ningún aliado, `aliado_id` es NULL y
+      // esto no casa nunca: no se puede saber, así que no se cancela por aquí.
+      const { rowCount: registro } = await pool.query(
+        `SELECT 1 FROM public.solicitudes_servicio ss
+          WHERE ss.created_at > $2
+            AND ss.aliado_id = (SELECT aliado_id FROM public.v_whatsapp_conversaciones
+                                 WHERE contacto = $1)
+          LIMIT 1`,
+        [s.contacto, s.creado_en]
+      )
+      if (registro) { await cerrar('CANCELADO', 'ya llegó su solicitud'); continue }
+
+      const laLleva = await laLlevaUnHumano(s.contacto)
+      if (laLleva) { await cerrar('CANCELADO', laLleva); continue }
+
+      const texto = String(s.seguimiento_enlace_texto || '').trim()
+      if (!texto) { await cerrar('CANCELADO', 'no hay texto configurado'); continue }
+
+      // `enviarTexto` valida la ventana de 24 h antes de llamar a Meta: si se
+      // cerró (el backend estuvo caído medio día), devuelve error y aquí se
+      // cancela en vez de reventar.
+      const env = await enviarTexto({ contacto: s.contacto, texto, personalId: null })
+        .catch(e => ({ body: { ok: false, error: e.message } }))
+      if (!env.body?.ok) {
+        await cerrar('CANCELADO', `no se pudo enviar: ${env.body?.error || 'desconocido'}`)
+        continue
+      }
+
+      await cerrar('ENVIADO', null)
+      log(MOD, `seguimiento del enlace enviado a ${s.contacto}`)
+    } catch (e) {
+      await cerrar('CANCELADO', `error: ${e.message}`)
+      log(MOD, `seguimiento ${s.id} falló —`, e.message)
+    }
+  }
+}
+
+let temporizadorSeguimientos = null
+
+/** Lo arranca `index.js`. Idempotente: dos llamadas no dan dos barridos. */
+export function arrancarSeguimientos() {
+  if (temporizadorSeguimientos) return
+  temporizadorSeguimientos = setInterval(
+    () => barrerSeguimientos().catch(e => log(MOD, 'barrido de seguimientos falló —', e.message)),
+    SEGUIMIENTO_CADA_MS
+  )
+  temporizadorSeguimientos.unref?.()
+  log(MOD, `seguimiento del enlace: barrido cada ${SEGUIMIENTO_CADA_MS / 1000}s`)
+}
+
 /** Cómo se llama en cristiano lo que llegó, para el aviso y la etiqueta. */
 function nombrarTipos(tipos) {
   const NOMBRES = {
@@ -1338,6 +1464,14 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
             out = await enviarEnlaceRegistro({ contacto })
             if (out.tipo === 'ESCALAR') {
               await clasificarConversacion({ entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' }, contacto }).catch(() => {})
+            } else {
+              // Mandar el enlace y no volver nunca es donde se pierde el
+              // registro: la clínica lo deja para luego y nadie pregunta más.
+              // Se programa la vuelta; al vencer se decide si todavía tiene
+              // sentido. Nunca lanza: que falle el recordatorio no puede
+              // tumbar la respuesta que la vet está esperando.
+              await programarSeguimiento({ agente, contacto, motivo: 'ENLACE_REGISTRO' })
+                .catch(e => log(MOD, 'no se pudo programar el seguimiento —', e.message))
             }
           } else if (bloque.name === 'registrar_solicitud') {
             out = await registrarSolicitud({ entrada: bloque.input, agente, contacto })

@@ -36,7 +36,7 @@ import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
 } from './agente-config.js'
-import { probar as probarAgente } from './agente-wa.js'
+import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
 
 const app = express()
 
@@ -819,4 +819,9 @@ app.get(['/digitales/:id/archivo', '/memoriales/:id/archivo'], async (req, res) 
 })
 
 const PORT = parseInt(process.env.PORT) || 8787
-app.listen(PORT, () => log(`orbit-backend escuchando en :${PORT} (TZ=${process.env.TZ || 'UTC'})`))
+app.listen(PORT, () => {
+  log(`orbit-backend escuchando en :${PORT} (TZ=${process.env.TZ || 'UTC'})`)
+  // Se arranca DESPUÉS de escuchar: si el barrido tuviera un problema, que no
+  // impida levantar el servidor. Ver migración 098.
+  arrancarSeguimientos()
+})
