@@ -283,3 +283,121 @@ export async function imagenesRecientes(contacto, tope = 2) {
   )
   return rows.reverse()
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enviar una imagen (2026-08-14)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Lo que Meta acepta como imagen. Otros formatos los rechaza con un 400 seco. */
+const MIMES_IMAGEN = ['image/jpeg', 'image/png']
+/** Tope de Meta para imagen. Por encima devuelve un error que no lo explica. */
+const MAX_IMAGEN = 5 * 1024 * 1024
+/** Tope del pie de foto. */
+const MAX_PIE = 1024
+
+/**
+ * Sube la imagen a Meta y la manda.
+ *
+ * Va en DOS pasos y no en uno con `link` público a propósito: mandar un enlace
+ * obligaría a exponer la foto en una URL sin sesión, y por esta línea viajan
+ * fotos de mascotas fallecidas y datos de familias. Subida, el archivo vive en
+ * Meta 30 días y solo lo alcanza esta cuenta.
+ *
+ * La copia se guarda además en `whatsapp_media`, igual que las que entran: sin
+ * eso el hilo mostraría un mensaje vacío donde se envió una foto, y el
+ * coordinador no sabría qué mandó.
+ */
+export async function enviarImagen({ contacto, base64, mime, nombre = 'imagen', pie = '', personalId = null, enviarSobre }) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  if (!MIMES_IMAGEN.includes(mime)) {
+    return { status: 400, body: { ok: false, error: 'WhatsApp solo admite imágenes JPG o PNG' } }
+  }
+
+  let buf
+  try {
+    buf = Buffer.from(String(base64 || ''), 'base64')
+  } catch {
+    return { status: 400, body: { ok: false, error: 'No se pudo leer la imagen' } }
+  }
+  if (!buf.length) return { status: 400, body: { ok: false, error: 'La imagen llegó vacía' } }
+  if (buf.length > MAX_IMAGEN) {
+    return {
+      status: 400,
+      body: { ok: false, error: `La imagen pesa ${(buf.length / 1048576).toFixed(1)} MB y el tope son 5 MB` },
+    }
+  }
+
+  const token = process.env.WHATSAPP_ACCESS_TOKEN
+  if (!token) return { status: 500, body: { ok: false, error: 'WhatsApp no está configurado en el servidor' } }
+
+  // El id de la línea por la que va a salir: la subida se hace contra ESE
+  // número, no contra cualquiera.
+  const { rows } = await pool.query(
+    `SELECT phone_number_id, ventana_abierta FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
+    [num]
+  )
+  const conv = rows[0]
+  if (!conv) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
+  // Se comprueba ANTES de subir: si la ventana está cerrada, subir el archivo
+  // sería gastar la llamada y dejar basura en Meta para nada.
+  if (!conv.ventana_abierta) {
+    return {
+      status: 409,
+      body: {
+        ok: false, ventana_cerrada: true,
+        error: 'La ventana de 24 horas se cerró. Para retomar esta conversación hay que enviar una plantilla aprobada.',
+      },
+    }
+  }
+
+  const version = process.env.WHATSAPP_API_VERSION || 'v26.0'
+  let mediaId
+  try {
+    const fd = new FormData()
+    fd.append('messaging_product', 'whatsapp')
+    fd.append('type', mime)
+    fd.append('file', new Blob([buf], { type: mime }), nombre)
+
+    const r = await fetch(`${GRAPH}/${version}/${conv.phone_number_id}/media`, {
+      method: 'POST',
+      // Sin Content-Type a mano: fetch le pone el boundary del multipart, y
+      // ponerlo nosotros lo rompe con un error que no dice nada.
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok || !data?.id) {
+      const detalle = data?.error?.error_user_msg || data?.error?.message || `Error ${r.status}`
+      log(MOD, 'Meta rechazó la subida —', detalle)
+      return { status: 502, body: { ok: false, error: `No se pudo subir la imagen: ${detalle}` } }
+    }
+    mediaId = data.id
+  } catch (e) {
+    log(MOD, 'ERROR subiendo imagen —', e.message)
+    return { status: 502, body: { ok: false, error: `No se pudo subir la imagen: ${e.message}` } }
+  }
+
+  const pieCorto = String(pie || '').trim().slice(0, MAX_PIE)
+  const r = await enviarSobre({
+    contacto: num,
+    payload: { type: 'image', image: { id: mediaId, ...(pieCorto ? { caption: pieCorto } : {}) } },
+    texto: pieCorto || '[imagen]',
+    tipo: 'image',
+    personalId,
+  })
+
+  // La copia local, para que el hilo la muestre como muestra las que entran.
+  // Si esto falla, el mensaje YA se envió: se registra y se sigue.
+  if (r?.body?.ok && r.body.mensaje?.id) {
+    await pool.query(
+      `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, archivo)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (mensaje_id) DO NOTHING`,
+      [r.body.mensaje.id, mediaId, mime, buf.length, buf]
+    ).catch(e => log(MOD, 'imagen enviada pero no se pudo guardar la copia —', e.message))
+  }
+
+  if (r?.body?.ok) log(MOD, `imagen enviada a ${num} (${(buf.length / 1024).toFixed(0)} kB)`)
+  return r
+}

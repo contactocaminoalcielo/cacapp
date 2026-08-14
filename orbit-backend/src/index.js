@@ -27,7 +27,7 @@ import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
   listarEtiquetas, etiquetar, desetiquetar,
 } from './whatsapp-cloud.js'
-import { leerMedia } from './whatsapp-media.js'
+import { leerMedia, enviarImagen } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
 import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
@@ -56,6 +56,12 @@ app.use('/webhook/whatsapp', express.raw({ type: '*/*', limit: '1mb' }))
 // subida fallaría con un 413 sin mensaje útil. Va ANTES del json global, igual
 // que el webhook: el primer parser que coincide gana y el global lo salta.
 app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
+
+// Las imágenes que se envían viajan en base64 (≈ +33 %) y no caben en el
+// límite por defecto. Ruta PLANA con el contacto en el cuerpo a propósito: con
+// el contacto en la URL, el prefijo no se podría acotar y este límite acabaría
+// aplicándose a todo /whatsapp/conversaciones.
+app.use('/whatsapp/imagen', express.json({ limit: '12mb' }))
 
 app.use(express.json())
 
@@ -300,6 +306,17 @@ app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
     const r = await listarInteractivos()
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/interactivos', e) }
+})
+
+app.post('/whatsapp/imagen', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await enviarImagen({
+      contacto: req.body?.contacto, base64: req.body?.base64, mime: req.body?.mime,
+      nombre: req.body?.nombre, pie: req.body?.pie,
+      personalId: req.personal.id, enviarSobre,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/imagen', e) }
 })
 
 app.post('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {

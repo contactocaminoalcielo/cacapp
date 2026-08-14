@@ -135,3 +135,60 @@ export const ESTADO_ENVIO = {
   read:      { icono: '✓✓', label: 'Leído',     clase: 'text-[#1A5CD8]' },
   failed:    { icono: '!',  label: 'Falló',     clase: 'text-red-500' },
 }
+
+// ── Enviar una imagen (2026-08-14) ───────────────────────────────────────────
+
+export function enviarImagen({ contacto, base64, mime, nombre, pie }) {
+  return orbitApi('/whatsapp/imagen', {
+    method: 'POST',
+    body: { contacto, base64, mime, nombre, pie },
+  })
+}
+
+/**
+ * Reduce la foto en el navegador antes de subirla.
+ *
+ * Tres razones, y ninguna es cosmética:
+ *  1. Meta rechaza por encima de 5 MB, y una foto de celular moderno los pasa.
+ *  2. La copia se guarda en la base (`whatsapp_media`), así que subir el
+ *     original engorda la tabla sin que nadie lo note hasta que duele.
+ *  3. Se decodifica a un tamaño acotado, NUNCA a resolución completa: en un
+ *     Android modesto eso es un cierre por falta de memoria — ya nos pasó en la
+ *     app del técnico.
+ *
+ * Devuelve siempre JPEG: es lo que WhatsApp muestra mejor y pesa menos.
+ */
+export function prepararImagen(file, { ladoMax = 1600, calidad = 0.82 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) return reject(new Error('Eso no es una imagen'))
+
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const escala = Math.min(1, ladoMax / Math.max(img.width, img.height))
+      const w = Math.round(img.width * escala)
+      const h = Math.round(img.height * escala)
+
+      const lienzo = document.createElement('canvas')
+      lienzo.width = w
+      lienzo.height = h
+      const ctx = lienzo.getContext('2d')
+      // Fondo blanco: un PNG con transparencia sobre JPEG saldría negro.
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+
+      const dataUrl = lienzo.toDataURL('image/jpeg', calidad)
+      lienzo.width = lienzo.height = 0   // suelta la memoria del lienzo
+      resolve({
+        base64: dataUrl.replace(/^data:[^;]+;base64,/, ''),
+        mime: 'image/jpeg',
+        nombre: (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.jpg',
+        previsualizacion: dataUrl,
+      })
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('No se pudo abrir la imagen')) }
+    img.src = url
+  })
+}

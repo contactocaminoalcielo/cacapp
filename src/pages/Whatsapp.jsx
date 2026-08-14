@@ -19,11 +19,11 @@ import {
   listarConversaciones, abrirHilo, marcarLeido, enviarMensaje,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
-  bajarAdjunto, esImagen,
+  bajarAdjunto, esImagen, enviarImagen, prepararImagen,
 } from '@/lib/whatsappInbox'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
-  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download,
+  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -286,6 +286,8 @@ export default function Whatsapp() {
                   enviando={enviando} onEnviar={enviar}
                   ventanaAbierta={ventanaAbierta} restante={restante}
                   error={errorEnvio}
+                  contacto={activo}
+                  onEnviada={() => { cargarHilo(activo, { silencioso: true }); cargarLista({ silencioso: true }) }}
                 />
               </>
             )}
@@ -674,8 +676,33 @@ function Burbuja({ m }) {
   )
 }
 
-function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restante, error }) {
+function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restante, error, contacto, onEnviada }) {
   const ref = useRef(null)
+  const fileRef = useRef(null)
+  const [foto, setFoto] = useState(null)          // { base64, mime, nombre, previsualizacion }
+  const [subiendo, setSubiendo] = useState(false)
+  const [errorFoto, setErrorFoto] = useState(null)
+
+  async function tomarArchivo(file) {
+    if (!file) return
+    setErrorFoto(null)
+    try {
+      // Se reduce ANTES de tocar la red: Meta rechaza por encima de 5 MB y una
+      // foto de celular los pasa de sobra.
+      setFoto(await prepararImagen(file))
+    } catch (e) { setErrorFoto(e.message) }
+  }
+
+  async function mandarFoto() {
+    if (!foto || subiendo) return
+    setSubiendo(true); setErrorFoto(null)
+    try {
+      await enviarImagen({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre, pie: texto.trim() })
+      setFoto(null)
+      setTexto('')
+      onEnviada?.()
+    } catch (e) { setErrorFoto(e.message) } finally { setSubiendo(false) }
+  }
 
   // El textarea crece con el contenido hasta un tope, como en WhatsApp.
   useEffect(() => {
@@ -688,7 +715,10 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      onEnviar()
+      // Con una foto elegida, el texto es su PIE: enviar manda la foto, no un
+      // mensaje suelto que dejaría la imagen sin mandar y al coordinador
+      // creyendo que ya salió.
+      foto ? mandarFoto() : onEnviar()
     }
   }
 
@@ -724,20 +754,44 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
         )}
       </AnimatePresence>
 
+      {foto && (
+        <div className="px-3 pt-3 flex items-start gap-2">
+          <img src={foto.previsualizacion} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[11.5px] text-gray-600">Se enviará esta imagen. Lo que escribas abajo va como pie de foto.</p>
+            <button type="button" onClick={() => setFoto(null)}
+              className="text-[11px] text-gray-400 hover:text-red-500 mt-0.5">Quitar</button>
+          </div>
+        </div>
+      )}
+      {errorFoto && (
+        <p className="px-4 pt-2 text-[11.5px] text-red-600 flex items-start gap-1.5">
+          <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" /> {errorFoto}
+        </p>
+      )}
+
       <div className="p-3 flex items-end gap-2">
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png" className="hidden"
+          onChange={e => { tomarArchivo(e.target.files?.[0]); e.target.value = '' }} />
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={enviando || subiendo}
+          title="Enviar una imagen"
+          className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
+          <Paperclip size={16} />
+        </button>
         <textarea
           ref={ref} rows={1} value={texto}
           onChange={e => setTexto(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={enviando}
-          placeholder="Escribe un mensaje..."
+          placeholder={foto ? 'Pie de foto (opcional)…' : 'Escribe un mensaje...'}
           className="flex-1 resize-none px-3 py-2.5 text-[13px] text-gray-900 bg-white
                      border border-gray-200 rounded-lg placeholder:text-gray-400
                      outline-none transition-all focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10
                      disabled:bg-gray-50"
         />
-        <Button onClick={onEnviar} disabled={enviando || !texto.trim()} className="h-10 px-4">
-          {enviando ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+        <Button onClick={foto ? mandarFoto : onEnviar}
+          disabled={enviando || subiendo || (!foto && !texto.trim())} className="h-10 px-4">
+          {(enviando || subiendo) ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
         </Button>
       </div>
 
