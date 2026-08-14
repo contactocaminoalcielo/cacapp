@@ -371,7 +371,11 @@ async function resolverEspecie(dicho) {
  * "Exclusivo" son cuatro planes con precios distintos, y adivinar uno sería
  * inventar el precio del servicio.
  */
-async function resolverPlan(dicho) {
+// Exportada para poder comprobarla de verdad: al armar el menú de planes se
+// verificó con un emparejamiento escrito aparte y daba ambiguos donde no los
+// hay, porque no replicaba la coincidencia exacta. Comprobar con la función
+// real, no con una copia.
+export async function resolverPlan(dicho) {
   const q = sinTildes(dicho).replace(/^plan\s+/, '').replace(/\s+plan$/, '')
   if (!q) return { falta: true }
 
