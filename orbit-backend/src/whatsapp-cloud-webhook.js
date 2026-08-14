@@ -381,7 +381,15 @@ async function normalizar(ev) {
     if (!rowCount) {
       // Normal si el mensaje se envió antes de existir la bandeja, o si el
       // acuse llegó fuera de orden. No es un error: el crudo ya quedó.
-      log(MOD, `acuse sin mensaje en la bandeja (wamid=${ev.waMessageId}, estado=${ev.status})`)
+      //
+      // 👀 Y es además la ÚNICA señal de que alguien respondió por esta línea
+      // desde FUERA de Orbit (el panel de Zolutium, WhatsApp Manager): Meta no
+      // nos manda como mensaje lo que sale por otra app, solo su acuse. El
+      // agente lee esto en `laLlevaUnHumano` para callarse y no contestar
+      // encima. Si tras el cambio de línea aparecen muchos de estos, es que
+      // hay dos sistemas atendiendo la misma conversación.
+      log(MOD, `acuse sin mensaje en la bandeja (wamid=${ev.waMessageId}, estado=${ev.status})`
+        + ` — o es viejo, o lo envió otro panel a ${ev.fromNumber || '?'}`)
     }
   } catch (e) {
     log(MOD, `ERROR normalizando wamid=${ev.waMessageId || '-'} —`, e.message)

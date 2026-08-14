@@ -855,8 +855,9 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return
 
-    if (await laLlevaUnHumano(num)) {
-      log(MOD, `${num} la lleva una persona — el agente ni acusa recibo`)
+    const laLleva = await laLlevaUnHumano(num)
+    if (laLleva) {
+      log(MOD, `${num}: ${laLleva} — el agente ni acusa recibo`)
       return
     }
 
@@ -983,8 +984,9 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // cosa y otra pasan los segundos de espera, que es JUSTO cuando el coordinador
   // ve el mensaje entrar y contesta. Sin esta segunda comprobación, el caso más
   // probable de todos —los dos contestando— se colaría.
-  if (await laLlevaUnHumano(num)) {
-    log(MOD, `${num} la tomó una persona mientras esperábamos — el agente se aparta`)
+  const laTomaron = await laLlevaUnHumano(num)
+  if (laTomaron) {
+    log(MOD, `${num}: ${laTomaron} mientras esperábamos — el agente se aparta`)
     return
   }
 
@@ -1106,20 +1108,83 @@ function esReintentable(error) {
 }
 
 /**
- * ¿Escribió una persona del equipo hace poco por esta conversación?
+ * ¿Está esta conversación en manos de una persona? Devuelve el motivo (texto,
+ * para el log) o `null` si el agente puede responder.
  *
- * Lo distingue `enviado_por`: el agente envía con NULL y el coordinador con su
- * id. Es el mismo campo que ya usa la bandeja para mostrar quién respondió.
+ * Hay DOS formas de que la lleve alguien, y la segunda es la que importa el día
+ * que esta línea conviva con otro panel:
+ *
+ * 1. **Desde Orbit.** Lo distingue `enviado_por`: el agente envía con NULL y el
+ *    coordinador con su id. Es el mismo campo que usa la bandeja.
+ *
+ * 2. **Desde FUERA de Orbit** — el panel de Zolutium, WhatsApp Manager, o
+ *    cualquier otra app suscrita a la misma WABA. Aquí no hay `enviado_por` que
+ *    mirar: **Meta no nos manda como mensaje lo que sale por otra app, solo el
+ *    acuse**. El único rastro es un acuse de SALIDA cuyo `wa_message_id` no
+ *    corresponde a ningún mensaje nuestro — el que la bandeja descarta
+ *    logueando "acuse sin mensaje en la bandeja". Si hay uno reciente para este
+ *    contacto, alguien ya contestó desde otro lado y el agente se calla.
+ *
+ * Sin el punto 2, el día del plan B la veterinaria recibiría DOS respuestas: la
+ * del panel y la del agente, que no puede verse la una a la otra.
+ *
+ * Se lee de la capa CRUDA a propósito: es la única que conserva esos acuses
+ * huérfanos, y por eso existe (ver la arquitectura en dos capas del receptor).
+ * `idx_wa_webhook_from (from_number, received_at DESC)` ya cubre la consulta.
+ *
+ * ⚠️ En un acuse, `from_number` NO es quien escribió: es el `recipient_id` de
+ * Meta, o sea la veterinaria a la que le enviamos. Por eso casa con `contacto`.
  */
 async function laLlevaUnHumano(contacto) {
-  const { rowCount } = await pool.query(
+  const { rowCount: enOrbit } = await pool.query(
     `SELECT 1 FROM public.whatsapp_mensajes
       WHERE contacto = $1 AND direccion = 'OUT' AND enviado_por IS NOT NULL
         AND ocurrido_en > now() - ($2 || ' hours')::interval
       LIMIT 1`,
     [contacto, PAUSA_TRAS_HUMANO_HORAS]
   )
-  return rowCount > 0
+  if (enOrbit) return 'la contestó una persona desde Orbit'
+
+  // Dos filtros, y los dos hacen falta — sin ellos esto calla al agente en
+  // conversaciones que está atendiendo bien (comprobado contra prod el 13-ago,
+  // donde había 7 acuses huérfanos y NINGUNO era de otro panel):
+  //
+  //  · `status = 'sent'` — es el instante en que un mensaje SALE. Los `read` y
+  //    `delivered` no sirven: llegan cuando a la veterinaria le da por abrir el
+  //    chat, y pueden ser de mensajes viejísimos. En prod había 5 `read`
+  //    huérfanos de golpe, todos de mensajes NUESTROS cuyas filas se borraron
+  //    al limpiar datos de prueba. Nada que ver con otro panel.
+  //
+  //  · posterior al ÚLTIMO ENTRANTE — lo que importa no es que alguien haya
+  //    enviado algo hoy, sino que haya contestado el mensaje que el agente está
+  //    a punto de responder. Un envío ANTERIOR a lo que ella escribió no la deja
+  //    atendida: la deja esperando, y callarse ahí es el fallo peor de todos.
+  //    Si el otro panel sigue contestando, cada mensaje nuevo trae su propio
+  //    acuse y la protección se renueva sola, turno a turno.
+  //
+  // Sin entrante (no debería pasar aquí), `now()` hace que nada califique: ante
+  // la duda el agente responde, porque un silencio no tiene quien lo note.
+  //
+  // No hay carrera con nuestros propios envíos: el `wamid` se guarda en cuanto
+  // Meta responde al POST, y esto corre segundos después, tras la espera de
+  // agrupación. Un acuse nuestro que llegue antes del INSERT deja de ser
+  // huérfano en cuanto la fila existe — la condición se evalúa al vuelo.
+  const { rowCount: fuera } = await pool.query(
+    `SELECT 1 FROM public.whatsapp_webhook_events e
+      WHERE e.event_type = 'status'
+        AND e.status = 'sent'
+        AND e.from_number = $1
+        AND e.wa_message_id IS NOT NULL
+        AND e.received_at > COALESCE(
+              (SELECT max(ocurrido_en) FROM public.whatsapp_mensajes
+                WHERE contacto = $1 AND direccion = 'IN'), now())
+        AND NOT EXISTS (
+              SELECT 1 FROM public.whatsapp_mensajes m
+               WHERE m.wa_message_id = e.wa_message_id)
+      LIMIT 1`,
+    [contacto]
+  )
+  return fuera ? 'ya le respondieron desde otro panel (fuera de Orbit)' : null
 }
 
 /** Cómo se llama en cristiano lo que llegó, para el aviso y la etiqueta. */
