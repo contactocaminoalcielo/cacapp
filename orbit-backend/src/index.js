@@ -24,10 +24,11 @@ import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
 import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
 import {
-  listarConversaciones, hilo, marcarLeido, enviarTexto,
+  listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
   listarEtiquetas, etiquetar, desetiquetar,
 } from './whatsapp-cloud.js'
 import { leerMedia } from './whatsapp-media.js'
+import { listarInteractivos, enviarInteractivo } from './whatsapp-interactivos.js'
 import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
   camposDisponibles, variablesDe, guardarVariables, valoresPara,
@@ -289,6 +290,26 @@ app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandeja, async (req, res) 
     log('[wa-bandeja/media] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+// ── Mensajes interactivos: botones, menus y boton de enlace (migracion 100) ──
+// El catalogo lo edita David; aqui solo se lista y se envia.
+
+app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await listarInteractivos()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/interactivos', e) }
+})
+
+app.post('/whatsapp/conversaciones/:contacto/interactivo', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await enviarInteractivo({
+      contacto: req.params.contacto, clave: req.body?.clave,
+      personalId: req.personal.id, enviarSobre,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/interactivo-enviar', e) }
 })
 
 // ── Configuración del agente de WhatsApp (migración 088) ──

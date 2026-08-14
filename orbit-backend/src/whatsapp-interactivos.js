@@ -1,0 +1,193 @@
+// Mensajes interactivos de WhatsApp: botones, menú de lista y botón de enlace.
+//
+// El catálogo lo edita David (migración 100), no vive en el código: el agente
+// elige por clave y la `descripcion` de cada uno es lo que lee para saber
+// cuándo usarlo. Mismo patrón que las etiquetas.
+//
+// ⚠️ LÍMITE DE META: los interactivos solo salen DENTRO de la ventana de 24 h.
+// Fuera hace falta plantilla. `enviarSobre` lo valida antes de llamar a Meta,
+// igual que el envío de texto.
+//
+// ⚠️ Los topes de longitud NO son cosmética: Meta rechaza el mensaje entero con
+// un error genérico que no dice cuál campo se pasó. Se recortan aquí para que
+// un título largo escrito en la pantalla no se convierta en un fallo mudo.
+import { pool, log } from './db.js'
+import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
+
+const MOD = '[wa-interactivos]'
+
+// Topes de la API de Meta (Cloud API v26).
+const MAX = {
+  encabezado: 60,
+  cuerpo:     1024,
+  pie:        60,
+  boton:      20,   // rótulo del botón de lista y del CTA
+  titulo:     24,   // fila de lista
+  desc:       72,   // descripción de fila
+  tituloBtn:  20,   // botón de respuesta
+  botones:    3,
+  filas:      10,
+  secciones:  10,
+}
+
+const corta = (s, n) => {
+  const t = String(s ?? '').trim()
+  return t.length > n ? t.slice(0, n - 1) + '…' : t
+}
+
+/** Los que puede usar el agente, con su descripción: alimenta el enum de la herramienta. */
+export async function catalogoParaAgente() {
+  const { rows } = await pool.query(
+    `SELECT clave, nombre, descripcion, tipo FROM public.whatsapp_interactivos
+      WHERE activo AND usa_agente ORDER BY orden, id`
+  )
+  return rows
+}
+
+export async function listarInteractivos() {
+  const { rows } = await pool.query(
+    `SELECT id, clave, nombre, descripcion, tipo, encabezado, cuerpo, pie,
+            boton_texto, opciones, url, usa_agente, activo, orden
+       FROM public.whatsapp_interactivos ORDER BY orden, id`
+  )
+  return { status: 200, body: { ok: true, interactivos: rows } }
+}
+
+/**
+ * Resuelve las variables que solo sabe el servidor.
+ *
+ * Hoy solo `{{enlace_registro}}`, y es a propósito: el enlace personal de una
+ * clínica es su credencial, así que **no puede escribirse a mano en el
+ * catálogo** — se deriva del número que escribe, igual que en la herramienta
+ * del agente. Ver la nota de seguridad en agente-wa.js.
+ */
+async function resolverUrl(url, contacto) {
+  const t = String(url || '')
+  if (!t.includes('{{enlace_registro}}')) return t
+
+  const { rows: [conv] } = await pool.query(
+    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`, [contacto]
+  )
+  // Sin aliado, el enlace correcto es el de afiliación: es el mismo criterio
+  // que usa la herramienta del agente, y de ahí sale que nadie pueda pedir el
+  // enlace de otra clínica diciendo su nombre.
+  if (!conv?.aliado_id) return t.replace('{{enlace_registro}}', enlaceAfiliacion())
+
+  const datos = await enlacePersonalAliado(conv.aliado_id)
+  if (!datos?.enlace) {
+    // Existe pero no está habilitada. Activarla es de coordinación, no de aquí.
+    throw new Error('Esa clínica figura en el sistema pero no está habilitada: no se le puede mandar el enlace')
+  }
+  return t.replace('{{enlace_registro}}', datos.enlace)
+}
+
+/** El cuerpo que entiende Meta, ya validado y recortado. */
+function armarPayload(m, url) {
+  const base = {
+    body: { text: corta(m.cuerpo, MAX.cuerpo) },
+    ...(m.encabezado ? { header: { type: 'text', text: corta(m.encabezado, MAX.encabezado) } } : {}),
+    ...(m.pie ? { footer: { text: corta(m.pie, MAX.pie) } } : {}),
+  }
+
+  if (m.tipo === 'CTA_URL') {
+    return {
+      ...base,
+      type: 'cta_url',
+      action: {
+        name: 'cta_url',
+        parameters: {
+          display_text: corta(m.boton_texto || 'Abrir', MAX.boton),
+          url,
+        },
+      },
+    }
+  }
+
+  if (m.tipo === 'BOTONES') {
+    const ops = (Array.isArray(m.opciones) ? m.opciones : []).slice(0, MAX.botones)
+    if (!ops.length) throw new Error('Ese mensaje no tiene botones configurados')
+    return {
+      ...base,
+      type: 'button',
+      action: {
+        buttons: ops.map((o, i) => ({
+          type: 'reply',
+          reply: { id: String(o.id || `op${i}`).slice(0, 256), title: corta(o.titulo, MAX.tituloBtn) },
+        })),
+      },
+    }
+  }
+
+  // LISTA
+  const secciones = (Array.isArray(m.opciones) ? m.opciones : []).slice(0, MAX.secciones)
+  // Meta cuenta las filas en TOTAL, no por sección: diez es diez aunque estén
+  // repartidas. Pasarse rechaza el mensaje entero.
+  let quedan = MAX.filas
+  const armadas = []
+  for (const s of secciones) {
+    if (quedan <= 0) break
+    const filas = (Array.isArray(s.filas) ? s.filas : []).slice(0, quedan)
+    if (!filas.length) continue
+    quedan -= filas.length
+    armadas.push({
+      title: corta(s.titulo || 'Opciones', MAX.titulo),
+      rows: filas.map((f, i) => ({
+        id: String(f.id || `f${i}`).slice(0, 200),
+        title: corta(f.titulo, MAX.titulo),
+        ...(f.descripcion ? { description: corta(f.descripcion, MAX.desc) } : {}),
+      })),
+    })
+  }
+  if (!armadas.length) throw new Error('Ese menú no tiene opciones configuradas')
+
+  return {
+    ...base,
+    type: 'list',
+    action: { button: corta(m.boton_texto || 'Ver opciones', MAX.boton), sections: armadas },
+  }
+}
+
+/** Cómo se ve en la bandeja. Sin esto el hilo mostraría un hueco donde hubo un mensaje. */
+function resumen(m) {
+  if (m.tipo === 'CTA_URL') return `${m.cuerpo}\n[botón: ${m.boton_texto || 'Abrir'}]`
+  if (m.tipo === 'BOTONES') {
+    const t = (m.opciones || []).map(o => o.titulo).filter(Boolean).join(' · ')
+    return `${m.cuerpo}\n[botones: ${t}]`
+  }
+  const n = (m.opciones || []).reduce((a, s) => a + (s.filas?.length || 0), 0)
+  return `${m.cuerpo}\n[menú "${m.boton_texto || 'Ver opciones'}": ${n} opciones]`
+}
+
+/**
+ * Envía uno del catálogo.
+ *
+ * Recibe `enviarSobre` en vez de importarlo: whatsapp-cloud ya importa de aquí
+ * indirectamente a través del agente, y el lazo cerraría un ciclo de módulos.
+ */
+export async function enviarInteractivo({ contacto, clave, personalId = null, enviarSobre }) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { rows: [m] } = await pool.query(
+    `SELECT * FROM public.whatsapp_interactivos WHERE clave = $1 AND activo`, [clave]
+  )
+  if (!m) return { status: 404, body: { ok: false, error: `No existe el mensaje "${clave}" o está desactivado` } }
+
+  let interactive
+  try {
+    const url = m.tipo === 'CTA_URL' ? await resolverUrl(m.url, num) : null
+    interactive = armarPayload(m, url)
+  } catch (e) {
+    return { status: 400, body: { ok: false, error: e.message } }
+  }
+
+  const r = await enviarSobre({
+    contacto: num,
+    payload: { type: 'interactive', interactive },
+    texto: resumen(m),
+    tipo: 'interactive',
+    personalId,
+  })
+  if (r?.body?.ok) log(MOD, `${clave} enviado a ${num}`)
+  return r
+}

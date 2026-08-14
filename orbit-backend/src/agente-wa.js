@@ -23,7 +23,8 @@
 // tercero en nombre de Camino al Cielo.
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
-import { enviarTexto, etiquetar, acusarLectura } from './whatsapp-cloud.js'
+import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
+import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
 import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
@@ -227,9 +228,39 @@ async function construirHerramientas() {
     `SELECT clave, nombre, descripcion FROM public.whatsapp_etiquetas
       WHERE activo AND NOT solo_sistema ORDER BY orden, id`
   )
-  if (!etiquetas.length) return HERRAMIENTAS
+  // Los interactivos (migración 100) también salen de un catálogo editable: la
+  // `descripcion` de cada uno es lo que el modelo lee para saber cuándo usarlo.
+  // Añadir un menú nuevo NO exige tocar el motor ni desplegar.
+  const interactivos = await catalogoParaAgente().catch(() => [])
+  const extra = []
+  if (interactivos.length) {
+    extra.push({
+      name: 'enviar_interactivo',
+      description:
+        'Manda un mensaje con BOTONES, un MENÚ o un BOTÓN DE ENLACE, en vez de escribirlo. ' +
+        'A la veterinaria le sale algo que se toca: es más rápido para ella y evita que ' +
+        'conteste algo que no esperabas.\n\n' +
+        '⚠️ El mensaje se envía TAL CUAL está configurado, así que no repitas su contenido en ' +
+        'tu respuesta ni anuncies que lo vas a mandar. Y no lo uses para cualquier cosa: solo ' +
+        'cuando encaje con lo que estás preguntando.\n\n' +
+        'Disponibles:\n'
+        + interactivos.map(i => `- ${i.clave} (${i.nombre}): ${i.descripcion || ''}`).join('\n'),
+      input_schema: {
+        type: 'object',
+        properties: {
+          clave: {
+            type: 'string', enum: interactivos.map(i => i.clave),
+            description: 'Cuál de los de arriba encaja con lo que necesitas ahora.',
+          },
+        },
+        required: ['clave'],
+      },
+    })
+  }
 
-  return [...HERRAMIENTAS, {
+  if (!etiquetas.length) return [...HERRAMIENTAS, ...extra]
+
+  return [...HERRAMIENTAS, ...extra, {
     name: 'clasificar_conversacion',
     description:
       'Etiqueta esta conversación para que coordinación sepa qué necesita atención. ' +
@@ -1517,6 +1548,17 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
             // La solicitud tiene su propia etiqueta: si el agente no la pone, la
             // conversación que MÁS importa quedaría fuera del tablero.
             if (out.ok) await clasificarConversacion({ entrada: { etiqueta: 'SOLICITUD' }, contacto }).catch(() => {})
+          } else if (bloque.name === 'enviar_interactivo') {
+            // OJO: esta herramienta ENVÍA de verdad, no devuelve texto para que
+            // el modelo lo incluya. Por eso el resultado se lo dice explícito:
+            // si no, remata repitiendo por escrito lo que la vet acaba de
+            // recibir como botones.
+            out = await enviarInteractivo({
+              contacto, clave: bloque.input?.clave, personalId: null, enviarSobre,
+            }).then(r => r.body?.ok
+              ? { ok: true, enviado: bloque.input?.clave,
+                  nota: 'Ya le llegó. NO repitas su contenido ni lo describas: solo sigue la conversación si hace falta.' }
+              : { ok: false, error: r.body?.error || 'No se pudo enviar' })
           } else if (bloque.name === 'clasificar_conversacion') {
             out = await clasificarConversacion({ entrada: bloque.input, contacto })
             // Se guarda en la bitácora, no solo en la conversación: la etiqueta

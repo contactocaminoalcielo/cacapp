@@ -243,15 +243,23 @@ export async function marcarLeido({ contacto }) {
  * aprobada (todavía no implementado). Se valida ANTES de llamar a Meta para dar
  * un mensaje entendible en vez del error 131047 crudo.
  */
-export async function enviarTexto({ contacto, texto, personalId }) {
+/**
+ * Manda CUALQUIER mensaje por la línea, y es el único sitio que habla con Meta
+ * para enviar. Texto, botones, menús y botón de enlace pasan todos por aquí.
+ *
+ * Se generalizó al añadir los interactivos (migración 100) en vez de copiar la
+ * función: la ventana de 24 h, el rastro del fallo y la regla de `ultimo_leido_en`
+ * son reglas que no pueden vivir en dos implementaciones — una se quedaría atrás
+ * y el fallo sería mudo.
+ *
+ * @param {object} payload  lo específico del tipo, sin `messaging_product`/`to`
+ * @param {string} texto    cómo se ve en la bandeja (un botón no tiene "texto" propio)
+ */
+export async function enviarSobre({ contacto, payload, texto, tipo = 'text', personalId }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
   const cuerpo = (texto || '').trim()
-  if (!cuerpo) return { status: 400, body: { ok: false, error: 'El mensaje está vacío' } }
-  if (cuerpo.length > MAX_CARACTERES) {
-    return { status: 400, body: { ok: false, error: `El mensaje supera los ${MAX_CARACTERES} caracteres` } }
-  }
 
   const token = process.env.WHATSAPP_ACCESS_TOKEN
   if (!token) {
@@ -267,6 +275,8 @@ export async function enviarTexto({ contacto, texto, personalId }) {
   const conv = rows[0]
   if (!conv) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
 
+  // Vale para TODO lo que no sea plantilla: los interactivos tampoco salen
+  // fuera de la ventana, y Meta los rechaza con un error que no lo explica.
   if (!conv.ventana_abierta) {
     return {
       status: 409,
@@ -296,8 +306,7 @@ export async function enviarTexto({ contacto, texto, personalId }) {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: num,
-        type: 'text',
-        text: { preview_url: true, body: cuerpo },
+        ...payload,
       }),
     })
     data = await r.json().catch(() => ({}))
@@ -316,8 +325,8 @@ export async function enviarTexto({ contacto, texto, personalId }) {
     await pool.query(
       `INSERT INTO public.whatsapp_mensajes
          (phone_number_id, contacto, direccion, tipo, texto, estado, estado_en, error, enviado_por)
-       VALUES ($1, $2, 'OUT', 'text', $3, 'failed', now(), $4, $5)`,
-      [desde, num, cuerpo, detalle, personalId || null]
+       VALUES ($1, $2, 'OUT', $3, $4, 'failed', now(), $5, $6)`,
+      [desde, num, tipo, cuerpo, detalle, personalId || null]
     ).catch((e) => log(MOD, 'no se pudo registrar el fallo —', e.message))
 
     return { status: 502, body: { ok: false, error: detalle } }
@@ -328,10 +337,10 @@ export async function enviarTexto({ contacto, texto, personalId }) {
   const { rows: guardado } = await pool.query(
     `INSERT INTO public.whatsapp_mensajes
        (phone_number_id, contacto, direccion, wa_message_id, tipo, texto, estado, estado_en, enviado_por)
-     VALUES ($1, $2, 'OUT', $3, 'text', $4, 'sent', now(), $5)
+     VALUES ($1, $2, 'OUT', $3, $4, $5, 'sent', now(), $6)
      ON CONFLICT DO NOTHING
      RETURNING id, direccion, tipo, texto, estado, estado_en, ocurrido_en, wa_message_id`,
-    [desde, num, wamid, cuerpo, personalId || null]
+    [desde, num, wamid, tipo, cuerpo, personalId || null]
   )
 
   // Responder implica haber leído: evita que la conversación quede marcada
@@ -349,8 +358,24 @@ export async function enviarTexto({ contacto, texto, personalId }) {
     )
   }
 
-  log(MOD, `enviado a ${num} por ${desde} (wamid=${wamid || '-'}, ${cuerpo.length} chars)`)
+  log(MOD, `enviado a ${num} por ${desde} (wamid=${wamid || '-'}, tipo=${tipo})`)
   return { status: 200, body: { ok: true, mensaje: guardado[0] || null, wa_message_id: wamid } }
+}
+
+/** Texto libre. Es `enviarSobre` con la validación propia del texto. */
+export async function enviarTexto({ contacto, texto, personalId }) {
+  const cuerpo = (texto || '').trim()
+  if (!cuerpo) return { status: 400, body: { ok: false, error: 'El mensaje está vacío' } }
+  if (cuerpo.length > MAX_CARACTERES) {
+    return { status: 400, body: { ok: false, error: `El mensaje supera los ${MAX_CARACTERES} caracteres` } }
+  }
+  return enviarSobre({
+    contacto,
+    payload: { type: 'text', text: { preview_url: true, body: cuerpo } },
+    texto: cuerpo,
+    tipo: 'text',
+    personalId,
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
