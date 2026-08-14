@@ -2,6 +2,8 @@ import { HashRouter, Routes, Route, useLocation, Navigate } from 'react-router-d
 import { Suspense, lazy } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { BadgesProvider } from '@/contexts/BadgesContext'
+import { ChatWaProvider } from '@/contexts/ChatWaContext'
+import ChatFlotante from '@/components/ChatFlotante'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig, esRolValido } from '@/lib/roles'
@@ -202,11 +204,16 @@ function InnerApp() {
 
   // Coordinador / Admin / Productor / Operario → AppShell con módulos permitidos
   return (
-    <BadgesProvider>
-      <AppShell>
-        <AppRoutes rol={personalData.rol} />
-      </AppShell>
-    </BadgesProvider>
+    <ChatWaProvider>
+      <BadgesProvider>
+        <AppShell>
+          <AppRoutes rol={personalData.rol} />
+        </AppShell>
+        {/* Fuera del AppShell: la ventanita flota sobre cualquier pantalla, y
+            avisa aunque estés en Kanban o en Finanzas. */}
+        <ChatFlotante />
+      </BadgesProvider>
+    </ChatWaProvider>
   )
 }
 
