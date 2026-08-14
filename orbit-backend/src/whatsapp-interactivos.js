@@ -191,3 +191,121 @@ export async function enviarInteractivo({ contacto, clave, personalId = null, en
   if (r?.body?.ok) log(MOD, `${clave} enviado a ${num}`)
   return r
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Edición del catálogo (la pantalla)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lo que Meta exige según el tipo. Se valida aquí y no solo en la pantalla:
+ * un mensaje mal armado no falla al guardarlo, falla al ENVIARLO —delante de
+ * una veterinaria— y con un error que no explica cuál es el problema.
+ */
+function validar(d) {
+  if (!['BOTONES', 'LISTA', 'CTA_URL'].includes(d.tipo)) return 'Tipo inválido'
+  if (!String(d.cuerpo || '').trim()) return 'El mensaje necesita un texto'
+  if (String(d.cuerpo).length > MAX.cuerpo) return `El texto no puede pasar de ${MAX.cuerpo} caracteres`
+
+  if (d.tipo === 'CTA_URL') {
+    const url = String(d.url || '').trim()
+    if (!url) return 'Un botón de enlace necesita una dirección'
+    // `{{enlace_registro}}` no es una URL válida hasta que el servidor la
+    // resuelve, así que se acepta tal cual y se comprueba el resto.
+    if (!url.includes('{{enlace_registro}}') && !/^https?:\/\//i.test(url)) {
+      return 'La dirección debe empezar por http:// o https://'
+    }
+    if (!String(d.boton_texto || '').trim()) return 'Ponle un rótulo al botón'
+    return null
+  }
+
+  const ops = Array.isArray(d.opciones) ? d.opciones : []
+
+  if (d.tipo === 'BOTONES') {
+    if (!ops.length) return 'Añade al menos un botón'
+    if (ops.length > MAX.botones) return `WhatsApp admite como mucho ${MAX.botones} botones`
+    if (ops.some(o => !String(o?.titulo || '').trim())) return 'Todos los botones necesitan un texto'
+    // Dos botones con el mismo id devuelven la misma respuesta y no habría
+    // forma de saber cuál tocó la veterinaria.
+    const ids = ops.map((o, i) => String(o.id || `op${i}`))
+    if (new Set(ids).size !== ids.length) return 'Dos botones no pueden tener el mismo identificador'
+    return null
+  }
+
+  // LISTA
+  if (!String(d.boton_texto || '').trim()) return 'Ponle un rótulo al botón que abre el menú'
+  const secciones = ops.filter(s => (s?.filas || []).length)
+  if (!secciones.length) return 'Añade al menos una opción al menú'
+  const total = secciones.reduce((a, s) => a + s.filas.length, 0)
+  // Meta las cuenta en total, no por sección: es el error más fácil de cometer
+  // armando un menú de planes.
+  if (total > MAX.filas) return `WhatsApp admite ${MAX.filas} opciones en total, y hay ${total}`
+  if (secciones.some(s => s.filas.some(f => !String(f?.titulo || '').trim()))) {
+    return 'Todas las opciones necesitan un texto'
+  }
+  return null
+}
+
+export async function guardarInteractivo({ id, datos = {} }) {
+  const error = validar(datos)
+  if (error) return { status: 400, body: { ok: false, error } }
+
+  const clave = String(datos.clave || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+  if (!clave) return { status: 400, body: { ok: false, error: 'Falta la clave' } }
+
+  const vals = [
+    clave,
+    String(datos.nombre || clave).trim().slice(0, 120),
+    String(datos.descripcion || '').trim().slice(0, 600) || null,
+    datos.tipo,
+    String(datos.encabezado || '').trim().slice(0, MAX.encabezado) || null,
+    String(datos.cuerpo).trim(),
+    String(datos.pie || '').trim().slice(0, MAX.pie) || null,
+    String(datos.boton_texto || '').trim().slice(0, MAX.boton) || null,
+    JSON.stringify(datos.opciones || []),
+    String(datos.url || '').trim() || null,
+    datos.usa_agente !== false,
+    datos.activo !== false,
+    Number.isInteger(Number(datos.orden)) ? Number(datos.orden) : 0,
+  ]
+
+  try {
+    if (id) {
+      const { rows } = await pool.query(
+        `UPDATE public.whatsapp_interactivos
+            SET clave=$1, nombre=$2, descripcion=$3, tipo=$4, encabezado=$5, cuerpo=$6,
+                pie=$7, boton_texto=$8, opciones=$9::jsonb, url=$10, usa_agente=$11,
+                activo=$12, orden=$13, actualizado_en=now()
+          WHERE id=$14 RETURNING id, clave`,
+        [...vals, Number(id)]
+      )
+      if (!rows.length) return { status: 404, body: { ok: false, error: 'Ese mensaje ya no existe' } }
+      log(MOD, `${rows[0].clave} actualizado`)
+      return { status: 200, body: { ok: true, id: rows[0].id } }
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO public.whatsapp_interactivos
+         (clave, nombre, descripcion, tipo, encabezado, cuerpo, pie, boton_texto,
+          opciones, url, usa_agente, activo, orden)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13)
+       RETURNING id, clave`,
+      vals
+    )
+    log(MOD, `${rows[0].clave} creado`)
+    return { status: 200, body: { ok: true, id: rows[0].id } }
+  } catch (e) {
+    // La clave es única: repetirla es el error más probable al crear uno nuevo.
+    if (e.code === '23505') {
+      return { status: 409, body: { ok: false, error: `Ya existe un mensaje con la clave ${clave}` } }
+    }
+    throw e
+  }
+}
+
+export async function borrarInteractivo({ id }) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM public.whatsapp_interactivos WHERE id = $1`, [Number(id)]
+  )
+  if (!rowCount) return { status: 404, body: { ok: false, error: 'Ese mensaje ya no existe' } }
+  return { status: 200, body: { ok: true } }
+}

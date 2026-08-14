@@ -28,7 +28,7 @@ import {
   listarEtiquetas, etiquetar, desetiquetar,
 } from './whatsapp-cloud.js'
 import { leerMedia } from './whatsapp-media.js'
-import { listarInteractivos, enviarInteractivo } from './whatsapp-interactivos.js'
+import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
 import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
   camposDisponibles, variablesDe, guardarVariables, valoresPara,
@@ -300,6 +300,20 @@ app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
     const r = await listarInteractivos()
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/interactivos', e) }
+})
+
+app.post('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await guardarInteractivo({ id: req.body?.id || null, datos: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/interactivo-guardar', e) }
+})
+
+app.delete('/whatsapp/interactivos/:id', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await borrarInteractivo({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/interactivo-borrar', e) }
 })
 
 app.post('/whatsapp/conversaciones/:contacto/interactivo', requireAuth, rolBandeja, async (req, res) => {
