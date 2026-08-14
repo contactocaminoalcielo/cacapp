@@ -27,7 +27,7 @@ import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
   listarEtiquetas, etiquetar, desetiquetar,
 } from './whatsapp-cloud.js'
-import { leerMedia, enviarImagen } from './whatsapp-media.js'
+import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
 import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
@@ -61,7 +61,8 @@ app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
 // límite por defecto. Ruta PLANA con el contacto en el cuerpo a propósito: con
 // el contacto en la URL, el prefijo no se podría acotar y este límite acabaría
 // aplicándose a todo /whatsapp/conversaciones.
-app.use('/whatsapp/imagen', express.json({ limit: '12mb' }))
+app.use('/whatsapp/imagen',  express.json({ limit: '30mb' }))
+app.use('/whatsapp/archivo', express.json({ limit: '30mb' }))
 
 app.use(express.json())
 
@@ -308,16 +309,20 @@ app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
   } catch (e) { errorInterno(res, 'wa/interactivos', e) }
 })
 
-app.post('/whatsapp/imagen', requireAuth, rolBandeja, async (req, res) => {
+// Imagen, audio, video o documento: el tipo lo decide el MIME del archivo.
+// `/whatsapp/imagen` se mantiene porque la PWA cacheada sigue llamándolo.
+async function rutaArchivo(req, res) {
   try {
-    const r = await enviarImagen({
+    const r = await enviarArchivo({
       contacto: req.body?.contacto, base64: req.body?.base64, mime: req.body?.mime,
       nombre: req.body?.nombre, pie: req.body?.pie,
       personalId: req.personal.id, enviarSobre,
     })
     res.status(r.status).json(r.body)
-  } catch (e) { errorInterno(res, 'wa/imagen', e) }
-})
+  } catch (e) { errorInterno(res, 'wa/archivo', e) }
+}
+app.post('/whatsapp/archivo', requireAuth, rolBandeja, rutaArchivo)
+app.post('/whatsapp/imagen',  requireAuth, rolBandeja, rutaArchivo)
 
 app.post('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
   try {

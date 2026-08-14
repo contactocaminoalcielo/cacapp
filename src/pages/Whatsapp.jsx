@@ -19,11 +19,11 @@ import {
   listarConversaciones, abrirHilo, marcarLeido, enviarMensaje,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
-  bajarAdjunto, esImagen, enviarImagen, prepararImagen,
+  bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
 } from '@/lib/whatsappInbox'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
-  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip,
+  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -679,7 +679,7 @@ function Burbuja({ m }) {
 function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restante, error, contacto, onEnviada }) {
   const ref = useRef(null)
   const fileRef = useRef(null)
-  const [foto, setFoto] = useState(null)          // { base64, mime, nombre, previsualizacion }
+  const [foto, setFoto] = useState(null)          // el adjunto elegido, ya preparado
   const [subiendo, setSubiendo] = useState(false)
   const [errorFoto, setErrorFoto] = useState(null)
 
@@ -687,9 +687,15 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     if (!file) return
     setErrorFoto(null)
     try {
-      // Se reduce ANTES de tocar la red: Meta rechaza por encima de 5 MB y una
-      // foto de celular los pasa de sobra.
-      setFoto(await prepararImagen(file))
+      // Las fotos se reducen ANTES de tocar la red; lo demás viaja tal cual.
+      const listo = await prepararArchivo(file)
+      const tope = TOPES_ARCHIVO[listo.clase]
+      // Se avisa aquí y no después de subir 15 MB por una red móvil.
+      if (listo.bytes > tope * 1048576) {
+        setErrorFoto(`Pesa ${(listo.bytes / 1048576).toFixed(1)} MB y el tope para ${listo.clase} son ${tope} MB.`)
+        return
+      }
+      setFoto(listo)
     } catch (e) { setErrorFoto(e.message) }
   }
 
@@ -697,7 +703,7 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     if (!foto || subiendo) return
     setSubiendo(true); setErrorFoto(null)
     try {
-      await enviarImagen({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre, pie: texto.trim() })
+      await enviarArchivo({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre, pie: texto.trim() })
       setFoto(null)
       setTexto('')
       onEnviada?.()
@@ -756,9 +762,22 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
 
       {foto && (
         <div className="px-3 pt-3 flex items-start gap-2">
-          <img src={foto.previsualizacion} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
+          {foto.previsualizacion ? (
+            <img src={foto.previsualizacion} alt="" className="w-16 h-16 object-cover rounded-lg border border-gray-200" />
+          ) : (
+            <div className="w-16 h-16 rounded-lg border border-gray-200 bg-gray-50 grid place-items-center text-gray-400">
+              {foto.clase === 'audio' ? <Mic size={20} /> : foto.clase === 'video' ? <Video size={20} /> : <FileText size={20} />}
+            </div>
+          )}
           <div className="flex-1 min-w-0">
-            <p className="text-[11.5px] text-gray-600">Se enviará esta imagen. Lo que escribas abajo va como pie de foto.</p>
+            <p className="text-[12px] font-semibold text-gray-700 truncate">{foto.nombre}</p>
+            <p className="text-[11px] text-gray-500">
+              {(foto.bytes / 1024).toFixed(0)} kB ·{' '}
+              {/* WhatsApp NO admite pie en los audios: prometerlo sería mentir. */}
+              {foto.clase === 'audio'
+                ? 'los audios no llevan texto'
+                : 'lo que escribas abajo va como pie'}
+            </p>
             <button type="button" onClick={() => setFoto(null)}
               className="text-[11px] text-gray-400 hover:text-red-500 mt-0.5">Quitar</button>
           </div>
@@ -771,10 +790,10 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
       )}
 
       <div className="p-3 flex items-end gap-2">
-        <input ref={fileRef} type="file" accept="image/jpeg,image/png" className="hidden"
+        <input ref={fileRef} type="file" className="hidden"
           onChange={e => { tomarArchivo(e.target.files?.[0]); e.target.value = '' }} />
         <button type="button" onClick={() => fileRef.current?.click()} disabled={enviando || subiendo}
-          title="Enviar una imagen"
+          title="Adjuntar imagen, audio, video o documento"
           className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
           <Paperclip size={16} />
         </button>
@@ -783,7 +802,7 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
           onChange={e => setTexto(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={enviando}
-          placeholder={foto ? 'Pie de foto (opcional)…' : 'Escribe un mensaje...'}
+          placeholder={foto ? (foto.clase === 'audio' ? 'Los audios se envían sin texto' : 'Pie (opcional)…') : 'Escribe un mensaje...'}
           className="flex-1 resize-none px-3 py-2.5 text-[13px] text-gray-900 bg-white
                      border border-gray-200 rounded-lg placeholder:text-gray-400
                      outline-none transition-all focus:border-[#1A5CD8] focus:ring-2 focus:ring-[#1A5CD8]/10

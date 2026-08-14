@@ -285,63 +285,95 @@ export async function imagenesRecientes(contacto, tope = 2) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Enviar una imagen (2026-08-14)
+// Enviar adjuntos: imagen, audio, documento y video (2026-08-14)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Lo que Meta acepta como imagen. Otros formatos los rechaza con un 400 seco. */
-const MIMES_IMAGEN = ['image/jpeg', 'image/png']
-/** Tope de Meta para imagen. Por encima devuelve un error que no lo explica. */
-const MAX_IMAGEN = 5 * 1024 * 1024
-/** Tope del pie de foto. */
+/**
+ * Qué acepta Meta y hasta cuánto, por tipo de mensaje.
+ *
+ * `documento` acepta cualquier MIME a propósito: es el cajón de sastre de
+ * WhatsApp y ahí caen PDF, Word, Excel y lo que traiga la clínica.
+ *
+ * ⚠️ El tope de Meta para documento es 100 MB, pero aquí son 16: la copia se
+ * guarda en la base para poder volver a verla, y un PDF de 100 MB por mensaje
+ * engorda la tabla hasta que duele. Si algún día hace falta más, el sitio donde
+ * cambiarlo es este, no la pantalla.
+ */
+const CLASES = {
+  image:    { mimes: ['image/jpeg', 'image/png'], max: 5 * 1024 * 1024, etiqueta: 'imagen' },
+  audio:    {
+    mimes: ['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg'],
+    max: 16 * 1024 * 1024, etiqueta: 'audio',
+  },
+  video:    { mimes: ['video/mp4', 'video/3gp', 'video/3gpp'], max: 16 * 1024 * 1024, etiqueta: 'video' },
+  document: { mimes: null, max: 16 * 1024 * 1024, etiqueta: 'documento' },
+}
+
+/** Tope del pie de foto/documento. Audio y video NO admiten pie en la API. */
 const MAX_PIE = 1024
+/** Por encima de esto no se guarda copia local: iría a la tabla en `bytea`. */
+const MAX_COPIA = 12 * 1024 * 1024
+
+/** De qué tipo de mensaje se trata, según el MIME que trae el archivo. */
+export function claseDeArchivo(mime) {
+  const m = String(mime || '').toLowerCase()
+  if (CLASES.image.mimes.includes(m)) return 'image'
+  if (CLASES.audio.mimes.some(x => m.startsWith(x))) return 'audio'
+  if (CLASES.video.mimes.some(x => m.startsWith(x))) return 'video'
+  // Una imagen en un formato que WhatsApp no muestra (HEIC, WEBP, GIF) NO se
+  // manda como imagen: se rechazaría. Va como documento, que sí llega.
+  return 'document'
+}
 
 /**
- * Sube la imagen a Meta y la manda.
+ * Sube el archivo a Meta y lo manda.
  *
- * Va en DOS pasos y no en uno con `link` público a propósito: mandar un enlace
- * obligaría a exponer la foto en una URL sin sesión, y por esta línea viajan
- * fotos de mascotas fallecidas y datos de familias. Subida, el archivo vive en
- * Meta 30 días y solo lo alcanza esta cuenta.
+ * Va en DOS pasos y no con `link` público a propósito: mandar un enlace
+ * obligaría a exponer el archivo en una URL sin sesión, y por esta línea viajan
+ * fotos de mascotas fallecidas y datos de familias. Subido, vive en Meta 30
+ * días y solo lo alcanza esta cuenta.
  *
- * La copia se guarda además en `whatsapp_media`, igual que las que entran: sin
- * eso el hilo mostraría un mensaje vacío donde se envió una foto, y el
- * coordinador no sabría qué mandó.
+ * La copia se guarda además en `whatsapp_media`, igual que lo que entra: sin
+ * eso el hilo mostraría un mensaje vacío donde se mandó algo, y el coordinador
+ * no sabría qué envió.
  */
-export async function enviarImagen({ contacto, base64, mime, nombre = 'imagen', pie = '', personalId = null, enviarSobre }) {
+export async function enviarArchivo({
+  contacto, base64, mime, nombre = 'archivo', pie = '', personalId = null, enviarSobre,
+}) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
-  if (!MIMES_IMAGEN.includes(mime)) {
-    return { status: 400, body: { ok: false, error: 'WhatsApp solo admite imágenes JPG o PNG' } }
+  const clase = claseDeArchivo(mime)
+  const regla = CLASES[clase]
+  if (regla.mimes && !regla.mimes.some(x => String(mime).toLowerCase().startsWith(x))) {
+    return { status: 400, body: { ok: false, error: `WhatsApp no admite ese formato de ${regla.etiqueta}` } }
   }
 
   let buf
-  try {
-    buf = Buffer.from(String(base64 || ''), 'base64')
-  } catch {
-    return { status: 400, body: { ok: false, error: 'No se pudo leer la imagen' } }
-  }
-  if (!buf.length) return { status: 400, body: { ok: false, error: 'La imagen llegó vacía' } }
-  if (buf.length > MAX_IMAGEN) {
+  try { buf = Buffer.from(String(base64 || ''), 'base64') }
+  catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
+  if (!buf.length) return { status: 400, body: { ok: false, error: 'El archivo llegó vacío' } }
+  if (buf.length > regla.max) {
     return {
       status: 400,
-      body: { ok: false, error: `La imagen pesa ${(buf.length / 1048576).toFixed(1)} MB y el tope son 5 MB` },
+      body: {
+        ok: false,
+        error: `Pesa ${(buf.length / 1048576).toFixed(1)} MB y el tope para ${regla.etiqueta} son ${regla.max / 1048576} MB`,
+      },
     }
   }
 
   const token = process.env.WHATSAPP_ACCESS_TOKEN
   if (!token) return { status: 500, body: { ok: false, error: 'WhatsApp no está configurado en el servidor' } }
 
-  // El id de la línea por la que va a salir: la subida se hace contra ESE
-  // número, no contra cualquiera.
   const { rows } = await pool.query(
     `SELECT phone_number_id, ventana_abierta FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
     [num]
   )
   const conv = rows[0]
   if (!conv) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
-  // Se comprueba ANTES de subir: si la ventana está cerrada, subir el archivo
-  // sería gastar la llamada y dejar basura en Meta para nada.
+  // Se comprueba ANTES de subir: con la ventana cerrada, subir sería gastar la
+  // llamada y dejar el archivo en Meta para nada.
   if (!conv.ventana_abierta) {
     return {
       status: 409,
@@ -371,33 +403,47 @@ export async function enviarImagen({ contacto, base64, mime, nombre = 'imagen', 
     if (!r.ok || !data?.id) {
       const detalle = data?.error?.error_user_msg || data?.error?.message || `Error ${r.status}`
       log(MOD, 'Meta rechazó la subida —', detalle)
-      return { status: 502, body: { ok: false, error: `No se pudo subir la imagen: ${detalle}` } }
+      return { status: 502, body: { ok: false, error: `No se pudo subir el archivo: ${detalle}` } }
     }
     mediaId = data.id
   } catch (e) {
-    log(MOD, 'ERROR subiendo imagen —', e.message)
-    return { status: 502, body: { ok: false, error: `No se pudo subir la imagen: ${e.message}` } }
+    log(MOD, 'ERROR subiendo archivo —', e.message)
+    return { status: 502, body: { ok: false, error: `No se pudo subir el archivo: ${e.message}` } }
   }
 
+  // ⚠️ Solo imagen, video y documento admiten pie. En audio, mandar `caption`
+  // hace que Meta rechace el mensaje entero.
   const pieCorto = String(pie || '').trim().slice(0, MAX_PIE)
+  const admitePie = clase !== 'audio'
+  const contenido = {
+    id: mediaId,
+    ...(admitePie && pieCorto ? { caption: pieCorto } : {}),
+    // El nombre solo viaja en documento, y es lo que la clínica ve: sin él
+    // WhatsApp muestra un archivo sin título que nadie sabe qué es.
+    ...(clase === 'document' ? { filename: nombre } : {}),
+  }
+
   const r = await enviarSobre({
     contacto: num,
-    payload: { type: 'image', image: { id: mediaId, ...(pieCorto ? { caption: pieCorto } : {}) } },
-    texto: pieCorto || '[imagen]',
-    tipo: 'image',
+    payload: { type: clase, [clase]: contenido },
+    texto: pieCorto || (clase === 'document' ? `[documento] ${nombre}` : `[${regla.etiqueta}]`),
+    tipo: clase,
     personalId,
   })
 
-  // La copia local, para que el hilo la muestre como muestra las que entran.
-  // Si esto falla, el mensaje YA se envió: se registra y se sigue.
-  if (r?.body?.ok && r.body.mensaje?.id) {
+  // La copia local, para que el hilo lo muestre como muestra lo que entra. Si
+  // falla, el mensaje YA se envió: se registra y se sigue.
+  if (r?.body?.ok && r.body.mensaje?.id && buf.length <= MAX_COPIA) {
     await pool.query(
       `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, archivo)
        VALUES ($1,$2,$3,$4,$5) ON CONFLICT (mensaje_id) DO NOTHING`,
       [r.body.mensaje.id, mediaId, mime, buf.length, buf]
-    ).catch(e => log(MOD, 'imagen enviada pero no se pudo guardar la copia —', e.message))
+    ).catch(e => log(MOD, 'enviado pero no se pudo guardar la copia —', e.message))
   }
 
-  if (r?.body?.ok) log(MOD, `imagen enviada a ${num} (${(buf.length / 1024).toFixed(0)} kB)`)
+  if (r?.body?.ok) log(MOD, `${regla.etiqueta} enviado a ${num} (${(buf.length / 1024).toFixed(0)} kB)`)
   return r
 }
+
+/** Compatibilidad: la pantalla vieja en caché sigue llamando a esto. */
+export const enviarImagen = enviarArchivo

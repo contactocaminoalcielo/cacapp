@@ -136,32 +136,56 @@ export const ESTADO_ENVIO = {
   failed:    { icono: '!',  label: 'Falló',     clase: 'text-red-500' },
 }
 
-// ── Enviar una imagen (2026-08-14) ───────────────────────────────────────────
+// ── Enviar adjuntos: imagen, audio, video o documento (2026-08-14) ───────────
 
-export function enviarImagen({ contacto, base64, mime, nombre, pie }) {
-  return orbitApi('/whatsapp/imagen', {
+/** Topes de WhatsApp por tipo. Pasarse lo rechaza con un error poco claro. */
+export const TOPES_ARCHIVO = { imagen: 5, audio: 16, video: 16, documento: 16 }
+
+export function enviarArchivo({ contacto, base64, mime, nombre, pie }) {
+  return orbitApi('/whatsapp/archivo', {
     method: 'POST',
     body: { contacto, base64, mime, nombre, pie },
   })
 }
 
+/** Solo para saber qué icono y qué texto mostrar antes de enviarlo. */
+export function claseArchivo(mime = '') {
+  const m = mime.toLowerCase()
+  if (m === 'image/jpeg' || m === 'image/png') return 'imagen'
+  if (m.startsWith('audio/')) return 'audio'
+  if (m.startsWith('video/')) return 'video'
+  return 'documento'
+}
+
 /**
- * Reduce la foto en el navegador antes de subirla.
+ * Deja el archivo listo para enviarlo.
  *
- * Tres razones, y ninguna es cosmética:
- *  1. Meta rechaza por encima de 5 MB, y una foto de celular moderno los pasa.
- *  2. La copia se guarda en la base (`whatsapp_media`), así que subir el
- *     original engorda la tabla sin que nadie lo note hasta que duele.
+ * Las FOTOS se reducen aquí, en el navegador, por tres razones y ninguna es
+ * cosmética:
+ *  1. Meta rechaza por encima de 5 MB, y una foto de celular los pasa.
+ *  2. La copia se guarda en la base, así que subir el original engorda la tabla
+ *     sin que nadie lo note hasta que duele.
  *  3. Se decodifica a un tamaño acotado, NUNCA a resolución completa: en un
  *     Android modesto eso es un cierre por falta de memoria — ya nos pasó en la
  *     app del técnico.
  *
- * Devuelve siempre JPEG: es lo que WhatsApp muestra mejor y pesa menos.
+ * Lo demás (audio, video, documentos) viaja tal cual: comprimirlo no se puede
+ * en el navegador y recodificarlo sería peor que el problema.
  */
-export function prepararImagen(file, { ladoMax = 1600, calidad = 0.82 } = {}) {
-  return new Promise((resolve, reject) => {
-    if (!file.type.startsWith('image/')) return reject(new Error('Eso no es una imagen'))
+export function prepararArchivo(file, { ladoMax = 1600, calidad = 0.82 } = {}) {
+  const clase = claseArchivo(file.type)
 
+  // Un HEIC o un WEBP no son "imagen" para WhatsApp: van como documento, que sí
+  // llega, en vez de rebotar con un error de formato.
+  if (clase !== 'imagen') {
+    return leerComoBase64(file).then(base64 => ({
+      base64, mime: file.type || 'application/octet-stream',
+      nombre: file.name || 'archivo', clase, previsualizacion: null,
+      bytes: file.size,
+    }))
+  }
+
+  return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {
@@ -181,14 +205,24 @@ export function prepararImagen(file, { ladoMax = 1600, calidad = 0.82 } = {}) {
 
       const dataUrl = lienzo.toDataURL('image/jpeg', calidad)
       lienzo.width = lienzo.height = 0   // suelta la memoria del lienzo
+      const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '')
       resolve({
-        base64: dataUrl.replace(/^data:[^;]+;base64,/, ''),
-        mime: 'image/jpeg',
+        base64, mime: 'image/jpeg',
         nombre: (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.jpg',
-        previsualizacion: dataUrl,
+        clase: 'imagen', previsualizacion: dataUrl,
+        bytes: Math.round(base64.length * 0.75),
       })
     }
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('No se pudo abrir la imagen')) }
     img.src = url
+  })
+}
+
+function leerComoBase64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload  = () => resolve(String(fr.result).replace(/^data:[^;]*;base64,/, ''))
+    fr.onerror = () => reject(new Error('No se pudo leer el archivo'))
+    fr.readAsDataURL(file)
   })
 }
