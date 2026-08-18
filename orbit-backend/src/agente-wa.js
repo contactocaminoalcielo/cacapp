@@ -726,9 +726,33 @@ async function construirSistema(agente) {
  * esto, y ella además dijo esto otro" y conteste lo que falta, en vez de repetir
  * lo que ya había dicho.
  */
+/**
+ * Un interactivo, contado como lo que es: algo que YA se envió.
+ *
+ * En la bandeja los botones y menús se guardan como `cuerpo` + una marca final
+ * `[botón: …]` / `[menú "…": N opciones]`, que es como los PINTA la pantalla.
+ * Esa marca entraba tal cual en el historial del modelo, al final del mensaje —
+ * justo donde él pondría un cierre— y la aprendió como estilo propio: el 16-ago
+ * le mandó a una veterinaria un mensaje de TEXTO que acababa en
+ * `[botón: https://orbit.orbitacac.com/#/aliado?c=…]`. Lo vio tal cual, con los
+ * corchetes, y el enlace de su clínica crudo dentro.
+ *
+ * La marca pasa al PRINCIPIO y en pasado. Ahí lee como metadato —igual que
+ * `[coordinación]`, que lleva dos semanas sin que la copie— y no como el final
+ * de un mensaje que se pueda imitar.
+ */
+function narrarInteractivo(texto) {
+  const t = String(texto || '')
+  const corte = t.lastIndexOf('\n[')
+  if (corte < 0) return t
+  const marca = t.slice(corte + 2).replace(/\]\s*$/, '').trim()
+  const cuerpo = t.slice(0, corte).trim()
+  return `[le enviaste ${marca} — ya lo recibió] ${cuerpo}`
+}
+
 async function construirHistorial(contacto, pendientesDesde = null) {
   const { rows: crudas } = await pool.query(
-    `SELECT id, direccion, texto, enviado_por FROM public.whatsapp_mensajes
+    `SELECT id, direccion, texto, tipo, enviado_por FROM public.whatsapp_mensajes
       WHERE contacto = $1 AND texto IS NOT NULL AND texto <> ''
       ORDER BY ocurrido_en DESC, id DESC
       LIMIT $2`,
@@ -764,9 +788,10 @@ async function construirHistorial(contacto, pendientesDesde = null) {
     // dicho él — y da por suyos compromisos que no hizo, o repite lo que
     // coordinación acaba de resolver. El prefijo es la única forma de que
     // distinga, porque la API solo tiene dos roles.
-    const texto = role === 'assistant' && m.enviado_por
-      ? `[coordinación] ${m.texto}`
+    let texto = role === 'assistant' && m.tipo === 'interactive'
+      ? narrarInteractivo(m.texto)
       : m.texto
+    if (role === 'assistant' && m.enviado_por) texto = `[coordinación] ${texto}`
 
     const foto = fotos.get(Number(m.id))
     // Con foto, el turno deja de ser una cadena y pasa a ser bloques. Van

@@ -362,9 +362,30 @@ export async function enviarSobre({ contacto, payload, texto, tipo = 'text', per
   return { status: 200, body: { ok: true, mensaje: guardado[0] || null, wa_message_id: wamid } }
 }
 
+/**
+ * WhatsApp NO entiende Markdown: su negrita es `*así*` y `**así**` se ve tal
+ * cual, con los asteriscos. El modelo escribe Markdown por defecto, así que la
+ * veterinaria de Quiripets recibió el 14-ago la lista de planes llena de
+ * `**Eco-grupal**` y `**Precio:**` — 7 mensajes salieron así.
+ *
+ * Se traduce al ENVIAR y no se le pide al modelo en el contexto: una regla de
+ * formato es de las que se saltan (lo demostró el enlace de registro), y aquí no
+ * hay nada que decidir. Solo se toca lo que escribe el AGENTE: reescribir lo que
+ * teclea una persona sería cambiarle sus palabras.
+ */
+function aFormatoWhatsapp(texto) {
+  return String(texto)
+    // Negrita y cursiva de Markdown → las de WhatsApp.
+    .replace(/\*\*\*(.+?)\*\*\*/gs, '_*$1*_')
+    .replace(/\*\*(.+?)\*\*/gs, '*$1*')
+    .replace(/__(.+?)__/gs, '_$1_')
+    // Los títulos `## Algo` no existen en WhatsApp: quedan en negrita.
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
+}
+
 /** Texto libre. Es `enviarSobre` con la validación propia del texto. */
 export async function enviarTexto({ contacto, texto, personalId }) {
-  const cuerpo = (texto || '').trim()
+  const cuerpo = (personalId ? (texto || '') : aFormatoWhatsapp(texto || '')).trim()
   if (!cuerpo) return { status: 400, body: { ok: false, error: 'El mensaje está vacío' } }
   if (cuerpo.length > MAX_CARACTERES) {
     return { status: 400, body: { ok: false, error: `El mensaje supera los ${MAX_CARACTERES} caracteres` } }
