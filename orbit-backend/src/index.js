@@ -30,6 +30,9 @@ import {
 import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
 import {
+  listarMateriales, leerMaterial, enviarMaterial, guardarMaterial, borrarMaterial,
+} from './whatsapp-materiales.js'
+import {
   listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
   camposDisponibles, variablesDe, guardarVariables, valoresPara,
 } from './whatsapp-plantillas.js'
@@ -63,6 +66,8 @@ app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
 // aplicándose a todo /whatsapp/conversaciones.
 app.use('/whatsapp/imagen',  express.json({ limit: '30mb' }))
 app.use('/whatsapp/archivo', express.json({ limit: '30mb' }))
+// Los materiales del catálogo (101) se suben por aquí, también en base64.
+app.use('/whatsapp/materiales', express.json({ limit: '30mb' }))
 
 app.use(express.json())
 
@@ -346,6 +351,55 @@ app.post('/whatsapp/conversaciones/:contacto/interactivo', requireAuth, rolBande
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/interactivo-enviar', e) }
+})
+
+// ── Materiales: brochure, tarifario, instructivos (migración 101) ──
+// El catálogo lo edita David y el agente manda de él. Salió de una vet pidiendo
+// el brochure, que hubo que mandarle a mano por la otra línea.
+
+app.get('/whatsapp/materiales', requireAuth, rolBandeja, async (_req, res) => {
+  try {
+    const r = await listarMateriales()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/materiales', e) }
+})
+
+// Los bytes, para poder ver el archivo antes de mandárselo a una clínica. Con
+// sesión y rol, igual que los adjuntos: no hay URL pública de nada que salga
+// por esta línea.
+app.get('/whatsapp/materiales/:id/archivo', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const m = await leerMaterial(req.params.id)
+    if (!m) return res.status(404).json({ ok: false, error: 'Ese material ya no existe' })
+    res.set('Content-Type', m.mime || 'application/octet-stream')
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(m.nombre_archivo)}"`)
+    res.set('Cache-Control', 'private, max-age=3600')
+    res.send(m.archivo)
+  } catch (e) { errorInterno(res, 'wa/material-archivo', e) }
+})
+
+app.post('/whatsapp/materiales', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await guardarMaterial({ id: req.body?.id || null, datos: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/material-guardar', e) }
+})
+
+app.delete('/whatsapp/materiales/:id', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await borrarMaterial({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/material-borrar', e) }
+})
+
+app.post('/whatsapp/conversaciones/:contacto/material', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await enviarMaterial({
+      contacto: req.params.contacto, clave: req.body?.clave,
+      personalId: req.personal.id, enviarSobre,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa/material-enviar', e) }
 })
 
 // ── Configuración del agente de WhatsApp (migración 088) ──

@@ -25,6 +25,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
 import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
 import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
+import { catalogoDeMateriales, enviarMaterial } from './whatsapp-materiales.js'
 import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
@@ -251,6 +252,35 @@ async function construirHerramientas() {
           clave: {
             type: 'string', enum: interactivos.map(i => i.clave),
             description: 'Cuál de los de arriba encaja con lo que necesitas ahora.',
+          },
+        },
+        required: ['clave'],
+      },
+    })
+  }
+
+  // Los materiales (migración 101) son el mismo catálogo editable: brochure,
+  // tarifario, instructivos. Si no hay ninguno cargado, la herramienta NO se
+  // ofrece — un enum vacío es un 400 de la API, y prometer un archivo que no
+  // existe es peor que decir que no se tiene.
+  const materiales = await catalogoDeMateriales().catch(() => [])
+  if (materiales.length) {
+    extra.push({
+      name: 'enviar_material',
+      description:
+        'Manda un ARCHIVO del catálogo: el brochure, el tarifario o lo que haya cargado ' +
+        'coordinación. Úsalo cuando te pidan material para enseñárselo a una familia, o ' +
+        'cuando un documento explique mejor que un párrafo lo que te están preguntando.\n\n' +
+        '⚠️ Solo puedes mandar los de esta lista. Si te piden otra cosa, no la inventes ni ' +
+        'prometas mandarla: dilo y pásalo a coordinación.\n\n' +
+        'Disponibles:\n'
+        + materiales.map(m => `- ${m.clave} (${m.nombre}): ${m.descripcion || ''}`).join('\n'),
+      input_schema: {
+        type: 'object',
+        properties: {
+          clave: {
+            type: 'string', enum: materiales.map(m => m.clave),
+            description: 'Cuál de los de arriba es el que te piden.',
           },
         },
         required: ['clave'],
@@ -1588,6 +1618,24 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
               ? { ok: true, enviado: bloque.input?.clave,
                   nota: 'Ya le llegó. NO repitas su contenido ni lo describas: solo sigue la conversación si hace falta.' }
               : { ok: false, error: r.body?.error || 'No se pudo enviar' })
+          } else if (bloque.name === 'enviar_material') {
+            // Como el interactivo: ENVÍA de verdad. El archivo ya le llegó, así
+            // que anunciarlo ("te lo mando en seguida") sería anunciar algo que
+            // la clínica ya tiene en pantalla.
+            out = await enviarMaterial({
+              contacto, clave: bloque.input?.clave, personalId: null, enviarSobre,
+            }).then(r => {
+              if (r.body?.ok) {
+                return { ok: true, enviado: bloque.input?.clave,
+                  nota: 'El archivo YA le llegó. No digas que se lo vas a mandar: confírmalo en pasado, en una línea, y sigue.' }
+              }
+              // El detalle técnico se queda en el log y NO se le da al modelo:
+              // probándolo, le repetía el error a la clínica tal cual ("me da un
+              // error con el contacto"), que no le dice nada y suena a roto.
+              log(MOD, `no se pudo mandar ${bloque.input?.clave} a ${contacto} —`, r.body?.error)
+              return { ok: false, error: 'No se pudo enviar el archivo.',
+                nota: 'No expliques el fallo ni lo cites: dile que se lo hace llegar coordinación, y etiqueta la conversación.' }
+            })
           } else if (bloque.name === 'clasificar_conversacion') {
             out = await clasificarConversacion({ entrada: bloque.input, contacto })
             // Se guarda en la bitácora, no solo en la conversación: la etiqueta
