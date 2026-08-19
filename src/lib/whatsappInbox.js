@@ -174,6 +174,41 @@ export function claseArchivo(mime = '') {
 }
 
 /**
+ * Grabar una nota de voz — en un formato que WhatsApp acepte.
+ *
+ * Aquí está toda la dificultad del asunto. Chrome graba en `audio/webm;codecs=opus`
+ * por defecto y **WhatsApp NO lo admite**: llegaría como un archivo adjunto que
+ * la clínica tiene que descargar, no como una nota de voz que se toca y suena.
+ *
+ * La lista va en orden de preferencia y solo con lo que Meta acepta de verdad:
+ *   · `audio/mp4` (AAC)   — lo que graba Chrome y Safari. Comprobado en el
+ *                           Chrome 151 de David el 2026-08-19.
+ *   · `audio/ogg;codecs=opus` — lo que graba Firefox. Meta admite ogg SOLO con
+ *                           opus; el ogg "a secas" lo rechaza.
+ *
+ * Si el navegador no puede con ninguno se devuelve null y la pantalla lo dice,
+ * en vez de grabar algo que va a rebotar después de que la persona ya habló.
+ */
+const FORMATOS_GRABACION = ['audio/mp4', 'audio/ogg;codecs=opus']
+
+export function formatoGrabacion() {
+  if (typeof MediaRecorder === 'undefined') return null
+  return FORMATOS_GRABACION.find(f => MediaRecorder.isTypeSupported(f)) || null
+}
+
+/** ¿Se puede grabar aquí? Necesita HTTPS y permiso de micrófono. */
+export function sePuedeGrabar() {
+  return !!(navigator.mediaDevices?.getUserMedia && formatoGrabacion())
+}
+
+/** `95` → `1:35`. */
+export function duracionAudio(segundos) {
+  const m = Math.floor(segundos / 60)
+  const s = String(Math.floor(segundos % 60)).padStart(2, '0')
+  return `${m}:${s}`
+}
+
+/**
  * Deja el archivo listo para enviarlo.
  *
  * Las FOTOS se reducen aquí, en el navegador, por tres razones y ninguna es

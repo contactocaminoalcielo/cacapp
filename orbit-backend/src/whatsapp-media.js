@@ -352,6 +352,11 @@ export async function enviarArchivo({
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
+  // Meta quiere el tipo A SECAS. Al grabar una nota de voz el navegador devuelve
+  // `audio/ogg;codecs=opus` o `audio/mp4;codecs=...`, y con el sufijo la subida
+  // se rechaza — el códec ya va dentro del archivo, no hace falta anunciarlo.
+  mime = String(mime || '').split(';')[0].trim()
+
   const clase = claseDeArchivo(mime)
   const regla = CLASES[clase]
   if (regla.mimes && !regla.mimes.some(x => String(mime).toLowerCase().startsWith(x))) {

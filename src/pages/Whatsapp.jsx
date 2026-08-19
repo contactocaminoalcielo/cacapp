@@ -19,12 +19,13 @@ import {
   listarConversaciones, abrirHilo, marcarLeido, enviarMensaje, cambiarAgente,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
+  sePuedeGrabar, formatoGrabacion, duracionAudio,
   bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
 } from '@/lib/whatsappInbox'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
-  Bot, BotOff,
+  Bot, BotOff, Square, Trash2,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -724,6 +725,74 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
   const [subiendo, setSubiendo] = useState(false)
   const [errorFoto, setErrorFoto] = useState(null)
 
+  // ── Nota de voz ────────────────────────────────────────────────────────────
+  // Se graba y, al parar, entra por `tomarArchivo` como cualquier adjunto: la
+  // previa, el tope de tamaño y el envío ya existen y no hay por qué tener dos
+  // caminos que se puedan desincronizar.
+  const [grabando, setGrabando] = useState(false)
+  const [segundos, setSegundos] = useState(0)
+  const grabadoraRef = useRef(null)
+  const trozosRef = useRef([])
+  const cronoRef = useRef(null)
+  const puedeGrabar = sePuedeGrabar()
+
+  // Soltar el micrófono SIEMPRE. Si no, Chrome deja el punto rojo de "grabando"
+  // encendido en la pestaña y da la sensación de que Orbit sigue escuchando.
+  const soltarMicro = () => {
+    grabadoraRef.current?.stream?.getTracks().forEach(t => t.stop())
+    grabadoraRef.current = null
+    clearInterval(cronoRef.current)
+  }
+
+  useEffect(() => () => soltarMicro(), [])
+
+  async function empezarGrabacion() {
+    setErrorFoto(null)
+    const formato = formatoGrabacion()
+    if (!formato) {
+      setErrorFoto('Este navegador no puede grabar en un formato que WhatsApp acepte. Adjunta el audio como archivo.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const rec = new MediaRecorder(stream, { mimeType: formato })
+      trozosRef.current = []
+      rec.ondataavailable = e => { if (e.data.size) trozosRef.current.push(e.data) }
+      rec.onstop = async () => {
+        const dur = segundos
+        soltarMicro()
+        setGrabando(false)
+        if (rec.cancelada) return
+        const blob = new Blob(trozosRef.current, { type: formato })
+        // `.m4a` y `.ogg` son las extensiones que hacen que WhatsApp lo muestre
+        // como nota de voz y no como un adjunto sin nombre.
+        const ext = formato.startsWith('audio/mp4') ? 'm4a' : 'ogg'
+        await tomarArchivo(new File([blob], `nota-de-voz-${duracionAudio(dur).replace(':', 'm')}s.${ext}`,
+                                    { type: formato }))
+      }
+      grabadoraRef.current = rec
+      rec.start()
+      setSegundos(0)
+      setGrabando(true)
+      cronoRef.current = setInterval(() => setSegundos(v => v + 1), 1000)
+    } catch {
+      // El navegador no dice por qué: casi siempre es que se denegó el permiso.
+      setErrorFoto('No se pudo usar el micrófono. Revisa que le hayas dado permiso a Orbit en el navegador.')
+      soltarMicro()
+      setGrabando(false)
+    }
+  }
+
+  function pararGrabacion({ descartar = false } = {}) {
+    const rec = grabadoraRef.current
+    if (!rec) return
+    rec.cancelada = descartar
+    // `stop()` dispara `onstop`, que es donde se arma el archivo y se suelta el
+    // micrófono. Descartar es lo mismo, pero tirando lo grabado.
+    if (rec.state !== 'inactive') rec.stop()
+    else { soltarMicro(); setGrabando(false) }
+  }
+
   async function tomarArchivo(file) {
     if (!file) return
     setErrorFoto(null)
@@ -830,7 +899,27 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
         </p>
       )}
 
-      <div className="p-3 flex items-end gap-2">
+      {grabando && (
+        <div className="p-3 flex items-center gap-3">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+          <span className="text-[13px] font-semibold text-gray-700 tabular-nums">
+            {duracionAudio(segundos)}
+          </span>
+          <span className="text-[11.5px] text-gray-400 flex-1 truncate">
+            Grabando… la clínica lo recibirá como nota de voz
+          </span>
+          <button type="button" onClick={() => pararGrabacion({ descartar: true })}
+            title="Descartar la grabación"
+            className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-400 hover:text-red-600 hover:bg-red-50">
+            <Trash2 size={16} />
+          </button>
+          <Button onClick={() => pararGrabacion()} className="h-10 px-4">
+            <Square size={14} className="mr-1.5" /> Listo
+          </Button>
+        </div>
+      )}
+
+      <div className={`p-3 flex items-end gap-2 ${grabando ? 'hidden' : ''}`}>
         <input ref={fileRef} type="file" className="hidden"
           onChange={e => { tomarArchivo(e.target.files?.[0]); e.target.value = '' }} />
         <button type="button" onClick={() => fileRef.current?.click()} disabled={enviando || subiendo}
@@ -838,6 +927,15 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
           className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
           <Paperclip size={16} />
         </button>
+        {/* Grabar va aparte de adjuntar: es el gesto más frecuente de WhatsApp
+            y esconderlo dentro del selector de archivos sería no tenerlo. */}
+        {puedeGrabar && !foto && (
+          <button type="button" onClick={empezarGrabacion} disabled={enviando || subiendo}
+            title="Grabar una nota de voz"
+            className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
+            <Mic size={16} />
+          </button>
+        )}
         <textarea
           ref={ref} rows={1} value={texto}
           onChange={e => setTexto(e.target.value)}
