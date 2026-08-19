@@ -33,10 +33,11 @@ import {
   camposDisponibles, variablesDePlantilla, guardarVariables, valoresDeServicio, porGrupo,
 } from '@/lib/plantillasWa'
 import { cargarMateriales, leerArchivo } from '@/lib/materialesApi'
+import CampanasWa from '@/pages/whatsapp/CampanasWa'
 import {
   Plus, Loader2, RefreshCw, Trash2, Send, X, AlertTriangle, MessageSquare,
   Link2, Reply, Search, Database, Check, Pencil, Phone, Copy, Image as ImageIcon,
-  FileText, Film, MapPin, Upload,
+  FileText, Film, MapPin, Upload, Megaphone,
 } from 'lucide-react'
 
 const VACIA = {
@@ -56,6 +57,11 @@ export default function PlantillasWhatsapp() {
   const [enviando, setEnviando] = useState(null)
   const [mapeando, setMapeando] = useState(null)
   const [campos, setCampos] = useState([])
+  const [pestana, setPestana] = useState('plantillas')
+  // Entrar al envío masivo YA con la plantilla puesta: llegar a esta pantalla
+  // con una plantilla en la cabeza y tener que volver a elegirla es fricción
+  // gratis.
+  const [masivoDe, setMasivoDe] = useState(null)
 
   // El catálogo de datos de Orbit que pueden ir en un hueco. Es cerrado y viene
   // del backend: la pantalla no inventa campos.
@@ -112,6 +118,21 @@ export default function PlantillasWhatsapp() {
       <Topbar titulo="Plantillas de WhatsApp" />
 
       <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
+        <div className="flex gap-1 p-1 bg-gray-100/70 rounded-xl w-fit">
+          {[['plantillas', 'Plantillas', MessageSquare], ['campanas', 'Envíos masivos', Megaphone]].map(([v, txt, Icono]) => (
+            <button key={v} onClick={() => setPestana(v)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[12.5px] font-semibold transition
+                      ${pestana === v ? 'bg-white text-[#1A5CD8] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              <Icono className="w-3.5 h-3.5" /> {txt}
+            </button>
+          ))}
+        </div>
+
+        {pestana === 'campanas' ? (
+          <CampanasWa plantillas={plantillas} abrirCon={masivoDe}
+                      onAbierto={() => setMasivoDe(null)} />
+        ) : (
+        <>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -164,9 +185,12 @@ export default function PlantillasWhatsapp() {
             {filtradas.map(p => (
               <Tarjeta key={p.id || p.name} p={p}
                        onEnviar={() => setEnviando(p)} onBorrar={() => quitar(p)}
-                       onEditar={() => setEditando(p)} onMapear={() => setMapeando(p)} />
+                       onEditar={() => setEditando(p)} onMapear={() => setMapeando(p)}
+                       onMasivo={() => { setMasivoDe(p.name); setPestana('campanas') }} />
             ))}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -189,7 +213,7 @@ export default function PlantillasWhatsapp() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear }) {
+function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear, onMasivo }) {
   const est = ESTADOS[p.status] || { label: p.status, clase: 'bg-gray-100 text-gray-600 border-gray-200' }
   const cuerpo = componente(p, 'BODY')?.text || ''
   const huecos = huecosDePlantilla(p)
@@ -247,9 +271,15 @@ function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear }) {
             <Pencil className="w-3.5 h-3.5" />
           </Button>
           {p.status === 'APPROVED' && (
-            <Button size="sm" variant="outline" onClick={onEnviar}>
-              <Send className="w-3.5 h-3.5 mr-1" /> Enviar
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={onMasivo}
+                      title="Mandarla a muchos a la vez">
+                <Megaphone className="w-3.5 h-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" onClick={onEnviar}>
+                <Send className="w-3.5 h-3.5 mr-1" /> Enviar
+              </Button>
+            </>
           )}
           <Button size="sm" variant="ghost" onClick={onBorrar}
                   className="text-gray-400 hover:text-red-600">

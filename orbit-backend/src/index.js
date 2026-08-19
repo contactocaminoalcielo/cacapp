@@ -44,6 +44,10 @@ import {
   listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
 import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
+import {
+  listarAudiencias, previsualizar, crearCampana, listarCampanas,
+  detalleCampana, accionCampana, borrarCampana, arrancarCampanas,
+} from './whatsapp-campanas.js'
 
 const app = express()
 
@@ -325,6 +329,70 @@ app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/enviar', e) }
+})
+
+// ── Envíos masivos: campañas (migración 104) ──
+// Mandar una plantilla a 203 clínicas no es un bucle: no se puede deshacer,
+// Meta tiene cupo, y el backend se reinicia. Ver whatsapp-campanas.js.
+app.get('/whatsapp/audiencias', requireAuth, rolBandeja, (_req, res) => {
+  const r = listarAudiencias()
+  res.status(r.status).json(r.body)
+})
+
+// A cuántos iría y qué huecos quedarían en blanco — SIN mandar nada. Es lo
+// único que se mira antes de apretar el botón, así que tiene que ser exacto.
+app.post('/whatsapp/campanas/previsualizar', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await previsualizar({
+      audiencia: req.body?.audiencia, filtros: req.body?.filtros,
+      plantilla: req.body?.plantilla, idioma: req.body?.idioma,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/previsualizar', e) }
+})
+
+app.get('/whatsapp/campanas', requireAuth, rolBandeja, async (_req, res) => {
+  try {
+    const r = await listarCampanas()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/listar', e) }
+})
+
+// Crear NO envía: deja la campaña en BORRADOR con su lista armada, para poder
+// mirarla antes.
+app.post('/whatsapp/campanas', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await crearCampana({
+      nombre: req.body?.nombre, plantilla: req.body?.plantilla, idioma: req.body?.idioma,
+      audiencia: req.body?.audiencia, filtros: req.body?.filtros,
+      valoresFijos: req.body?.valoresFijos, porHora: req.body?.porHora,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/crear', e) }
+})
+
+app.get('/whatsapp/campanas/:id', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await detalleCampana({ id: req.params.id, estado: req.query.estado || null })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/detalle', e) }
+})
+
+app.post('/whatsapp/campanas/:id/:accion', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await accionCampana({
+      id: req.params.id, accion: req.params.accion, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/accion', e) }
+})
+
+app.delete('/whatsapp/campanas/:id', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await borrarCampana({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-campanas/borrar', e) }
 })
 
 // ── Archivos recibidos por WhatsApp (migración 094) ──
@@ -1056,4 +1124,7 @@ app.listen(PORT, () => {
   // Se arranca DESPUÉS de escuchar: si el barrido tuviera un problema, que no
   // impida levantar el servidor. Ver migración 098.
   arrancarSeguimientos()
+  // Los envíos masivos también: el estado vive en la tabla, así que retomar
+  // una campaña a medias tras un reinicio es justo lo que tiene que pasar.
+  arrancarCampanas()
 })

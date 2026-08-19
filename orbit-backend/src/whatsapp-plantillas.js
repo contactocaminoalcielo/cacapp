@@ -135,7 +135,7 @@ export async function listarPlantillas() {
  * plantilla aprobada, no quien pulsa "Enviar". Si alguien la edita en WhatsApp
  * Manager, el envío sigue saliendo bien sin tocar Orbit.
  */
-async function obtenerPlantilla(nombre, idioma, token) {
+export async function obtenerPlantilla(nombre, idioma, token) {
   const r = await meta(
     `${waba()}/message_templates?name=${encodeURIComponent(nombre)}`
     + `&language=${encodeURIComponent(JSON.stringify([idioma]))}`
@@ -507,7 +507,7 @@ const CAMPOS = [
   { clave: 'servicio.entregado', grupo: 'Servicio', etiqueta: 'Fecha de entrega real', col: 'fecha_entrega_real', ejemplo: '19 de agosto de 2026', formato: 'fecha' },
   { clave: 'servicio.recogida', grupo: 'Servicio', etiqueta: 'Fecha de recogida',    col: 'fecha_recogida',    ejemplo: '5 de agosto de 2026', formato: 'fecha' },
   { clave: 'servicio.tecnico',  grupo: 'Servicio', etiqueta: 'Técnico que recogió',  col: 'tecnico_nombre',    ejemplo: 'Andrés' },
-  { clave: 'aliado.nombre',     grupo: 'Servicio', etiqueta: 'Veterinaria aliada',   col: 'aliado_nombre',     ejemplo: 'Veterinaria Patitas' },
+  { clave: 'aliado.nombre',     grupo: 'Servicio', etiqueta: 'Veterinaria aliada',   col: 'aliado_nombre',     ejemplo: 'Veterinaria Patitas', fuentes: ['SERVICIO', 'ALIADO'] },
 
   // ── El portal de fotos ────────────────────────────────────────────────────
   // El enlace completo, no el código: pedirle a una familia que "entre a la web
@@ -519,9 +519,25 @@ const CAMPOS = [
   { clave: 'servicio.valor',    grupo: 'Dinero', etiqueta: 'Valor total',      col: 'valor_total',   ejemplo: '$ 350.000', formato: 'moneda', dinero: true },
   { clave: 'servicio.pagado',   grupo: 'Dinero', etiqueta: 'Valor pagado',     col: 'valor_pagado',  ejemplo: '$ 200.000', formato: 'moneda', dinero: true },
   { clave: 'servicio.saldo',    grupo: 'Dinero', etiqueta: 'Saldo pendiente',  col: 'saldo',         ejemplo: '$ 150.000', formato: 'moneda', dinero: true },
+
+  // ── Cuando el destinatario ES la veterinaria (envíos masivos) ─────────────
+  // Aquí no hay servicio del que colgar nada: el mensaje va a la clínica, no a
+  // una familia. Por eso estos campos declaran otra fuente.
+  { clave: 'aliado.contacto',  grupo: 'Veterinaria', etiqueta: 'Persona de contacto', col: 'aliado_contacto', ejemplo: 'Dra. Liliana', fuentes: ['ALIADO'] },
+  { clave: 'aliado.ciudad',    grupo: 'Veterinaria', etiqueta: 'Ciudad',              col: 'aliado_ciudad',   ejemplo: 'Bogotá',       fuentes: ['ALIADO'] },
+  { clave: 'aliado.whatsapp',  grupo: 'Veterinaria', etiqueta: 'WhatsApp',            col: 'aliado_whatsapp', ejemplo: '573001234567', fuentes: ['ALIADO'] },
 ]
 
+/** Un campo sin `fuentes` sale de un servicio: es de dónde salían todos. */
+const fuentesDe = c => c?.fuentes || ['SERVICIO']
+
 const campoPorClave = c => CAMPOS.find(x => x.clave === c)
+
+/** ¿Este dato se puede rellenar cuando el destinatario es de esta fuente? */
+export const campoSirvePara = (clave, fuente) => {
+  const c = campoPorClave(clave)
+  return !!c && fuentesDe(c).includes(fuente)
+}
 
 /**
  * Todo lo que un servicio puede aportar, en una sola fila.
@@ -578,6 +594,28 @@ const RESOLVER = `
        LIMIT 1
     ) rec ON TRUE
    WHERE s.id = $1`
+
+/**
+ * Lo que aporta una VETERINARIA cuando el mensaje va dirigido a ella.
+ *
+ * Es otra fuente, no una variante: aquí no hay mascota ni servicio del que
+ * colgar nada. `aliado_nombre` se llama igual que en el resolver de servicios a
+ * propósito — así una plantilla que dice "Hola {{vet}}" sirve en los dos casos.
+ */
+const RESOLVER_ALIADO = `
+  SELECT a.nombre           AS aliado_nombre,
+         a.contacto_nombre  AS aliado_contacto,
+         a.ciudad           AS aliado_ciudad,
+         a.whatsapp         AS aliado_whatsapp,
+         a.whatsapp         AS contacto
+    FROM public.aliados a
+   WHERE a.id_aliado = $1`
+
+/** De dónde sale cada fuente. Añadir una es añadir una entrada aquí. */
+const FUENTES = {
+  SERVICIO: { sql: RESOLVER, etiqueta: 'servicio' },
+  ALIADO:   { sql: RESOLVER_ALIADO, etiqueta: 'veterinaria' },
+}
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
                'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -652,7 +690,43 @@ export async function buscarServicios({ q = '', limite = 12 }) {
 }
 
 export function camposDisponibles() {
-  return { status: 200, body: { ok: true, campos: CAMPOS.map(({ col, ...c }) => c) } }
+  return {
+    status: 200,
+    body: { ok: true, campos: CAMPOS.map(({ col, ...c }) => ({ ...c, fuentes: fuentesDe(c) })) },
+  }
+}
+
+/**
+ * Los huecos de una plantilla resueltos para UN destinatario de la fuente que
+ * sea. Es lo que usan los envíos masivos, uno por uno.
+ *
+ * Devuelve también `contacto`: el número VIGENTE, leído ahora y no cuando se
+ * armó la lista. Congelarlo repetiría el bug de los envíos que salían al
+ * WhatsApp viejo por leer un snapshot.
+ */
+export async function valoresDeFuente({ plantilla, idioma = 'es_MX', fuente, refId }) {
+  const f = FUENTES[fuente]
+  if (!f) return { ok: false, error: `Fuente desconocida: ${fuente}` }
+
+  const { body: { variables } } = await variablesDe({ plantilla, idioma })
+  const { rows: [datos] } = await pool.query(f.sql, [refId])
+  if (!datos) return { ok: false, error: `Ya no existe esa ${f.etiqueta}` }
+
+  const valores = {}
+  const sinDato = []
+  for (const v of variables) {
+    const campo = campoPorClave(v.campo)
+    // Un campo de otra fuente no se puede rellenar aquí: se deja vacío y quien
+    // llama decide (se salta el destinatario en vez de mandar un hueco).
+    if (!campo || !fuentesDe(campo).includes(fuente)) { sinDato.push(v.campo); continue }
+    const crudo = campo.col === 'portal_enlace'
+      ? (datos.codigo_fotos ? construirEnlace(datos.codigo_fotos) : null)
+      : datos[campo.col]
+    const valor = formatear(crudo, campo)
+    if (valor) valores[claveHueco(v)] = valor
+    else sinDato.push(campo.etiqueta)
+  }
+  return { ok: true, valores, sinDato, contacto: aInternacional(datos.contacto || datos.cliente_whatsapp) }
 }
 
 export async function variablesDe({ plantilla, idioma = 'es_MX' }) {
@@ -842,41 +916,27 @@ async function mediaDeCabecera(buf, mime, nombre, phoneNumberId, token) {
  * Con `servicioId`, lo mapeado se rellena solo desde Orbit y lo escrito a mano
  * solo manda donde el mapeo no llega.
  */
-export async function enviarPlantilla({
-  contacto, nombre, idioma = 'es_MX', valores = {}, servicioId = null, personalId = null,
-  // Compatibilidad con la forma vieja (arrays posicionales).
-  variables = null, variablesBoton = null,
-}) {
+/**
+ * El sobre y el envío, con la plantilla ya en la mano y los huecos resueltos.
+ *
+ * Está separado de `enviarPlantilla` por los envíos masivos: mandar a 203
+ * clínicas no puede pedirle a Meta la misma plantilla 203 veces. Quien manda en
+ * lote la pide UNA y luego llama aquí por cada destinatario.
+ *
+ * `dados` es un diccionario por hueco: `{ 'BODY:1': 'Toby', 'HEADER:mascota': 'Toby' }`.
+ */
+export async function mandarPlantilla({ plantilla, contacto, dados = {}, personalId = null }) {
   const { token, error } = credenciales()
   if (error) return { status: 500, body: { ok: false, error } }
 
-  const { plantilla, error: errPlantilla, status: stPlantilla } = await obtenerPlantilla(nombre, idioma, token)
-  if (!plantilla) return { status: stPlantilla || 502, body: { ok: false, error: errPlantilla } }
-  if (plantilla.status !== 'APPROVED') {
-    return { status: 409, body: { ok: false, error: `La plantilla está ${plantilla.status}: Meta solo deja enviar las aprobadas.` } }
-  }
-
-  const dados = { ...valores }
-  if (Array.isArray(variables)) variables.forEach((v, i) => { dados[`BODY:${i + 1}`] ??= v })
-  if (Array.isArray(variablesBoton)) variablesBoton.forEach((v, i) => { dados[`BUTTON:${i + 1}`] ??= v })
-
-  let num = aInternacional(contacto)
-
-  // Con un servicio, los valores salen de Orbit y no de lo que teclee nadie —
-  // que es el punto de asignar variables (migración 097). Lo escrito a mano se
-  // respeta solo donde el mapeo no llega.
-  if (servicioId) {
-    const r = await valoresPara({ plantilla: nombre, idioma, servicioId })
-    if (!r.body.ok) return { status: r.status, body: r.body }
-    for (const [k, v] of Object.entries(r.body.valores)) { if (v) dados[k] = v }
-    if (num.length < 10 && r.body.contacto) num = r.body.contacto
-  }
-
+  const num = aInternacional(contacto)
   if (num.length < 10) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
   const desde = (process.env.WHATSAPP_ALLOWED_PHONE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)[0]
   if (!desde) return { status: 500, body: { ok: false, error: 'No hay número configurado para enviar' } }
 
+  const nombre = plantilla.name
+  const idioma = plantilla.language
   const named = plantilla.parameter_format === 'NAMED'
   const parametro = (hueco, valor) => ({
     type: 'text',
@@ -966,7 +1026,10 @@ export async function enviarPlantilla({
        VALUES ($1,$2,'OUT','template',$3,'failed',now(),$4,$5)`,
       [desde, num, `[plantilla ${nombre}]`, r.error, personalId]
     ).catch(e => log(MOD, 'no se pudo registrar el fallo —', e.message))
-    return { status: r.status, body: { ok: false, error: r.error } }
+    // El código de Meta viaja con el error: un envío masivo lo necesita para
+    // distinguir "ese número no existe" (seguir con el siguiente) de "cupo
+    // agotado" (parar del todo).
+    return { status: r.status, body: { ok: false, error: r.error, codigo: r.detalle?.code || null } }
   }
 
   const wamid = r.data?.messages?.[0]?.id || null
@@ -993,4 +1056,49 @@ export async function enviarPlantilla({
 
   log(MOD, `plantilla ${nombre} enviada a ${num} (wamid=${wamid || '-'})`)
   return { status: 200, body: { ok: true, wa_message_id: wamid, mensaje: rows[0] || null } }
+}
+
+/**
+ * Manda una plantilla a un número. **Esto es lo que funciona fuera de las 24h**
+ * — es su única razón de ser; para responder dentro de la ventana está
+ * `enviarTexto`, que es más barato y más natural.
+ *
+ * La plantilla se lee de Meta, no de lo que mande la pantalla: los huecos, si
+ * van numerados o con nombre, y si la cabecera lleva texto o una imagen los
+ * decide la plantilla aprobada. Así un cambio hecho en WhatsApp Manager no
+ * rompe el envío en silencio.
+ *
+ * Con `servicioId`, lo mapeado se rellena solo desde Orbit y lo escrito a mano
+ * manda solo donde el mapeo no llega.
+ */
+export async function enviarPlantilla({
+  contacto, nombre, idioma = 'es_MX', valores = {}, servicioId = null, personalId = null,
+  // Compatibilidad con la forma vieja (arrays posicionales).
+  variables = null, variablesBoton = null,
+}) {
+  const { token, error } = credenciales()
+  if (error) return { status: 500, body: { ok: false, error } }
+
+  const { plantilla, error: errPlantilla, status: stPlantilla } = await obtenerPlantilla(nombre, idioma, token)
+  if (!plantilla) return { status: stPlantilla || 502, body: { ok: false, error: errPlantilla } }
+  if (plantilla.status !== 'APPROVED') {
+    return { status: 409, body: { ok: false, error: `La plantilla está ${plantilla.status}: Meta solo deja enviar las aprobadas.` } }
+  }
+
+  const dados = { ...valores }
+  if (Array.isArray(variables)) variables.forEach((v, i) => { dados[`BODY:${i + 1}`] ??= v })
+  if (Array.isArray(variablesBoton)) variablesBoton.forEach((v, i) => { dados[`BUTTON:${i + 1}`] ??= v })
+
+  let num = aInternacional(contacto)
+
+  // Con un servicio, los valores salen de Orbit y no de lo que teclee nadie —
+  // que es el punto de asignar variables (migración 097).
+  if (servicioId) {
+    const r = await valoresPara({ plantilla: nombre, idioma, servicioId })
+    if (!r.body.ok) return { status: r.status, body: r.body }
+    for (const [k, v] of Object.entries(r.body.valores)) { if (v) dados[k] = v }
+    if (num.length < 10 && r.body.contacto) num = r.body.contacto
+  }
+
+  return mandarPlantilla({ plantilla, contacto: num, dados, personalId })
 }
