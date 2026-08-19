@@ -33,8 +33,9 @@ import {
   listarMateriales, leerMaterial, enviarMaterial, guardarMaterial, borrarMaterial,
 } from './whatsapp-materiales.js'
 import {
-  listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
+  listarPlantillas, crearPlantilla, editarPlantilla, borrarPlantilla, enviarPlantilla,
   camposDisponibles, variablesDe, guardarVariables, valoresPara,
+  subirCabecera, buscarServicios,
 } from './whatsapp-plantillas.js'
 import {
   obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
@@ -68,6 +69,9 @@ app.use('/whatsapp/imagen',  express.json({ limit: '30mb' }))
 app.use('/whatsapp/archivo', express.json({ limit: '30mb' }))
 // Los materiales del catálogo (101) se suben por aquí, también en base64.
 app.use('/whatsapp/materiales', express.json({ limit: '30mb' }))
+// La imagen/PDF de la cabecera de una plantilla se sube a Meta antes de crearla
+// (Resumable Upload API) y viaja en base64, igual que lo anterior.
+app.use('/whatsapp/plantillas-cabecera', express.json({ limit: '30mb' }))
 
 app.use(express.json())
 
@@ -219,9 +223,24 @@ app.post('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
     const r = await crearPlantilla({
       nombre: req.body?.nombre, idioma: req.body?.idioma,
       categoria: req.body?.categoria, componentes: req.body?.componentes,
+      formato: req.body?.formato,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/crear', e) }
+})
+
+// Cambiar el texto de una que ya existe. Se creía imposible —"Meta no deja
+// editar una aprobada"— y por eso el módulo solo sabía borrar y recrear.
+// Comprobado el 2026-08-19: se puede. Vuelve a revisión, pero conserva el
+// nombre, y con él el mapeo de datos.
+app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await editarPlantilla({
+      id: req.body?.id, nombre: req.params.nombre, categoria: req.body?.categoria,
+      componentes: req.body?.componentes, formato: req.body?.formato,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/editar', e) }
 })
 
 app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, res) => {
@@ -238,6 +257,27 @@ app.get('/whatsapp/plantillas-campos', requireAuth, rolBandeja, (_req, res) => {
   res.status(r.status).json(r.body)
 })
 
+// El archivo de una cabecera de imagen/video/PDF. Meta NO acepta una URL al dar
+// de alta la plantilla (`error_subcode 2388273`): hay que subirlo antes y pasar
+// el `handle` que devuelve.
+app.post('/whatsapp/plantillas-cabecera', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await subirCabecera({
+      base64: req.body?.base64, mime: req.body?.mime, nombre: req.body?.nombre,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/cabecera', e) }
+})
+
+// Buscar el servicio del que salen los datos, por mascota/familia/código. Sin
+// esto, enviar empieza por pegar un UUID y acaba escribiéndose todo a mano.
+app.get('/whatsapp/plantillas-servicios', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await buscarServicios({ q: req.query.q })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/servicios', e) }
+})
+
 app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
   try {
     const r = await variablesDe({ plantilla: req.params.nombre, idioma: req.query.idioma })
@@ -250,6 +290,8 @@ app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async
     const r = await guardarVariables({
       plantilla: req.params.nombre, idioma: req.body?.idioma,
       variables: Array.isArray(req.body?.variables) ? req.body.variables : [],
+      // `undefined` = no se habla de la cabecera y no se toca; `null` = se quita.
+      cabecera: 'cabecera' in (req.body || {}) ? req.body.cabecera : undefined,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
@@ -271,8 +313,12 @@ app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (
       nombre: req.params.nombre,
       contacto: req.body?.contacto,
       idioma: req.body?.idioma,
-      variables: Array.isArray(req.body?.variables) ? req.body.variables : [],
-      variablesBoton: Array.isArray(req.body?.variablesBoton) ? req.body.variablesBoton : [],
+      // Diccionario por hueco ("BODY:1", "HEADER:mascota"). Los arrays son la
+      // forma vieja y siguen valiendo.
+      valores: req.body?.valores && typeof req.body.valores === 'object' ? req.body.valores : {},
+      servicioId: req.body?.servicioId || null,
+      variables: Array.isArray(req.body?.variables) ? req.body.variables : null,
+      variablesBoton: Array.isArray(req.body?.variablesBoton) ? req.body.variablesBoton : null,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)

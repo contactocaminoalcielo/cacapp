@@ -1,4 +1,4 @@
-// Plantillas de WhatsApp — crear, revisar y enviar.
+// Plantillas de WhatsApp — construir, revisar, mapear a Orbit y enviar.
 //
 // Una plantilla es el ÚNICO modo de escribirle a alguien pasadas 24 horas desde
 // su último mensaje. Meta las revisa antes de dejarlas usar, y esa revisión
@@ -7,12 +7,18 @@
 // 🩸 EL ERROR QUE ESTA PANTALLA VIENE A CORREGIR: en la cuenta vieja hay 251
 // plantillas con nombres como `mango_compet_26_3_2026` — una por mascota, con el
 // texto quemado. Eso obliga a esperar una aprobación por cada servicio. Una sola
-// plantilla con {{1}} sirve para todas. Por eso el constructor empuja a usar
-// variables y muestra en todo momento cuántas lleva.
+// plantilla con un hueco sirve para todas. Por eso el constructor empuja a usar
+// variables, y por eso cada hueco se puede atar a un dato de Orbit: si el nombre
+// de la mascota sale solo, nadie necesita una plantilla por mascota.
 //
-// Los datos NO vienen de Supabase ni de Orbit: viven en la cuenta de WhatsApp y
-// se piden a Meta a través del backend. Ver lib/plantillasWa.js.
-import { useState, useEffect, useCallback, useMemo } from 'react'
+// Lo que se comprobó contra la API el 2026-08-19 y esta pantalla ya usa:
+// variables CON NOMBRE (`{{mascota}}`), cabecera con imagen/video/PDF, botones
+// de llamada y de copiar código, y **editar una plantilla ya aprobada** — que se
+// creía imposible.
+//
+// Los datos NO vienen de Supabase: las plantillas viven en la cuenta de WhatsApp
+// y el mapeo en Orbit; todo pasa por el backend. Ver lib/plantillasWa.js.
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
@@ -20,19 +26,23 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import {
-  listarPlantillas, crearPlantilla, borrarPlantilla, enviarPlantilla,
-  ESTADOS, CATEGORIAS, IDIOMAS, variablesDe, componente,
-  variablesDelCuerpo, variablesDelBoton, conValores,
-  camposDisponibles, variablesDePlantilla, guardarVariables, valoresDeServicio,
+  listarPlantillas, crearPlantilla, editarPlantilla, borrarPlantilla, enviarPlantilla,
+  subirCabecera, buscarServicios,
+  ESTADOS, CATEGORIAS, IDIOMAS, FORMATOS, CABECERAS, BOTONES, esMedia,
+  huecosDe, componente, esNamed, huecosDePlantilla, conValores,
+  camposDisponibles, variablesDePlantilla, guardarVariables, valoresDeServicio, porGrupo,
 } from '@/lib/plantillasWa'
+import { cargarMateriales, leerArchivo } from '@/lib/materialesApi'
 import {
   Plus, Loader2, RefreshCw, Trash2, Send, X, AlertTriangle, MessageSquare,
-  Link2, Reply, Search, Database, Check,
+  Link2, Reply, Search, Database, Check, Pencil, Phone, Copy, Image as ImageIcon,
+  FileText, Film, MapPin, Upload,
 } from 'lucide-react'
 
 const VACIA = {
-  nombre: '', idioma: 'es_MX', categoria: 'UTILITY',
-  cabecera: '', cuerpo: '', pie: '', botones: [],
+  nombre: '', idioma: 'es_MX', categoria: 'UTILITY', formato: 'NAMED',
+  cabTipo: '', cabTexto: '', cabHandle: '', cabArchivo: null,
+  cuerpo: '', pie: '', botones: [],
 }
 
 export default function PlantillasWhatsapp() {
@@ -42,12 +52,12 @@ export default function PlantillasWhatsapp() {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState(null)
   const [busqueda, setBusqueda] = useState('')
-  const [creando, setCreando] = useState(false)
+  const [editando, setEditando] = useState(null)   // null | 'nueva' | plantilla
   const [enviando, setEnviando] = useState(null)
   const [mapeando, setMapeando] = useState(null)
   const [campos, setCampos] = useState([])
 
-  // El catálogo de datos de Orbit que pueden ir en un {{n}}. Es cerrado y viene
+  // El catálogo de datos de Orbit que pueden ir en un hueco. Es cerrado y viene
   // del backend: la pantalla no inventa campos.
   useEffect(() => {
     camposDisponibles().then(r => setCampos(r.campos || [])).catch(() => {})
@@ -83,7 +93,9 @@ export default function PlantillasWhatsapp() {
 
   async function quitar(p) {
     const ok = await confirm(
-      `Se borrará "${p.name}" de la cuenta de WhatsApp. Si algún envío automático la usa, dejará de funcionar.`,
+      `Se borrará "${p.name}" de la cuenta de WhatsApp, y con ella el mapeo de datos. `
+      + 'Si algún envío automático la usa, dejará de funcionar. '
+      + 'Si solo quieres cambiarle el texto, usa Editar: ya no hace falta borrarla.',
       { title: 'Borrar plantilla', confirmText: 'Borrar', danger: true }
     )
     if (!ok) return
@@ -110,7 +122,7 @@ export default function PlantillasWhatsapp() {
             <RefreshCw className={`w-4 h-4 mr-1.5 ${cargando ? 'animate-spin' : ''}`} />
             Actualizar
           </Button>
-          <Button onClick={() => setCreando(true)}>
+          <Button onClick={() => setEditando('nueva')}>
             <Plus className="w-4 h-4 mr-1.5" /> Nueva plantilla
           </Button>
         </div>
@@ -152,19 +164,20 @@ export default function PlantillasWhatsapp() {
             {filtradas.map(p => (
               <Tarjeta key={p.id || p.name} p={p}
                        onEnviar={() => setEnviando(p)} onBorrar={() => quitar(p)}
-                       onMapear={() => setMapeando(p)} />
+                       onEditar={() => setEditando(p)} onMapear={() => setMapeando(p)} />
             ))}
           </div>
         )}
       </div>
 
       <AnimatePresence>
-        {creando && (
-          <Constructor onCerrar={() => setCreando(false)}
-                       onCreada={async () => { setCreando(false); await cargar(false) }} />
+        {editando && (
+          <Constructor original={editando === 'nueva' ? null : editando}
+                       onCerrar={() => setEditando(null)}
+                       onGuardada={async () => { setEditando(null); await cargar(false) }} />
         )}
         {enviando && (
-          <Enviar p={enviando} onCerrar={() => setEnviando(null)} />
+          <Enviar p={enviando} campos={campos} onCerrar={() => setEnviando(null)} />
         )}
         {mapeando && (
           <Mapeo p={mapeando} campos={campos} onCerrar={() => setMapeando(null)} />
@@ -176,10 +189,10 @@ export default function PlantillasWhatsapp() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Tarjeta({ p, onEnviar, onBorrar, onMapear }) {
+function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear }) {
   const est = ESTADOS[p.status] || { label: p.status, clase: 'bg-gray-100 text-gray-600 border-gray-200' }
   const cuerpo = componente(p, 'BODY')?.text || ''
-  const vars = variablesDelCuerpo(p)
+  const huecos = huecosDePlantilla(p)
   const cambiada = p.previous_category && p.previous_category !== p.category
 
   return (
@@ -187,7 +200,9 @@ function Tarjeta({ p, onEnviar, onBorrar, onMapear }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold text-[13px] text-gray-800 truncate">{p.name}</p>
-          <p className="text-[11px] text-gray-400">{p.language}</p>
+          <p className="text-[11px] text-gray-400">
+            {p.language}{esNamed(p) && ' · variables con nombre'}
+          </p>
         </div>
         <span className={`px-2 py-0.5 rounded-full text-[10.5px] font-semibold border shrink-0 ${est.clase}`}>
           {est.label}
@@ -212,19 +227,25 @@ function Tarjeta({ p, onEnviar, onBorrar, onMapear }) {
           </span>
         )}
         <span className={`px-2 py-0.5 rounded-md text-[10.5px] font-semibold
-                          ${vars.length ? 'bg-blue-50 text-[#1A5CD8]' : 'bg-orange-50 text-orange-700'}`}
-              title={vars.length
+                          ${huecos.length ? 'bg-blue-50 text-[#1A5CD8]' : 'bg-orange-50 text-orange-700'}`}
+              title={huecos.length
                 ? 'Reutilizable: los datos se rellenan al enviar'
                 : 'Sin variables: solo sirve para este texto exacto'}>
-          {vars.length ? `${vars.length} variable(s)` : 'texto fijo'}
+          {huecos.length ? `${huecos.length} variable(s)` : 'texto fijo'}
         </span>
 
         <div className="ml-auto flex gap-1">
-          {vars.length > 0 && (
+          {huecos.length > 0 && (
             <Button size="sm" variant="outline" onClick={onMapear} title="Decir qué dato de Orbit va en cada variable">
               <Database className="w-3.5 h-3.5 mr-1" /> Datos
             </Button>
           )}
+          <Button size="sm" variant="outline" onClick={onEditar} disabled={p.status === 'PENDING'}
+                  title={p.status === 'PENDING'
+                    ? 'Mientras Meta la revisa no se puede editar: espera a que la apruebe o la rechace'
+                    : 'Cambiar el texto (vuelve a revisión de Meta)'}>
+            <Pencil className="w-3.5 h-3.5" />
+          </Button>
           {p.status === 'APPROVED' && (
             <Button size="sm" variant="outline" onClick={onEnviar}>
               <Send className="w-3.5 h-3.5 mr-1" /> Enviar
@@ -241,12 +262,15 @@ function Tarjeta({ p, onEnviar, onBorrar, onMapear }) {
   )
 }
 
+const ICONO_CAB = { IMAGE: ImageIcon, VIDEO: Film, DOCUMENT: FileText, LOCATION: MapPin }
+
 /** Cómo se ve en WhatsApp: es lo que evita aprobar algo que se lee mal. */
-function VistaPrevia({ p, valores = [] }) {
+function VistaPrevia({ p, valores = {} }) {
   const cab = componente(p, 'HEADER')
   const cuerpo = componente(p, 'BODY')?.text || ''
   const pie = componente(p, 'FOOTER')?.text
   const botones = componente(p, 'BUTTONS')?.buttons || []
+  const Icono = ICONO_CAB[cab?.format]
 
   return (
     <div className="rounded-xl bg-[#E7F3E9] p-2.5 space-y-1.5">
@@ -254,9 +278,12 @@ function VistaPrevia({ p, valores = [] }) {
         {cab?.format === 'TEXT' && cab.text && (
           <p className="text-[12.5px] font-bold text-gray-800">{conValores(cab.text, valores)}</p>
         )}
-        {cab && cab.format !== 'TEXT' && (
-          <div className="h-14 rounded-md bg-gray-100 flex items-center justify-center text-[10.5px] text-gray-500">
-            {cab.format}
+        {Icono && (
+          <div className="h-16 rounded-md bg-gray-100 flex flex-col items-center justify-center gap-1 text-gray-400">
+            <Icono className="w-5 h-5" />
+            <span className="text-[10px]">
+              {CABECERAS.find(c => c.valor === cab.format)?.label || cab.format}
+            </span>
           </div>
         )}
         <p className="text-[12.5px] text-gray-800 whitespace-pre-wrap leading-snug">
@@ -267,8 +294,10 @@ function VistaPrevia({ p, valores = [] }) {
       {botones.map((b, i) => (
         <div key={i} className="bg-white rounded-lg py-1.5 text-center text-[12px] font-semibold text-[#0a7cff] shadow-sm">
           {b.type === 'URL' ? <Link2 className="w-3 h-3 inline mr-1 -mt-0.5" />
-            : b.type === 'QUICK_REPLY' ? <Reply className="w-3 h-3 inline mr-1 -mt-0.5" /> : null}
-          {b.text}
+            : b.type === 'QUICK_REPLY' ? <Reply className="w-3 h-3 inline mr-1 -mt-0.5" />
+            : b.type === 'PHONE_NUMBER' ? <Phone className="w-3 h-3 inline mr-1 -mt-0.5" />
+            : b.type === 'COPY_CODE' ? <Copy className="w-3 h-3 inline mr-1 -mt-0.5" /> : null}
+          {b.text || (b.type === 'COPY_CODE' ? 'Copiar código' : '')}
         </div>
       ))}
     </div>
@@ -277,66 +306,190 @@ function VistaPrevia({ p, valores = [] }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Constructor({ onCerrar, onCreada }) {
+/** Lee una plantilla de Meta y la convierte en el formulario del constructor. */
+function desdePlantilla(p) {
+  if (!p) return VACIA
+  const cab = componente(p, 'HEADER')
+  const pie = componente(p, 'FOOTER')
+  const botones = (componente(p, 'BUTTONS')?.buttons || []).map(b => ({ ...b }))
+  return {
+    nombre: p.name, idioma: p.language, categoria: p.category,
+    formato: esNamed(p) ? 'NAMED' : 'POSITIONAL',
+    cabTipo: cab?.format || '',
+    cabTexto: cab?.format === 'TEXT' ? cab.text || '' : '',
+    // Meta devuelve la URL de su CDN donde estaba el `handle`, y esa URL no vale
+    // para volver a crearla: si se cambia una plantilla con imagen hay que
+    // subir el archivo otra vez. Se avisa en la pantalla, no se adivina.
+    cabHandle: '', cabArchivo: null,
+    cuerpo: componente(p, 'BODY')?.text || '',
+    pie: pie?.text || '',
+    botones,
+  }
+}
+
+/** Los ejemplos que ya tiene la plantilla, indexados por hueco. */
+function ejemplosDe(p) {
+  if (!p) return {}
+  const out = {}
+  const named = esNamed(p)
+  for (const c of p.components || []) {
+    if (c.type !== 'BODY' && c.type !== 'HEADER') continue
+    const destino = c.type
+    if (named) {
+      const lista = c.example?.[c.type === 'BODY' ? 'body_text_named_params' : 'header_text_named_params'] || []
+      lista.forEach(d => { out[`${destino}:${d.param_name}`] = d.example })
+    } else {
+      const lista = c.type === 'BODY' ? (c.example?.body_text?.[0] || []) : (c.example?.header_text || [])
+      huecosDe(c.text).forEach((h, i) => { out[`${destino}:${h}`] = lista[i] })
+    }
+  }
+  return out
+}
+
+function Constructor({ original, onCerrar, onGuardada }) {
   const { alert: showAlert } = useConfirm()
-  const [f, setF] = useState(VACIA)
+  const editar = !!original
+  const [f, setF] = useState(() => desdePlantilla(original))
+  const [ejemplos, setEjemplos] = useState(() => ejemplosDe(original))
   const [guardando, setGuardando] = useState(false)
+  const [subiendo, setSubiendo] = useState(false)
+  const archivoRef = useRef(null)
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const ejemplo = k => ejemplos[k] || ''
 
-  const varsCuerpo = variablesDe(f.cuerpo)
-  const varsCab = variablesDe(f.cabecera)
-
-  // Meta exige un ejemplo por variable. Se piden aquí y no después porque su
-  // error llega cuando uno ya cree haber terminado.
-  const [ejemplos, setEjemplos] = useState({})
-  const ejemplo = n => ejemplos[n] || ''
+  const named = f.formato === 'NAMED'
+  const huecosCuerpo = huecosDe(f.cuerpo)
+  const huecosCab = f.cabTipo === 'TEXT' ? huecosDe(f.cabTexto) : []
+  const iBotonUrl = f.botones.findIndex(b => b.type === 'URL' && huecosDe(b.url).length)
 
   const previa = useMemo(() => ({
+    parameter_format: f.formato,
     components: [
-      ...(f.cabecera ? [{ type: 'HEADER', format: 'TEXT', text: f.cabecera }] : []),
+      ...(f.cabTipo === 'TEXT' && f.cabTexto ? [{ type: 'HEADER', format: 'TEXT', text: f.cabTexto }] : []),
+      ...(f.cabTipo && f.cabTipo !== 'TEXT' ? [{ type: 'HEADER', format: f.cabTipo }] : []),
       { type: 'BODY', text: f.cuerpo },
       ...(f.pie ? [{ type: 'FOOTER', text: f.pie }] : []),
       ...(f.botones.length ? [{ type: 'BUTTONS', buttons: f.botones }] : []),
     ],
   }), [f])
 
+  // Insertar el hueco donde está el cursor es lo que hace que la gente los use.
+  // Escribirlos a mano invita a equivocarse de número y, sobre todo, a no
+  // ponerlos — que es como se llega a una plantilla por mascota.
+  const cuerpoRef = useRef(null)
+  const [nombreHueco, setNombreHueco] = useState('')
+  function insertarHueco() {
+    const nombre = named ? nombreHueco.trim() : String(huecosCuerpo.length + 1)
+    if (!nombre) return
+    const el = cuerpoRef.current
+    const i = el?.selectionStart ?? f.cuerpo.length
+    set('cuerpo', f.cuerpo.slice(0, i) + `{{${nombre}}}` + f.cuerpo.slice(i))
+    setNombreHueco('')
+    // Devolver el foco al mensaje: el hueco casi nunca es lo último que se
+    // escribe, y perder el cursor obliga a buscar el sitio otra vez.
+    requestAnimationFrame(() => {
+      el?.focus()
+      const fin = i + nombre.length + 4
+      el?.setSelectionRange(fin, fin)
+    })
+  }
+
+  async function elegirArchivo(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setSubiendo(true)
+    try {
+      const base64 = await leerArchivo(file)
+      const r = await subirCabecera({ base64, mime: file.type, nombre: file.name })
+      setF(p => ({ ...p, cabHandle: r.handle, cabArchivo: { nombre: file.name, mime: file.type } }))
+    } catch (err) {
+      await showAlert(err.message, { title: 'No se pudo subir el archivo' })
+    } finally {
+      setSubiendo(false)
+    }
+  }
+
   function agregarBoton(tipo) {
     if (f.botones.length >= 10) return
-    const b = tipo === 'URL'
-      ? { type: 'URL', text: 'Abrir enlace', url: 'https://orbit.orbitacac.com/', example: ['https://orbit.orbitacac.com/'] }
-      : { type: 'QUICK_REPLY', text: 'Responder' }
-    set('botones', [...f.botones, b])
+    const nuevo = {
+      QUICK_REPLY:  { type: 'QUICK_REPLY', text: 'Responder' },
+      URL:          { type: 'URL', text: 'Abrir enlace', url: 'https://orbit.orbitacac.com/' },
+      PHONE_NUMBER: { type: 'PHONE_NUMBER', text: 'Llámanos', phone_number: '+573180967711' },
+      COPY_CODE:    { type: 'COPY_CODE', example: 'CODIGO123' },
+    }[tipo]
+    set('botones', [...f.botones, nuevo])
   }
   const editarBoton = (i, campo, valor) =>
     set('botones', f.botones.map((b, j) => j === i ? { ...b, [campo]: valor } : b))
+
+  /** El ejemplo de cada hueco, en la forma que pide Meta según el formato. */
+  function ejemploDe(destino, huecos) {
+    if (!huecos.length) return undefined
+    if (named) {
+      const clave = destino === 'BODY' ? 'body_text_named_params' : 'header_text_named_params'
+      return { [clave]: huecos.map(h => ({ param_name: h, example: ejemplo(`${destino}:${h}`) })) }
+    }
+    const vals = huecos.map(h => ejemplo(`${destino}:${h}`))
+    return destino === 'BODY' ? { body_text: [vals] } : { header_text: vals }
+  }
 
   async function guardar() {
     setGuardando(true)
     try {
       const componentes = []
-      if (f.cabecera.trim()) {
-        const c = { type: 'HEADER', format: 'TEXT', text: f.cabecera.trim() }
-        if (varsCab.length) c.example = { header_text: varsCab.map(n => ejemplo(`h${n}`)) }
-        componentes.push(c)
+
+      if (f.cabTipo === 'TEXT' && f.cabTexto.trim()) {
+        componentes.push({
+          type: 'HEADER', format: 'TEXT', text: f.cabTexto.trim(),
+          ...(huecosCab.length ? { example: ejemploDe('HEADER', huecosCab) } : {}),
+        })
+      } else if (esMedia(f.cabTipo)) {
+        componentes.push({ type: 'HEADER', format: f.cabTipo, example: { header_handle: [f.cabHandle] } })
+      } else if (f.cabTipo === 'LOCATION') {
+        componentes.push({ type: 'HEADER', format: 'LOCATION' })
       }
-      const cuerpo = { type: 'BODY', text: f.cuerpo.trim() }
-      if (varsCuerpo.length) cuerpo.example = { body_text: [varsCuerpo.map(n => ejemplo(`b${n}`))] }
-      componentes.push(cuerpo)
+
+      componentes.push({
+        type: 'BODY', text: f.cuerpo.trim(),
+        ...(huecosCuerpo.length ? { example: ejemploDe('BODY', huecosCuerpo) } : {}),
+      })
+
       if (f.pie.trim()) componentes.push({ type: 'FOOTER', text: f.pie.trim() })
+
       if (f.botones.length) {
         componentes.push({
           type: 'BUTTONS',
-          buttons: f.botones.map(b => b.type === 'URL'
-            ? { type: 'URL', text: b.text, url: b.url, example: [b.example?.[0] || b.url] }
-            : { type: 'QUICK_REPLY', text: b.text }),
+          buttons: f.botones.map(b => {
+            if (b.type === 'URL') {
+              return {
+                type: 'URL', text: b.text, url: b.url,
+                // El ejemplo del enlace solo hace falta si lleva variable, y
+                // Meta lo quiere ya sustituido: una URL de verdad.
+                ...(huecosDe(b.url).length
+                  ? { example: [b.url.replace(/\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g, 'ejemplo')] }
+                  : {}),
+              }
+            }
+            if (b.type === 'PHONE_NUMBER') {
+              return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number }
+            }
+            if (b.type === 'COPY_CODE') return { type: 'COPY_CODE', example: b.example || 'CODIGO' }
+            return { type: 'QUICK_REPLY', text: b.text }
+          }),
         })
       }
 
-      const r = await crearPlantilla({
-        nombre: f.nombre.trim(), idioma: f.idioma, categoria: f.categoria, componentes,
-      })
-      if (r.aviso) await showAlert(r.aviso, { title: 'Enviada, con un cambio' })
-      onCreada()
+      const r = editar
+        ? await editarPlantilla(f.nombre, {
+            id: original.id, categoria: f.categoria, componentes, formato: f.formato,
+          })
+        : await crearPlantilla({
+            nombre: f.nombre.trim(), idioma: f.idioma, categoria: f.categoria,
+            componentes, formato: f.formato,
+          })
+      if (r.aviso) await showAlert(r.aviso, { title: editar ? 'Editada' : 'Enviada, con un cambio' })
+      onGuardada()
     } catch (e) {
       await showAlert(e.message, { title: 'Meta no la aceptó' })
     } finally {
@@ -344,15 +497,29 @@ function Constructor({ onCerrar, onCreada }) {
     }
   }
 
-  const listo = f.nombre.trim() && f.cuerpo.trim()
-    && [...varsCuerpo.map(n => `b${n}`), ...varsCab.map(n => `h${n}`)].every(k => ejemplo(k).trim())
+  const faltaArchivo = esMedia(f.cabTipo) && !f.cabHandle
+  const listo = f.nombre.trim() && f.cuerpo.trim() && !faltaArchivo
+    && [...huecosCuerpo.map(h => `BODY:${h}`), ...huecosCab.map(h => `HEADER:${h}`)]
+       .every(k => ejemplo(k).trim())
 
   return (
-    <Modal titulo="Nueva plantilla" onCerrar={onCerrar} ancho="max-w-3xl">
+    <Modal titulo={editar ? `Editar "${original.name}"` : 'Nueva plantilla'} onCerrar={onCerrar} ancho="max-w-3xl">
+      {editar && (
+        <div className="flex gap-2.5 p-3 mb-4 rounded-xl bg-blue-50/70 border border-blue-100">
+          <Pencil className="w-4 h-4 text-[#1A5CD8] shrink-0 mt-0.5" />
+          <p className="text-[12px] text-[#1A5CD8]">
+            Al guardar vuelve a revisión de Meta y no se podrá enviar hasta que la aprueben.
+            El nombre y el idioma no se pueden cambiar — <b>el mapeo de datos se conserva</b>.
+            Solo se puede editar una plantilla aprobada o rechazada: mientras está en revisión,
+            Meta no lo permite.
+          </p>
+        </div>
+      )}
+
       <div className="grid lg:grid-cols-[1fr_260px] gap-5">
         <div className="space-y-4">
           <Campo etiqueta="Nombre" ayuda="Solo minúsculas, números y guion bajo. No se puede cambiar después.">
-            <Input value={f.nombre} placeholder="recordatorios_listos"
+            <Input value={f.nombre} placeholder="recordatorios_listos" disabled={editar}
                    onChange={e => set('nombre', e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} />
           </Campo>
 
@@ -367,55 +534,146 @@ function Constructor({ onCerrar, onCreada }) {
               </p>
             </Campo>
             <Campo etiqueta="Idioma">
-              <select value={f.idioma} onChange={e => set('idioma', e.target.value)}
-                      className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px]">
+              <select value={f.idioma} onChange={e => set('idioma', e.target.value)} disabled={editar}
+                      className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] disabled:bg-gray-50">
                 {IDIOMAS.map(i => <option key={i.valor} value={i.valor}>{i.label}</option>)}
               </select>
             </Campo>
           </div>
 
+          <Campo etiqueta="Cómo se llaman las variables">
+            <div className="flex gap-2">
+              {FORMATOS.map(x => (
+                <button key={x.valor} type="button" onClick={() => !editar && set('formato', x.valor)}
+                        disabled={editar}
+                        className={`flex-1 px-3 py-2 rounded-lg border text-left transition
+                          ${f.formato === x.valor
+                            ? 'border-[#1A5CD8] bg-blue-50/60 text-[#1A5CD8]'
+                            : 'border-gray-200 text-gray-600 hover:border-gray-300'}
+                          ${editar ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                  <span className="block text-[12px] font-semibold">{x.label}</span>
+                  <span className="block font-mono text-[11px] opacity-70">{x.ejemplo}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">
+              {editar
+                ? 'El formato de las variables no se puede cambiar en una plantilla que ya existe.'
+                : FORMATOS.find(x => x.valor === f.formato)?.ayuda}
+            </p>
+          </Campo>
+
           <Campo etiqueta="Título (opcional)">
-            <Input value={f.cabecera} onChange={e => set('cabecera', e.target.value)}
-                   placeholder="Los recordatorios de {{1}} ya están listos" />
+            <select value={f.cabTipo} onChange={e => set('cabTipo', e.target.value)}
+                    className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] mb-2">
+              {CABECERAS.map(c => <option key={c.valor} value={c.valor}>{c.label}</option>)}
+            </select>
+            {f.cabTipo === 'TEXT' && (
+              <Input value={f.cabTexto} onChange={e => set('cabTexto', e.target.value)}
+                     placeholder={named ? 'Los recordatorios de {{mascota}} ya están listos'
+                                        : 'Los recordatorios de {{1}} ya están listos'} />
+            )}
+            {esMedia(f.cabTipo) && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => archivoRef.current?.click()} disabled={subiendo}>
+                    {subiendo ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+                    {f.cabHandle ? 'Cambiar archivo' : 'Subir archivo'}
+                  </Button>
+                  {f.cabArchivo && (
+                    <span className="text-[11.5px] text-emerald-700 truncate">
+                      <Check className="w-3 h-3 inline mr-0.5 -mt-0.5" />{f.cabArchivo.nombre}
+                    </span>
+                  )}
+                </div>
+                <input ref={archivoRef} type="file" className="hidden" onChange={elegirArchivo}
+                       accept={f.cabTipo === 'IMAGE' ? 'image/jpeg,image/png'
+                             : f.cabTipo === 'VIDEO' ? 'video/mp4' : 'application/pdf'} />
+                {editar && !f.cabHandle && (
+                  <p className="text-[11px] text-amber-700">
+                    Meta no devuelve el archivo original: vuelve a subirlo para poder guardar.
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400 mt-1">
+              {CABECERAS.find(c => c.valor === f.cabTipo)?.ayuda}
+            </p>
           </Campo>
 
           <Campo etiqueta="Mensaje"
-                 ayuda="Escribe {{1}}, {{2}}… donde vayan los datos que cambian. Con variables la misma plantilla sirve para todas las mascotas; sin ellas hay que crear (y esperar que aprueben) una nueva cada vez.">
-            <Textarea rows={5} value={f.cuerpo} onChange={e => set('cuerpo', e.target.value)}
-                      placeholder="Hola, los recordatorios de {{1}} ya están listos para entrega." />
+                 ayuda="Los huecos son lo que hace que una plantilla sirva para todos: sin ellos hay que crear (y esperar que aprueben) una nueva por cada mascota.">
+            <Textarea rows={5} ref={cuerpoRef} value={f.cuerpo} onChange={e => set('cuerpo', e.target.value)}
+                      placeholder={named
+                        ? 'Hola {{cliente}}, los recordatorios de {{mascota}} ya están listos.'
+                        : 'Hola {{1}}, los recordatorios de {{2}} ya están listos.'} />
+            <div className="flex gap-2 mt-1.5">
+              {named && (
+                <Input value={nombreHueco} className="h-8 max-w-[200px]"
+                       placeholder="mascota, cliente, enlace…"
+                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); insertarHueco() } }}
+                       onChange={e => setNombreHueco(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} />
+              )}
+              <Button size="sm" variant="outline" onClick={insertarHueco}
+                      disabled={named && !nombreHueco.trim()}>
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                {named ? 'Insertar' : `Insertar {{${huecosCuerpo.length + 1}}}`}
+              </Button>
+            </div>
           </Campo>
 
-          {(varsCuerpo.length > 0 || varsCab.length > 0) && (
+          {(huecosCuerpo.length > 0 || huecosCab.length > 0) && (
             <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-100 space-y-2">
               <p className="text-[11.5px] font-semibold text-[#1A5CD8]">
                 Ejemplo de cada variable — Meta los exige para poder revisarla
               </p>
-              {varsCab.map(n => (
-                <EjemploVar key={`h${n}`} etiqueta={`Título {{${n}}}`}
-                            valor={ejemplo(`h${n}`)} onChange={v => setEjemplos(e => ({ ...e, [`h${n}`]: v }))} />
+              {huecosCab.map(h => (
+                <EjemploVar key={`HEADER:${h}`} etiqueta={`Título {{${h}}}`}
+                            valor={ejemplo(`HEADER:${h}`)}
+                            onChange={v => setEjemplos(e => ({ ...e, [`HEADER:${h}`]: v }))} />
               ))}
-              {varsCuerpo.map(n => (
-                <EjemploVar key={`b${n}`} etiqueta={`Mensaje {{${n}}}`}
-                            valor={ejemplo(`b${n}`)} onChange={v => setEjemplos(e => ({ ...e, [`b${n}`]: v }))} />
+              {huecosCuerpo.map(h => (
+                <EjemploVar key={`BODY:${h}`} etiqueta={`Mensaje {{${h}}}`}
+                            valor={ejemplo(`BODY:${h}`)}
+                            onChange={v => setEjemplos(e => ({ ...e, [`BODY:${h}`]: v }))} />
               ))}
+              <p className="text-[11px] text-[#1A5CD8]/70">
+                Es solo para la revisión. Lo que llegue de verdad se decide en "Datos".
+              </p>
             </div>
           )}
 
-          <Campo etiqueta="Pie (opcional)">
+          <Campo etiqueta="Pie (opcional)" ayuda="Texto fijo: no admite variables.">
             <Input value={f.pie} onChange={e => set('pie', e.target.value)} placeholder="Camino al Cielo" />
           </Campo>
 
-          <Campo etiqueta="Botones (opcional)"
-                 ayuda="El de respuesta rápida es especial: al tocarlo la persona nos escribe, y eso reabre la ventana de 24 horas para poder conversar.">
+          <Campo etiqueta="Botones (opcional)">
             <div className="space-y-2">
               {f.botones.map((b, i) => (
                 <div key={i} className="flex gap-2 items-start">
                   <div className="flex-1 space-y-1.5">
-                    <Input value={b.text} onChange={e => editarBoton(i, 'text', e.target.value)}
-                           placeholder="Texto del botón" />
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10.5px] font-semibold text-gray-400 w-24 shrink-0">
+                        {BOTONES.find(x => x.tipo === b.type)?.label || b.type}
+                      </span>
+                      {b.type !== 'COPY_CODE' && (
+                        <Input value={b.text || ''} onChange={e => editarBoton(i, 'text', e.target.value)}
+                               placeholder="Texto del botón" className="h-8" />
+                      )}
+                    </div>
                     {b.type === 'URL' && (
-                      <Input value={b.url} onChange={e => editarBoton(i, 'url', e.target.value)}
-                             placeholder="https://… (usa {{1}} para un enlace distinto por persona)" />
+                      <Input value={b.url || ''} onChange={e => editarBoton(i, 'url', e.target.value)}
+                             placeholder={named ? 'https://… (usa {{enlace}} para uno distinto por persona)'
+                                                : 'https://… (usa {{1}} para uno distinto por persona)'}
+                             className="h-8" />
+                    )}
+                    {b.type === 'PHONE_NUMBER' && (
+                      <Input value={b.phone_number || ''} onChange={e => editarBoton(i, 'phone_number', e.target.value)}
+                             placeholder="+573180967711" className="h-8" />
+                    )}
+                    {b.type === 'COPY_CODE' && (
+                      <Input value={b.example || ''} onChange={e => editarBoton(i, 'example', e.target.value)}
+                             placeholder="Código de ejemplo" className="h-8" />
                     )}
                   </div>
                   <Button size="sm" variant="ghost" onClick={() => set('botones', f.botones.filter((_, j) => j !== i))}>
@@ -423,14 +681,17 @@ function Constructor({ onCerrar, onCreada }) {
                   </Button>
                 </div>
               ))}
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => agregarBoton('QUICK_REPLY')}>
-                  <Reply className="w-3.5 h-3.5 mr-1" /> Respuesta rápida
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => agregarBoton('URL')}>
-                  <Link2 className="w-3.5 h-3.5 mr-1" /> Enlace
-                </Button>
+              <div className="flex flex-wrap gap-2">
+                {BOTONES.map(x => (
+                  <Button key={x.tipo} size="sm" variant="outline" title={x.ayuda}
+                          onClick={() => agregarBoton(x.tipo)}>
+                    <Plus className="w-3.5 h-3.5 mr-1" /> {x.label}
+                  </Button>
+                ))}
               </div>
+              <p className="text-[11px] text-gray-400">
+                {BOTONES[0].ayuda}
+              </p>
             </div>
           </Campo>
         </div>
@@ -438,8 +699,16 @@ function Constructor({ onCerrar, onCreada }) {
         <div className="space-y-2">
           <p className="text-[11.5px] font-semibold text-gray-500">Así se verá</p>
           <VistaPrevia p={previa} />
+          {iBotonUrl > 0 && (
+            <p className="text-[11px] text-gray-400">
+              El botón de enlace con variable va en la posición {iBotonUrl + 1}: al enviar, el
+              dato se manda a ese botón y no al primero.
+            </p>
+          )}
           <p className="text-[11px] text-gray-400">
-            Al guardar se envía a Meta para revisión. Suele tardar minutos, a veces días.
+            {editar
+              ? 'Al guardar vuelve a revisión. Suele tardar minutos, a veces días.'
+              : 'Al guardar se envía a Meta para revisión. Suele tardar minutos, a veces días.'}
           </p>
         </div>
       </div>
@@ -448,7 +717,7 @@ function Constructor({ onCerrar, onCreada }) {
         <Button variant="outline" onClick={onCerrar}>Cancelar</Button>
         <Button onClick={guardar} disabled={!listo || guardando}>
           {guardando ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null}
-          Enviar a revisión
+          {editar ? 'Guardar cambios' : 'Enviar a revisión'}
         </Button>
       </div>
     </Modal>
@@ -458,7 +727,7 @@ function Constructor({ onCerrar, onCreada }) {
 function EjemploVar({ etiqueta, valor, onChange }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11.5px] text-gray-500 w-24 shrink-0">{etiqueta}</span>
+      <span className="text-[11.5px] text-gray-500 w-32 shrink-0 truncate" title={etiqueta}>{etiqueta}</span>
       <Input value={valor} onChange={e => onChange(e.target.value)} placeholder="Ej: Toby" className="h-8" />
     </div>
   )
@@ -466,55 +735,77 @@ function EjemploVar({ etiqueta, valor, onChange }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Enviar({ p, onCerrar }) {
+function Enviar({ p, campos, onCerrar }) {
   const { alert: showAlert } = useConfirm()
   const [contacto, setContacto] = useState('')
-  const [valores, setValores] = useState([])
-  const [valoresBoton, setValoresBoton] = useState([])
+  const [valores, setValores] = useState({})
   const [enviando, setEnviando] = useState(false)
-  const [servicio, setServicio] = useState('')
-  const [trayendo, setTrayendo] = useState(false)
-  const [avisoServicio, setAvisoServicio] = useState(null)
+  const [q, setQ] = useState('')
+  const [resultados, setResultados] = useState([])
+  const [buscando, setBuscando] = useState(false)
+  const [servicio, setServicio] = useState(null)
+  const [aviso, setAviso] = useState(null)
 
-  // Rellena desde Orbit lo que esté asignado. Lo que no lo esté se queda como
-  // está: el mapeo manda donde llega, y la mano manda donde el mapeo no llega.
-  async function traer() {
-    setTrayendo(true); setAvisoServicio(null)
+  const huecos = huecosDePlantilla(p)
+  const mapa = useMemo(() => {
+    const m = {}
+    for (const c of campos) m[c.clave] = c
+    return m
+  }, [campos])
+  const [asignado, setAsignado] = useState({})
+
+  useEffect(() => {
+    variablesDePlantilla(p.name, p.language)
+      .then(r => {
+        const m = {}
+        for (const v of r.variables || []) m[`${v.destino}:${v.param ?? v.posicion}`] = v.campo
+        setAsignado(m)
+      })
+      .catch(() => {})
+  }, [p.name, p.language])
+
+  // Buscar por lo que la gente sí tiene a mano: el nombre de la mascota, el de
+  // la familia o el código de fotos. Pegar un UUID no es una opción real.
+  useEffect(() => {
+    if (q.trim().length < 2) { setResultados([]); return }
+    let vivo = true
+    const t = setTimeout(async () => {
+      setBuscando(true)
+      try {
+        const r = await buscarServicios(q.trim())
+        if (vivo) setResultados(r.servicios || [])
+      } catch { /* la búsqueda no bloquea el envío manual */ }
+      finally { if (vivo) setBuscando(false) }
+    }, 300)
+    return () => { vivo = false; clearTimeout(t) }
+  }, [q])
+
+  async function tomar(s) {
+    setServicio(s); setResultados([]); setQ(''); setAviso(null)
     try {
-      const r = await valoresDeServicio(p.name, servicio.trim(), p.language)
-      const cuerpo = [], boton = []
-      for (const [k, v] of Object.entries(r.valores || {})) {
-        const [destino, n] = k.split(':')
-        if (destino === 'BODY') cuerpo[Number(n) - 1] = v
-        if (destino === 'BUTTON') boton[Number(n) - 1] = v
-      }
-      if (cuerpo.length) setValores(prev => cuerpo.map((v, i) => v || prev[i] || ''))
-      if (boton.length) setValoresBoton(prev => boton.map((v, i) => v || prev[i] || ''))
+      const r = await valoresDeServicio(p.name, s.id, p.language)
+      setValores(prev => ({ ...prev, ...Object.fromEntries(
+        Object.entries(r.valores || {}).filter(([, v]) => v)) }))
+      if (r.contacto) setContacto(r.contacto)
       if (!r.variables?.length) {
-        setAvisoServicio('Esta plantilla todavía no tiene datos asignados: usa el botón "Datos" en su tarjeta.')
+        setAviso('Esta plantilla todavía no tiene datos asignados: usa el botón "Datos" en su tarjeta y no habrá que escribir nada aquí.')
       } else if (r.sinAsignar?.length) {
-        setAvisoServicio(`Ese servicio no tiene: ${r.sinAsignar.join(', ')}. Complétalo a mano.`)
+        setAviso(`Ese servicio no tiene: ${r.sinAsignar.join(', ')}. Complétalo a mano.`)
       }
     } catch (e) {
-      setAvisoServicio(e.message)
-    } finally {
-      setTrayendo(false)
+      setAviso(e.message)
     }
   }
 
-  const vars = variablesDelCuerpo(p)
-  const varsBoton = variablesDelBoton(p)
   const listo = contacto.replace(/\D/g, '').length >= 10
-    && vars.every((_, i) => (valores[i] || '').trim())
-    && varsBoton.every((_, i) => (valoresBoton[i] || '').trim())
+    && huecos.every(h => String(valores[h.clave] || '').trim())
 
   async function mandar() {
     setEnviando(true)
     try {
       await enviarPlantilla(p.name, {
         contacto: contacto.replace(/\D/g, ''), idioma: p.language,
-        variables: valores.slice(0, vars.length),
-        variablesBoton: valoresBoton.slice(0, varsBoton.length),
+        valores, servicioId: servicio?.id || null,
       })
       await showAlert('Enviada. Aparecerá en la bandeja de WhatsApp.', { title: 'Listo' })
       onCerrar()
@@ -525,41 +816,77 @@ function Enviar({ p, onCerrar }) {
     }
   }
 
+  // Los valores de la previa van por hueco, sin el destino: el cuerpo y el
+  // título pueden usar el mismo nombre para el mismo dato.
+  const previaValores = Object.fromEntries(
+    Object.entries(valores).map(([k, v]) => [k.split(':')[1], v]))
+
   return (
     <Modal titulo={`Enviar "${p.name}"`} onCerrar={onCerrar} ancho="max-w-lg">
       <div className="space-y-4">
-        <Campo etiqueta="Traer datos de un servicio (opcional)"
-               ayuda="Pega el id del servicio y las variables que tengan un dato asignado se rellenan solas.">
-          <div className="flex gap-2">
-            <Input value={servicio} onChange={e => setServicio(e.target.value)}
-                   placeholder="id del servicio" className="font-mono text-[12px]" />
-            <Button variant="outline" onClick={traer} disabled={!servicio.trim() || trayendo}>
-              {trayendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
-            </Button>
-          </div>
-          {avisoServicio && <p className="text-[11px] text-amber-700 mt-1">{avisoServicio}</p>}
+        <Campo etiqueta="¿De qué servicio salen los datos?"
+               ayuda="Busca por mascota, familia o código de fotos. Los huecos con un dato asignado se rellenan solos.">
+          {servicio ? (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-blue-50/60 border border-blue-100">
+              <Database className="w-4 h-4 text-[#1A5CD8] shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] font-semibold text-gray-800 truncate">
+                  {servicio.mascota || 'Sin mascota'} · {servicio.cliente || 'sin familia'}
+                </p>
+                <p className="text-[11px] text-gray-500 truncate">
+                  {servicio.plan || 'sin plan'} · {servicio.estado}
+                  {servicio.codigo_fotos && ` · ${servicio.codigo_fotos}`}
+                </p>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setServicio(null)}>
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Input value={q} onChange={e => setQ(e.target.value)} className="pl-9"
+                     placeholder="Toby, Marta Gómez, AB12CD…" />
+              {buscando && <Loader2 className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400" />}
+              {resultados.length > 0 && (
+                <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+                  {resultados.map(s => (
+                    <button key={s.id} onClick={() => tomar(s)}
+                            className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-50 last:border-0">
+                      <p className="text-[12.5px] font-semibold text-gray-800">
+                        {s.mascota || 'Sin mascota'} · <span className="font-normal text-gray-500">{s.cliente}</span>
+                      </p>
+                      <p className="text-[11px] text-gray-400">
+                        {s.plan || 'sin plan'} · {s.estado}{s.fecha_ingreso && ` · ${s.fecha_ingreso}`}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {aviso && <p className="text-[11px] text-amber-700 mt-1">{aviso}</p>}
         </Campo>
 
         <Campo etiqueta="Número de destino" ayuda="Solo dígitos, con indicativo. Ej: 573001234567">
           <Input value={contacto} onChange={e => setContacto(e.target.value)} placeholder="573001234567" />
         </Campo>
 
-        {vars.map((n, i) => (
-          <Campo key={n} etiqueta={`Variable {{${n}}}`}>
-            <Input value={valores[i] || ''}
-                   onChange={e => setValores(v => Object.assign([...v], { [i]: e.target.value }))} />
-          </Campo>
-        ))}
-        {varsBoton.map((n, i) => (
-          <Campo key={`btn${n}`} etiqueta={`Enlace del botón {{${n}}}`}>
-            <Input value={valoresBoton[i] || ''}
-                   onChange={e => setValoresBoton(v => Object.assign([...v], { [i]: e.target.value }))} />
-          </Campo>
-        ))}
+        {huecos.map(h => {
+          const campo = mapa[asignado[h.clave]]
+          return (
+            <Campo key={h.clave}
+                   etiqueta={`${h.destino === 'HEADER' ? 'Título' : h.destino === 'BUTTON' ? 'Enlace del botón' : 'Mensaje'} {{${h.hueco}}}`}
+                   ayuda={campo ? `Sale de Orbit: ${campo.grupo} — ${campo.etiqueta}` : 'Sin dato asignado: se escribe a mano cada vez.'}>
+              <Input value={valores[h.clave] || ''}
+                     onChange={e => setValores(v => ({ ...v, [h.clave]: e.target.value }))} />
+            </Campo>
+          )
+        })}
 
         <div>
           <p className="text-[11.5px] font-semibold text-gray-500 mb-1.5">Así le llegará</p>
-          <VistaPrevia p={p} valores={valores} />
+          <VistaPrevia p={p} valores={previaValores} />
         </div>
       </div>
 
@@ -577,7 +904,7 @@ function Enviar({ p, onCerrar }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Qué dato de Orbit rellena cada {{n}}.
+ * Qué dato de Orbit rellena cada hueco.
  *
  * Es lo que convierte una plantilla en reutilizable de verdad: sin esto hay que
  * teclear el nombre de la mascota en cada envío, y de ahí a crear una plantilla
@@ -587,34 +914,50 @@ function Enviar({ p, onCerrar }) {
 function Mapeo({ p, campos, onCerrar }) {
   const { alert: showAlert } = useConfirm()
   const [asignado, setAsignado] = useState({})
+  const [cabecera, setCabecera] = useState(null)     // { material_id } | { url }
+  const [materiales, setMateriales] = useState([])
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
 
-  const varsCuerpo = variablesDelCuerpo(p)
-  const varsBoton = variablesDelBoton(p)
+  const huecos = huecosDePlantilla(p)
   const cuerpo = componente(p, 'BODY')?.text || ''
+  const cab = componente(p, 'HEADER')
+  const cabMedia = cab && esMedia(cab.format)
+  const grupos = useMemo(() => porGrupo(campos), [campos])
+  const porClave = useMemo(() => Object.fromEntries(campos.map(c => [c.clave, c])), [campos])
 
   useEffect(() => {
     variablesDePlantilla(p.name, p.language)
       .then(r => {
         const m = {}
-        for (const v of r.variables || []) m[`${v.destino}:${v.posicion}`] = v.campo
+        for (const v of r.variables || []) m[`${v.destino}:${v.param ?? v.posicion}`] = v.campo
         setAsignado(m)
+        setCabecera(r.cabecera || null)
       })
       .catch(() => {})
       .finally(() => setCargando(false))
   }, [p.name, p.language])
 
+  useEffect(() => {
+    if (!cabMedia) return
+    cargarMateriales().then(r => setMateriales(r.materiales || [])).catch(() => {})
+  }, [cabMedia])
+
+  // Meta reclasifica de UTILITY a MARKETING cuando el texto habla de plata, y
+  // MARKETING se cobra distinto. Vale la pena decirlo antes, no en la factura.
+  const conDinero = Object.values(asignado).some(c => porClave[c]?.dinero)
+
   async function guardar() {
     setGuardando(true)
     try {
+      const named = esNamed(p)
       const variables = Object.entries(asignado)
         .filter(([, campo]) => campo)
         .map(([k, campo]) => {
-          const [destino, posicion] = k.split(':')
-          return { destino, posicion: Number(posicion), campo }
+          const [destino, hueco] = k.split(':')
+          return named ? { destino, param: hueco, campo } : { destino, posicion: Number(hueco), campo }
         })
-      await guardarVariables(p.name, p.language, variables)
+      await guardarVariables(p.name, p.language, variables, cabMedia ? cabecera : undefined)
       onCerrar()
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo guardar' })
@@ -623,27 +966,27 @@ function Mapeo({ p, campos, onCerrar }) {
     }
   }
 
-  const fila = (destino, n) => {
-    const k = `${destino}:${n}`
-    return (
-      <div key={k} className="flex items-center gap-2">
-        <span className="font-mono text-[12px] text-[#1A5CD8] w-16 shrink-0">
-          {destino === 'BUTTON' ? '🔗' : ''}{`{{${n}}}`}
-        </span>
-        <select value={asignado[k] || ''}
-                onChange={e => setAsignado(a => ({ ...a, [k]: e.target.value }))}
-                className="flex-1 h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
-          <option value="">— se escribe a mano al enviar —</option>
-          {campos.map(c => <option key={c.clave} value={c.clave}>{c.etiqueta}</option>)}
-        </select>
-      </div>
-    )
-  }
+  const fila = (h) => (
+    <div key={h.clave} className="flex items-center gap-2">
+      <span className="font-mono text-[12px] text-[#1A5CD8] w-32 shrink-0 truncate"
+            title={`${h.destino} {{${h.hueco}}}`}>
+        {h.destino === 'BUTTON' ? '🔗 ' : h.destino === 'HEADER' ? '▲ ' : ''}{`{{${h.hueco}}}`}
+      </span>
+      <select value={asignado[h.clave] || ''}
+              onChange={e => setAsignado(a => ({ ...a, [h.clave]: e.target.value }))}
+              className="flex-1 h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
+        <option value="">— se escribe a mano al enviar —</option>
+        {grupos.map(g => (
+          <optgroup key={g.nombre} label={g.nombre}>
+            {g.campos.map(c => <option key={c.clave} value={c.clave}>{c.etiqueta}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </div>
+  )
 
-  const ejemploValores = varsCuerpo.map(n => {
-    const c = campos.find(x => x.clave === asignado[`BODY:${n}`])
-    return c ? c.ejemplo : null
-  })
+  const ejemploValores = Object.fromEntries(
+    huecos.map(h => [h.hueco, porClave[asignado[h.clave]]?.ejemplo]).filter(([, v]) => v))
 
   return (
     <Modal titulo="Qué dato va en cada variable" onCerrar={onCerrar}>
@@ -660,10 +1003,43 @@ function Mapeo({ p, campos, onCerrar }) {
             servicio. Lo que dejes sin asignar habrá que escribirlo a mano cada vez.
           </p>
 
-          <div className="space-y-2">
-            {varsCuerpo.map(n => fila('BODY', n))}
-            {varsBoton.map(n => fila('BUTTON', n))}
-          </div>
+          <div className="space-y-2">{huecos.map(fila)}</div>
+
+          {conDinero && (
+            <div className="flex gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[12px] text-amber-900">
+                Esta plantilla va a mencionar precios. <b>Meta suele reclasificar de Utilidad a
+                Marketing</b> las que hablan de plata, y Marketing se cobra más y permite darse
+                de baja. Ya pasó con una plantilla de esta cuenta.
+              </p>
+            </div>
+          )}
+
+          {cabMedia && (
+            <div className="space-y-2 pt-1">
+              <p className="text-[11.5px] font-semibold text-gray-600">
+                Archivo del título ({CABECERAS.find(c => c.valor === cab.format)?.label})
+              </p>
+              <p className="text-[11px] text-gray-400">
+                Meta obliga a mandar el archivo en cada envío: el que se usó para aprobarla solo
+                sirvió para la revisión. Sin esto, la plantilla no se puede enviar.
+              </p>
+              <select value={cabecera?.material_id || ''}
+                      onChange={e => setCabecera(e.target.value ? { material_id: Number(e.target.value) } : null)}
+                      className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
+                <option value="">— elige un material del catálogo —</option>
+                {materiales.map(m => (
+                  <option key={m.id} value={m.id}>{m.nombre} ({m.nombre_archivo})</option>
+                ))}
+              </select>
+              {!materiales.length && (
+                <p className="text-[11px] text-amber-700">
+                  No hay materiales cargados todavía. Súbelos en Clientes → Materiales WA.
+                </p>
+              )}
+            </div>
+          )}
 
           <div>
             <p className="text-[11.5px] font-semibold text-gray-500 mb-1.5">Ejemplo con datos reales</p>
