@@ -482,7 +482,7 @@ export async function subirCabecera({ base64, mime, nombre = 'archivo' }) {
  */
 const CAMPOS = [
   // ── La mascota ────────────────────────────────────────────────────────────
-  { clave: 'mascota.nombre',   grupo: 'Mascota', etiqueta: 'Nombre',            col: 'mascota_nombre',   ejemplo: 'Toby' },
+  { clave: 'mascota.nombre',   grupo: 'Mascota', etiqueta: 'Nombre',            col: 'mascota_nombre',   ejemplo: 'Toby', fuentes: ['SERVICIO', 'CLIENTE'] },
   { clave: 'mascota.especie',  grupo: 'Mascota', etiqueta: 'Especie',           col: 'mascota_especie',  ejemplo: 'Perro' },
   { clave: 'mascota.raza',     grupo: 'Mascota', etiqueta: 'Raza',              col: 'mascota_raza',     ejemplo: 'Criollo' },
   { clave: 'mascota.sexo',     grupo: 'Mascota', etiqueta: 'Sexo',              col: 'mascota_sexo',     ejemplo: 'Macho' },
@@ -492,11 +492,11 @@ const CAMPOS = [
   // ── La familia ────────────────────────────────────────────────────────────
   // El primer nombre a secas es lo que se usa para saludar: "Hola, Marta" se
   // lee como una persona; "Hola, Marta Gómez Restrepo" se lee como un banco.
-  { clave: 'cliente.nombre',    grupo: 'Familia', etiqueta: 'Primer nombre',        col: 'cliente_primer',    ejemplo: 'Marta' },
-  { clave: 'cliente.completo',  grupo: 'Familia', etiqueta: 'Nombre y apellido',    col: 'cliente_completo',  ejemplo: 'Marta Gómez' },
-  { clave: 'cliente.whatsapp',  grupo: 'Familia', etiqueta: 'WhatsApp',             col: 'cliente_whatsapp',  ejemplo: '573001234567' },
-  { clave: 'cliente.ciudad',    grupo: 'Familia', etiqueta: 'Ciudad',               col: 'cliente_ciudad',    ejemplo: 'Bogotá' },
-  { clave: 'cliente.direccion', grupo: 'Familia', etiqueta: 'Dirección',            col: 'cliente_direccion', ejemplo: 'Cra 15 # 80-25' },
+  { clave: 'cliente.nombre',    grupo: 'Familia', etiqueta: 'Primer nombre',        col: 'cliente_primer',    ejemplo: 'Marta', fuentes: ['SERVICIO', 'CLIENTE'] },
+  { clave: 'cliente.completo',  grupo: 'Familia', etiqueta: 'Nombre y apellido',    col: 'cliente_completo',  ejemplo: 'Marta Gómez', fuentes: ['SERVICIO', 'CLIENTE'] },
+  { clave: 'cliente.whatsapp',  grupo: 'Familia', etiqueta: 'WhatsApp',             col: 'cliente_whatsapp',  ejemplo: '573001234567', fuentes: ['SERVICIO', 'CLIENTE'] },
+  { clave: 'cliente.ciudad',    grupo: 'Familia', etiqueta: 'Ciudad',               col: 'cliente_ciudad',    ejemplo: 'Bogotá', fuentes: ['SERVICIO', 'CLIENTE'] },
+  { clave: 'cliente.direccion', grupo: 'Familia', etiqueta: 'Dirección',            col: 'cliente_direccion', ejemplo: 'Cra 15 # 80-25', fuentes: ['SERVICIO', 'CLIENTE'] },
 
   // ── El servicio ───────────────────────────────────────────────────────────
   { clave: 'plan.nombre',       grupo: 'Servicio', etiqueta: 'Plan contratado',      col: 'plan_nombre',       ejemplo: 'Standard' },
@@ -611,10 +611,38 @@ const RESOLVER_ALIADO = `
     FROM public.aliados a
    WHERE a.id_aliado = $1`
 
+/**
+ * Lo que aporta una FAMILIA cuando el mensaje va dirigido a ella y no a un
+ * servicio concreto (un aviso general, una novedad).
+ *
+ * ⚠️ La mascota es la del **servicio más reciente**. Una familia puede haber
+ * pasado por aquí más de una vez, y en un masivo no hay nadie mirando: por eso
+ * se ordena por la fecha del servicio y no por cuándo se creó la ficha.
+ */
+const RESOLVER_CLIENTE = `
+  SELECT SPLIT_PART(TRIM(c.nombre), ' ', 1)         AS cliente_primer,
+         TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS cliente_completo,
+         c.whatsapp                                 AS cliente_whatsapp,
+         c.ciudad                                   AS cliente_ciudad,
+         c.direccion                                AS cliente_direccion,
+         ult.nombre                                 AS mascota_nombre,
+         c.whatsapp                                 AS contacto
+    FROM public.clientes c
+    LEFT JOIN LATERAL (
+      SELECT m.nombre
+        FROM public.mascotas m
+        LEFT JOIN public.servicios s ON s.mascota_id = m.id_mascota
+       WHERE m.cliente_id = c.id_cliente
+       ORDER BY s.fecha_ingreso DESC NULLS LAST, m.created_at DESC
+       LIMIT 1
+    ) ult ON TRUE
+   WHERE c.id_cliente = $1`
+
 /** De dónde sale cada fuente. Añadir una es añadir una entrada aquí. */
 const FUENTES = {
   SERVICIO: { sql: RESOLVER, etiqueta: 'servicio' },
   ALIADO:   { sql: RESOLVER_ALIADO, etiqueta: 'veterinaria' },
+  CLIENTE:  { sql: RESOLVER_CLIENTE, etiqueta: 'familia' },
 }
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',

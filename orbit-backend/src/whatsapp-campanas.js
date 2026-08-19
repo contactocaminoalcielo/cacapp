@@ -66,6 +66,51 @@ const AUDIENCIAS = [
     ],
   },
   {
+    clave: 'CLIENTES',
+    etiqueta: 'Clientes (familias)',
+    fuente: 'CLIENTE',
+    ayuda: 'Las familias activas con WhatsApp. Por defecto se saltan las que tienen un servicio EN CURSO.',
+    filtros: [
+      { clave: 'meses', etiqueta: 'Solo con servicio en los últimos… (meses)', tipo: 'numero', ayuda: 'Vacío = todas, hayan venido cuando hayan venido' },
+      { clave: 'ciudad', etiqueta: 'Ciudad', tipo: 'texto', ayuda: 'Vacío = todas' },
+      {
+        clave: 'incluir_en_curso', etiqueta: 'Incluir familias con un servicio en curso', tipo: 'si_no',
+        ayuda: 'Déjalo sin marcar salvo que sepas lo que haces: es una familia que ahora mismo está esperando a su mascota.',
+      },
+    ],
+    // ⚠️ La exclusión por defecto NO es una preferencia: a una familia que está
+    // en mitad del servicio no se le manda una promoción. Por eso el filtro es
+    // "incluir", y no marcarlo excluye — lo peligroso exige un acto explícito.
+    //
+    // Nunca `CURRENT_DATE`: la base corre en UTC y en Colombia eso se corre un
+    // día. Ver la nota `feedback_fechas_date_utc`.
+    sql: `
+      SELECT c.id_cliente::text                     AS ref_id,
+             TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre,
+             public.fn_wa_internacional(c.whatsapp) AS contacto
+        FROM public.clientes c
+       WHERE c.activo
+         AND public.fn_wa_internacional(c.whatsapp) IS NOT NULL
+         AND ($1::int IS NULL OR EXISTS (
+               SELECT 1 FROM public.mascotas m
+                 JOIN public.servicios s ON s.mascota_id = m.id_mascota
+                WHERE m.cliente_id = c.id_cliente
+                  AND s.fecha_ingreso >= (now() AT TIME ZONE 'America/Bogota')::date
+                                          - ($1::int * 30)))
+         AND ($2::text IS NULL OR c.ciudad ILIKE '%' || $2 || '%')
+         AND ($3::boolean IS TRUE OR NOT EXISTS (
+               SELECT 1 FROM public.mascotas m
+                 JOIN public.servicios s ON s.mascota_id = m.id_mascota
+                WHERE m.cliente_id = c.id_cliente
+                  AND s.estado NOT IN ('ENTREGADO', 'CANCELADO')))
+       ORDER BY c.nombre`,
+    params: f => [
+      Number(f.meses) > 0 ? Number(f.meses) : null,
+      String(f.ciudad || '').trim() || null,
+      f.incluir_en_curso === true ? true : null,
+    ],
+  },
+  {
     clave: 'LISTA',
     etiqueta: 'Lista de números',
     fuente: 'MANUAL',

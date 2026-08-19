@@ -326,7 +326,9 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
                           placeholder={'573001234567\n3009876543'}
                           onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null) }} />
               ) : (
-                <Input value={f.filtros[fl.clave] || ''}
+                <Input type={fl.tipo === 'numero' ? 'number' : 'text'} min={fl.tipo === 'numero' ? 1 : undefined}
+                       className={fl.tipo === 'numero' ? 'w-32' : undefined}
+                       value={f.filtros[fl.clave] || ''}
                        onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null) }} />
               )}
             </Campo>
