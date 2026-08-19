@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   cargarMateriales, guardarMaterial, borrarMaterial, archivoMaterial,
-  leerArchivo, comoLlega, pesoLegible, nuevoMaterial, MAX_BYTES, MAX_MB,
+  leerArchivo, comoLlega, pesoLegible, nuevoMaterial, MAX_BYTES, MAX_MB, TOPE_POR_CLASE,
 } from '@/lib/materialesApi'
 
 const ICONO = { imagen: ImageIcon, video: Film, documento: FileText }
@@ -53,6 +53,16 @@ export default function MaterialesWhatsapp() {
     if (!file) return
     if (file.size > MAX_BYTES) {
       setError(`"${file.name}" pesa ${pesoLegible(file.size)} y el tope son ${MAX_MB} MB.`)
+      return
+    }
+    // El tope que de verdad manda es el del TIPO: una imagen son 5 MB, no 64.
+    // Se avisa al elegirla y no cuando la clínica se quede esperando.
+    const { clase } = comoLlega(file.type)
+    const topeClase = TOPE_POR_CLASE[clase]
+    if (topeClase && file.size > topeClase * 1048576) {
+      setError(`"${file.name}" pesa ${pesoLegible(file.size)} y WhatsApp solo admite ${topeClase} MB en `
+        + `${clase === 'imagen' ? 'una imagen' : 'un ' + clase}. `
+        + (clase === 'imagen' ? 'Redúcela, o guárdala como PDF y llegará como documento.' : 'Redúcelo antes de subirlo.'))
       return
     }
     setError(null)

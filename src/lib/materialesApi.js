@@ -17,6 +17,15 @@ export const MAX_MB = 64
 export const MAX_BYTES = MAX_MB * 1024 * 1024
 
 /**
+ * El tope REAL depende del tipo, y es lo que de verdad manda.
+ *
+ * WhatsApp admite 64 MB en un documento pero solo **5 en una imagen**. Sin esto,
+ * una foto de 8 MB se guarda sin protestar y revienta al ENVIARLA — delante de
+ * la veterinaria y con un error de Meta que no explica nada.
+ */
+export const TOPE_POR_CLASE = { imagen: 5, video: 16, documento: 64 }
+
+/**
  * Lo que WhatsApp muestra como FOTO. Todo lo demás llega como documento —que se
  * abre igual—, pero conviene saberlo antes de subirlo: una foto de iPhone (HEIC)
  * o un WEBP se rechazarían como imagen.

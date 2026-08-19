@@ -111,6 +111,20 @@ function validar({ mime, buf, nombreArchivo }) {
   // cuando la clínica reciba un PDF donde esperaba una foto.
   const clase = claseDeArchivo(mime)
   if (clase === 'audio') return 'Los audios no llevan pie ni nombre: para audio, mándalo desde la bandeja'
+
+  // 🩸 El tope de verdad es POR TIPO, no el global. WhatsApp admite 64 MB en un
+  // documento pero solo 5 en una IMAGEN, y hasta ahora aquí solo se miraba el
+  // global: una foto de 8 MB se guardaba tan campante y reventaba al ENVIARLA,
+  // delante de la veterinaria y con un error de Meta que no dice cuál es el
+  // problema. Que es exactamente lo que esta función dice arriba que evita.
+  const tope = TOPE_MB[clase]
+  if (tope && buf.length > tope * 1048576) {
+    return `Pesa ${(buf.length / 1048576).toFixed(1)} MB y WhatsApp solo admite ${tope} MB en `
+      + `${clase === 'image' ? 'una imagen' : clase === 'video' ? 'un video' : 'un archivo así'}. `
+      + (clase === 'image'
+          ? 'Redúcela, o guárdala como PDF y llegará como documento.'
+          : 'Tienes que reducirlo antes de subirlo.')
+  }
   return null
 }
 
