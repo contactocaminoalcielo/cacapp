@@ -186,6 +186,15 @@ export async function guardarMaterial({ id, datos = {} }) {
     if (e.code === '23505') {
       return { status: 409, body: { ok: false, error: `Ya existe un material con la clave ${clave}` } }
     }
+    // Un CHECK de la tabla llegaba a la pantalla como "Error interno", que no
+    // dice nada. Pasó de verdad: el tope de `bytes` se quedó en 16 MB mientras
+    // el del código ya era 64, y el rechazo fue mudo (migración 103).
+    if (e.code === '23514') {
+      return {
+        status: 400,
+        body: { ok: false, error: `La base de datos rechazó el material (${e.constraint || 'restricción'}). Si es por el tamaño, el tope son ${TOPE_MB.document} MB.` },
+      }
+    }
     throw e
   }
 }
