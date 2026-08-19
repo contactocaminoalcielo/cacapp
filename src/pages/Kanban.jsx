@@ -430,6 +430,7 @@ export default function Kanban() {
   const [filtroRec, setFiltroRec]         = useState('')   // id de recordatorio (solo tablero producción)
   const [filtroRecEstado, setFiltroRecEstado] = useState('') // estado de ese recordatorio; '' = cualquiera
   const [soloAdicional, setSoloAdicional] = useState(false) // solo servicios con recordatorio ADICIONAL
+  const [soloConImagenes, setSoloConImagenes] = useState(false) // solo las familias que ya mandaron las fotos
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
   const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
@@ -1993,6 +1994,10 @@ export default function Kanban() {
     // Solo los que llevan un recordatorio ADICIONAL (mismo criterio del badge de
     // la tarjeta: ítem con origen ADICIONAL y no removido)
     if (soloAdicional && !s.tiene_adicional) return false
+    // Solo los que ya recibieron las fotos del cliente. Se mira la fecha real
+    // (`servicios.fecha_imagenes_recibidas`), no el estado: el badge de la
+    // tarjeta solo la pinta en EN_PROCESO, pero el filtro sirve en toda columna.
+    if (soloConImagenes && !s.fecha_imagenes_recibidas) return false
     // Filtro por recordatorio (y opcionalmente su estado): solo tablero de producción
     if (esVistaProd && filtroRec) {
       const delRec = (s.items_rec || []).filter(i => String(i.recordatorio_id) === String(filtroRec) && i.estado !== 'NA')
@@ -2031,6 +2036,7 @@ export default function Kanban() {
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado)    setFiltroEstado('todos')
     if (filtroPlanes.length && !filtroPlanes.includes(s.plan))    setFiltroPlanes([])
     if (soloAdicional && !s.tiene_adicional)                      setSoloAdicional(false)
+    if (soloConImagenes && !s.fecha_imagenes_recibidas)           setSoloConImagenes(false)
     abrirModal(s)
   }
 
@@ -2418,6 +2424,19 @@ export default function Kanban() {
           >
             <Gift size={13} />
             Con adicional
+          </button>
+
+          {/* Solo las mascotas cuya familia ya mandó las fotos por el portal */}
+          <button
+            onClick={() => setSoloConImagenes(v => !v)}
+            title={soloConImagenes
+              ? 'Mostrando solo las mascotas que ya enviaron imágenes — clic para ver todas'
+              : 'Mostrar solo las mascotas que ya enviaron imágenes'}
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloConImagenes ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
+            style={soloConImagenes ? { background: '#7C3AED' } : {}}
+          >
+            <Images size={13} />
+            Con imágenes
           </button>
 
           <div className="ml-auto flex items-center gap-2">
