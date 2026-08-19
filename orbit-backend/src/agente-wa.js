@@ -102,6 +102,18 @@ const VENTANA_TOPE_HORAS = 24
 const PAUSA_TRAS_HUMANO_HORAS = 12
 
 /**
+ * Una PLANTILLA enviada a mano no es lo mismo: casi nunca es "yo atiendo a esta
+ * clínica", es un aviso —los recordatorios están listos, la línea nueva— y lo
+ * que venga después lo contesta el agente como cualquier otra conversación.
+ *
+ * Diez minutos de margen por si quien la mandó iba a escribir algo más detrás.
+ * Pasados, el agente vuelve a estar al mando. Con las 12 horas de una persona
+ * escribiendo, mandar una plantilla dejaba la conversación sin respuesta el
+ * resto del día — que es como se descubrió todo esto (Davidvet, 19-ago).
+ */
+const PAUSA_TRAS_PLANTILLA_MIN = 10
+
+/**
  * Cada cuánto se refresca el "escribiendo…" durante una espera larga. El
  * indicador de Meta dura 25 s; 20 deja margen para la latencia de la llamada.
  */
@@ -1247,6 +1259,11 @@ function esReintentable(error) {
  * 1. **Desde Orbit.** Lo distingue `enviado_por`: el agente envía con NULL y el
  *    coordinador con su id. Es el mismo campo que usa la bandeja.
  *
+ *    Con dos matices, y los dos salieron de la práctica: una **plantilla**
+ *    enviada a mano solo aparta al agente `PAUSA_TRAS_PLANTILLA_MIN` minutos
+ *    (es un aviso, no una conversación tomada), y un **envío masivo** no lo
+ *    aparta en absoluto.
+ *
  * 2. **Desde FUERA de Orbit** — el panel de Zolutium, WhatsApp Manager, o
  *    cualquier otra app suscrita a la misma WABA. Aquí no hay `enviado_por` que
  *    mirar: **Meta no nos manda como mensaje lo que sale por otra app, solo el
@@ -1277,17 +1294,24 @@ async function laLlevaUnHumano(contacto) {
   // Se distingue por el `wamid`, que la campaña guarda en sus destinos: no hace
   // falta una marca nueva en la tabla de mensajes, y el rastro de quién lanzó
   // el envío se conserva intacto.
-  const { rowCount: enOrbit } = await pool.query(
-    `SELECT 1 FROM public.whatsapp_mensajes m
+  const { rows: [enOrbit] } = await pool.query(
+    `SELECT m.tipo FROM public.whatsapp_mensajes m
       WHERE m.contacto = $1 AND m.direccion = 'OUT' AND m.enviado_por IS NOT NULL
-        AND m.ocurrido_en > now() - ($2 || ' hours')::interval
+        AND m.ocurrido_en > now() - (CASE WHEN m.tipo = 'template'
+                                          THEN ($3 || ' minutes')::interval
+                                          ELSE ($2 || ' hours')::interval END)
         AND NOT EXISTS (
           SELECT 1 FROM public.whatsapp_campana_destinos d
            WHERE d.wa_message_id = m.wa_message_id)
+      ORDER BY m.ocurrido_en DESC
       LIMIT 1`,
-    [contacto, PAUSA_TRAS_HUMANO_HORAS]
+    [contacto, PAUSA_TRAS_HUMANO_HORAS, PAUSA_TRAS_PLANTILLA_MIN]
   )
-  if (enOrbit) return 'la contestó una persona desde Orbit'
+  if (enOrbit) {
+    return enOrbit.tipo === 'template'
+      ? `se le acaba de enviar una plantilla a mano (margen de ${PAUSA_TRAS_PLANTILLA_MIN} min)`
+      : 'la contestó una persona desde Orbit'
+  }
 
   // Dos filtros, y los dos hacen falta — sin ellos esto calla al agente en
   // conversaciones que está atendiendo bien (comprobado contra prod el 13-ago,
