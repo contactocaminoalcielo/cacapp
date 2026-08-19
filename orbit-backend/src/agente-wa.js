@@ -98,8 +98,16 @@ const VENTANA_TOPE_HORAS = 24
  *
  * Apartarse no es desatender: la conversación sigue contando como NO leída en la
  * bandeja (el agente nunca apaga ese badge), así que quien la tomó la ve.
+ *
+ * ⏱️ Eran 12 HORAS, y se bajó a 30 minutos el 2026-08-19. El medio día tenía
+ * sentido cuando escribir a mano era la ÚNICA forma de decir "de esta clínica me
+ * encargo yo". Ahora eso lo dice el interruptor de la conversación (migración
+ * 105), así que la pausa automática solo tiene que cubrir la ida y vuelta de
+ * quien está escribiendo en ese momento. Con 12 h, un "buenas tardes" dejaba la
+ * conversación sin agente hasta el día siguiente — pasó de verdad, y la clínica
+ * se quedó esperando.
  */
-const PAUSA_TRAS_HUMANO_HORAS = 12
+const PAUSA_TRAS_HUMANO_MIN = 30
 
 /**
  * Una PLANTILLA enviada a mano no es lo mismo: casi nunca es "yo atiendo a esta
@@ -1306,13 +1314,13 @@ async function laLlevaUnHumano(contacto) {
       WHERE m.contacto = $1 AND m.direccion = 'OUT' AND m.enviado_por IS NOT NULL
         AND m.ocurrido_en > now() - (CASE WHEN m.tipo = 'template'
                                           THEN ($3 || ' minutes')::interval
-                                          ELSE ($2 || ' hours')::interval END)
+                                          ELSE ($2 || ' minutes')::interval END)
         AND NOT EXISTS (
           SELECT 1 FROM public.whatsapp_campana_destinos d
            WHERE d.wa_message_id = m.wa_message_id)
       ORDER BY m.ocurrido_en DESC
       LIMIT 1`,
-    [contacto, PAUSA_TRAS_HUMANO_HORAS, PAUSA_TRAS_PLANTILLA_MIN]
+    [contacto, PAUSA_TRAS_HUMANO_MIN, PAUSA_TRAS_PLANTILLA_MIN]
   )
   if (enOrbit) {
     return enOrbit.tipo === 'template'
@@ -1474,6 +1482,74 @@ async function barrerSeguimientos() {
   }
 }
 
+/**
+ * Lo que quedó esperando mientras el agente estaba en pausa.
+ *
+ * 🩸 EL AGUJERO QUE ESTO TAPA: el agente es puramente REACTIVO — solo actúa
+ * cuando entra un mensaje. Si en ese instante estaba apartado (una persona
+ * acababa de escribir, o se envió una plantilla), ese mensaje **se perdía para
+ * siempre**: al vencer la pausa no pasaba nada, se quedaba esperando el
+ * siguiente. Pasó de verdad el 19-ago: una clínica escribió tres veces durante
+ * una pausa y no iba a recibir respuesta nunca.
+ *
+ * De paso cubre otros dos casos con el mismo síntoma: un **reinicio del
+ * backend** (las respuestas programadas viven en memoria y se pierden con el
+ * proceso) y un webhook que Meta no consiguiera entregar.
+ *
+ * Los límites son lo que evita que esto se vuelva un problema:
+ *
+ *  · **Dentro de las 24 h.** Fuera de la ventana el agente no puede mandar
+ *    texto libre, así que retomar sería fabricar un fallo.
+ *  · **Más de 2 minutos de antigüedad.** Lo recién llegado ya lo está
+ *    atendiendo el camino normal, que agrupa varios mensajes seguidos.
+ *  · **Nada en vuelo.** Si la conversación ya está en `enEspera`, se deja.
+ *  · **Un intento por conversación cada media hora.** Sin esto, un fallo al
+ *    responder se reintentaría cada minuto para siempre.
+ */
+const REINTENTO_PENDIENTE_MS = 30 * 60_000
+const TOPE_PENDIENTES_POR_BARRIDO = 5
+const intentados = new Map()
+
+async function barrerPendientes() {
+  const { rows } = await pool.query(
+    `SELECT u.contacto, u.id AS mensaje_id, u.wa_message_id, u.tipo, u.phone_number_id
+       FROM (
+         SELECT DISTINCT ON (m.contacto)
+                m.contacto, m.id, m.wa_message_id, m.tipo, m.phone_number_id,
+                m.direccion, m.ocurrido_en
+           FROM public.whatsapp_mensajes m
+          WHERE m.ocurrido_en > now() - interval '24 hours'
+          ORDER BY m.contacto, m.ocurrido_en DESC, m.id DESC
+       ) u
+      WHERE u.direccion = 'IN'
+        AND u.ocurrido_en < now() - interval '2 minutes'
+      ORDER BY u.ocurrido_en
+      LIMIT $1`,
+    [TOPE_PENDIENTES_POR_BARRIDO]
+  )
+
+  for (const p of rows) {
+    if (enEspera.has(p.contacto)) continue
+    const ultimo = intentados.get(p.contacto)
+    if (ultimo && Date.now() - ultimo < REINTENTO_PENDIENTE_MS) continue
+
+    // Las mismas compuertas que en el camino normal: si sigue en pausa o el
+    // interruptor está apagado, no se toca.
+    const laLleva = await laLlevaUnHumano(p.contacto)
+    if (laLleva) continue
+
+    intentados.set(p.contacto, Date.now())
+    log(MOD, `${p.contacto}: retomando un mensaje que quedó sin contestar`)
+    // Se entra por la puerta de siempre: agrupación, "escribiendo…", acuse de
+    // lectura y bitácora salen gratis, y no hay una segunda forma de responder
+    // que se quede atrás el día que cambie la primera.
+    await responderSiAplica({
+      phoneNumberId: p.phone_number_id, contacto: p.contacto,
+      tipo: p.tipo, waMessageId: p.wa_message_id, mensajeId: p.mensaje_id,
+    })
+  }
+}
+
 let temporizadorSeguimientos = null
 
 /** Lo arranca `index.js`. Idempotente: dos llamadas no dan dos barridos. */
@@ -1485,6 +1561,13 @@ export function arrancarSeguimientos() {
   )
   temporizadorSeguimientos.unref?.()
   log(MOD, `seguimiento del enlace: barrido cada ${SEGUIMIENTO_CADA_MS / 1000}s`)
+
+  const pendientes = setInterval(
+    () => barrerPendientes().catch(e => log(MOD, 'barrido de pendientes falló —', e.message)),
+    SEGUIMIENTO_CADA_MS
+  )
+  pendientes.unref?.()
+  log(MOD, `mensajes sin contestar: barrido cada ${SEGUIMIENTO_CADA_MS / 1000}s`)
 }
 
 /** Cómo se llama en cristiano lo que llegó, para el aviso y la etiqueta. */
