@@ -139,7 +139,10 @@ export const ESTADO_ENVIO = {
 // ── Enviar adjuntos: imagen, audio, video o documento (2026-08-14) ───────────
 
 /** Topes de WhatsApp por tipo. Pasarse lo rechaza con un error poco claro. */
-export const TOPES_ARCHIVO = { imagen: 5, audio: 16, video: 16, documento: 16 }
+// Imagen, audio y video son los topes REALES de WhatsApp. El de documento es
+// nuestro (Meta admite 100 MB) y tiene que coincidir con `CLASES.document` del
+// backend: si aquí dice menos, la pantalla rechaza algo que el servidor acepta.
+export const TOPES_ARCHIVO = { imagen: 5, audio: 16, video: 16, documento: 64 }
 
 export function enviarArchivo({ contacto, base64, mime, nombre, pie }) {
   return orbitApi('/whatsapp/archivo', {

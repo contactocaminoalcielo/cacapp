@@ -8,8 +8,13 @@
 // Los bytes no están expuestos por PostgREST: van y vienen por orbit-backend.
 import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
-/** El mismo tope que un documento en la bandeja (whatsapp-media.js). */
-export const MAX_BYTES = 16 * 1024 * 1024
+/**
+ * El mismo tope que un documento en la bandeja (`CLASES.document` en
+ * whatsapp-media.js). Meta admite hasta 100 MB; el corte es nuestro, para que
+ * el brochure siga siendo algo que una clínica descarga con datos móviles.
+ */
+export const MAX_MB = 64
+export const MAX_BYTES = MAX_MB * 1024 * 1024
 
 /**
  * Lo que WhatsApp muestra como FOTO. Todo lo demás llega como documento —que se

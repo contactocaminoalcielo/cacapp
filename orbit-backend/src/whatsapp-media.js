@@ -306,8 +306,17 @@ const CLASES = {
     max: 16 * 1024 * 1024, etiqueta: 'audio',
   },
   video:    { mimes: ['video/mp4', 'video/3gp', 'video/3gpp'], max: 16 * 1024 * 1024, etiqueta: 'video' },
-  document: { mimes: null, max: 16 * 1024 * 1024, etiqueta: 'documento' },
+  // Imagen, audio y video llevan el tope REAL de WhatsApp; los documentos no.
+  // El de documentos es NUESTRO: Meta acepta hasta 100 MB (comprobado el
+  // 2026-08-19 subiendo un PDF de 31 MB, `{"id":"…"}`), pero un PDF enorme por
+  // WhatsApp es un PDF que la clínica no descarga con datos móviles. 64 MB deja
+  // pasar cualquier brochure sin abrir la puerta a mandar un video disfrazado.
+  document: { mimes: null, max: 64 * 1024 * 1024, etiqueta: 'documento' },
 }
+
+/** El tope de cada tipo, en MB. Lo lee el catálogo de materiales y la pantalla. */
+export const TOPE_MB = Object.fromEntries(
+  Object.entries(CLASES).map(([k, v]) => [k, v.max / 1048576]))
 
 /** Tope del pie de foto/documento. Audio y video NO admiten pie en la API. */
 const MAX_PIE = 1024

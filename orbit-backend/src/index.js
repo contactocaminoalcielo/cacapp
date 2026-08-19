@@ -65,10 +65,12 @@ app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
 // límite por defecto. Ruta PLANA con el contacto en el cuerpo a propósito: con
 // el contacto en la URL, el prefijo no se podría acotar y este límite acabaría
 // aplicándose a todo /whatsapp/conversaciones.
-app.use('/whatsapp/imagen',  express.json({ limit: '30mb' }))
-app.use('/whatsapp/archivo', express.json({ limit: '30mb' }))
+// 90 MB porque el tope de un documento son 64 MB y en base64 pesa un tercio
+// más: con 30 MB, un PDF de 25 MB se caía con un 413 que no dice nada.
+app.use('/whatsapp/imagen',  express.json({ limit: '90mb' }))
+app.use('/whatsapp/archivo', express.json({ limit: '90mb' }))
 // Los materiales del catálogo (101) se suben por aquí, también en base64.
-app.use('/whatsapp/materiales', express.json({ limit: '30mb' }))
+app.use('/whatsapp/materiales', express.json({ limit: '90mb' }))
 // La imagen/PDF de la cabecera de una plantilla se sube a Meta antes de crearla
 // (Resumable Upload API) y viaja en base64, igual que lo anterior.
 app.use('/whatsapp/plantillas-cabecera', express.json({ limit: '30mb' }))

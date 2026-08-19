@@ -12,12 +12,16 @@
 // ventana de 24 h, los topes por tipo y la regla de `ultimo_leido_en` no pueden
 // vivir en dos sitios: uno se quedaría atrás y el fallo sería mudo.
 import { pool, log } from './db.js'
-import { enviarArchivo, claseDeArchivo } from './whatsapp-media.js'
+import { enviarArchivo, claseDeArchivo, TOPE_MB } from './whatsapp-media.js'
 
 const MOD = '[wa-materiales]'
 
-/** El mismo tope que un documento en la bandeja. No dos topes para lo mismo. */
-const MAX_BYTES = 16 * 1024 * 1024
+/**
+ * El mismo tope que un documento en la bandeja. No dos topes para lo mismo: se
+ * lee de allí, no se copia el número — copiado, uno de los dos se queda atrás y
+ * la subida falla con un mensaje que miente.
+ */
+const MAX_BYTES = TOPE_MB.document * 1048576
 
 /**
  * Los que puede usar el agente, con su descripción: alimenta el enum de la

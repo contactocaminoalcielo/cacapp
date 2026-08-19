@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   cargarMateriales, guardarMaterial, borrarMaterial, archivoMaterial,
-  leerArchivo, comoLlega, pesoLegible, nuevoMaterial, MAX_BYTES,
+  leerArchivo, comoLlega, pesoLegible, nuevoMaterial, MAX_BYTES, MAX_MB,
 } from '@/lib/materialesApi'
 
 const ICONO = { imagen: ImageIcon, video: Film, documento: FileText }
@@ -52,7 +52,7 @@ export default function MaterialesWhatsapp() {
     e.target.value = ''            // que volver a elegir el mismo archivo dispare el change
     if (!file) return
     if (file.size > MAX_BYTES) {
-      setError(`"${file.name}" pesa ${pesoLegible(file.size)} y el tope son 16 MB.`)
+      setError(`"${file.name}" pesa ${pesoLegible(file.size)} y el tope son ${MAX_MB} MB.`)
       return
     }
     setError(null)
