@@ -416,8 +416,14 @@ export async function enviarArchivo({
   mime = String(mime || '').split(';')[0].trim()
 
   let buf
-  try { buf = Buffer.from(String(base64 || ''), 'base64') }
-  catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
+  try {
+    // Red de seguridad: si llega el data URL entero (`data:audio/webm;...;base64,AAA`)
+    // se recorta aqui. Node NO se queja al decodificarlo —ignora los caracteres
+    // que no son base64— y devuelve bytes basura, asi que el fallo aparece muy
+    // lejos de su causa: paso de verdad y se vio como "ffmpeg: datos invalidos".
+    const limpio = String(base64 || '')
+    buf = Buffer.from(limpio.startsWith('data:') ? limpio.slice(limpio.indexOf(',') + 1) : limpio, 'base64')
+  } catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
   if (!buf.length) return { status: 400, body: { ok: false, error: 'El archivo llegó vacío' } }
 
   // ⚠️ ESTO VA ANTES DE CLASIFICAR, y el orden no es un detalle: lo que graba

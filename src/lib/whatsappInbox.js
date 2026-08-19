@@ -275,7 +275,22 @@ export function prepararArchivo(file, { ladoMax = 1600, calidad = 0.82 } = {}) {
 function leerComoBase64(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader()
-    fr.onload  = () => resolve(String(fr.result).replace(/^data:[^;]*;base64,/, ''))
+    // Se corta por la PRIMERA coma, no con un patron sobre la cabecera.
+    //
+    // Antes decia `/^data:[^;]*;base64,/` y con un MIME que lleva parametros
+    // reventaba en silencio: el de una nota de voz es
+    // `data:audio/webm;codecs=opus;base64,...`, ahi `[^;]*` se para en
+    // `audio/webm` y ya no encuentra `;base64,` seguido. No casaba, no
+    // recortaba nada, y al servidor le llegaba la cabecera pegada al audio —
+    // que Node decodifica como basura y ffmpeg rechaza. Con fotos y PDF nunca
+    // se noto porque sus MIME no llevan `;`.
+    //
+    // En un data URL el base64 empieza justo tras la primera coma y nunca
+    // contiene comas, asi que esto vale para todos.
+    fr.onload  = () => {
+      const t = String(fr.result)
+      resolve(t.slice(t.indexOf(',') + 1))
+    }
     fr.onerror = () => reject(new Error('No se pudo leer el archivo'))
     fr.readAsDataURL(file)
   })
