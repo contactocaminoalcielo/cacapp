@@ -48,9 +48,18 @@ const AUDIENCIAS = [
       { clave: 'vip', etiqueta: 'Solo VIP', tipo: 'si_no' },
       { clave: 'facturacion_mensual', etiqueta: 'Solo facturación mensual', tipo: 'si_no' },
     ],
+    // Lo que se ve en la tabla al elegir a quién se le manda. Sin ciudad ni VIP
+    // la lista son 200 nombres iguales y no hay forma de decidir.
+    columnas: [
+      { clave: 'nombre', etiqueta: 'Veterinaria' },
+      { clave: 'ciudad', etiqueta: 'Ciudad' },
+      { clave: 'vip', etiqueta: 'VIP' },
+    ],
     sql: `
       SELECT a.id_aliado::text                    AS ref_id,
              a.nombre                             AS nombre,
+             a.ciudad                             AS ciudad,
+             CASE WHEN a.vip THEN 'Sí' ELSE '' END AS vip,
              public.fn_wa_internacional(a.whatsapp) AS contacto
         FROM public.aliados a
        WHERE a.activo
@@ -84,11 +93,28 @@ const AUDIENCIAS = [
     //
     // Nunca `CURRENT_DATE`: la base corre en UTC y en Colombia eso se corre un
     // día. Ver la nota `feedback_fechas_date_utc`.
+    columnas: [
+      { clave: 'nombre', etiqueta: 'Familia' },
+      { clave: 'mascota', etiqueta: 'Mascota' },
+      { clave: 'ciudad', etiqueta: 'Ciudad' },
+      { clave: 'ultimo', etiqueta: 'Último servicio' },
+    ],
     sql: `
       SELECT c.id_cliente::text                     AS ref_id,
              TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre,
+             ult.mascota                            AS mascota,
+             c.ciudad                               AS ciudad,
+             ult.fecha::text                        AS ultimo,
              public.fn_wa_internacional(c.whatsapp) AS contacto
         FROM public.clientes c
+        LEFT JOIN LATERAL (
+          SELECT m.nombre AS mascota, s.fecha_ingreso AS fecha
+            FROM public.mascotas m
+            LEFT JOIN public.servicios s ON s.mascota_id = m.id_mascota
+           WHERE m.cliente_id = c.id_cliente
+           ORDER BY s.fecha_ingreso DESC NULLS LAST, m.created_at DESC
+           LIMIT 1
+        ) ult ON TRUE
        WHERE c.activo
          AND public.fn_wa_internacional(c.whatsapp) IS NOT NULL
          AND ($1::int IS NULL OR EXISTS (
@@ -118,6 +144,7 @@ const AUDIENCIAS = [
     filtros: [
       { clave: 'numeros', etiqueta: 'Números', tipo: 'lista', ayuda: 'Uno por línea, con o sin indicativo' },
     ],
+    columnas: [],
     // Sin SQL: los destinatarios los escribe una persona. Ver `destinosDe`.
     sql: null,
     params: () => [],
@@ -125,6 +152,15 @@ const AUDIENCIAS = [
 ]
 
 const audienciaPorClave = c => AUDIENCIAS.find(a => a.clave === c)
+
+/**
+ * Cuántos destinatarios viajan a la pantalla para elegirlos uno a uno.
+ *
+ * Mil filas ya son una tabla que nadie repasa entera; más allá, el navegador
+ * empieza a sufrir. Si la audiencia da más, se avisa y se afina con los filtros
+ * —que es lo que hay que hacer de todas formas.
+ */
+const TOPE_TABLA = 1000
 
 export function listarAudiencias() {
   return {
@@ -212,14 +248,12 @@ export async function previsualizar({ audiencia, filtros = {}, plantilla, idioma
     .filter(v => !campoSirvePara(v.campo, r.fuente))
     .map(v => `{{${v.param ?? v.posicion}}}`)
 
-  // Una muestra de verdad: los tres primeros, resueltos como saldrían.
-  const muestra = []
-  for (const d of r.destinos.slice(0, 3)) {
-    const val = d.ref_id
-      ? await valoresDeFuente({ plantilla, idioma, fuente: r.fuente, refId: d.ref_id })
-      : { ok: true, valores: {} }
-    muestra.push({ contacto: d.contacto, nombre: d.nombre, valores: val.valores || {} })
-  }
+  // Cómo saldría de verdad, resuelto: solo el primero. Resolver los 900 serían
+  // 900 consultas para pintar una previa que nadie lee entera.
+  const primero = r.destinos[0]
+  const muestra = primero?.ref_id
+    ? [{ ...primero, valores: (await valoresDeFuente({ plantilla, idioma, fuente: r.fuente, refId: primero.ref_id })).valores || {} }]
+    : primero ? [{ ...primero, valores: {} }] : []
 
   return {
     status: 200,
@@ -228,9 +262,15 @@ export async function previsualizar({ audiencia, filtros = {}, plantilla, idioma
       total: r.destinos.length,
       excluidos: r.excluidos,
       fuente: r.fuente,
+      columnas: audienciaPorClave(audiencia)?.columnas || [],
       // Los huecos que esta audiencia NO puede rellenar. Se escriben a mano una
       // vez (valores fijos) o la campaña saldrá con blancos.
       huecosSinDato: sinFuente,
+      // La lista ENTERA: la pantalla la pinta como tabla y se elige uno por
+      // uno. Un total a secas obliga a mandarle a todos o a nadie, y casi nunca
+      // es lo que uno quiere.
+      destinos: r.destinos.slice(0, TOPE_TABLA),
+      recortada: r.destinos.length > TOPE_TABLA,
       muestra,
     },
   }
@@ -242,6 +282,10 @@ export async function previsualizar({ audiencia, filtros = {}, plantilla, idioma
 
 export async function crearCampana({
   nombre, plantilla, idioma = 'es_MX', audiencia, filtros = {},
+  // Los números que se marcaron en la tabla. Sin esto iría a toda la audiencia,
+  // que casi nunca es lo que se quiere: la gracia de ver la lista es poder
+  // quitar a alguien.
+  seleccion = null,
   valoresFijos = {}, porHora = 200, personalId = null,
 }) {
   if (!String(nombre || '').trim()) {
@@ -262,8 +306,18 @@ export async function crearCampana({
 
   const r = await destinosDe(audiencia, filtros)
   if (r.error) return { status: 422, body: { ok: false, error: r.error } }
-  if (!r.destinos.length) {
-    return { status: 422, body: { ok: false, error: 'Esa audiencia no tiene a nadie con WhatsApp' } }
+
+  // La lista se vuelve a calcular aquí y NO se toma la que mandó la pantalla:
+  // lo que llega de fuera solo puede QUITAR gente, nunca añadir a alguien que
+  // la audiencia no incluía (ni saltarse el filtro de "no enviar masivos").
+  const elegidos = Array.isArray(seleccion) && seleccion.length
+    ? r.destinos.filter(d => seleccion.includes(d.contacto))
+    : r.destinos
+  if (!elegidos.length) {
+    return {
+      status: 422,
+      body: { ok: false, error: 'No queda nadie a quien enviar: revisa los filtros o la selección' },
+    }
   }
 
   const cliente = await pool.connect()
@@ -284,11 +338,11 @@ export async function crearCampana({
        SELECT $1, x.contacto, x.ref_id, x.nombre
          FROM jsonb_to_recordset($2::jsonb) AS x(contacto text, ref_id text, nombre text)
        ON CONFLICT (campana_id, contacto) DO NOTHING`,
-      [c.id, JSON.stringify(r.destinos)]
+      [c.id, JSON.stringify(elegidos)]
     )
     await cliente.query('COMMIT')
-    log(MOD, `campaña ${c.id} "${nombre}" creada con ${r.destinos.length} destino(s)`)
-    return { status: 200, body: { ok: true, id: c.id, total: r.destinos.length, excluidos: r.excluidos } }
+    log(MOD, `campaña ${c.id} "${nombre}" creada con ${elegidos.length} destino(s)`)
+    return { status: 200, body: { ok: true, id: c.id, total: elegidos.length, excluidos: r.excluidos } }
   } catch (e) {
     await cliente.query('ROLLBACK').catch(() => {})
     return { status: 500, body: { ok: false, error: e.message } }

@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import {
   listarAudiencias, previsualizar, crearCampana, listarCampanas, verCampana,
   accionCampana, borrarCampana, ESTADOS_CAMPANA, ESTADOS_DESTINO, cuantoTarda,
@@ -23,7 +24,7 @@ import {
 import { huecosDePlantilla, conValores, componente } from '@/lib/plantillasWa'
 import {
   Plus, Loader2, Send, X, AlertTriangle, Users, Pause, Play, Ban, Trash2,
-  RefreshCw, Eye, Megaphone, Check,
+  RefreshCw, Eye, Megaphone, Check, Search,
 } from 'lucide-react'
 
 export default function CampanasWa({ plantillas = [], abrirCon = null, onAbierto }) {
@@ -235,7 +236,12 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
   const [previa, setPrevia] = useState(null)
   const [mirando, setMirando] = useState(false)
   const [guardando, setGuardando] = useState(false)
-  const set = (k, v) => { setF(p => ({ ...p, [k]: v })); setPrevia(null) }
+  // Los números marcados. Al calcular la previa entran todos: quitar a alguien
+  // es la excepción, y obligar a marcar 200 casillas para el caso normal sería
+  // absurdo.
+  const [elegidos, setElegidos] = useState(() => new Set())
+  const [buscaDestino, setBuscaDestino] = useState('')
+  const set = (k, v) => { setF(p => ({ ...p, [k]: v })); setPrevia(null); setElegidos(new Set()) }
 
   useEffect(() => {
     listarAudiencias().then(r => setAudiencias(r.audiencias || [])).catch(() => {})
@@ -253,6 +259,7 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
         plantilla: f.plantilla, idioma: plantilla?.language,
       })
       setPrevia(r)
+      setElegidos(new Set((r.destinos || []).map(d => d.contacto)))
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo calcular' })
     } finally {
@@ -266,6 +273,7 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
       await crearCampana({
         nombre: f.nombre.trim(), plantilla: f.plantilla, idioma: plantilla?.language,
         audiencia: f.audiencia, filtros: f.filtros, valoresFijos: fijos,
+        seleccion: [...elegidos],
         porHora: Number(f.porHora) || 200,
       })
       onCreada()
@@ -279,7 +287,7 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
   // Los huecos que esta audiencia no puede rellenar sola. Se escriben una vez y
   // valen para todos: es lo que hace que una lista de números pegada sirva.
   const faltantes = previa?.huecosSinDato || []
-  const listoParaCrear = f.nombre.trim() && f.plantilla && previa?.total > 0
+  const listoParaCrear = f.nombre.trim() && f.plantilla && elegidos.size > 0
     && faltantes.every(h => String(fijos[claveDe(huecos, h)] || '').trim())
 
   const valoresPrevia = {
@@ -289,7 +297,7 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
   }
 
   return (
-    <Modal titulo="Nuevo envío masivo" onCerrar={onCerrar} ancho="max-w-3xl">
+    <Modal titulo="Nuevo envío masivo" onCerrar={onCerrar} ancho="max-w-5xl">
       <div className="grid lg:grid-cols-[1fr_270px] gap-5">
         <div className="space-y-4">
           <Campo etiqueta="¿Cómo se llama este envío?"
@@ -307,7 +315,7 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
 
           <Campo etiqueta="¿A quiénes?" ayuda={aud?.ayuda}>
             <select value={f.audiencia}
-                    onChange={e => { setF(p => ({ ...p, audiencia: e.target.value, filtros: {} })); setPrevia(null) }}
+                    onChange={e => { setF(p => ({ ...p, audiencia: e.target.value, filtros: {} })); setPrevia(null); setElegidos(new Set()) }}
                     className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
               {audiencias.map(a => <option key={a.clave} value={a.clave}>{a.etiqueta}</option>)}
             </select>
@@ -318,18 +326,18 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
               {fl.tipo === 'si_no' ? (
                 <label className="flex items-center gap-2 text-[13px] text-gray-700">
                   <input type="checkbox" checked={!!f.filtros[fl.clave]}
-                         onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.checked } })); setPrevia(null) }} />
+                         onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.checked } })); setPrevia(null); setElegidos(new Set()) }} />
                   Sí
                 </label>
               ) : fl.tipo === 'lista' ? (
                 <Textarea rows={5} value={f.filtros[fl.clave] || ''}
                           placeholder={'573001234567\n3009876543'}
-                          onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null) }} />
+                          onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null); setElegidos(new Set()) }} />
               ) : (
                 <Input type={fl.tipo === 'numero' ? 'number' : 'text'} min={fl.tipo === 'numero' ? 1 : undefined}
                        className={fl.tipo === 'numero' ? 'w-32' : undefined}
                        value={f.filtros[fl.clave] || ''}
-                       onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null) }} />
+                       onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null); setElegidos(new Set()) }} />
               )}
             </Campo>
           ))}
@@ -339,34 +347,15 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
             Ver a quiénes le llegaría
           </Button>
 
-          {previa && (
-            <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-100 space-y-2">
-              <p className="text-[13px] font-semibold text-[#1A5CD8]">
-                {previa.total} destinatario(s)
-              </p>
-              {previa.excluidos > 0 && (
-                <p className="text-[11.5px] text-[#1A5CD8]/80">
-                  Se saltaron {previa.excluidos} que pidieron no recibir masivos.
-                </p>
-              )}
-              {previa.total === 0 && (
-                <p className="text-[11.5px] text-red-600">
-                  Con esos filtros no queda nadie. Revísalos antes de seguir.
-                </p>
-              )}
-              {previa.muestra?.length > 0 && (
-                <ul className="text-[11.5px] text-gray-600 space-y-0.5">
-                  {previa.muestra.map(m => (
-                    <li key={m.contacto} className="truncate">
-                      · {m.nombre || m.contacto} <span className="text-gray-400 font-mono">{m.contacto}</span>
-                    </li>
-                  ))}
-                  {previa.total > previa.muestra.length && (
-                    <li className="text-gray-400">…y {previa.total - previa.muestra.length} más</li>
-                  )}
-                </ul>
-              )}
-            </div>
+          {previa && previa.total === 0 && (
+            <p className="text-[12px] text-red-600">
+              Con esos filtros no queda nadie. Revísalos antes de seguir.
+            </p>
+          )}
+          {previa?.excluidos > 0 && (
+            <p className="text-[11.5px] text-gray-500">
+              Se saltaron {previa.excluidos} que pidieron no recibir masivos.
+            </p>
           )}
 
           {previa && faltantes.length > 0 && (
@@ -424,7 +413,20 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-gray-100">
+      {previa?.destinos?.length > 0 && (
+        <TablaDestinos destinos={previa.destinos} columnas={previa.columnas || []}
+                       elegidos={elegidos} setElegidos={setElegidos}
+                       busca={buscaDestino} setBusca={setBuscaDestino}
+                       recortada={previa.recortada} total={previa.total} />
+      )}
+
+      <div className="flex flex-wrap items-center justify-end gap-2 pt-4 mt-4 border-t border-gray-100">
+        {previa && (
+          <p className="text-[12px] text-gray-500 mr-auto">
+            Se le escribirá a <b className="text-gray-800">{elegidos.size}</b> de {previa.total}
+            {elegidos.size > 0 && <> · {cuantoTarda(elegidos.size, Number(f.porHora) || 200)}</>}
+          </p>
+        )}
         <Button variant="outline" onClick={onCerrar}>Cancelar</Button>
         <Button onClick={crear} disabled={!listoParaCrear || guardando}>
           {guardando ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}
@@ -432,6 +434,108 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
         </Button>
       </div>
     </Modal>
+  )
+}
+
+/**
+ * A quiénes se les manda, uno por uno y con casilla.
+ *
+ * La lista entera y no un total: un número a secas obliga a mandarle a TODOS o
+ * a nadie, y casi nunca es lo que uno quiere —siempre hay una clínica a la que
+ * conviene escribirle aparte, o una familia a la que ahora no.
+ *
+ * Entran todos marcados a propósito: quitar es la excepción, y obligar a marcar
+ * 200 casillas para el caso normal sería absurdo.
+ */
+function TablaDestinos({ destinos, columnas, elegidos, setElegidos, busca, setBusca, recortada, total }) {
+  const q = busca.trim().toLowerCase()
+  const visibles = q
+    ? destinos.filter(d => (d.nombre || '').toLowerCase().includes(q)
+        || (d.contacto || '').includes(q)
+        || columnas.some(c => String(d[c.clave] || '').toLowerCase().includes(q)))
+    : destinos
+
+  const marcar = (contacto, si) => setElegidos(prev => {
+    const n = new Set(prev)
+    si ? n.add(contacto) : n.delete(contacto)
+    return n
+  })
+  // El "todos" opera sobre lo que se ESTÁ VIENDO: con un filtro puesto, marcar
+  // todo y que se marque también lo que no se ve es como se manda sin querer.
+  const todosVisibles = visibles.length > 0 && visibles.every(d => elegidos.has(d.contacto))
+  const marcarVisibles = (si) => setElegidos(prev => {
+    const n = new Set(prev)
+    visibles.forEach(d => (si ? n.add(d.contacto) : n.delete(d.contacto)))
+    return n
+  })
+
+  return (
+    <div className="mt-5 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-[12px] font-semibold text-gray-600">
+          ¿A quiénes? <span className="font-normal text-gray-400">— desmarca a quien no deba recibirlo</span>
+        </p>
+        <div className="relative ml-auto w-full sm:w-56">
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Input className="pl-8 h-8" value={busca} onChange={e => setBusca(e.target.value)}
+                 placeholder="Buscar en la lista" />
+        </div>
+        <div className="flex gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => marcarVisibles(true)}>
+            Marcar {q ? 'lo filtrado' : 'todos'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => marcarVisibles(false)}>
+            Desmarcar {q ? 'lo filtrado' : 'todos'}
+          </Button>
+        </div>
+      </div>
+
+      <div className="max-h-[42vh] overflow-y-auto border border-gray-100 rounded-xl">
+        <TableWrap>
+          <Table>
+            <thead className="sticky top-0 z-10">
+              <tr>
+                <Th className="w-10">
+                  <input type="checkbox" checked={todosVisibles}
+                         onChange={e => marcarVisibles(e.target.checked)} />
+                </Th>
+                {columnas.map(c => <Th key={c.clave}>{c.etiqueta}</Th>)}
+                <Th>Número</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibles.map(d => {
+                const marcado = elegidos.has(d.contacto)
+                return (
+                  <Tr key={d.contacto} className={marcado ? '' : 'opacity-45'}>
+                    <Td>
+                      <input type="checkbox" checked={marcado}
+                             onChange={e => marcar(d.contacto, e.target.checked)} />
+                    </Td>
+                    {columnas.map(c => (
+                      <Td key={c.clave} className={c.clave === 'nombre' ? 'font-semibold text-gray-800' : 'text-gray-500'}>
+                        {d[c.clave] || <span className="text-gray-300">—</span>}
+                      </Td>
+                    ))}
+                    <Td className="font-mono text-[12px] text-gray-500">{d.contacto}</Td>
+                  </Tr>
+                )
+              })}
+            </tbody>
+          </Table>
+        </TableWrap>
+        {!visibles.length && (
+          <p className="text-[12.5px] text-gray-400 text-center py-6">Nada coincide con esa búsqueda.</p>
+        )}
+      </div>
+
+      {recortada && (
+        <p className="text-[11px] text-amber-700">
+          La audiencia da {total} y aquí solo caben los primeros {destinos.length}. Afina los
+          filtros: una lista que no se puede repasar entera no se debería enviar entera.
+        </p>
+      )}
+    </div>
   )
 }
 

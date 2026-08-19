@@ -365,6 +365,9 @@ app.post('/whatsapp/campanas', requireAuth, rolBandeja, async (req, res) => {
     const r = await crearCampana({
       nombre: req.body?.nombre, plantilla: req.body?.plantilla, idioma: req.body?.idioma,
       audiencia: req.body?.audiencia, filtros: req.body?.filtros,
+      // Los números marcados en la tabla. Solo pueden QUITAR gente: la lista se
+      // recalcula en el servidor.
+      seleccion: Array.isArray(req.body?.seleccion) ? req.body.seleccion : null,
       valoresFijos: req.body?.valoresFijos, porHora: req.body?.porHora,
       personalId: req.personal.id,
     })
