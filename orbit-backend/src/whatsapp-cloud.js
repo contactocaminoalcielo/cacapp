@@ -41,8 +41,12 @@ export async function listarConversaciones({ q = null } = {}) {
     `SELECT v.contacto, v.nombre, v.nombre_perfil, v.tipo_contacto, v.aliado_id, v.cliente_id,
             v.ultimo_mensaje_en, v.ultimo_entrante_en, v.ultimo_texto, v.ultima_direccion,
             v.sin_leer, v.ventana_abierta, v.ventana_hasta,
+            -- Se lee de la tabla y no de la vista: añadir una columna a la vista
+            -- obliga a recrearla entera, y esta no la necesita nadie más.
+            COALESCE(ct.agente_activo, true) AS agente_activo,
             COALESCE(e.etiquetas, '[]'::json) AS etiquetas
        FROM public.v_whatsapp_conversaciones v
+       LEFT JOIN public.whatsapp_contactos ct ON ct.contacto = v.contacto
        LEFT JOIN LATERAL (
          SELECT json_agg(json_build_object(
                   'clave', t.clave, 'nombre', t.nombre, 'grupo', t.grupo,
@@ -127,9 +131,15 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
 
   const [cab, msgs] = await Promise.all([
     pool.query(
-      `SELECT contacto, nombre, nombre_perfil, tipo_contacto, aliado_id, cliente_id,
-              ventana_abierta, ventana_hasta, ultimo_entrante_en
-         FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
+      `SELECT v.contacto, v.nombre, v.nombre_perfil, v.tipo_contacto, v.aliado_id, v.cliente_id,
+              v.ventana_abierta, v.ventana_hasta, v.ultimo_entrante_en,
+              COALESCE(ct.agente_activo, true) AS agente_activo,
+              ct.agente_cambiado_en,
+              TRIM(CONCAT_WS(' ', pe.nombre, pe.apellido)) AS agente_cambiado_por
+         FROM public.v_whatsapp_conversaciones v
+         LEFT JOIN public.whatsapp_contactos ct ON ct.contacto = v.contacto
+         LEFT JOIN public.personal pe ON pe.id = ct.agente_cambiado_por
+        WHERE v.contacto = $1`,
       [num]
     ),
     // Se piden los ÚLTIMOS `tope` (DESC + LIMIT) y se invierten en JS: con DESC
@@ -220,6 +230,30 @@ export async function acusarLectura({ phoneNumberId, contacto, waMessageId, escr
 }
 
 /** Marca la conversación como leída hasta ahora. */
+/**
+ * Enciende o apaga el agente en UNA conversación (migración 105).
+ *
+ * ⚠️ No caduca. Es a propósito —"de esta clínica me encargo yo" no dura doce
+ * horas—, pero significa que un apagado olvidado deja a esa clínica sin agente
+ * para siempre. Por eso la bandeja lo enseña también en la lista.
+ */
+export async function cambiarAgente({ contacto, activo, personalId = null }) {
+  const num = soloDigitos(contacto)
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { rows } = await pool.query(
+    `UPDATE public.whatsapp_contactos
+        SET agente_activo = $2, agente_cambiado_por = $3, agente_cambiado_en = now()
+      WHERE contacto = $1
+      RETURNING agente_activo`,
+    [num, activo === true, personalId]
+  )
+  if (!rows.length) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
+
+  log(MOD, `${num}: agente ${rows[0].agente_activo ? 'ENCENDIDO' : 'APAGADO'}`)
+  return { status: 200, body: { ok: true, agente_activo: rows[0].agente_activo } }
+}
+
 export async function marcarLeido({ contacto }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }

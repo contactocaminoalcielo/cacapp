@@ -26,6 +26,19 @@ export function enviarMensaje(contacto, texto) {
   })
 }
 
+/**
+ * Encender o apagar el agente en ESTA conversación (migración 105).
+ *
+ * Manda sobre las reglas automáticas —12 h si escribe una persona, 10 min tras
+ * una plantilla— porque "de esta clínica me encargo yo" no dura doce horas.
+ * ⚠️ No caduca: apagado se queda apagado hasta que alguien lo encienda.
+ */
+export function cambiarAgente(contacto, activo) {
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/agente`, {
+    method: 'POST', body: { activo },
+  })
+}
+
 // ── Etiquetas (migración 090) ────────────────────────────────────────────────
 // Son las listas de trabajo de la bandeja. Las pone el agente al clasificar y
 // el coordinador a mano; quitarlas es cómo se cierra una novedad.

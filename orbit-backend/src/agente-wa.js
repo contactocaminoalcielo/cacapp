@@ -1283,6 +1283,13 @@ function esReintentable(error) {
  * Meta, o sea la veterinaria a la que le enviamos. Por eso casa con `contacto`.
  */
 async function laLlevaUnHumano(contacto) {
+  // El interruptor manual (migración 105) manda sobre todo lo demás: si alguien
+  // dijo "de esta me encargo yo", no hay regla automática que valga.
+  const { rows: [c] } = await pool.query(
+    `SELECT agente_activo FROM public.whatsapp_contactos WHERE contacto = $1`, [contacto]
+  )
+  if (c && c.agente_activo === false) return 'el agente está apagado en esta conversación'
+
   // ⚠️ Un ENVÍO MASIVO no es una persona atendiendo esta conversación.
   //
   // Lleva `enviado_por` porque alguien lanzó la campaña, y es verdad — pero es

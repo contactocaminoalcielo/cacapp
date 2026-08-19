@@ -25,7 +25,7 @@ import { analizarCuadre } from './cuadres-ia.js'
 import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
 import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
-  listarEtiquetas, etiquetar, desetiquetar,
+  listarEtiquetas, etiquetar, desetiquetar, cambiarAgente,
 } from './whatsapp-cloud.js'
 import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
@@ -211,6 +211,18 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, r
     log('[wa-bandeja/desetiquetar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+// Encender o apagar el agente en UNA conversación (migración 105). Manda sobre
+// las reglas automáticas: "de esta clínica me encargo yo" no dura doce horas.
+app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await cambiarAgente({
+      contacto: req.params.contacto, activo: req.body?.activo === true,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-bandeja/agente', e) }
 })
 
 // ── Plantillas de WhatsApp ──

@@ -16,7 +16,7 @@ import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
-  listarConversaciones, abrirHilo, marcarLeido, enviarMensaje,
+  listarConversaciones, abrirHilo, marcarLeido, enviarMensaje, cambiarAgente,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
   bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
@@ -24,6 +24,7 @@ import {
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
+  Bot, BotOff,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -266,7 +267,15 @@ export default function Whatsapp() {
                               onVolver={() => { setActivo(null); setHilo(null) }}
                               etiquetas={convs.find(c => c.contacto === activo)?.etiquetas || []}
                               catalogo={catalogo}
-                              onAlternar={(clave, puesta) => alternarEtiqueta(activo, clave, puesta)} />
+                              onAlternar={(clave, puesta) => alternarEtiqueta(activo, clave, puesta)}
+                              onAgente={async (encender) => {
+                                await cambiarAgente(activo, encender)
+                                // Se recarga hilo y lista: el estado se pinta en
+                                // los dos sitios y verlos discrepar da la
+                                // sensación de que no se guardó.
+                                setHilo(h => h ? { ...h, contacto: { ...h.contacto, agente_activo: encender } } : h)
+                                cargarLista({ silencioso: true })
+                              }} />
 
                 <div ref={scrollRef} onScroll={onScroll}
                      className="flex-1 overflow-y-auto px-4 py-4 space-y-1"
@@ -419,8 +428,14 @@ function ItemConversacion({ c, activo, onClick }) {
 
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline justify-between gap-2">
-            <span className={`text-[13px] truncate ${noLeidos ? 'font-bold text-[#0B1D4F]' : 'font-semibold text-gray-700'}`}>
-              {c.nombre || formatearNumero(c.contacto)}
+            <span className={`text-[13px] truncate flex items-center gap-1 ${noLeidos ? 'font-bold text-[#0B1D4F]' : 'font-semibold text-gray-700'}`}>
+              {/* Un apagado que solo se ve al abrir la conversación es un
+                  apagado que se olvida, y esa clínica se queda sin agente. */}
+              {c.agente_activo === false && (
+                <BotOff size={12} className="text-amber-600 flex-shrink-0"
+                        title="El agente está apagado en esta conversación" />
+              )}
+              <span className="truncate">{c.nombre || formatearNumero(c.contacto)}</span>
             </span>
             <span className="text-[10.5px] text-gray-400 flex-shrink-0">
               {haceCuanto(c.ultimo_mensaje_en)}
@@ -459,10 +474,19 @@ function ItemConversacion({ c, activo, onClick }) {
   )
 }
 
-function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar }) {
+function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar, onAgente }) {
   const esAliado = conv?.tipo_contacto === 'ALIADO'
   const [eligiendo, setEligiendo] = useState(false)
+  const [cambiando, setCambiando] = useState(false)
   const puestas = new Set(etiquetas.map(e => e.clave))
+  // Sin dato todavía = encendido: es el valor por defecto en la base, y pintar
+  // "apagado" mientras carga asustaría sin motivo.
+  const agenteOn = conv?.agente_activo !== false
+
+  async function alternarAgente() {
+    setCambiando(true)
+    try { await onAgente(!agenteOn) } finally { setCambiando(false) }
+  }
 
   return (
     <div className="px-3 py-2.5 border-b border-gray-200 bg-white">
@@ -493,6 +517,23 @@ function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], cata
             <Clock size={11} /> {restante}
           </span>
         )}
+
+        {/* El interruptor del agente. Va en la cabecera y no en un menú: si
+            está apagado, hay que verlo sin buscarlo — una conversación que
+            nadie sabe que quedó a cargo de una persona es una sin atender. */}
+        <button onClick={alternarAgente} disabled={cambiando}
+                title={agenteOn
+                  ? 'El agente responde en esta conversación. Tócalo para apagarlo y atenderla tú.'
+                  : `Apagado${conv?.agente_cambiado_por ? ` por ${conv.agente_cambiado_por}` : ''}. Tócalo para que el agente vuelva a responder.`}
+                className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10.5px] font-bold
+                            border transition flex-shrink-0 cursor-pointer disabled:opacity-50
+                            ${agenteOn
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}>
+          {cambiando ? <Loader2 size={11} className="animate-spin" />
+            : agenteOn ? <Bot size={11} /> : <BotOff size={11} />}
+          <span className="hidden sm:inline">{agenteOn ? 'Agente activo' : 'Agente apagado'}</span>
+        </button>
       </div>
 
       {/* Quitar la etiqueta es cómo se cierra una novedad: la conversación sale
