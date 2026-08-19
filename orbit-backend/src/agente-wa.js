@@ -717,6 +717,22 @@ async function construirSistema(agente) {
       + 'La veterinaria suele escribir en varios mensajes cortos seguidos. Te llegan '
       + 'todos juntos: léelos como un solo mensaje y responde UNA vez a todo, no una '
       + 'vez por línea.\n\n'
+      // Va aquí, en el bloque del motor, y no en el contexto editable: sin una
+      // línea que lo pida, el modelo dejó de usar la herramienta —12 respuestas
+      // seguidas sin una sola etiqueta— y nadie se enteró, porque no etiquetar no
+      // se le nota a la veterinaria. Es la herramienta más fácil de olvidar
+      // precisamente porque no produce nada que ella vea.
+      + 'CLASIFICA SIEMPRE. Antes de dar por terminada tu respuesta, usa '
+      + '`clasificar_conversacion` con la etiqueta que mejor describa lo que esta '
+      + 'conversación necesita. No es opcional ni es solo para cuando escalas: la '
+      + 'etiqueta es LO ÚNICO que hace que coordinación vea esta conversación en su '
+      + 'tablero, y sin ella, para el equipo, esto no ha pasado. A la veterinaria no '
+      + 'le llega nada por etiquetar, así que no la anuncies ni la menciones — y como '
+      + 'no le llega nada, tampoco tienes excusa para saltártela.\n\n'
+      + 'Pídela JUNTO con las demás herramientas, en la misma respuesta. Una vez por '
+      + 'asunto basta: si ya pusiste esa misma etiqueta antes en esta conversación no '
+      + 'la repitas, pero si el tema cambia —pedían precios y ahora reclaman por una '
+      + 'entrega— pon la nueva.\n\n'
       + 'FOTOS. Si te adjuntan una imagen, la estás viendo de verdad: comenta lo que '
       + 'ves y sigue la conversación con naturalidad. Si en cambio lees "[imagen]", '
       + '"[audio]", "[documento]" o similar SIN que venga el archivo, eso es algo que '

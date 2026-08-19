@@ -82,10 +82,13 @@ COMMENT ON TABLE public.whatsapp_campana_destinos IS
 -- Reutiliza las etiquetas de conversación (migración 090) en vez de inventar
 -- otra lista: la etiqueta se pone desde la bandeja, donde está quien recibe el
 -- "no me escriban más".
-INSERT INTO public.whatsapp_etiquetas (clave, nombre, grupo, color, descripcion, orden)
+-- `solo_sistema` la saca del enum que ve el AGENTE: es una decisión de la
+-- clínica que registra una persona, no algo que el modelo deba marcar por su
+-- cuenta. La bandeja sí la ofrece (lista todas las activas).
+INSERT INTO public.whatsapp_etiquetas (clave, nombre, grupo, color, descripcion, orden, solo_sistema)
 VALUES ('NO_MASIVOS', 'No enviar masivos', 'OTRO', '#DC2626',
         'Pidió no recibir avisos masivos. Las campañas la saltan siempre. No afecta a los mensajes de su propio servicio.',
-        90)
+        90, true)
 ON CONFLICT (clave) DO NOTHING;
 
 -- ── El número como lo quiere Meta, también desde SQL ────────────────────────
