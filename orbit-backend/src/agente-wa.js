@@ -1266,10 +1266,24 @@ function esReintentable(error) {
  * Meta, o sea la veterinaria a la que le enviamos. Por eso casa con `contacto`.
  */
 async function laLlevaUnHumano(contacto) {
+  // ⚠️ Un ENVÍO MASIVO no es una persona atendiendo esta conversación.
+  //
+  // Lleva `enviado_por` porque alguien lanzó la campaña, y es verdad — pero es
+  // un aviso a 200 clínicas, no una voz metida en este chat concreto. Sin esta
+  // excepción, una campaña dejaría al agente MUDO durante 12 horas en las 200
+  // conversaciones a la vez, justo cuando más van a escribir: el texto del
+  // aviso suele ser, literalmente, "escríbanos por esta línea".
+  //
+  // Se distingue por el `wamid`, que la campaña guarda en sus destinos: no hace
+  // falta una marca nueva en la tabla de mensajes, y el rastro de quién lanzó
+  // el envío se conserva intacto.
   const { rowCount: enOrbit } = await pool.query(
-    `SELECT 1 FROM public.whatsapp_mensajes
-      WHERE contacto = $1 AND direccion = 'OUT' AND enviado_por IS NOT NULL
-        AND ocurrido_en > now() - ($2 || ' hours')::interval
+    `SELECT 1 FROM public.whatsapp_mensajes m
+      WHERE m.contacto = $1 AND m.direccion = 'OUT' AND m.enviado_por IS NOT NULL
+        AND m.ocurrido_en > now() - ($2 || ' hours')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM public.whatsapp_campana_destinos d
+           WHERE d.wa_message_id = m.wa_message_id)
       LIMIT 1`,
     [contacto, PAUSA_TRAS_HUMANO_HORAS]
   )
