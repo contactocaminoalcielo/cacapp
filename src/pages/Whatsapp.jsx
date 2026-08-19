@@ -598,20 +598,27 @@ function Mensajes({ mensajes }) {
 }
 
 /**
- * El archivo que mandaron: la foto se ve, lo demás se descarga.
+ * El archivo que mandaron: la foto se ve, el audio SE OYE, lo demás se descarga.
  *
- * Se baja con fetch y no con `<img src>` porque el endpoint exige sesión y rol
- * (son fotos de conversaciones con clínicas y familias, no van por una URL
- * pública). El object URL se libera al desmontar: sin eso, abrir varios hilos
- * con fotos deja la memoria del navegador llena.
+ * El audio se reproduce aquí mismo y no se descarga por una razón práctica: una
+ * nota de voz es lo que más rápido se despacha —se oye y se sigue— y bajar un
+ * fichero para oír diez segundos rompe ese ritmo. Vale para las que llegan y
+ * para las que uno manda, que es como se comprueba que salió bien.
+ *
+ * Se baja con fetch y no con `<img src>` / `<audio src>` porque el endpoint
+ * exige sesión y rol (son conversaciones con clínicas y familias, no van por una
+ * URL pública). El object URL se libera al desmontar: sin eso, abrir varios
+ * hilos con archivos deja la memoria del navegador llena.
  */
 function Adjunto({ m, mio }) {
   const [url, setUrl] = useState(null)
   const [fallo, setFallo] = useState(m.archivo_error || null)
   const imagen = esImagen(m.archivo_mime)
+  const audio = claseArchivo(m.archivo_mime) === 'audio'
+  const enLinea = imagen || audio
 
   useEffect(() => {
-    if (!m.tiene_archivo || !imagen) return
+    if (!m.tiene_archivo || !enLinea) return
     let vivo = true
     let creada = null
     bajarAdjunto(m.id)
@@ -622,7 +629,7 @@ function Adjunto({ m, mio }) {
       })
       .catch(e => { if (vivo) setFallo(e.message) })
     return () => { vivo = false; if (creada) URL.revokeObjectURL(creada) }
-  }, [m.id, m.tiene_archivo, imagen])
+  }, [m.id, m.tiene_archivo, enLinea])
 
   async function descargar() {
     try {
@@ -650,6 +657,14 @@ function Adjunto({ m, mio }) {
              onClick={() => window.open(url, '_blank')}
              className="rounded-xl mb-1.5 max-h-72 w-auto cursor-zoom-in object-contain" />
       : <div className="rounded-xl mb-1.5 h-32 w-44 bg-black/5 animate-pulse" />
+  }
+
+  if (audio) {
+    // El reproductor del navegador ya trae descargar en su menú, así que no
+    // hace falta un botón aparte para lo mismo.
+    return url
+      ? <audio src={url} controls preload="metadata" className="mb-1.5 h-9 w-56 max-w-full" />
+      : <div className="rounded-full mb-1.5 h-9 w-56 max-w-full bg-black/5 animate-pulse" />
   }
 
   return (
