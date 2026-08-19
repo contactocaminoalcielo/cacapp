@@ -157,10 +157,12 @@ export const ESTADO_ENVIO = {
 // backend: si aquí dice menos, la pantalla rechaza algo que el servidor acepta.
 export const TOPES_ARCHIVO = { imagen: 5, audio: 16, video: 16, documento: 64 }
 
-export function enviarArchivo({ contacto, base64, mime, nombre, pie }) {
+export function enviarArchivo({ contacto, base64, mime, nombre, pie, notaDeVoz = false }) {
   return orbitApi('/whatsapp/archivo', {
     method: 'POST',
-    body: { contacto, base64, mime, nombre, pie },
+    // `notaDeVoz` no se deduce del MIME: un mp3 adjunto y una grabacion del
+    // microfono pueden llegar igual y NO se ven igual del otro lado.
+    body: { contacto, base64, mime, nombre, pie, notaDeVoz },
   })
 }
 
@@ -174,22 +176,23 @@ export function claseArchivo(mime = '') {
 }
 
 /**
- * Grabar una nota de voz — en un formato que WhatsApp acepte.
+ * Grabar una nota de voz.
  *
- * Aquí está toda la dificultad del asunto. Chrome graba en `audio/webm;codecs=opus`
- * por defecto y **WhatsApp NO lo admite**: llegaría como un archivo adjunto que
- * la clínica tiene que descargar, no como una nota de voz que se toca y suena.
+ * 🩸 Una nota de voz DE VERDAD —icono de micrófono, descarga automática,
+ * transcripción— exige `.ogg` con códec OPUS. Cualquier otro formato llega como
+ * un archivo de audio con icono de nota musical, que hay que descargar. Lo dice
+ * Meta y se comprobó: durante un rato se mandó `audio/mp4` y era justo eso.
  *
- * La lista va en orden de preferencia y solo con lo que Meta acepta de verdad:
- *   · `audio/mp4` (AAC)   — lo que graba Chrome y Safari. Comprobado en el
- *                           Chrome 151 de David el 2026-08-19.
- *   · `audio/ogg;codecs=opus` — lo que graba Firefox. Meta admite ogg SOLO con
- *                           opus; el ogg "a secas" lo rechaza.
- *
- * Si el navegador no puede con ninguno se devuelve null y la pantalla lo dice,
- * en vez de grabar algo que va a rebotar después de que la persona ya habló.
+ * Chrome NO sabe grabar ogg, pero sí graba `webm` con codecs=opus — y el códec
+ * ya es el bueno. Por eso la lista busca OPUS primero, del envase que sea: el
+ * servidor solo tiene que cambiar la caja (`-c:a copy`, instantáneo y sin
+ * pérdida). `audio/mp4` queda de último recurso, y ese sí obliga a recodificar.
  */
-const FORMATOS_GRABACION = ['audio/mp4', 'audio/ogg;codecs=opus']
+const FORMATOS_GRABACION = [
+  'audio/webm;codecs=opus',   // Chrome, Edge
+  'audio/ogg;codecs=opus',    // Firefox — ya llega listo
+  'audio/mp4',                // Safari viejo: hay que recodificar en el servidor
+]
 
 export function formatoGrabacion() {
   if (typeof MediaRecorder === 'undefined') return null

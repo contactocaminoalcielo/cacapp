@@ -12,6 +12,10 @@
 // Se baja en el momento de recibir el mensaje. No hay segunda oportunidad
 // cómoda: Meta conserva el archivo unos días y la URL, minutos.
 import { pool, log } from './db.js'
+import { execFile } from 'node:child_process'
+import { writeFile, readFile, unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const MOD = '[wa-media]'
 const GRAPH = 'https://graph.facebook.com'
@@ -346,8 +350,62 @@ export function claseDeArchivo(mime) {
  * eso el hilo mostraría un mensaje vacío donde se mandó algo, y el coordinador
  * no sabría qué envió.
  */
+/**
+ * Deja el audio como una NOTA DE VOZ de verdad: `.ogg` con códec Opus.
+ *
+ * 🩸 Sin esto la nota de voz no es una nota de voz. Meta lo dice sin rodeos: una
+ * nota de voz —icono de micrófono, descarga automática, transcripción— exige
+ * `.ogg` con OPUS **y** mandar `voice: true`. Cualquier otro formato llega como
+ * un archivo de audio con icono de nota musical, que la clínica tiene que
+ * descargar. Se envió `audio/mp4` durante un rato y era justo eso.
+ *
+ * El problema es que **Chrome no sabe grabar ogg**: graba `audio/webm` con
+ * codecs=opus. Pero el códec ya es el bueno — lo único que sobra es el envase.
+ * Así que esto no recodifica: `-c:a copy` cambia webm por ogg moviendo los
+ * mismos paquetes Opus. Es instantáneo y no pierde un solo bit.
+ *
+ * Solo si lo que llega NO es Opus (un mp4/AAC de un navegador que no pueda con
+ * lo otro) hay que recodificar de verdad, y ahí sí se nota en el tiempo.
+ */
+async function aNotaDeVoz(buf, mime) {
+  const yaEsOpus = /webm|ogg/.test(mime)
+  const sello = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const entrada = join(tmpdir(), `voz-${sello}.in`)
+  const salida  = join(tmpdir(), `voz-${sello}.ogg`)
+
+  // Por archivo y no por tubería: el demuxer de WebM necesita saltar dentro del
+  // fichero y con `pipe:0` falla de formas que no dicen qué pasó.
+  try {
+    await writeFile(entrada, buf)
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', entrada,
+      '-vn',
+      ...(yaEsOpus
+        ? ['-c:a', 'copy']
+        // Mono y 32 kbps: es voz, y es lo que manda WhatsApp. Más es peso que
+        // nadie oye.
+        : ['-c:a', 'libopus', '-b:a', '32k', '-ac', '1']),
+      '-f', 'ogg', salida,
+    ]
+    await new Promise((resolver, rechazar) => {
+      execFile('ffmpeg', args, { timeout: 30_000 }, (err, _out, stderr) =>
+        err ? rechazar(new Error(String(stderr || err.message).slice(0, 300))) : resolver())
+    })
+    return { buf: await readFile(salida) }
+  } catch (e) {
+    return { error: e.message }
+  } finally {
+    unlink(entrada).catch(() => {})
+    unlink(salida).catch(() => {})
+  }
+}
+
 export async function enviarArchivo({
   contacto, base64, mime, nombre = 'archivo', pie = '', personalId = null, enviarSobre,
+  // Lo graba la bandeja apretando el micrófono. Cambia el formato Y cómo se
+  // ve del otro lado, así que no se adivina por el MIME: se dice.
+  notaDeVoz = false,
 }) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
@@ -357,16 +415,36 @@ export async function enviarArchivo({
   // se rechaza — el códec ya va dentro del archivo, no hace falta anunciarlo.
   mime = String(mime || '').split(';')[0].trim()
 
+  let buf
+  try { buf = Buffer.from(String(base64 || ''), 'base64') }
+  catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
+  if (!buf.length) return { status: 400, body: { ok: false, error: 'El archivo llegó vacío' } }
+
+  // ⚠️ ESTO VA ANTES DE CLASIFICAR, y el orden no es un detalle: lo que graba
+  // Chrome es `audio/webm`, y para `claseDeArchivo` eso NO es audio — cae en
+  // "documento". Clasificar antes de convertir mandaría la nota de voz como un
+  // fichero adjunto, que es justo lo que se viene a evitar.
+  //
+  // Y va antes de subir nada: si falla, no se ha gastado una llamada a Meta.
+  if (notaDeVoz) {
+    const r = await aNotaDeVoz(buf, mime)
+    if (r.error) {
+      log(MOD, 'no se pudo convertir la nota de voz —', r.error)
+      return {
+        status: 500,
+        body: { ok: false, error: 'No se pudo preparar la nota de voz. Vuelve a intentarlo o mándala como archivo.' },
+      }
+    }
+    buf = r.buf
+    mime = 'audio/ogg'
+    nombre = nombre.replace(/\.[^.]+$/, '') + '.ogg'
+  }
+
   const clase = claseDeArchivo(mime)
   const regla = CLASES[clase]
   if (regla.mimes && !regla.mimes.some(x => String(mime).toLowerCase().startsWith(x))) {
     return { status: 400, body: { ok: false, error: `WhatsApp no admite ese formato de ${regla.etiqueta}` } }
   }
-
-  let buf
-  try { buf = Buffer.from(String(base64 || ''), 'base64') }
-  catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
-  if (!buf.length) return { status: 400, body: { ok: false, error: 'El archivo llegó vacío' } }
   if (buf.length > regla.max) {
     return {
       status: 400,
@@ -431,6 +509,9 @@ export async function enviarArchivo({
   const admitePie = clase !== 'audio'
   const contenido = {
     id: mediaId,
+    // Lo que convierte un audio en NOTA DE VOZ del lado de la clínica: sin este
+    // campo llega con icono de nota musical y hay que descargarlo.
+    ...(notaDeVoz ? { voice: true } : {}),
     ...(admitePie && pieCorto ? { caption: pieCorto } : {}),
     // El nombre solo viaja en documento, y es lo que la clínica ve: sin él
     // WhatsApp muestra un archivo sin título que nadie sabe qué es.
@@ -440,7 +521,8 @@ export async function enviarArchivo({
   const r = await enviarSobre({
     contacto: num,
     payload: { type: clase, [clase]: contenido },
-    texto: pieCorto || (clase === 'document' ? `[documento] ${nombre}` : `[${regla.etiqueta}]`),
+    texto: pieCorto || (clase === 'document' ? `[documento] ${nombre}`
+      : notaDeVoz ? '[nota de voz]' : `[${regla.etiqueta}]`),
     tipo: clase,
     personalId,
   })

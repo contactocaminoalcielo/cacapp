@@ -452,6 +452,7 @@ async function rutaArchivo(req, res) {
     const r = await enviarArchivo({
       contacto: req.body?.contacto, base64: req.body?.base64, mime: req.body?.mime,
       nombre: req.body?.nombre, pie: req.body?.pie,
+      notaDeVoz: req.body?.notaDeVoz === true,
       personalId: req.personal.id, enviarSobre,
     })
     res.status(r.status).json(r.body)

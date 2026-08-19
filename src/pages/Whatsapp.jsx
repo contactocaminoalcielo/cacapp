@@ -764,11 +764,13 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
         setGrabando(false)
         if (rec.cancelada) return
         const blob = new Blob(trozosRef.current, { type: formato })
-        // `.m4a` y `.ogg` son las extensiones que hacen que WhatsApp lo muestre
-        // como nota de voz y no como un adjunto sin nombre.
-        const ext = formato.startsWith('audio/mp4') ? 'm4a' : 'ogg'
-        await tomarArchivo(new File([blob], `nota-de-voz-${duracionAudio(dur).replace(':', 'm')}s.${ext}`,
-                                    { type: formato }))
+        // El nombre y la extensión los arregla el servidor al reenvasar: aquí
+        // sale lo que el navegador sepa grabar, y lo que llega a la clínica es
+        // siempre un .ogg.
+        const archivo = new File([blob], `nota-de-voz-${duracionAudio(dur).replace(':', 'm')}s`,
+                                 { type: formato })
+        archivo.esNotaDeVoz = true
+        await tomarArchivo(archivo)
       }
       grabadoraRef.current = rec
       rec.start()
@@ -799,6 +801,9 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     try {
       // Las fotos se reducen ANTES de tocar la red; lo demás viaja tal cual.
       const listo = await prepararArchivo(file)
+      // Lo graba el micrófono, no lo elige el selector de archivos: de ahí sale
+      // el `voice: true` que hace que llegue como nota de voz.
+      if (file.esNotaDeVoz) { listo.notaDeVoz = true; listo.clase = 'audio' }
       const tope = TOPES_ARCHIVO[listo.clase]
       // Se avisa aquí y no después de subir 15 MB por una red móvil.
       if (listo.bytes > tope * 1048576) {
@@ -813,7 +818,8 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     if (!foto || subiendo) return
     setSubiendo(true); setErrorFoto(null)
     try {
-      await enviarArchivo({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre, pie: texto.trim() })
+      await enviarArchivo({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre,
+                            pie: texto.trim(), notaDeVoz: !!foto.notaDeVoz })
       setFoto(null)
       setTexto('')
       onEnviada?.()
