@@ -100,11 +100,20 @@ export function vaciosDeConocimiento(ejecuciones = []) {
       })))
 }
 
-/** Lee un File del navegador como base64 sin el prefijo `data:`. */
+/**
+ * Lee un File del navegador como base64 sin el prefijo `data:`.
+ *
+ * Se corta por la PRIMERA coma y no con un patron sobre la cabecera: un MIME
+ * con parametros (`audio/webm;codecs=opus`) hace que el patron no case, no
+ * recorte nada, y el archivo viaje con la cabecera pegada. Node lo decodifica
+ * sin quejarse y devuelve basura, asi que el fallo sale tres capas mas abajo.
+ * Aqui todavia no ha pasado —los ficheros del selector no traen parametros—
+ * pero es la misma trampa que rompio las notas de voz.
+ */
 export function leerBase64(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader()
-    fr.onload  = () => resolve(String(fr.result).replace(/^data:[^;]+;base64,/, ''))
+    fr.onload  = () => { const t = String(fr.result); resolve(t.slice(t.indexOf(',') + 1)) }
     fr.onerror = () => reject(new Error('No se pudo leer el archivo'))
     fr.readAsDataURL(file)
   })
