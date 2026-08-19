@@ -25,7 +25,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, History,
+  ImageUp, History, PawPrint,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import ResumenEntrega from '@/components/servicio/ResumenEntrega'
@@ -235,6 +235,14 @@ function SortIcon({ field, sortField, sortDir }) {
     ? <ChevronUp size={11} className="text-gray-600" />
     : <ChevronDown size={11} className="text-gray-600" />
 }
+
+// Fotos de la huella para el 3D, en el orden en que las pide la planta
+// (mismos slots que `slotsEvidenciaInicio` en la Jornada de Tenjo).
+const HUELLA_SLOTS = [
+  { key: 'huella_frontal', nombre: 'Huella frontal' },
+  { key: 'huella_lateral', nombre: 'Huella de lado' },
+  { key: 'huella_medidas', nombre: 'Huella con medidas' },
+]
 
 function EvidenciasColapsable({ fotos }) {
   const [open, setOpen] = useState(false)
@@ -466,6 +474,7 @@ export default function Kanban() {
   const [detalle, setDetalle]             = useState(null)
   const [recordatorios, setRecordatorios] = useState([])
   const [descargandoTodas, setDescargandoTodas] = useState(false)
+  const [descargandoHuellas, setDescargandoHuellas] = useState(false)
   // Reemplazo de una foto del cliente por una de mejor calidad (migración 058)
   const [reemplazoFoto, setReemplazoFoto] = useState(null)
   const [histFotos, setHistFotos]         = useState(false)
@@ -1191,7 +1200,7 @@ export default function Kanban() {
         .catch(() => {})
     }
 
-    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }] = await Promise.all([
+    const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }, { data: tenjoItems }] = await Promise.all([
       db.from('servicios')
         .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, ${COLS_CONSISTENCIA_COMISION}`)
         .eq('id', s.servicio_id).maybeSingle(),
@@ -1213,9 +1222,15 @@ export default function Kanban() {
       db.from('solicitud_imagenes_contactos')
         .select('numero, estado')
         .eq('servicio_id', s.servicio_id),
+      // Evidencias etiquetadas que carga la planta al iniciar el proceso
+      // (migración 051): de ahí salen las 3 fotos de la huella para el 3D.
+      db.from('lotes_tenjo_items')
+        .select('id, evidencia_inicio, fecha_inicio_proceso')
+        .eq('servicio_id', s.servicio_id)
+        .order('fecha_inicio_proceso', { ascending: false }),
     ])
 
-    setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf, contactos: cts || [] })
+    setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf, contactos: cts || [], tenjoItems: tenjoItems || [] })
     setRecordatorios(recs || [])
     setNovedades(novs || [])
     setNuevoComentario('')
@@ -2053,6 +2068,29 @@ export default function Kanban() {
         : r.imagen_cliente_url ? [r.imagen_cliente_url] : []
       return urls.map((url, i) => ({ url, nombre: r.recordatorios?.nombre || 'Foto', idx: i, total: urls.length, recId: r.id }))
     })
+
+  // ── Huellas 3D tomadas en la planta (Tenjo) ──────────────────────────────
+  // El operario las sube al INICIAR el proceso, etiquetadas en
+  // `lotes_tenjo_items.evidencia_inicio` (migración 051). Hasta ahora solo se
+  // veían dentro del checklist de la jornada; producción las necesita aquí.
+  // Un servicio puede tener más de un item Tenjo (reprogramaciones): gana el
+  // más reciente que tenga esa foto — los items vienen ordenados desc.
+  const huellas3D = HUELLA_SLOTS
+    .map(({ key, nombre }) => {
+      const item = (detalle?.tenjoItems || []).find(it => it?.evidencia_inicio?.[key])
+      return item ? { url: item.evidencia_inicio[key], nombre } : null
+    })
+    .filter(Boolean)
+
+  async function descargarTodasHuellas() {
+    if (descargandoHuellas || !huellas3D.length) return
+    setDescargandoHuellas(true)
+    for (const img of huellas3D) {
+      await descargarImagen(img.url, nombreArchivoImagen(selected?.mascota, img.nombre, 0, 1, img.url))
+      await new Promise(r => setTimeout(r, 350))   // separa las descargas para que el navegador no las bloquee
+    }
+    setDescargandoHuellas(false)
+  }
 
   // Refresca la galería sin recargar el servicio entero. Espeja la regla de la DB
   // (migración 058): imagen_cliente_url se recalcula desde el array — si aquí se
@@ -3042,6 +3080,56 @@ export default function Kanban() {
                       </div>
                       <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate leading-tight pointer-events-none" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
                         {img.total > 1 ? `${img.nombre} ${img.idx + 1}` : img.nombre}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Huellas 3D tomadas en la planta (productor y admin) ── */}
+            {puedeVerImagenes && huellas3D.length > 0 && (
+              <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#99F6E4', background: '#F0FDFA' }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#0F766E' }}>
+                    <PawPrint size={12} /> Huellas 3D ({huellas3D.length}/{HUELLA_SLOTS.length})
+                  </div>
+                  <button
+                    onClick={descargarTodasHuellas}
+                    disabled={descargandoHuellas}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg text-white transition-opacity disabled:opacity-60 flex-shrink-0"
+                    style={{ background: '#0F766E' }}
+                    title="Descargar las fotos de la huella"
+                  >
+                    <Download size={11} /> {descargandoHuellas ? 'Descargando…' : 'Descargar todas'}
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {huellas3D.map((img, i) => (
+                    <div key={i}
+                      className="group relative rounded-lg overflow-hidden bg-teal-100"
+                      style={{ aspectRatio: '1/1' }}
+                      title={img.nombre}
+                    >
+                      <img src={img.url} alt={img.nombre} className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => window.open(img.url, '_blank', 'noopener')}
+                          title="Abrir"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
+                        >
+                          <Search size={13} className="text-gray-700" />
+                        </button>
+                        <button
+                          onClick={() => descargarImagen(img.url, nombreArchivoImagen(selected?.mascota, img.nombre, 0, 1, img.url))}
+                          title="Descargar"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 hover:bg-white flex items-center justify-center shadow"
+                        >
+                          <Download size={13} className="text-gray-700" />
+                        </button>
+                      </div>
+                      <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate leading-tight pointer-events-none" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
+                        {img.nombre}
                       </div>
                     </div>
                   ))}
