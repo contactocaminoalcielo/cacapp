@@ -113,7 +113,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
     const { rows: cod } = await client.query(
       `UPDATE public.servicios
        SET codigo_fotos = COALESCE(codigo_fotos, public.fn_gen_codigo_fotos()),
-           fecha_codigo_enviado = COALESCE(fecha_codigo_enviado, CURRENT_DATE)
+           fecha_codigo_enviado = COALESCE(fecha_codigo_enviado, public.fn_hoy_bogota())
        WHERE id = $1
        RETURNING codigo_fotos`,
       [sol.servicio_id]
@@ -388,7 +388,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Idempotencia: ya procesado → marcar solicitud RECIBIDO si existe y salir ok.
     if (s.fecha_imagenes_recibidas) {
       await client.query(
-        `UPDATE public.solicitudes_imagenes SET estado = 'RECIBIDO', fecha_recepcion = COALESCE(fecha_recepcion, CURRENT_DATE)
+        `UPDATE public.solicitudes_imagenes SET estado = 'RECIBIDO', fecha_recepcion = COALESCE(fecha_recepcion, public.fn_hoy_bogota())
          WHERE servicio_id = $1 AND estado IN ('POR_VALIDAR','ENVIADO','ERROR','SIN_RESPUESTA')`,
         [s.id]
       )
@@ -563,11 +563,16 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     }
 
     // Servicio: fecha_imagenes_recibidas + comentarios + anticipados (compostaje) + avance de estado
+    // La fecha se sella con fn_hoy_bogota(), NUNCA con now()/CURRENT_DATE: la base
+    // corre en UTC y la columna es DATE, así que todo lo que la familia subiera
+    // después de las 7 p.m. de Colombia quedaba con la fecha del día siguiente
+    // (~10 % de los casos medibles). De esa fecha cuelga la fecha límite de
+    // entrega (fn_calcular_fecha_entrega), o sea el compromiso con la familia.
     // "anticipados" solo aplica a compostaje INDIVIDUAL; en eco-grupal no se pregunta ni se guarda.
     const esCompostaje = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
     await client.query(
       `UPDATE public.servicios
-       SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, now()),
+       SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, public.fn_hoy_bogota()),
            comentarios_cliente = COALESCE($2, comentarios_cliente),
            recordatorios_anticipados = CASE WHEN $3 THEN $4 ELSE recordatorios_anticipados END,
            datos_entrega_cliente = COALESCE($5::jsonb, datos_entrega_cliente),
@@ -584,13 +589,13 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Solicitud → RECIBIDO (crea una si el cliente entró por enlace manual sin solicitud previa)
     if (solRows[0]) {
       await client.query(
-        `UPDATE public.solicitudes_imagenes SET estado = 'RECIBIDO', fecha_recepcion = CURRENT_DATE WHERE id = $1`,
+        `UPDATE public.solicitudes_imagenes SET estado = 'RECIBIDO', fecha_recepcion = public.fn_hoy_bogota() WHERE id = $1`,
         [solRows[0].id]
       )
     } else {
       await client.query(
         `INSERT INTO public.solicitudes_imagenes (servicio_id, estado, fecha_solicitud, fecha_recepcion, codigo, enlace)
-         VALUES ($1, 'RECIBIDO', CURRENT_DATE, CURRENT_DATE, $2, $3)`,
+         VALUES ($1, 'RECIBIDO', public.fn_hoy_bogota(), public.fn_hoy_bogota(), $2, $3)`,
         [s.id, cod, construirEnlace(cod)]
       )
     }
