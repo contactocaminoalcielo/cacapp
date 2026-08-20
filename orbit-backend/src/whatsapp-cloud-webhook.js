@@ -530,7 +530,10 @@ function textoDelEvento(payload, wamid) {
  */
 async function atenderLlamadaEntrante(ev, payload) {
   const { rows: [agente] } = await pool.query(
-    `SELECT id, clave, voz_id, voz_modelo, voz_activa
+    // Las MISMAS columnas que necesita el cerebro, no solo las de la voz: sin
+    // `instrucciones` el contexto sale vacío y Claude devuelve 400 ("text
+    // content blocks must be non-empty"), un error que no dice nada de agentes.
+    `SELECT id, clave, instrucciones, modelo, effort, voz_id, voz_modelo, voz_activa
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)`,
     [ev.phoneNumberId]
@@ -544,14 +547,14 @@ async function atenderLlamadaEntrante(ev, payload) {
   const sdpOffer = llamada?.session?.sdp
   if (!sdpOffer) return log(MOD, `llamada ${ev.waMessageId}: llegó sin oferta SDP`)
 
-  const { contestarConFrase } = await import('./llamadas.js')
-  await contestarConFrase({
+  // Conversación completa: saluda, escucha, piensa y contesta, en bucle. El
+  // hito de la frase fija (`contestarConFrase`) se queda en el módulo por si
+  // hay que volver a aislar el problema al tubo de audio.
+  const { conversar } = await import('./llamadas.js')
+  await conversar({
     phoneNumberId: ev.phoneNumberId,
     callId: ev.waMessageId,
     sdpOffer,
     agente,
-    // Fija a propósito en este primer hito: lo que se prueba es que el audio
-    // llegue, no lo que diga.
-    texto: 'Hola, le atiende Camino al Cielo. Esta es una prueba del sistema de voz. Gracias.',
   })
 }

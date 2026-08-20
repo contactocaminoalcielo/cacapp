@@ -44,6 +44,8 @@ import {
   listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
 import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
+import { turno as turnoDeVoz, rellenos as rellenosDeVoz } from './voz-conversacion.js'
+import { paginaDePrueba } from './voz-pagina.js'
 import {
   listarAudiencias, previsualizar, crearCampana, listarCampanas,
   detalleCampana, accionCampana, borrarCampana, arrancarCampanas,
@@ -223,6 +225,54 @@ app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, rolBandeja, a
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-bandeja/agente', e) }
+})
+
+// ── Banco de pruebas de voz ──
+// Herramienta temporal para afinar el bucle de conversación (oír → pensar →
+// hablar) sin encender el botón de llamar para 203 clínicas cada vez. NO es una
+// pantalla de Orbit: se protege con el token de trabajos, porque detrás hay un
+// micrófono y una llave de pago.
+const tokenVoz = (req) => {
+  const t = req.query?.t || req.headers['x-job-token']
+  return t && process.env.JOB_TOKEN && t === process.env.JOB_TOKEN
+}
+
+app.get('/voz/prueba', (req, res) => {
+  if (!tokenVoz(req)) return res.status(403).send('Sin token')
+  res.type('html').send(paginaDePrueba(req.query.t))
+})
+
+// Las muletillas, pregeneradas. La página las carga UNA vez al abrirse y las
+// suena al instante mientras el servidor trabaja.
+app.get('/voz/relleno', async (req, res) => {
+  if (!tokenVoz(req)) return res.status(403).json({ error: 'Sin token' })
+  try {
+    const { rows: [agente] } = await pool.query(
+      `SELECT voz_id, voz_modelo FROM public.agente_wa WHERE clave = 'VETERINARIAS' AND activo`
+    )
+    res.json({ frases: agente ? await rellenosDeVoz(agente) : [] })
+  } catch (e) { errorInterno(res, 'voz/relleno', e) }
+})
+
+app.post('/voz/turno', express.json({ limit: '25mb' }), async (req, res) => {
+  if (!tokenVoz(req)) return res.status(403).json({ error: 'Sin token' })
+  try {
+    const { rows: [agente] } = await pool.query(
+      `SELECT id, clave, modelo, instrucciones, voz_id, voz_modelo
+         FROM public.agente_wa WHERE clave = $1 AND activo`,
+      [req.body?.agente || 'VETERINARIAS']
+    )
+    if (!agente) return res.status(404).json({ error: 'No hay agente activo' })
+
+    const audio = Buffer.from(String(req.body?.audio || ''), 'base64')
+    if (!audio.length) return res.status(400).json({ error: 'No llegó audio' })
+
+    const r = await turnoDeVoz({
+      agente, audio,
+      historial: Array.isArray(req.body?.historial) ? req.body.historial.slice(-10) : [],
+    })
+    res.json(r)
+  } catch (e) { errorInterno(res, 'voz/turno', e) }
 })
 
 // ── Plantillas de WhatsApp ──

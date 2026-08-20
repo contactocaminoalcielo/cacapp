@@ -267,3 +267,207 @@ export async function contestarConFrase({ phoneNumberId, callId, sdpOffer, agent
     try { pc?.close() } catch { /* ya estaba cerrada */ }
   }
 }
+
+/**
+ * El oído de la llamada: escucha, decide cuándo terminaste de hablar y avisa.
+ *
+ * 🩸 ESTA ES LA PIEZA QUE HACE QUE UN AGENTE DE VOZ SE SIENTA HUMANO O
+ * INSOPORTABLE. No es reconocer la voz —de eso se encarga Whisper— sino algo
+ * más tonto y más difícil: distinguir una pausa para respirar de un "ya
+ * terminé, contéstame".
+ *
+ *   · Si corta pronto, interrumpe a media frase y la clínica se enfada.
+ *   · Si corta tarde, la conversación se arrastra y parece lento.
+ *
+ * Se hace sobre el audio ya descodificado, midiendo energía. Es lo mismo que
+ * hace la página de pruebas en el navegador, pero aquí lo hacemos nosotros
+ * porque en una llamada no hay navegador que nos avise.
+ */
+class Oido {
+  constructor({ alTerminarDeHablar, silencioMs = 800, umbral = 0.012 }) {
+    this.alTerminarDeHablar = alTerminarDeHablar
+    this.silencioMs = silencioMs
+    this.umbral = umbral
+    this.trozos = []
+    this.huboVoz = false
+    this.calladoDesde = null
+    this.sordo = false          // mientras el agente habla, no se escucha
+  }
+
+  /** Un trozo de PCM de 20 ms recién descodificado. */
+  alimentar(pcm) {
+    if (this.sordo) return
+
+    // Energía media (RMS). Con PCM de 16 bits, dividir entre 32768 deja el
+    // valor entre 0 y 1, que es la misma escala que usa la página de pruebas —
+    // así el umbral afinado allí sirve aquí.
+    let suma = 0
+    for (let i = 0; i + 1 < pcm.length; i += 2) {
+      const m = pcm.readInt16LE(i) / 32768
+      suma += m * m
+    }
+    const nivel = Math.sqrt(suma / (pcm.length / 2))
+
+    if (nivel > this.umbral) {
+      this.huboVoz = true
+      this.calladoDesde = null
+      this.trozos.push(pcm)
+      return
+    }
+
+    // El silencio también se guarda: recortarlo deja las palabras pegadas y
+    // Whisper transcribe peor.
+    if (this.huboVoz) {
+      this.trozos.push(pcm)
+      this.calladoDesde ??= Date.now()
+      if (Date.now() - this.calladoDesde > this.silencioMs) this.cerrarTurno()
+    }
+  }
+
+  cerrarTurno() {
+    const pcm = Buffer.concat(this.trozos)
+    this.trozos = []
+    this.huboVoz = false
+    this.calladoDesde = null
+    // Menos de medio segundo de audio no es una frase: es una tos, un golpe o
+    // el eco del propio agente. Contestar a eso es peor que ignorarlo.
+    if (pcm.length < 48000 * 2 * 0.5) return
+    this.sordo = true
+    this.alTerminarDeHablar(pcm)
+  }
+
+  volverAEscuchar() {
+    this.trozos = []
+    this.huboVoz = false
+    this.calladoDesde = null
+    this.sordo = false
+  }
+}
+
+/**
+ * Contesta la llamada y CONVERSA.
+ *
+ * El circuito es el mismo que ya funciona en la página de pruebas —oír, pensar,
+ * hablar— pero con el audio entrando y saliendo por la llamada.
+ *
+ * ⚠️ Mientras el agente habla se pone sordo a propósito. Sin eso se oye a sí
+ * mismo por el eco de la línea, cree que le están hablando y se responde solo —
+ * un bucle que llena la llamada de disparates. Dejar que la clínica lo
+ * interrumpa de verdad (barge-in) exige distinguir su eco de una voz nueva, y
+ * eso es un problema aparte que hay que resolver a conciencia.
+ */
+export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
+  const t0 = Date.now()
+  let pc = null, viva = true
+  const historial = []
+
+  try {
+    const { RTCPeerConnection, MediaStreamTrack, useOPUS } = await import('werift')
+    const Opus = (await import('opusscript')).default
+    const { turno, wavDePcm, rellenos } = await import('./voz-conversacion.js')
+
+    pc = new RTCPeerConnection({
+      codecs: { audio: [useOPUS()] },
+      icePortRange: PUERTOS,
+      ...(IP_PUBLICA ? { iceAdditionalHostAddresses: [IP_PUBLICA] } : {}),
+    })
+
+    const salida = new MediaStreamTrack({ kind: 'audio' })
+    pc.addTransceiver(salida, { direction: 'sendrecv' })
+
+    // ⚠️ La suscripción va ANTES de `setRemoteDescription`: el evento de la
+    // pista entrante salta DURANTE esa llamada. Engancharlo después es llegar
+    // tarde — la llamada se establece, el agente habla, y no oye nada nunca.
+    // Costó una llamada entera descubrirlo, porque desde fuera se ve idéntico
+    // a "la clínica no dijo nada".
+    let pistaEntrante = null
+    pc.ontrack = (ev) => { pistaEntrante = ev.track }
+
+    await pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer })
+    await pc.setLocalDescription(await pc.createAnswer())
+    await esperarCandidatos(pc)
+    const sdp = pc.localDescription.sdp
+    const tipoCarga = tipoDeCargaOpus(sdpOffer)
+
+    // Se prepara todo lo que se puede EN PARALELO con la negociación: el
+    // saludo y las muletillas son fijos y tardan lo suyo en sintetizarse.
+    const preparativos = Promise.all([
+      sintetizar({ agente, texto: 'Camino al Cielo, buenas. ¿En qué te puedo ayudar?' }),
+      rellenos(agente),
+    ])
+
+    const pre = await accionLlamada({ phoneNumberId, callId, accion: 'pre_accept', sdp })
+    if (pre.error) return log(MOD, `${callId}: pre_accept falló — ${pre.error}`)
+    const acc = await accionLlamada({ phoneNumberId, callId, accion: 'accept', sdp })
+    if (acc.error) return log(MOD, `${callId}: accept falló — ${acc.error}`)
+    log(MOD, `${callId}: conversación ACEPTADA (${Date.now() - t0} ms)`)
+
+    const [saludo, muletillas] = await preparativos
+    const decodificador = new Opus(48000, 1, Opus.Application.VOIP)
+    let iMuletilla = 0
+
+    const decir = async (audio) => {
+      oido.sordo = true
+      try {
+        await reproducir(salida, await aPaquetesOpus(audio), tipoCarga)
+      } finally {
+        // Un respiro antes de volver a escuchar: la cola del propio audio en la
+        // línea se tomaría por voz de la clínica.
+        setTimeout(() => oido.volverAEscuchar(), 250)
+      }
+    }
+
+    const oido = new Oido({
+      alTerminarDeHablar: async (pcm) => {
+        if (!viva) return
+        const t = Date.now()
+        // La muletilla suena YA, mientras se piensa. Es lo que convierte tres
+        // segundos de silencio en una conversación normal.
+        const m = muletillas[iMuletilla++ % (muletillas.length || 1)]
+        if (m) reproducir(salida, await aPaquetesOpus(Buffer.from(m.audio, 'base64')), tipoCarga)
+          .catch(() => {})
+
+        const r = await turno({ agente, wav: wavDePcm(pcm, 48000), historial })
+        if (!viva) return
+        if (r.error) {
+          log(MOD, `${callId}: turno falló — ${r.error}`)
+          return oido.volverAEscuchar()
+        }
+        historial.push({ role: 'user', content: r.transcripcion })
+        historial.push({ role: 'assistant', content: r.respuesta })
+        log(MOD, `${callId}: "${r.transcripcion.slice(0, 40)}" → "${r.respuesta.slice(0, 40)}"`
+          + ` (${Date.now() - t} ms)`)
+        await decir(Buffer.from(r.audio, 'base64'))
+      },
+    })
+
+    // El audio que entra: cada paquete RTP trae 20 ms de Opus.
+    const escuchar = (pista) => pista.onReceiveRtp.subscribe((rtp) => {
+      if (!viva || oido.sordo) return
+      try { oido.alimentar(Buffer.from(decodificador.decode(rtp.payload))) }
+      catch { /* un paquete perdido no debe tumbar la llamada */ }
+    })
+    if (pistaEntrante) escuchar(pistaEntrante)
+    else pc.ontrack = (ev) => escuchar(ev.track)   // por si llega más tarde
+    log(MOD, `${callId}: oyendo (pista ${pistaEntrante ? 'ya presente' : 'pendiente'})`)
+
+    if (!saludo.error) await decir(saludo.audio)
+    else oido.volverAEscuchar()
+
+    // La llamada vive hasta que cuelguen o hasta el tope. Sin tope, un teléfono
+    // olvidado descolgado deja esto corriendo (y gastando) para siempre.
+    await new Promise(fin => {
+      const tope = setTimeout(fin, 5 * 60_000)
+      pc.connectionStateChange.subscribe(estado => {
+        if (['closed', 'failed', 'disconnected'].includes(estado)) { clearTimeout(tope); fin() }
+      })
+    })
+  } catch (e) {
+    log(MOD, `${callId}: ERROR en la conversación — ${e.message}`)
+  } finally {
+    viva = false
+    await accionLlamada({ phoneNumberId, callId, accion: 'terminate' }).catch(() => {})
+    try { pc?.close() } catch { /* ya estaba cerrada */ }
+    log(MOD, `${callId}: llamada cerrada (${Math.round((Date.now() - t0) / 1000)} s)`)
+  }
+}

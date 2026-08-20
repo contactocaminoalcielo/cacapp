@@ -650,7 +650,7 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
  * Por eso mismo NADA volátil (fecha, nombre del contacto) puede entrar aquí:
  * cambiaría el prefijo y anularía la caché.
  */
-async function construirSistema(agente) {
+export async function construirSistema(agente) {
   const { rows: piezas } = await pool.query(
     `SELECT tipo, titulo, texto, archivo, mime
        FROM public.agente_wa_conocimiento
@@ -659,7 +659,13 @@ async function construirSistema(agente) {
     [agente.id]
   )
 
-  const bloques = [{ type: 'text', text: agente.instrucciones || '' }]
+  // Nunca un bloque vacío: la API los rechaza con un 400 que habla de
+  // "content blocks" y no menciona al agente por ningún lado. Si alguien trae
+  // una fila incompleta, que el agente responda regular — no que reviente.
+  const bloques = []
+  if (String(agente.instrucciones || '').trim()) {
+    bloques.push({ type: 'text', text: agente.instrucciones })
+  }
 
   // ── Reglas aprobadas (migración 099) ──
   // Salen de corregir respuestas concretas en el chat, pero NINGUNA llega aquí
