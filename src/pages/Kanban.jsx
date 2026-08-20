@@ -236,6 +236,29 @@ function SortIcon({ field, sortField, sortDir }) {
     : <ChevronDown size={11} className="text-gray-600" />
 }
 
+// ── De dónde sale la fecha límite ────────────────────────────────────────────
+// El reloj de diseño arranca cuando la FAMILIA MANDA LAS FOTOS, no cuando
+// ingresa la mascota (fn_calcular_fecha_entrega, migración 007):
+//   fecha_imagenes_recibidas + los días hábiles prometidos por el plan.
+// La tarjeta solo mostraba la fecha de ingreso junto al "Vencido Nd", y eso
+// hacía leer el vencimiento contra una fecha que no entra en el cálculo.
+const fmtDiaMes = d => parseDate(d)?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) || null
+
+function explicaLimite(s, diasPlan) {
+  if (!s?.fecha_limite_entrega) return undefined
+  const largo = d => parseDate(d)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })
+  const l = []
+  if (s.fecha_imagenes_recibidas) {
+    l.push(`Imágenes recibidas: ${largo(s.fecha_imagenes_recibidas)}`)
+    l.push(diasPlan != null
+      ? `+ ${diasPlan} días hábiles del plan ${s.plan}`
+      : `+ los días hábiles prometidos del plan ${s.plan}`)
+  }
+  l.push(`= entrega máxima ${largo(s.fecha_limite_entrega)}`)
+  l.push('No cuentan fines de semana ni festivos. La fecha de ingreso no entra en el cálculo.')
+  return l.join('\n')
+}
+
 // Fotos de la huella para el 3D, en el orden en que las pide la planta
 // (mismos slots que `slotsEvidenciaInicio` en la Jornada de Tenjo).
 const HUELLA_SLOTS = [
@@ -945,7 +968,7 @@ export default function Kanban() {
     cargar()
     cargarSolicitudes()
     Promise.all([
-      db.from('planes').select('id,nombre,codigo,tipo_proceso').order('nombre'),
+      db.from('planes').select('id,nombre,codigo,tipo_proceso,dias_entrega_prometidos').order('nombre'),
       db.from('especies').select('id,nombre').order('nombre'),
       db.from('aliados').select('id_aliado,nombre,direccion,ciudad,localidad,barrio,contacto_nombre,whatsapp,telefono,vip,modalidad_comision').eq('activo', true).order('nombre'),
       db.from('tarifas_transporte').select('ciudad,tarifa_moto,tarifa_camioneta').eq('activo', true).order('ciudad'),
@@ -1973,6 +1996,12 @@ export default function Kanban() {
   const planesUnicos = [...new Set(servicios.map(s => s.plan).filter(Boolean))].sort()
 
   // Recordatorios presentes en los servicios cargados (nombres desde recListOpts)
+  // Días hábiles que promete cada plan (8 los más, 20 el eco-grupal, 3 el Ángel):
+  // sin esto el tooltip no puede decir de dónde sale la fecha límite.
+  const diasPlanPorCodigo = {}
+  planesKanban.forEach(p => { if (p.dias_entrega_prometidos != null) diasPlanPorCodigo[p.codigo] = p.dias_entrega_prometidos })
+  const diasDelPlan = s => (s?.codigo_plan != null ? diasPlanPorCodigo[s.codigo_plan] : undefined) ?? null
+
   const recIdsEnTablero = new Set(servicios.flatMap(s => (s.items_rec || []).map(i => String(i.recordatorio_id))))
   const recOpcionesKanban = recListOpts.filter(r => recIdsEnTablero.has(String(r.id)))
 
@@ -2563,7 +2592,7 @@ export default function Kanban() {
                         const renderCard = s => {
                           const al  = alertLevel(s)
                           const pct = s.total_items > 0 ? Math.round((s.items_listos / s.total_items) * 100) : 0
-                          const tieneImagenes = s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO'
+                          const tieneImagenes = !!s.fecha_imagenes_recibidas
                           // Números registrados del cliente (WhatsApp + alternos), sin repetir
                           const telefonos = [...new Set(
                             [s.cliente_wa, s.cliente_telefono, s.cliente_telefono2]
@@ -2692,14 +2721,17 @@ export default function Kanban() {
                                 </div>
                               )}
                               {al && (
-                                <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
+                                  title={explicaLimite(s, diasDelPlan(s))}>
                                   <AlertTriangle size={9} />
                                   {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Vence hoy' : `${s.dias_para_vencer}d`}
+                                  {s.fecha_limite_entrega && ` · límite ${fmtDiaMes(s.fecha_limite_entrega)}`}
                                 </div>
                               )}
                               {tieneImagenes && (
-                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700">
-                                  <Camera size={9} /> Imágenes listas
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-purple-100 text-purple-700"
+                                  title={`Día en que la familia subió las fotos por el portal.\nDesde aquí corren los días hábiles de la entrega, no desde el ingreso.`}>
+                                  <Camera size={9} /> Imágenes {fmtDiaMes(s.fecha_imagenes_recibidas)}
                                 </div>
                               )}
                               {s.tiene_adicional && (
@@ -2859,9 +2891,10 @@ export default function Kanban() {
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-1">
                             <EstadoBadge estado={s.estado} />
-                            {s.fecha_imagenes_recibidas && s.estado === 'EN_PROCESO' && (
-                              <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 w-fit">
-                                <Camera size={8} /> Imágenes listas
+                            {s.fecha_imagenes_recibidas && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 w-fit"
+                                title="Día en que la familia subió las fotos por el portal">
+                                <Camera size={8} /> Imágenes {fmtDiaMes(s.fecha_imagenes_recibidas)}
                               </span>
                             )}
                           </div>
@@ -2871,8 +2904,10 @@ export default function Kanban() {
                         </td>
                         <td className="px-4 py-3">
                           {s.dias_para_vencer != null ? (
-                            <span className={`text-[12px] font-semibold ${al === 'vencido' ? 'text-red-600' : al === 'hoy' ? 'text-amber-600' : al === 'pronto' ? 'text-amber-500' : 'text-gray-500'}`}>
+                            <span className={`text-[12px] font-semibold ${al === 'vencido' ? 'text-red-600' : al === 'hoy' ? 'text-amber-600' : al === 'pronto' ? 'text-amber-500' : 'text-gray-500'}`}
+                              title={explicaLimite(s, diasDelPlan(s))}>
                               {s.dias_para_vencer < 0 ? `−${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Hoy' : `${s.dias_para_vencer}d`}
+                              {s.fecha_limite_entrega && <span className="text-gray-400 font-normal"> · {fmtDiaMes(s.fecha_limite_entrega)}</span>}
                             </span>
                           ) : <span className="text-gray-300">—</span>}
                         </td>
@@ -2913,9 +2948,10 @@ export default function Kanban() {
               {/* `selected` viene de v_kanban (aliado_vip); si el detalle ya cargó
                   el aliado, esa también sirve — el helper entiende las dos. */}
               {(esAliadoVip(selected) || esAliadoVip({ aliado: aliadoHorario })) && <VipBadge />}
-              {selected.fecha_imagenes_recibidas && selected.estado === 'EN_PROCESO' && (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">
-                  <Camera size={11} /> Imágenes recibidas
+              {selected.fecha_imagenes_recibidas && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-purple-700"
+                  title={'Día en que la familia subió las fotos por el portal.\nDesde aquí corren los días hábiles de la entrega, no desde el ingreso.'}>
+                  <Camera size={11} /> Imágenes recibidas {fmtDiaMes(selected.fecha_imagenes_recibidas)}
                 </span>
               )}
               {/* Solo si YA se le escribió alguna vez: en un servicio que aún no
@@ -2929,10 +2965,10 @@ export default function Kanban() {
               )}
               <span className="text-[11px] text-gray-400">Ingreso: <strong className="text-gray-700">{detalle?.created_at ? fmtDateTime(detalle.created_at) : (selected.fecha_ingreso ? parseDate(selected.fecha_ingreso)?.toLocaleDateString('es-CO') : '—')}</strong></span>
               {selected.fecha_limite_entrega && (
-                <span className="text-[11px] text-gray-400">Límite: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
+                <span className="text-[11px] text-gray-400" title={explicaLimite(selected, diasDelPlan(selected))}>Límite: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
               )}
               {selected.dias_para_vencer != null && (
-                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${selected.dias_para_vencer < 0 ? 'bg-red-50 text-red-600' : selected.dias_para_vencer <= 2 ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'}`}>
+                <span title={explicaLimite(selected, diasDelPlan(selected))} className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${selected.dias_para_vencer < 0 ? 'bg-red-50 text-red-600' : selected.dias_para_vencer <= 2 ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'}`}>
                   {selected.dias_para_vencer < 0 ? `${Math.abs(selected.dias_para_vencer)}d vencido` : `${selected.dias_para_vencer}d restantes`}
                 </span>
               )}
@@ -3041,6 +3077,11 @@ export default function Kanban() {
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#7C3AED' }}>
                     <Images size={12} /> Imágenes del cliente ({imagenesDelCliente.length})
+                    {selected.fecha_imagenes_recibidas && (
+                      <span className="font-semibold normal-case tracking-normal" style={{ color: '#9333EA' }}>
+                        · recibidas {fmtDiaMes(selected.fecha_imagenes_recibidas)}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <button
