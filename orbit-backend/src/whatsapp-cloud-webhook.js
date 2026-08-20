@@ -315,6 +315,16 @@ async function procesarPayload(payload) {
       // quedó guardado y no se pierde nada — se puede reconstruir después.
       if (!rowCount) continue  // duplicado: ya se normalizó la primera vez
       await normalizar(ev)
+
+      // ── Contestar la llamada, si este agente tiene voz encendida ──
+      // Va SIN await a propósito: este webhook tiene que devolver 200 en menos
+      // de 5 s o Meta lo reintenta, y contestar una llamada lleva más. Meta da
+      // entre 30 y 60 s desde el `connect` para aceptar, así que hay margen de
+      // sobra para hacerlo por detrás.
+      if (ev.eventType === 'call' && ev.status === 'connect') {
+        atenderLlamadaEntrante(ev, payload).catch(e =>
+          log(MOD, 'no se pudo atender la llamada —', e.message))
+      }
     } catch (e) {
       log(MOD, `ERROR guardando wamid=${ev.waMessageId || '-'} —`, e.message)
     }
@@ -508,4 +518,40 @@ function textoDelEvento(payload, wamid) {
     }
   }
   return null
+}
+
+/**
+ * Decide si el agente contesta esta llamada, y la contesta.
+ *
+ * El interruptor es `agente_wa.voz_activa`, apagado por defecto. Que el código
+ * exista NO significa que el teléfono conteste: mientras esté en falso, la
+ * llamada solo queda registrada. Es la misma idea que el botón de llamar
+ * apagado en Meta — dos cerrojos, no uno.
+ */
+async function atenderLlamadaEntrante(ev, payload) {
+  const { rows: [agente] } = await pool.query(
+    `SELECT id, clave, voz_id, voz_modelo, voz_activa
+       FROM public.agente_wa
+      WHERE activo AND $1 = ANY(phone_number_ids)`,
+    [ev.phoneNumberId]
+  )
+  if (!agente) return log(MOD, `llamada de ${ev.fromNumber}: no hay agente para esta línea`)
+  if (!agente.voz_activa) {
+    return log(MOD, `llamada de ${ev.fromNumber}: registrada, pero la voz del agente está apagada`)
+  }
+
+  const llamada = payload?.entry?.[0]?.changes?.[0]?.value?.calls?.[0]
+  const sdpOffer = llamada?.session?.sdp
+  if (!sdpOffer) return log(MOD, `llamada ${ev.waMessageId}: llegó sin oferta SDP`)
+
+  const { contestarConFrase } = await import('./llamadas.js')
+  await contestarConFrase({
+    phoneNumberId: ev.phoneNumberId,
+    callId: ev.waMessageId,
+    sdpOffer,
+    agente,
+    // Fija a propósito en este primer hito: lo que se prueba es que el audio
+    // llegue, no lo que diga.
+    texto: 'Hola, le atiende Camino al Cielo. Esta es una prueba del sistema de voz. Gracias.',
+  })
 }

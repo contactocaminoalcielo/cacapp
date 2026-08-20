@@ -11,6 +11,11 @@ services:
       - MEMORIAL_DATA_DIR=/data/memoriales
     ports:
       - "127.0.0.1:8787:8787"
+      # Audio de las llamadas de WhatsApp (WebRTC). A diferencia del 8787, estos
+      # SI se exponen al exterior: Meta manda el audio directo a la IP publica
+      # del servidor, no pasa por nginx. El rango es cerrado y solo lo atiende
+      # el proceso de voz (`icePortRange` en llamadas.js).
+      - "40000-40019:40000-40019/udp"
     volumes:
       # Videos de memoriales — persisten entre reinicios/rebuilds del contenedor.
       - memorial_data:/data/memoriales
