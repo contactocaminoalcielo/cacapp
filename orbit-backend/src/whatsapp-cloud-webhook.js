@@ -162,7 +162,7 @@ function idsPermitidos() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Un POST puede traer varios eventos (entry[] → changes[] → messages[]/statuses[]).
+ * Un POST puede traer varios eventos (entry[] → changes[] → messages[]/statuses[]/calls[]).
  * Devuelve una entrada por evento; el payload completo se adjunta luego a cada fila.
  */
 function extraerEventos(payload) {
@@ -198,6 +198,36 @@ function extraerEventos(payload) {
           perfilNombre:  perfiles.get(m?.from) ?? null,
           mediaId:       adj?.id ?? null,
           mediaMime:     adj?.mime_type ?? null,
+        })
+      }
+
+      // ── Llamadas (campo `calls` del webhook, suscrito el 2026-08-20) ──
+      //
+      // De momento SOLO SE REGISTRAN. El botón de llamar sigue apagado en el
+      // número, así que esto no deberia dispararse todavía; está puesto para
+      // que el día que se encienda no se pierda el primer evento — que es
+      // justo el que hay que leer para saber qué manda Meta de verdad.
+      //
+      // ⚠️ Contestar una llamada es responder a una oferta SDP en SEGUNDOS.
+      // Nada de eso se hace aquí: este webhook solo apunta lo que llegó. Si
+      // algún día se contesta, tendrá que ser en su propio módulo y sin
+      // bloquear esta ruta, que debe seguir devolviendo 200 enseguida (Meta
+      // reintenta si tardamos más de 5 s).
+      //
+      // Los campos se leen a la defensiva y con varios nombres posibles: la
+      // API de llamadas es nueva y lo que importa ahora es no perder el
+      // payload, que va entero en `crudo`.
+      for (const c of value?.calls ?? []) {
+        eventos.push({
+          phoneNumberId,
+          waMessageId:  c?.id ?? null,
+          fromNumber:   c?.from ?? null,
+          eventType:    'call',
+          status:       c?.event ?? c?.status ?? null,
+          resumen:      `${c?.event ?? c?.status ?? 'desconocido'}`
+                        + `${c?.direction ? '/' + c.direction : ''}`
+                        + `${c?.session?.sdp_type ? '/sdp:' + c.session.sdp_type : ''}`,
+          ocurridoEn:   fechaMeta(c?.timestamp),
         })
       }
 
@@ -244,7 +274,7 @@ async function procesarPayload(payload) {
   if (!eventos.length) {
     // Meta manda otras notificaciones (cambios de plantilla, calidad del número).
     // No son mensajes; se registran para saber que llegaron y no se guardan.
-    log(MOD, 'evento sin messages/statuses — ignorado')
+    log(MOD, 'evento sin messages/statuses/calls — ignorado')
     return
   }
 
@@ -298,6 +328,13 @@ async function procesarPayload(payload) {
  */
 async function normalizar(ev) {
   try {
+    // Una LLAMADA no tiene sitio en la bandeja: no es un mensaje ni un acuse.
+    // Sin esta salida caía en la rama de acuses y se registraba como "acuse sin
+    // mensaje en la bandeja" — que NO es cosmetico: esa es justo la senal con
+    // la que el agente deduce que otro panel contesto la conversacion y se
+    // calla. Un evento de llamada no debe poder callar al agente.
+    if (ev.eventType === 'call') return
+
     if (ev.eventType === 'message') {
       const { rows: [fila] } = await pool.query(
         `INSERT INTO public.whatsapp_mensajes
