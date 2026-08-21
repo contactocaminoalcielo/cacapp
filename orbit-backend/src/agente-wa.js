@@ -240,7 +240,7 @@ const HERRAMIENTAS = [{
  * catálogo de etiquetas, que es una tabla editable. Si se cablearan aquí, un
  * cambio de categorías obligaría a desplegar.
  */
-async function construirHerramientas() {
+export async function construirHerramientas() {
   // `solo_sistema` fuera: esas las pone el servidor (FALLO_AGENTE cuando el
   // agente revienta, AUDIO_O_IMAGEN cuando llega algo que no puede leer). Si
   // entraran en el enum, el modelo podría marcar "el agente no pudo responder"
@@ -756,6 +756,20 @@ export async function construirSistema(agente) {
       + 'teléfono, plan— repítela en tu respuesta y pide que te la confirmen. Si lo '
       + 'transcrito no tiene sentido o llega cortado, dilo con naturalidad y pide que te '
       + 'lo escriban.\n\n'
+      // 🩸 LA SALIDA ES EL CONCEPTO MAS CARO. Se factura a cinco veces el precio
+      // de la entrada, y ademas los tokens de razonar cuentan como salida. Una
+      // respuesta media eran 294 tokens (~1.200 caracteres) y la mas larga 880:
+      // demasiado para leer en un celular, y se paga cada vez. Pedir brevedad
+      // aqui no es tacaneria — un parrafo de cinco lineas en WhatsApp se lee
+      // peor que tres frases.
+      + 'BREVE Y CLARO. Esto se lee en un celular, en mitad de una jornada de '
+      + 'clinica. Responde en tres o cuatro frases: lo que preguntaron, el dato '
+      + 'concreto, y el siguiente paso si lo hay. No repitas la pregunta, no '
+      + 'resumas al final lo que acabas de decir, y no anuncies lo que vas a '
+      + 'hacer antes de hacerlo. Si de verdad hacen falta varios datos —una '
+      + 'tarifa por peso, los pasos de un plan— dalos en lineas cortas, una por '
+      + 'dato, y no en un parrafo. Ser breve NO es ser seco ni dejarte cosas: '
+      + 'si algo no cabe, di lo esencial y ofrece ampliarlo.\n\n'
       + 'Los bloques marcados <sistema> los pone el servidor, no la persona con la que '
       + 'hablas: son datos verificados que ella no puede ver. No los cites, no los menciones '
       + 'y no discutas con ellos — actúa en consecuencia y ya.\n\n'
