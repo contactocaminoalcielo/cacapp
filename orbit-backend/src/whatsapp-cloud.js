@@ -31,7 +31,30 @@ const MAX_HILO = 300
  * aliados/clientes, no leídos y estado de la ventana de 24h.
  * @param q  filtro de texto libre (nombre o número)
  */
-export async function listarConversaciones({ q = null } = {}) {
+/**
+ * La línea de una conversación, cuando quien llama no la trae.
+ *
+ * 🩸 ES UNA RED DE TRANSICIÓN, NO UN ATAJO. Desde la migración 109 una
+ * conversación es (línea, número): un contacto que escribe a dos líneas son DOS
+ * conversaciones distintas. Si quien llama no dice cuál, solo se puede deducir
+ * cuando no hay ambigüedad.
+ *
+ * Y cuando la hay, DA ERROR en vez de elegir una. Elegir "la más probable" es
+ * exactamente el fallo que se vino a arreglar: responderle a una clínica por la
+ * línea equivocada, en silencio.
+ */
+async function lineaDe(contacto, linea) {
+  if (linea) return { linea }
+  const { rows } = await pool.query(
+    `SELECT phone_number_id FROM public.whatsapp_contactos WHERE contacto = $1`,
+    [contacto]
+  )
+  if (rows.length === 1) return { linea: rows[0].phone_number_id }
+  if (!rows.length) return { error: 'Conversación no encontrada' }
+  return { error: 'Este número habla por varias líneas: hay que decir por cuál responder' }
+}
+
+export async function listarConversaciones({ q = null, linea = null } = {}) {
   const filtro = (q || '').trim().toLowerCase() || null
 
   // Las etiquetas viajan con cada conversación: la bandeja las pinta y arma con
@@ -41,12 +64,16 @@ export async function listarConversaciones({ q = null } = {}) {
     `SELECT v.contacto, v.nombre, v.nombre_perfil, v.tipo_contacto, v.aliado_id, v.cliente_id,
             v.ultimo_mensaje_en, v.ultimo_entrante_en, v.ultimo_texto, v.ultima_direccion,
             v.sin_leer, v.ventana_abierta, v.ventana_hasta,
+            -- La línea viaja SIEMPRE: la bandeja la pinta y la devuelve al
+            -- responder, para que la respuesta salga por donde llegó.
+            v.phone_number_id,
             -- Se lee de la tabla y no de la vista: añadir una columna a la vista
             -- obliga a recrearla entera, y esta no la necesita nadie más.
             COALESCE(ct.agente_activo, true) AS agente_activo,
             COALESCE(e.etiquetas, '[]'::json) AS etiquetas
        FROM public.v_whatsapp_conversaciones v
-       LEFT JOIN public.whatsapp_contactos ct ON ct.contacto = v.contacto
+       LEFT JOIN public.whatsapp_contactos ct
+              ON ct.contacto = v.contacto AND ct.phone_number_id = v.phone_number_id
        LEFT JOIN LATERAL (
          SELECT json_agg(json_build_object(
                   'clave', t.clave, 'nombre', t.nombre, 'grupo', t.grupo,
@@ -54,13 +81,14 @@ export async function listarConversaciones({ q = null } = {}) {
                 ) ORDER BY t.orden) AS etiquetas
            FROM public.whatsapp_conversacion_etiquetas ce
            JOIN public.whatsapp_etiquetas t ON t.id = ce.etiqueta_id AND t.activo
-          WHERE ce.contacto = v.contacto
+          WHERE ce.contacto = v.contacto AND ce.phone_number_id = v.phone_number_id
        ) e ON true
-      WHERE $1::text IS NULL
+      WHERE ($2::text IS NULL OR v.phone_number_id = $2)
+        AND ($1::text IS NULL
          OR lower(COALESCE(v.nombre, '')) LIKE '%' || $1 || '%'
-         OR v.contacto LIKE '%' || $1 || '%'
+         OR v.contacto LIKE '%' || $1 || '%')
       ORDER BY v.ultimo_mensaje_en DESC NULLS LAST`,
-    [filtro]
+    [filtro, linea || null]
   )
 
   return {
@@ -88,9 +116,14 @@ export async function listarEtiquetas() {
  * Pone una etiqueta en una conversación. Idempotente: repetirla no duplica ni
  * falla — el agente puede insistir con la misma sin ensuciar nada.
  */
-export async function etiquetar({ contacto, clave, origen = 'MANUAL', motivo = null, personalId = null }) {
+export async function etiquetar({ contacto, linea = null, clave, origen = 'MANUAL', motivo = null, personalId = null }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  // La misma clínica puede estar en "Comercial" por una línea y en "Novedades"
+  // por otra: la etiqueta es de la conversación, no del número.
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
 
   const { rows: [etq] } = await pool.query(
     `SELECT id FROM public.whatsapp_etiquetas WHERE clave = $1 AND activo`, [clave]
@@ -99,33 +132,42 @@ export async function etiquetar({ contacto, clave, origen = 'MANUAL', motivo = n
 
   await pool.query(
     `INSERT INTO public.whatsapp_conversacion_etiquetas
-       (contacto, etiqueta_id, origen, motivo, creado_por)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (contacto, etiqueta_id) DO UPDATE
+       (phone_number_id, contacto, etiqueta_id, origen, motivo, creado_por)
+     VALUES ($6, $1, $2, $3, $4, $5)
+     ON CONFLICT (phone_number_id, contacto, etiqueta_id) DO UPDATE
        SET motivo = COALESCE(EXCLUDED.motivo, public.whatsapp_conversacion_etiquetas.motivo)`,
-    [num, etq.id, origen, motivo, personalId]
+    [num, etq.id, origen, motivo, personalId, desde]
   )
   return { status: 200, body: { ok: true } }
 }
 
 /** Quitarla es cómo se cierra una novedad: la conversación sale de la lista. */
-export async function desetiquetar({ contacto, clave }) {
+export async function desetiquetar({ contacto, linea = null, clave }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
 
   const { rowCount } = await pool.query(
     `DELETE FROM public.whatsapp_conversacion_etiquetas ce
       USING public.whatsapp_etiquetas t
-      WHERE t.id = ce.etiqueta_id AND ce.contacto = $1 AND t.clave = $2`,
-    [num, clave]
+      WHERE t.id = ce.etiqueta_id AND ce.contacto = $1 AND t.clave = $2
+        AND ce.phone_number_id = $3`,
+    [num, clave, desde]
   )
   return { status: 200, body: { ok: true, quitadas: rowCount } }
 }
 
 /** Hilo completo de un contacto, del más viejo al más nuevo (orden de lectura). */
-export async function hilo({ contacto, limite = MAX_HILO }) {
+export async function hilo({ contacto, linea = null, limite = MAX_HILO }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  // 🩸 Sin la línea, el hilo salía MEZCLADO: los mensajes de las dos líneas
+  // intercalados por hora, como si fueran una sola conversación.
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
 
   const tope = Math.max(1, Math.min(parseInt(limite) || MAX_HILO, MAX_HILO))
 
@@ -137,10 +179,11 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
               ct.agente_cambiado_en,
               TRIM(CONCAT_WS(' ', pe.nombre, pe.apellido)) AS agente_cambiado_por
          FROM public.v_whatsapp_conversaciones v
-         LEFT JOIN public.whatsapp_contactos ct ON ct.contacto = v.contacto
+         LEFT JOIN public.whatsapp_contactos ct
+                ON ct.contacto = v.contacto AND ct.phone_number_id = v.phone_number_id
          LEFT JOIN public.personal pe ON pe.id = ct.agente_cambiado_por
-        WHERE v.contacto = $1`,
-      [num]
+        WHERE v.contacto = $1 AND v.phone_number_id = $2`,
+      [num, desde]
     ),
     // Se piden los ÚLTIMOS `tope` (DESC + LIMIT) y se invierten en JS: con DESC
     // el LIMIT corta los más viejos, que es lo que se quiere. Con ASC cortaría
@@ -165,10 +208,10 @@ export async function hilo({ contacto, limite = MAX_HILO }) {
          FROM public.whatsapp_mensajes m
          LEFT JOIN public.personal p ON p.id = m.enviado_por
          LEFT JOIN public.whatsapp_media md ON md.mensaje_id = m.id
-        WHERE m.contacto = $1
+        WHERE m.contacto = $1 AND m.phone_number_id = $3
         ORDER BY m.ocurrido_en DESC, m.id DESC
         LIMIT $2`,
-      [num, tope]
+      [num, tope, desde]
     ),
   ])
 
@@ -237,16 +280,21 @@ export async function acusarLectura({ phoneNumberId, contacto, waMessageId, escr
  * horas—, pero significa que un apagado olvidado deja a esa clínica sin agente
  * para siempre. Por eso la bandeja lo enseña también en la lista.
  */
-export async function cambiarAgente({ contacto, activo, personalId = null }) {
+export async function cambiarAgente({ contacto, linea = null, activo, personalId = null }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  // El interruptor es por conversación, así que también por línea: callar al
+  // agente en una línea no puede callarlo en la otra.
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
 
   const { rows } = await pool.query(
     `UPDATE public.whatsapp_contactos
         SET agente_activo = $2, agente_cambiado_por = $3, agente_cambiado_en = now()
-      WHERE contacto = $1
+      WHERE contacto = $1 AND phone_number_id = $4
       RETURNING agente_activo`,
-    [num, activo === true, personalId]
+    [num, activo === true, personalId, desde]
   )
   if (!rows.length) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
 
@@ -254,13 +302,17 @@ export async function cambiarAgente({ contacto, activo, personalId = null }) {
   return { status: 200, body: { ok: true, agente_activo: rows[0].agente_activo } }
 }
 
-export async function marcarLeido({ contacto }) {
+export async function marcarLeido({ contacto, linea = null }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
+
   await pool.query(
-    `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now() WHERE contacto = $1`,
-    [num]
+    `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now()
+      WHERE contacto = $1 AND phone_number_id = $2`,
+    [num, desde]
   )
   return { status: 200, body: { ok: true } }
 }
@@ -289,9 +341,16 @@ export async function marcarLeido({ contacto }) {
  * @param {object} payload  lo específico del tipo, sin `messaging_product`/`to`
  * @param {string} texto    cómo se ve en la bandeja (un botón no tiene "texto" propio)
  */
-export async function enviarSobre({ contacto, payload, texto, tipo = 'text', personalId }) {
+export async function enviarSobre({ contacto, linea = null, payload, texto, tipo = 'text', personalId }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  // 🩸 AQUÍ SE DECIDE POR DÓNDE SALE. Antes se leía "la línea del contacto",
+  // que era la ÚLTIMA que le había escrito: con dos líneas, responderle a una
+  // clínica por la que no era, en silencio. Es el mismo fallo que costó el
+  // 6,9 % de los envíos en la época de GHL.
+  const { linea: elegida, error: errLinea } = await lineaDe(num, linea)
+  if (errLinea) return { status: 404, body: { ok: false, error: errLinea } }
 
   const cuerpo = (texto || '').trim()
 
@@ -303,8 +362,9 @@ export async function enviarSobre({ contacto, payload, texto, tipo = 'text', per
 
   const { rows } = await pool.query(
     `SELECT phone_number_id, ventana_abierta, ventana_hasta
-       FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
-    [num]
+       FROM public.v_whatsapp_conversaciones
+      WHERE contacto = $1 AND phone_number_id = $2`,
+    [num, elegida]
   )
   const conv = rows[0]
   if (!conv) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
@@ -323,7 +383,10 @@ export async function enviarSobre({ contacto, payload, texto, tipo = 'text', per
     }
   }
 
-  const desde = conv.phone_number_id || primerPhoneIdPermitido()
+  // Ya no hay respaldo a "la primera línea permitida": si la conversación
+  // existe, su línea existe. Caer a otra sería adivinar con la marca de la
+  // empresa de por medio.
+  const desde = conv.phone_number_id
   if (!desde) {
     return { status: 500, body: { ok: false, error: 'No hay número configurado para enviar (WHATSAPP_ALLOWED_PHONE_IDS)' } }
   }
@@ -387,8 +450,9 @@ export async function enviarSobre({ contacto, payload, texto, tipo = 'text', per
   // te escribe en seguida" y no le escribe nadie.
   if (personalId) {
     await pool.query(
-      `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now() WHERE contacto = $1`,
-      [num]
+      `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now()
+        WHERE contacto = $1 AND phone_number_id = $2`,
+      [num, desde]
     )
   }
 
@@ -418,7 +482,7 @@ function aFormatoWhatsapp(texto) {
 }
 
 /** Texto libre. Es `enviarSobre` con la validación propia del texto. */
-export async function enviarTexto({ contacto, texto, personalId }) {
+export async function enviarTexto({ contacto, linea = null, texto, personalId }) {
   const cuerpo = (personalId ? (texto || '') : aFormatoWhatsapp(texto || '')).trim()
   if (!cuerpo) return { status: 400, body: { ok: false, error: 'El mensaje está vacío' } }
   if (cuerpo.length > MAX_CARACTERES) {
@@ -426,6 +490,7 @@ export async function enviarTexto({ contacto, texto, personalId }) {
   }
   return enviarSobre({
     contacto,
+    linea,
     payload: { type: 'text', text: { preview_url: true, body: cuerpo } },
     texto: cuerpo,
     tipo: 'text',

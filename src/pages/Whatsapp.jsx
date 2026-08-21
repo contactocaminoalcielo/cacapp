@@ -22,6 +22,7 @@ import {
   sePuedeGrabar, formatoGrabacion, duracionAudio,
   bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
 } from '@/lib/whatsappInbox'
+import { listarAgentes } from '@/lib/agenteApi'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
@@ -32,7 +33,9 @@ import {
 const POLL_MS = 10000
 
 export default function Whatsapp() {
-  const [convs, setConvs]         = useState([])
+  // `todas` es lo que devuelve el backend; `convs` es lo que se pinta, ya
+  // filtrado por la línea elegida. Ver más abajo.
+  const [todas, setConvs]         = useState([])
   const [cargando, setCargando]   = useState(true)
   const [q, setQ]                 = useState('')
   const [activo, setActivo]       = useState(null)
@@ -46,11 +49,36 @@ export default function Whatsapp() {
   // Qué lista se está mirando: null = todas · 'NO_LEIDAS' · un grupo · una etiqueta.
   const [vista, setVista]         = useState(null)
 
+  // ── Líneas (migración 109) ──
+  // Una conversación es (línea, número): la misma clínica puede hablar por dos
+  // líneas y son DOS conversaciones. `lineaActiva` es la de la que está abierta,
+  // y viaja en cada llamada para que la respuesta salga por donde llegó.
+  const [filtroLinea, setFiltroLinea] = useState(null)
+  const [lineaActiva, setLineaActiva] = useState(null)
+  const [nombreLinea, setNombreLinea] = useState({})
+
   const finRef      = useRef(null)
   const scrollRef   = useRef(null)
   const pegadoAbajo = useRef(true)
   const activoRef   = useRef(null)
   activoRef.current = activo
+  const lineaRef    = useRef(null)
+  lineaRef.current  = lineaActiva
+
+  // El nombre de cada línea sale del agente que la atiende: un
+  // `phone_number_id` en crudo no le dice nada a nadie. Si falla, el selector
+  // cae a los últimos cuatro dígitos y la bandeja sigue funcionando igual.
+  useEffect(() => {
+    listarAgentes()
+      .then(r => {
+        const m = {}
+        for (const a of r?.agentes || []) {
+          for (const id of a.phone_number_ids || []) m[id] = a.nombre
+        }
+        setNombreLinea(m)
+      })
+      .catch(() => {})
+  }, [])
 
   // ── Carga ──────────────────────────────────────────────────────────────────
   const cargarLista = useCallback(async ({ silencioso = false } = {}) => {
@@ -72,7 +100,7 @@ export default function Whatsapp() {
     if (!contacto) return
     if (!silencioso) setCargandoHilo(true)
     try {
-      const r = await abrirHilo(contacto)
+      const r = await abrirHilo(contacto, lineaRef.current)
       // Si el usuario cambió de conversación mientras la petición viajaba, esta
       // respuesta ya no sirve — pintarla metería el hilo equivocado.
       if (activoRef.current !== contacto) return
@@ -102,8 +130,8 @@ export default function Whatsapp() {
         : [...(c.etiquetas || []), { ...catalogo.find(e => e.clave === clave), origen: 'MANUAL' }],
     }))
     try {
-      if (puesta) await quitarEtiqueta(contacto, clave)
-      else await ponerEtiqueta(contacto, clave)
+      if (puesta) await quitarEtiqueta(contacto, clave, lineaRef.current)
+      else await ponerEtiqueta(contacto, clave, lineaRef.current)
     } catch { /* el refresco lo corrige */ }
     cargarLista({ silencioso: true })
   }
@@ -121,7 +149,12 @@ export default function Whatsapp() {
   }, [cargarLista, cargarHilo])
 
   // ── Abrir conversación ─────────────────────────────────────────────────────
-  async function abrir(contacto) {
+  async function abrir(contacto, linea = null) {
+    // La línea se fija ANTES de pedir nada: `lineaRef` la lee el hilo, el acuse
+    // de leído y el envío. Sin ella, con el mismo número en dos líneas el
+    // backend no sabría cuál abrir.
+    setLineaActiva(linea)
+    lineaRef.current = linea
     setActivo(contacto)
     setHilo(null)
     setTexto('')
@@ -129,8 +162,10 @@ export default function Whatsapp() {
     pegadoAbajo.current = true
     await cargarHilo(contacto)
     try {
-      await marcarLeido(contacto)
-      setConvs(cs => cs.map(c => c.contacto === contacto ? { ...c, sin_leer: 0 } : c))
+      await marcarLeido(contacto, lineaRef.current)
+      setConvs(cs => cs.map(c =>
+        c.contacto === contacto && (!linea || c.phone_number_id === linea)
+          ? { ...c, sin_leer: 0 } : c))
     } catch { /* el badge se corrige solo en el siguiente refresco */ }
   }
 
@@ -141,7 +176,7 @@ export default function Whatsapp() {
     setEnviando(true)
     setErrorEnvio(null)
     try {
-      await enviarMensaje(activo, cuerpo)
+      await enviarMensaje(activo, cuerpo, lineaActiva)
       setTexto('')
       pegadoAbajo.current = true
       await cargarHilo(activo, { silencioso: true })
@@ -168,6 +203,22 @@ export default function Whatsapp() {
     pegadoAbajo.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
+  // Todo lo que se pinta parte de aquí: si hay una línea elegida, las demás no
+  // existen para esta pantalla — ni en la lista, ni en los contadores.
+  const convs = useMemo(
+    () => (filtroLinea ? todas.filter(c => c.phone_number_id === filtroLinea) : todas),
+    [todas, filtroLinea]
+  )
+
+  // Las líneas que aparecen en la bandeja, en orden estable.
+  const lineas = useMemo(() => {
+    const vistas = []
+    for (const c of todas) {
+      if (c.phone_number_id && !vistas.includes(c.phone_number_id)) vistas.push(c.phone_number_id)
+    }
+    return vistas.sort()
+  }, [todas])
+
   const sinLeerTotal = useMemo(
     () => convs.reduce((a, c) => a + (c.sin_leer || 0), 0), [convs]
   )
@@ -191,7 +242,10 @@ export default function Whatsapp() {
     return convs.filter(c => (c.etiquetas || []).some(e => e.grupo === vista || e.clave === vista))
   }, [convs, vista])
 
-  const conv = hilo?.contacto || convs.find(c => c.contacto === activo) || null
+  const conv = hilo?.contacto
+    || convs.find(c => c.contacto === activo
+         && (!lineaActiva || c.phone_number_id === lineaActiva))
+    || null
   const ventanaAbierta = conv?.ventana_abierta
   const restante = restanteVentana(conv?.ventana_hasta)
 
@@ -226,6 +280,22 @@ export default function Whatsapp() {
                        value={q} onChange={e => setQ(e.target.value)} />
               </div>
 
+              {/* 🩸 Solo aparece cuando HAY varias líneas: con una sola sería un
+                  control que no decide nada, y ruido en la pantalla más usada
+                  del día. Con dos o más, es lo primero que hay que elegir. */}
+              {lineas.length > 1 && (
+                <div className="flex flex-wrap gap-1">
+                  <BotonLinea activa={!filtroLinea} onClick={() => setFiltroLinea(null)}>
+                    Todas
+                  </BotonLinea>
+                  {lineas.map(id => (
+                    <BotonLinea key={id} activa={filtroLinea === id} onClick={() => setFiltroLinea(id)}>
+                      {nombreLinea[id] || `línea …${String(id).slice(-4)}`}
+                    </BotonLinea>
+                  ))}
+                </div>
+              )}
+
               <Listas vista={vista} setVista={setVista} conteos={conteos}
                       catalogo={catalogo} total={convs.length} />
             </div>
@@ -249,7 +319,7 @@ export default function Whatsapp() {
                 visibles.map(c => (
                   <ItemConversacion key={c.contacto} c={c}
                                     activo={c.contacto === activo}
-                                    onClick={() => abrir(c.contacto)} />
+                                    onClick={() => abrir(c.contacto, c.phone_number_id)} />
                 ))
               )}
             </div>
@@ -266,11 +336,12 @@ export default function Whatsapp() {
               <>
                 <CabeceraHilo conv={conv} contacto={activo} restante={restante}
                               onVolver={() => { setActivo(null); setHilo(null) }}
-                              etiquetas={convs.find(c => c.contacto === activo)?.etiquetas || []}
+                              etiquetas={convs.find(c => c.contacto === activo
+                                && (!lineaActiva || c.phone_number_id === lineaActiva))?.etiquetas || []}
                               catalogo={catalogo}
                               onAlternar={(clave, puesta) => alternarEtiqueta(activo, clave, puesta)}
                               onAgente={async (encender) => {
-                                await cambiarAgente(activo, encender)
+                                await cambiarAgente(activo, encender, lineaActiva)
                                 // Se recarga hilo y lista: el estado se pinta en
                                 // los dos sitios y verlos discrepar da la
                                 // sensación de que no se guardó.
@@ -360,6 +431,18 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
         )}
       </AnimatePresence>
     </div>
+  )
+}
+
+/** Elegir la línea. Sin esto, dos líneas se leen como una sola conversación. */
+function BotonLinea({ activa, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer transition ${
+        activa ? 'bg-[#0B1D4F] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      }`}
+    >{children}</button>
   )
 }
 
@@ -833,7 +916,7 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     if (!foto || subiendo) return
     setSubiendo(true); setErrorFoto(null)
     try {
-      await enviarArchivo({ contacto, base64: foto.base64, mime: foto.mime, nombre: foto.nombre,
+      await enviarArchivo({ contacto, linea: lineaRef.current, base64: foto.base64, mime: foto.mime, nombre: foto.nombre,
                             pie: texto.trim(), notaDeVoz: !!foto.notaDeVoz })
       setFoto(null)
       setTexto('')

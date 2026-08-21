@@ -406,8 +406,9 @@ async function normalizar(ev) {
         // El trigger ya creó la fila del contacto; aquí solo se le pone el nombre.
         await pool.query(
           `UPDATE public.whatsapp_contactos SET nombre_perfil = $2
-            WHERE contacto = $1 AND COALESCE(nombre_perfil, '') <> $2`,
-          [ev.fromNumber, ev.perfilNombre]
+            WHERE contacto = $1 AND phone_number_id = $3
+              AND COALESCE(nombre_perfil, '') <> $2`,
+          [ev.fromNumber, ev.perfilNombre, ev.phoneNumberId]
         )
       }
 

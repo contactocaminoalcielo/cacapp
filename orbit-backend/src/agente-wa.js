@@ -837,13 +837,18 @@ function narrarInteractivo(texto) {
   return `[le enviaste ${marca} — ya lo recibió] ${cuerpo}`
 }
 
-async function construirHistorial(contacto, pendientesDesde = null) {
+async function construirHistorial(contacto, phoneNumberId, pendientesDesde = null) {
+  // 🩸 EL FILTRO DE LÍNEA ES DE SEGURIDAD, no de comodidad. El agente se elige
+  // por `phone_number_id`, pero el historial venía del NÚMERO: una clínica que
+  // escriba a dos líneas le metía al agente conversaciones que no son suyas. Con
+  // la empresa hermana eso es filtrar datos de un cliente a otra compañía.
   const { rows: crudas } = await pool.query(
     `SELECT id, direccion, texto, tipo, enviado_por FROM public.whatsapp_mensajes
-      WHERE contacto = $1 AND texto IS NOT NULL AND texto <> ''
+      WHERE contacto = $1 AND phone_number_id = $3
+        AND texto IS NOT NULL AND texto <> ''
       ORDER BY ocurrido_en DESC, id DESC
       LIMIT $2`,
-    [contacto, HISTORIAL]
+    [contacto, HISTORIAL, phoneNumberId]
   )
 
   const ordenadas = crudas.slice().reverse()
@@ -860,7 +865,7 @@ async function construirHistorial(contacto, pendientesDesde = null) {
   // limitadas a las últimas: cada imagen son ~1.500 tokens y el historial NO se
   // cachea, así que una foto vieja se vuelve a pagar en CADA turno siguiente.
   const fotos = new Map()
-  for (const f of await imagenesRecientes(contacto, MAX_IMAGENES)) {
+  for (const f of await imagenesRecientes(contacto, MAX_IMAGENES, phoneNumberId)) {
     fotos.set(Number(f.mensaje_id), {
       type: 'image',
       source: { type: 'base64', media_type: f.mime, data: f.archivo.toString('base64') },
@@ -1035,7 +1040,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return
 
-    const laLleva = await laLlevaUnHumano(num)
+    const laLleva = await laLlevaUnHumano(num, phoneNumberId)
     if (laLleva) {
       log(MOD, `${num}: ${laLleva} — el agente ni acusa recibo`)
       return
@@ -1101,7 +1106,7 @@ export async function mantenerEscribiendo({ phoneNumberId, contacto, waMessageId
 
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return parar
-    if (await laLlevaUnHumano(num)) return parar
+    if (await laLlevaUnHumano(num, phoneNumberId)) return parar
 
     acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
     const latido = setInterval(() => {
@@ -1171,7 +1176,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // cosa y otra pasan los segundos de espera, que es JUSTO cuando el coordinador
   // ve el mensaje entrar y contesta. Sin esta segunda comprobación, el caso más
   // probable de todos —los dos contestando— se colaría.
-  const laTomaron = await laLlevaUnHumano(num)
+  const laTomaron = await laLlevaUnHumano(num, phoneNumberId)
   if (laTomaron) {
     log(MOD, `${num}: ${laTomaron} mientras esperábamos — el agente se aparta`)
     return
@@ -1252,7 +1257,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // Refresca el "escribiendo…" (dura 25 s) justo antes de la parte lenta.
   acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
 
-  let r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP', pendientesDesde })
+  let r = await ejecutar({ agente, contacto: num, phoneNumberId, origen: 'WHATSAPP', pendientesDesde })
 
   // Un reintento, y solo uno, y SOLO si tiene sentido reintentar. Un 400 es un
   // error nuestro en la petición: repetirlo da exactamente el mismo 400, hace
@@ -1261,7 +1266,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   if (r.error && esReintentable(r.error)) {
     log(MOD, `reintentando ${num} tras: ${r.error}`)
     await new Promise(res => setTimeout(res, 1500))
-    r = await ejecutar({ agente, contacto: num, origen: 'WHATSAPP', pendientesDesde })
+    r = await ejecutar({ agente, contacto: num, phoneNumberId, origen: 'WHATSAPP', pendientesDesde })
   }
 
   // No había nada nuevo que contestar. Silencio correcto, no fallo.
@@ -1327,11 +1332,16 @@ function esReintentable(error) {
  * ⚠️ En un acuse, `from_number` NO es quien escribió: es el `recipient_id` de
  * Meta, o sea la veterinaria a la que le enviamos. Por eso casa con `contacto`.
  */
-async function laLlevaUnHumano(contacto) {
+async function laLlevaUnHumano(contacto, phoneNumberId = null) {
   // El interruptor manual (migración 105) manda sobre todo lo demás: si alguien
   // dijo "de esta me encargo yo", no hay regla automática que valga.
+  // El interruptor es de la CONVERSACIÓN, y una conversación es (línea, número):
+  // callar al agente en una línea no puede callarlo en la otra.
   const { rows: [c] } = await pool.query(
-    `SELECT agente_activo FROM public.whatsapp_contactos WHERE contacto = $1`, [contacto]
+    `SELECT bool_and(agente_activo) AS agente_activo
+       FROM public.whatsapp_contactos
+      WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2)`,
+    [contacto, phoneNumberId]
   )
   if (c && c.agente_activo === false) return 'el agente está apagado en esta conversación'
 
@@ -1349,6 +1359,7 @@ async function laLlevaUnHumano(contacto) {
   const { rows: [enOrbit] } = await pool.query(
     `SELECT m.tipo FROM public.whatsapp_mensajes m
       WHERE m.contacto = $1 AND m.direccion = 'OUT' AND m.enviado_por IS NOT NULL
+        AND ($4::text IS NULL OR m.phone_number_id = $4)
         AND m.ocurrido_en > now() - (CASE WHEN m.tipo = 'template'
                                           THEN ($3 || ' minutes')::interval
                                           ELSE ($2 || ' minutes')::interval END)
@@ -1357,7 +1368,7 @@ async function laLlevaUnHumano(contacto) {
            WHERE d.wa_message_id = m.wa_message_id)
       ORDER BY m.ocurrido_en DESC
       LIMIT 1`,
-    [contacto, PAUSA_TRAS_HUMANO_MIN, PAUSA_TRAS_PLANTILLA_MIN]
+    [contacto, PAUSA_TRAS_HUMANO_MIN, PAUSA_TRAS_PLANTILLA_MIN, phoneNumberId]
   )
   if (enOrbit) {
     return enOrbit.tipo === 'template'
@@ -1428,16 +1439,17 @@ const SEGUIMIENTO_CADA_MS = 60_000
  * conversación": si el agente manda el enlace tres veces en la misma charla, el
  * recordatorio sigue siendo uno solo.
  */
-async function programarSeguimiento({ agente, contacto, motivo }) {
+async function programarSeguimiento({ agente, contacto, phoneNumberId = null, motivo }) {
   // 0 = apagado desde la pantalla del agente, sin desplegar nada.
   const minutos = Number(agente?.seguimiento_enlace_minutos ?? 0)
   if (!minutos || !contacto) return
 
   await pool.query(
-    `INSERT INTO public.agente_wa_seguimientos (agente_id, contacto, motivo, programado_para)
-     VALUES ($1, $2, $3, now() + ($4 || ' minutes')::interval)
+    `INSERT INTO public.agente_wa_seguimientos
+       (agente_id, contacto, phone_number_id, motivo, programado_para)
+     VALUES ($1, $2, $5, $3, now() + ($4 || ' minutes')::interval)
      ON CONFLICT DO NOTHING`,
-    [agente.id, contacto, motivo, minutos]
+    [agente.id, contacto, motivo, minutos, phoneNumberId || null]
   )
 }
 
@@ -1452,7 +1464,7 @@ async function programarSeguimiento({ agente, contacto, motivo }) {
  */
 async function barrerSeguimientos() {
   const { rows } = await pool.query(
-    `SELECT s.id, s.contacto, s.creado_en, a.activo, a.seguimiento_enlace_texto
+    `SELECT s.id, s.contacto, s.phone_number_id, s.creado_en, a.activo, a.seguimiento_enlace_texto
        FROM public.agente_wa_seguimientos s
        JOIN public.agente_wa a ON a.id = s.agente_id
       WHERE s.estado = 'PENDIENTE' AND s.programado_para <= now()
@@ -1475,8 +1487,9 @@ async function barrerSeguimientos() {
       // recordatorio sobra.
       const { rowCount: contesto } = await pool.query(
         `SELECT 1 FROM public.whatsapp_mensajes
-          WHERE contacto = $1 AND direccion = 'IN' AND ocurrido_en > $2 LIMIT 1`,
-        [s.contacto, s.creado_en]
+          WHERE contacto = $1 AND direccion = 'IN' AND ocurrido_en > $2
+            AND ($3::text IS NULL OR phone_number_id = $3) LIMIT 1`,
+        [s.contacto, s.creado_en, s.phone_number_id || null]
       )
       if (contesto) { await cerrar('CANCELADO', 'la veterinaria contestó'); continue }
 
@@ -1494,7 +1507,7 @@ async function barrerSeguimientos() {
       )
       if (registro) { await cerrar('CANCELADO', 'ya llegó su solicitud'); continue }
 
-      const laLleva = await laLlevaUnHumano(s.contacto)
+      const laLleva = await laLlevaUnHumano(s.contacto, s.phone_number_id || null)
       if (laLleva) { await cerrar('CANCELADO', laLleva); continue }
 
       const texto = String(s.seguimiento_enlace_texto || '').trim()
@@ -1572,7 +1585,7 @@ async function barrerPendientes() {
 
     // Las mismas compuertas que en el camino normal: si sigue en pausa o el
     // interruptor está apagado, no se toca.
-    const laLleva = await laLlevaUnHumano(p.contacto)
+    const laLleva = await laLlevaUnHumano(p.contacto, p.phone_number_id)
     if (laLleva) continue
 
     intentados.set(p.contacto, Date.now())
@@ -1667,7 +1680,7 @@ async function avisarQueQuedoSinRespuesta(contacto, motivo) {
  * si las pide y devuelve el texto final. Deja rastro en la bitácora pase lo
  * que pase — sin eso no hay forma de ajustar el contexto con evidencia.
  */
-export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null }) {
+export async function ejecutar({ agente, contacto, phoneNumberId = null, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null }) {
   const inicio = Date.now()
   const usadas = []
   const etiquetas = []
@@ -1691,7 +1704,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
     if (mensajePrueba) {
       messages = [{ role: 'user', content: mensajePrueba }]
     } else {
-      const hist = await construirHistorial(contacto, pendientesDesde)
+      const hist = await construirHistorial(contacto, phoneNumberId, pendientesDesde)
       messages = hist.mensajes
       hastaId = hist.hastaId
     }
@@ -1770,7 +1783,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
               // Se programa la vuelta; al vencer se decide si todavía tiene
               // sentido. Nunca lanza: que falle el recordatorio no puede
               // tumbar la respuesta que la vet está esperando.
-              await programarSeguimiento({ agente, contacto, motivo: 'ENLACE_REGISTRO' })
+              await programarSeguimiento({ agente, contacto, phoneNumberId, motivo: 'ENLACE_REGISTRO' })
                 .catch(e => log(MOD, 'no se pudo programar el seguimiento —', e.message))
             }
           } else if (bloque.name === 'registrar_solicitud') {
@@ -1784,7 +1797,8 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
             // si no, remata repitiendo por escrito lo que la vet acaba de
             // recibir como botones.
             out = await enviarInteractivo({
-              contacto, clave: bloque.input?.clave, personalId: null, enviarSobre,
+              contacto, linea: phoneNumberId, clave: bloque.input?.clave,
+              personalId: null, enviarSobre,
             }).then(r => r.body?.ok
               ? { ok: true, enviado: bloque.input?.clave,
                   nota: 'Ya le llegó. NO repitas su contenido ni lo describas: solo sigue la conversación si hace falta.' }
@@ -1794,7 +1808,8 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
             // que anunciarlo ("te lo mando en seguida") sería anunciar algo que
             // la clínica ya tiene en pantalla.
             out = await enviarMaterial({
-              contacto, clave: bloque.input?.clave, personalId: null, enviarSobre,
+              contacto, linea: phoneNumberId, clave: bloque.input?.clave,
+              personalId: null, enviarSobre,
             }).then(r => {
               if (r.body?.ok) {
                 return { ok: true, enviado: bloque.input?.clave,

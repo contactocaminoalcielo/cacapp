@@ -6,23 +6,38 @@
 // Ver migraciones 086/087 y orbit-backend/src/whatsapp-cloud.js.
 import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
-export function listarConversaciones(q) {
-  const qs = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
-  return orbitApi(`/whatsapp/conversaciones${qs}`)
+
+// ── La LÍNEA viaja en todo (migración 109) ───────────────────────────────────
+//
+// 🩸 Una conversación es (línea, número), no un número. La misma clínica puede
+// hablar por dos líneas y son DOS conversaciones. Cada llamada manda la línea de
+// la conversación que está abierta, para que la respuesta salga por donde llegó.
+// Sin ella el backend la deduce, y si el número habla por varias, da error en
+// vez de elegir — que es justo el fallo que se vino a arreglar.
+
+export function listarConversaciones(q, linea = null) {
+  const p = new URLSearchParams()
+  if (q?.trim()) p.set('q', q.trim())
+  if (linea) p.set('linea', linea)
+  const qs = p.toString()
+  return orbitApi(`/whatsapp/conversaciones${qs ? `?${qs}` : ''}`)
 }
 
-export function abrirHilo(contacto) {
-  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}`)
+export function abrirHilo(contacto, linea = null) {
+  const qs = linea ? `?linea=${encodeURIComponent(linea)}` : ''
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}${qs}`)
 }
 
-export function marcarLeido(contacto) {
-  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/leido`, { method: 'POST' })
+export function marcarLeido(contacto, linea = null) {
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/leido`, {
+    method: 'POST', body: { linea },
+  })
 }
 
-export function enviarMensaje(contacto, texto) {
+export function enviarMensaje(contacto, texto, linea = null) {
   return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/enviar`, {
     method: 'POST',
-    body: { texto },
+    body: { texto, linea },
   })
 }
 
@@ -33,9 +48,9 @@ export function enviarMensaje(contacto, texto) {
  * una plantilla— porque "de esta clínica me encargo yo" no dura doce horas.
  * ⚠️ No caduca: apagado se queda apagado hasta que alguien lo encienda.
  */
-export function cambiarAgente(contacto, activo) {
+export function cambiarAgente(contacto, activo, linea = null) {
   return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/agente`, {
-    method: 'POST', body: { activo },
+    method: 'POST', body: { activo, linea },
   })
 }
 
@@ -47,16 +62,17 @@ export function listarEtiquetas() {
   return orbitApi('/whatsapp/etiquetas')
 }
 
-export function ponerEtiqueta(contacto, clave) {
+export function ponerEtiqueta(contacto, clave, linea = null) {
   return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/etiquetas`, {
     method: 'POST',
-    body: { clave },
+    body: { clave, linea },
   })
 }
 
-export function quitarEtiqueta(contacto, clave) {
+export function quitarEtiqueta(contacto, clave, linea = null) {
+  const qs = linea ? `?linea=${encodeURIComponent(linea)}` : ''
   return orbitApi(
-    `/whatsapp/conversaciones/${encodeURIComponent(contacto)}/etiquetas/${encodeURIComponent(clave)}`,
+    `/whatsapp/conversaciones/${encodeURIComponent(contacto)}/etiquetas/${encodeURIComponent(clave)}${qs}`,
     { method: 'DELETE' }
   )
 }
@@ -157,12 +173,12 @@ export const ESTADO_ENVIO = {
 // backend: si aquí dice menos, la pantalla rechaza algo que el servidor acepta.
 export const TOPES_ARCHIVO = { imagen: 5, audio: 16, video: 16, documento: 64 }
 
-export function enviarArchivo({ contacto, base64, mime, nombre, pie, notaDeVoz = false }) {
+export function enviarArchivo({ contacto, linea = null, base64, mime, nombre, pie, notaDeVoz = false }) {
   return orbitApi('/whatsapp/archivo', {
     method: 'POST',
     // `notaDeVoz` no se deduce del MIME: un mp3 adjunto y una grabacion del
     // microfono pueden llegar igual y NO se ven igual del otro lado.
-    body: { contacto, base64, mime, nombre, pie, notaDeVoz },
+    body: { contacto, linea, base64, mime, nombre, pie, notaDeVoz },
   })
 }
 

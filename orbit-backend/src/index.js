@@ -145,7 +145,9 @@ const rolBandeja = requireRol('COORDINADOR', 'ADMIN')
 
 app.get('/whatsapp/conversaciones', requireAuth, rolBandeja, async (req, res) => {
   try {
-    res.json(await listarConversaciones({ q: req.query.q || null }))
+    // `linea` filtra la bandeja: con varias líneas, verlas mezcladas es
+    // exactamente lo que no se quiere. Sin ella se ven todas.
+    res.json(await listarConversaciones({ q: req.query.q || null, linea: req.query.linea || null }))
   } catch (e) {
     log('[wa-bandeja/conversaciones] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
@@ -154,7 +156,9 @@ app.get('/whatsapp/conversaciones', requireAuth, rolBandeja, async (req, res) =>
 
 app.get('/whatsapp/conversaciones/:contacto', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await hilo({ contacto: req.params.contacto, limite: req.query.limite })
+    const r = await hilo({
+      contacto: req.params.contacto, linea: req.query.linea || null, limite: req.query.limite,
+    })
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[wa-bandeja/hilo] ERROR', e.message)
@@ -164,7 +168,7 @@ app.get('/whatsapp/conversaciones/:contacto', requireAuth, rolBandeja, async (re
 
 app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await marcarLeido({ contacto: req.params.contacto })
+    const r = await marcarLeido({ contacto: req.params.contacto, linea: req.body?.linea || null })
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[wa-bandeja/leido] ERROR', e.message)
@@ -175,7 +179,8 @@ app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, rolBandeja, as
 app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, async (req, res) => {
   try {
     const r = await enviarTexto({
-      contacto: req.params.contacto, texto: req.body?.texto, personalId: req.personal.id,
+      contacto: req.params.contacto, linea: req.body?.linea || null,
+      texto: req.body?.texto, personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
   } catch (e) {
@@ -199,7 +204,7 @@ app.get('/whatsapp/etiquetas', requireAuth, rolBandeja, async (_req, res) => {
 app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, rolBandeja, async (req, res) => {
   try {
     const r = await etiquetar({
-      contacto: req.params.contacto, clave: req.body?.clave,
+      contacto: req.params.contacto, linea: req.body?.linea || null, clave: req.body?.clave,
       origen: 'MANUAL', motivo: req.body?.motivo || null, personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
@@ -211,7 +216,9 @@ app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, rolBandeja
 
 app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await desetiquetar({ contacto: req.params.contacto, clave: req.params.clave })
+    const r = await desetiquetar({
+      contacto: req.params.contacto, linea: req.query.linea || null, clave: req.params.clave,
+    })
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[wa-bandeja/desetiquetar] ERROR', e.message)
@@ -224,8 +231,8 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, r
 app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, rolBandeja, async (req, res) => {
   try {
     const r = await cambiarAgente({
-      contacto: req.params.contacto, activo: req.body?.activo === true,
-      personalId: req.personal.id,
+      contacto: req.params.contacto, linea: req.body?.linea || null,
+      activo: req.body?.activo === true, personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-bandeja/agente', e) }
@@ -504,7 +511,8 @@ app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
 async function rutaArchivo(req, res) {
   try {
     const r = await enviarArchivo({
-      contacto: req.body?.contacto, base64: req.body?.base64, mime: req.body?.mime,
+      contacto: req.body?.contacto, linea: req.body?.linea || null,
+      base64: req.body?.base64, mime: req.body?.mime,
       nombre: req.body?.nombre, pie: req.body?.pie,
       notaDeVoz: req.body?.notaDeVoz === true,
       personalId: req.personal.id, enviarSobre,

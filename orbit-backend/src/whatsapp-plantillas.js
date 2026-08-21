@@ -1078,7 +1078,8 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
   // pero solo si lo hizo una persona. Ver el bug del 11-ago en whatsapp-cloud.js.
   if (personalId) {
     await pool.query(
-      `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now() WHERE contacto = $1`, [num]
+      `UPDATE public.whatsapp_contactos SET ultimo_leido_en = now()
+        WHERE contacto = $1 AND phone_number_id = $2`, [num, desde]
     ).catch(() => {})
   }
 

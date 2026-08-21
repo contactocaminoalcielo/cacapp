@@ -66,7 +66,10 @@ async function resolverUrl(url, contacto) {
   if (!t.includes('{{enlace_registro}}')) return t
 
   const { rows: [conv] } = await pool.query(
-    `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`, [contacto]
+    // El aliado se resuelve por el número, así que es el mismo en todas las
+    // líneas; el LIMIT solo lo hace determinista ahora que puede haber varias.
+    `SELECT aliado_id FROM public.v_whatsapp_conversaciones
+      WHERE contacto = $1 AND aliado_id IS NOT NULL LIMIT 1`, [contacto]
   )
   // Sin aliado, el enlace correcto es el de afiliación: es el mismo criterio
   // que usa la herramienta del agente, y de ahí sale que nadie pueda pedir el
@@ -164,7 +167,7 @@ function resumen(m) {
  * Recibe `enviarSobre` en vez de importarlo: whatsapp-cloud ya importa de aquí
  * indirectamente a través del agente, y el lazo cerraría un ciclo de módulos.
  */
-export async function enviarInteractivo({ contacto, clave, personalId = null, enviarSobre }) {
+export async function enviarInteractivo({ contacto, linea = null, clave, personalId = null, enviarSobre }) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
@@ -183,6 +186,8 @@ export async function enviarInteractivo({ contacto, clave, personalId = null, en
 
   const r = await enviarSobre({
     contacto: num,
+    // Sale por la MISMA línea por la que llegó la conversación.
+    linea,
     payload: { type: 'interactive', interactive },
     texto: resumen(m),
     tipo: 'interactive',

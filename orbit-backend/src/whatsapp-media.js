@@ -273,17 +273,18 @@ export async function revisarImagenes(mensajeIds) {
   return { visibles: r?.visibles || 0, fallidas: r?.fallidas || 0 }
 }
 
-export async function imagenesRecientes(contacto, tope = 2) {
+export async function imagenesRecientes(contacto, tope = 2, phoneNumberId = null) {
   const { rows } = await pool.query(
     `SELECT m.mensaje_id, m.mime, m.archivo
        FROM public.whatsapp_media m
        JOIN public.whatsapp_mensajes w ON w.id = m.mensaje_id
       WHERE w.contacto = $1 AND w.direccion = 'IN'
+        AND ($4::text IS NULL OR w.phone_number_id = $4)
         AND m.archivo IS NOT NULL
         AND m.mime = ANY($2)
       ORDER BY w.ocurrido_en DESC, w.id DESC
       LIMIT $3`,
-    [contacto, [...MIRABLES], tope]
+    [contacto, [...MIRABLES], tope, phoneNumberId]
   )
   return rows.reverse()
 }
@@ -402,7 +403,7 @@ async function aNotaDeVoz(buf, mime) {
 }
 
 export async function enviarArchivo({
-  contacto, base64, mime, nombre = 'archivo', pie = '', personalId = null, enviarSobre,
+  contacto, linea = null, base64, mime, nombre = 'archivo', pie = '', personalId = null, enviarSobre,
   // Lo graba la bandeja apretando el micrófono. Cambia el formato Y cómo se
   // ve del otro lado, así que no se adivina por el MIME: se dice.
   notaDeVoz = false,
@@ -465,8 +466,13 @@ export async function enviarArchivo({
   if (!token) return { status: 500, body: { ok: false, error: 'WhatsApp no está configurado en el servidor' } }
 
   const { rows } = await pool.query(
-    `SELECT phone_number_id, ventana_abierta FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
-    [num]
+    // ⚠️ Sin la línea, con dos conversaciones abiertas esto elegía una al azar
+    // y la nota de voz salía por la que no era. La más reciente es la que se
+    // está atendiendo.
+    `SELECT phone_number_id, ventana_abierta FROM public.v_whatsapp_conversaciones
+      WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2)
+      ORDER BY ultimo_mensaje_en DESC NULLS LAST LIMIT 1`,
+    [num, linea || null]
   )
   const conv = rows[0]
   if (!conv) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
@@ -526,6 +532,8 @@ export async function enviarArchivo({
 
   const r = await enviarSobre({
     contacto: num,
+    // Sale por la MISMA línea por la que llegó la conversación.
+    linea: conv?.phone_number_id || linea || null,
     payload: { type: clase, [clase]: contenido },
     texto: pieCorto || (clase === 'document' ? `[documento] ${nombre}`
       : notaDeVoz ? '[nota de voz]' : `[${regla.etiqueta}]`),

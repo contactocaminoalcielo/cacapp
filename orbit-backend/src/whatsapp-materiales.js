@@ -65,7 +65,7 @@ export async function leerMaterial(id) {
  * Recibe `enviarSobre` en vez de importarlo, igual que los interactivos: el lazo
  * con whatsapp-cloud cerraría un ciclo de módulos.
  */
-export async function enviarMaterial({ contacto, clave, personalId = null, enviarSobre }) {
+export async function enviarMaterial({ contacto, linea = null, clave, personalId = null, enviarSobre }) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
@@ -78,6 +78,7 @@ export async function enviarMaterial({ contacto, clave, personalId = null, envia
 
   const r = await enviarArchivo({
     contacto: num,
+    linea,
     base64: m.archivo.toString('base64'),
     mime: m.mime,
     nombre: m.nombre_archivo,
