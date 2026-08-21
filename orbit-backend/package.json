@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "ensure-browser": "node memorial/ensure-browser.mjs"
+    "ensure-browser": "node memorial/ensure-browser.mjs",
+    "prueba:oido": "node pruebas/oido.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

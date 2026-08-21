@@ -283,15 +283,21 @@ export async function contestarConFrase({ phoneNumberId, callId, sdpOffer, agent
  * hace la página de pruebas en el navegador, pero aquí lo hacemos nosotros
  * porque en una llamada no hay navegador que nos avise.
  */
-class Oido {
-  constructor({ alTerminarDeHablar, silencioMs = 800, umbral = 0.012 }) {
+export class Oido {
+  constructor({ alTerminarDeHablar, silencioMs = 800, umbral = 0.012, topeTurnoMs = 15_000 }) {
     this.alTerminarDeHablar = alTerminarDeHablar
     this.silencioMs = silencioMs
     this.umbral = umbral
+    this.topeTurnoMs = topeTurnoMs
     this.trozos = []
+    this.msAudio = 0            // cuánto audio lleva acumulado este turno
+    this.niveles = []           // para poder afinar el umbral con datos, no a ojo
     this.huboVoz = false
     this.calladoDesde = null
+    this.ultimoTrozo = null     // cuándo llegó el último paquete RTP
     this.sordo = false          // mientras el agente habla, no se escucha
+    // 🩸 El reloj es PROPIO a propósito. Ver `revisar()`.
+    this.reloj = setInterval(() => this.revisar(), 100)
   }
 
   /** Un trozo de PCM de 20 ms recién descodificado. */
@@ -308,40 +314,125 @@ class Oido {
     }
     const nivel = Math.sqrt(suma / (pcm.length / 2))
 
+    this.ultimoTrozo = Date.now()
+    this.niveles.push(nivel)
+
     if (nivel > this.umbral) {
       this.huboVoz = true
       this.calladoDesde = null
-      this.trozos.push(pcm)
+      this.guardar(pcm)
+      // 🩸 UN TURNO NO PUEDE CRECER SIN FIN. Si el ruido de fondo de la línea
+      // se queda por encima del umbral —una calle, un consultorio, la propia
+      // portadora— el nivel no baja nunca, el corte por silencio no llega
+      // nunca y el agente escucha eternamente mientras la clínica habla y
+      // espera. Desde fuera se ve EXACTAMENTE igual que "saluda y no responde".
+      if (this.msAudio >= this.topeTurnoMs) this.cerrarTurno('tope')
       return
     }
 
     // El silencio también se guarda: recortarlo deja las palabras pegadas y
     // Whisper transcribe peor.
     if (this.huboVoz) {
-      this.trozos.push(pcm)
+      this.guardar(pcm)
       this.calladoDesde ??= Date.now()
-      if (Date.now() - this.calladoDesde > this.silencioMs) this.cerrarTurno()
+      if (Date.now() - this.calladoDesde > this.silencioMs) this.cerrarTurno('silencio')
     }
   }
 
-  cerrarTurno() {
+  guardar(pcm) {
+    this.trozos.push(pcm)
+    this.msAudio += (pcm.length / 2) / 48                  // muestras a 48 kHz → ms
+  }
+
+  /**
+   * Cierra el turno aunque DEJEN DE LLEGAR paquetes.
+   *
+   * 🩸 El corte por silencio vivía dentro de `alimentar`, así que dependía de
+   * que siguiera entrando audio. Si quien llama cuelga, o la línea deja de
+   * mandar durante una pausa (Opus manda DTX: en silencio no manda nada), lo
+   * que ya se había hablado se quedaba en el buffer para siempre y el agente
+   * no contestaba jamás.
+   */
+  revisar() {
+    if (this.sordo || !this.huboVoz) return
+    const desde = this.calladoDesde ?? this.ultimoTrozo
+    if (desde && Date.now() - desde > this.silencioMs) this.cerrarTurno('reloj')
+  }
+
+  cerrarTurno(motivo = 'silencio') {
     const pcm = Buffer.concat(this.trozos)
+    const ms = Math.round(this.msAudio)
+    const niveles = this.niveles
     this.trozos = []
+    this.msAudio = 0
+    this.niveles = []
     this.huboVoz = false
     this.calladoDesde = null
     // Menos de medio segundo de audio no es una frase: es una tos, un golpe o
     // el eco del propio agente. Contestar a eso es peor que ignorarlo.
     if (pcm.length < 48000 * 2 * 0.5) return
     this.sordo = true
-    this.alTerminarDeHablar(pcm)
+    this.alTerminarDeHablar(pcm, { motivo, ms, niveles: resumenNiveles(niveles) })
   }
 
   volverAEscuchar() {
     this.trozos = []
+    this.msAudio = 0
+    this.niveles = []
     this.huboVoz = false
     this.calladoDesde = null
+    this.ultimoTrozo = null
     this.sordo = false
   }
+
+  parar() {
+    clearInterval(this.reloj)
+    this.sordo = true
+  }
+}
+
+/**
+ * Cómo sonaba el turno, en tres números.
+ *
+ * Sirve para una pregunta concreta que hoy no se puede responder: si el agente
+ * no contestó, ¿fue porque no oyó nada (todo por debajo del umbral) o porque el
+ * ruido tapaba la voz (todo por encima)? Sin esto, las dos cosas se ven igual
+ * en el registro y el umbral se afina adivinando.
+ */
+function resumenNiveles(niveles) {
+  if (!niveles.length) return null
+  const orden = [...niveles].sort((a, b) => a - b)
+  const tres = n => n.toFixed(4)
+  return {
+    min:      tres(orden[0]),
+    mediana:  tres(orden[Math.floor(orden.length / 2)]),
+    max:      tres(orden[orden.length - 1]),
+  }
+}
+
+/**
+ * Las llamadas que están sonando AHORA, para poder cortarlas desde fuera.
+ *
+ * 🩸 Hace falta porque el webhook y la llamada viven en sitios distintos: quien
+ * llama cuelga, Meta manda `terminate` al webhook, y la sesión de audio no se
+ * entera. Medido el 2026-08-20: colgaron a los 26 s y la sesión siguió viva
+ * hasta el tope de 5 minutos — gastando Whisper y ElevenLabs, y contestándole
+ * en voz alta a una llamada que ya no existía (41 s después de colgar).
+ */
+const enCurso = new Map()
+
+/**
+ * Cuelga una llamada que está en curso. Devuelve si había alguna.
+ *
+ * `porElOtroLado` evita mandarle a Meta un `terminate` de una llamada que ya
+ * terminó ella sola: no rompe nada, pero ensucia el registro con un error que
+ * parece un fallo nuestro y no lo es.
+ */
+export function colgar(callId, { motivo = 'colgaron', porElOtroLado = true } = {}) {
+  const sesion = enCurso.get(callId)
+  if (!sesion) return false
+  sesion.cerrar({ motivo, porElOtroLado })
+  return true
 }
 
 /**
@@ -359,6 +450,8 @@ class Oido {
 export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
   const t0 = Date.now()
   let pc = null, viva = true
+  let cerrar = null, oidoVivo = null
+  let motivoCierre = 'sin empezar', yaColgada = false
   const historial = []
 
   try {
@@ -406,10 +499,23 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
     const decodificador = new Opus(48000, 1, Opus.Application.VOIP)
     let iMuletilla = 0
 
+    // 🩸 UNA SOLA COSA SUENA A LA VEZ. La muletilla se lanza sin esperarla (esa
+    // es toda su gracia: sonar YA mientras se piensa), así que si el turno sale
+    // rápido, la respuesta empezaría a escribir en la MISMA pista mientras la
+    // muletilla sigue sonando: dos numeraciones RTP mezcladas y un audio que
+    // llega picado. Encolar cuesta nada y lo hace imposible.
+    let sonando = Promise.resolve()
+    const reproducirEnCola = (audio) => {
+      sonando = sonando
+        .catch(() => {})
+        .then(async () => reproducir(salida, await aPaquetesOpus(audio), tipoCarga))
+      return sonando
+    }
+
     const decir = async (audio) => {
       oido.sordo = true
       try {
-        await reproducir(salida, await aPaquetesOpus(audio), tipoCarga)
+        await reproducirEnCola(audio)
       } finally {
         // Un respiro antes de volver a escuchar: la cola del propio audio en la
         // línea se tomaría por voz de la clínica.
@@ -418,17 +524,26 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
     }
 
     const oido = new Oido({
-      alTerminarDeHablar: async (pcm) => {
+      alTerminarDeHablar: async (pcm, corte) => {
         if (!viva) return
         const t = Date.now()
+        const n = corte?.niveles
+        log(MOD, `${callId}: turno cerrado por ${corte?.motivo} — ${corte?.ms} ms de audio`
+          + (n ? ` · nivel min ${n.min} / mediana ${n.mediana} / max ${n.max}` : ''))
+
         // La muletilla suena YA, mientras se piensa. Es lo que convierte tres
         // segundos de silencio en una conversación normal.
         const m = muletillas[iMuletilla++ % (muletillas.length || 1)]
-        if (m) reproducir(salida, await aPaquetesOpus(Buffer.from(m.audio, 'base64')), tipoCarga)
-          .catch(() => {})
+        if (m) reproducirEnCola(Buffer.from(m.audio, 'base64')).catch(() => {})
 
-        const r = await turno({ agente, wav: wavDePcm(pcm, 48000), historial })
+        const r = await turno({ agente, wav: wavDePcm(pcm, 48000), historial, msAudio: corte?.ms })
         if (!viva) return
+        // Whisper no devuelve vacío con el silencio: devuelve una muletilla de
+        // subtítulos. Contestarla es peor que callarse — ver `esRuido`.
+        if (r.ruido) {
+          log(MOD, `${callId}: ruido, no una frase ("${r.transcripcion}") — sigo escuchando`)
+          return oido.volverAEscuchar()
+        }
         if (r.error) {
           log(MOD, `${callId}: turno falló — ${r.error}`)
           return oido.volverAEscuchar()
@@ -440,6 +555,10 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
         await decir(Buffer.from(r.audio, 'base64'))
       },
     })
+
+    // El reloj del oído hay que pararlo al colgar: un `setInterval` suelto
+    // mantiene vivo el proceso y sigue latiendo por una llamada que ya no está.
+    oidoVivo = oido
 
     // El audio que entra: cada paquete RTP trae 20 ms de Opus.
     const escuchar = (pista) => pista.onReceiveRtp.subscribe((rtp) => {
@@ -456,18 +575,38 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
 
     // La llamada vive hasta que cuelguen o hasta el tope. Sin tope, un teléfono
     // olvidado descolgado deja esto corriendo (y gastando) para siempre.
+    //
+    // ⚠️ El estado de la conexión NO basta para saber que colgaron: medido, con
+    // Meta se queda en `connected` después de que cuelgan y solo se enteraba por
+    // el tope de 5 minutos. Quien avisa de verdad es el webhook (`terminate`),
+    // y para eso la sesión se apunta en `enCurso`.
     await new Promise(fin => {
-      const tope = setTimeout(fin, 5 * 60_000)
+      const tope = setTimeout(() => { motivoCierre = 'tope de 5 min'; fin() }, 5 * 60_000)
+      cerrar = ({ motivo, porElOtroLado }) => {
+        motivoCierre = motivo
+        yaColgada = yaColgada || porElOtroLado
+        clearTimeout(tope)
+        fin()
+      }
+      enCurso.set(callId, { cerrar })
       pc.connectionStateChange.subscribe(estado => {
-        if (['closed', 'failed', 'disconnected'].includes(estado)) { clearTimeout(tope); fin() }
+        if (['closed', 'failed', 'disconnected'].includes(estado)) {
+          cerrar({ motivo: `conexión ${estado}`, porElOtroLado: true })
+        }
       })
     })
   } catch (e) {
+    motivoCierre = `ERROR — ${e.message}`
     log(MOD, `${callId}: ERROR en la conversación — ${e.message}`)
   } finally {
     viva = false
-    await accionLlamada({ phoneNumberId, callId, accion: 'terminate' }).catch(() => {})
+    enCurso.delete(callId)
+    oidoVivo?.parar()
+    // Si colgó quien llamaba, mandarle `terminate` a Meta devuelve un error de
+    // llamada inexistente que parece un fallo nuestro. Solo se cuelga cuando
+    // quien cuelga somos nosotros.
+    if (!yaColgada) await accionLlamada({ phoneNumberId, callId, accion: 'terminate' }).catch(() => {})
     try { pc?.close() } catch { /* ya estaba cerrada */ }
-    log(MOD, `${callId}: llamada cerrada (${Math.round((Date.now() - t0) / 1000)} s)`)
+    log(MOD, `${callId}: llamada cerrada por ${motivoCierre} (${Math.round((Date.now() - t0) / 1000)} s)`)
   }
 }

@@ -76,6 +76,55 @@ async function transcribir(audio) {
 }
 
 /**
+ * ¿Lo que devolvió Whisper es algo que dijeron, o es Whisper rellenando?
+ *
+ * 🩸 WHISPER NO DEVUELVE VACÍO CON EL SILENCIO: devuelve una muletilla de
+ * subtítulos —"Gracias.", "Subtítulos realizados por..."— y normalmente
+ * repetida. En la llamada del 2026-08-20 eso hizo que el agente contestara
+ * "de nada, con gusto" a veinte segundos de ruido de fondo, y que quien llamaba
+ * oyera una respuesta a algo que no había dicho. Callarse es mucho mejor.
+ *
+ * `msAudio` es la clave para no pasarse de listo: "gracias" a secas SÍ es una
+ * frase real cuando dura un segundo. Lo que no existe es alguien que tarde
+ * cuatro segundos en decir solo "gracias" — eso es silencio con relleno.
+ */
+const RELLENOS_DE_WHISPER = new Set([
+  'gracias',
+  'muchas gracias',
+  'gracias por ver el video',
+  'gracias por ver este video',
+  'subtitulos realizados por la comunidad de amara org',
+  'subtitulado por la comunidad de amara org',
+  'subtitulos por la comunidad de amara org',
+  'amara org',
+  'www youtube com',
+  'continuara',
+])
+
+function normalizar(t) {
+  return String(t || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // sin tildes
+    .replace(/[^a-z0-9ñ ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function esRuido(texto, msAudio = null) {
+  const limpio = normalizar(texto)
+  if (!limpio) return true
+
+  // La firma más fiable: la MISMA frase corta repetida. Nadie habla así.
+  const frases = String(texto).split(/[.!?…]+/).map(normalizar).filter(Boolean)
+  if (frases.length >= 3 && new Set(frases).size === 1 && frases[0].split(' ').length <= 4) return true
+
+  if (!RELLENOS_DE_WHISPER.has(limpio)) return false
+  // Está en la lista: solo cuenta como ruido si el audio era largo. Un
+  // "gracias" de verdad ocupa un segundo, no cuatro.
+  return msAudio === null || msAudio > 4000
+}
+
+/**
  * La respuesta del agente, en modo VOZ.
  *
  * Devuelve la primera frase en cuanto está, no al terminar: con ella ya se
@@ -193,7 +242,7 @@ export function wavDePcm(pcm, hz = 48000) {
  * el cliente a propósito: esto es un laboratorio, y no quiero que una prueba
  * ensucie la bandeja ni la bitácora del agente de verdad.
  */
-export async function turno({ agente, audio, wav = null, historial = [] }) {
+export async function turno({ agente, audio, wav = null, historial = [], msAudio = null }) {
   const t0 = Date.now()
   const tiempos = {}
 
@@ -202,7 +251,16 @@ export async function turno({ agente, audio, wav = null, historial = [] }) {
   // descodificado y volver a pasarlo por ffmpeg sería tiempo tirado.
   const oido = wav ? await transcribirWav(wav) : await transcribir(audio)
   tiempos.transcribir = Date.now() - tOir
+  // Cuánto audio se le dio y cuánto tardó: sin los dos números, un "oír 53 s"
+  // no dice si el audio era larguísimo o si Whisper estaba atascado. Pasó, y no
+  // se pudo decidir con el registro que había.
+  tiempos.audio = msAudio ?? (oido.duracion ? Math.round(oido.duracion * 1000) : null)
   if (oido.error) return { error: oido.error, tiempos }
+
+  if (esRuido(oido.texto, tiempos.audio)) {
+    log(MOD, `ruido, no una frase: "${oido.texto}" (${tiempos.audio} ms de audio)`)
+    return { ruido: true, transcripcion: oido.texto, tiempos }
+  }
 
   const tPensar = Date.now()
   const pensado = await pensar({ agente, historial, dicho: oido.texto })
@@ -222,7 +280,7 @@ export async function turno({ agente, audio, wav = null, historial = [] }) {
   // termina de escribirlo todo.
   tiempos.silencioReal = tiempos.transcribir + (tiempos.primeraFrase ?? tiempos.pensar) + (tiempos.primerSonido ?? 0)
 
-  log(MOD, `turno: oír ${tiempos.transcribir}ms · pensar ${tiempos.pensar}ms`
+  log(MOD, `turno: ${tiempos.audio ?? '?'}ms de audio · oír ${tiempos.transcribir}ms · pensar ${tiempos.pensar}ms`
     + ` (1ª frase ${tiempos.primeraFrase}ms) · hablar ${tiempos.hablar}ms`
     + ` → silencio real ${tiempos.silencioReal}ms`)
 

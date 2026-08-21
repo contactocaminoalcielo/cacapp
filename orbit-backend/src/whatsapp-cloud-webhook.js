@@ -325,6 +325,22 @@ async function procesarPayload(payload) {
         atenderLlamadaEntrante(ev, payload).catch(e =>
           log(MOD, 'no se pudo atender la llamada —', e.message))
       }
+
+      // ── Colgaron: cortar la sesión de audio de verdad ──
+      // 🩸 Sin esto la sesión seguía viva hasta el tope de 5 minutos. Medido el
+      // 2026-08-20: colgaron a los 26 s, y 41 s DESPUÉS el agente le contestó
+      // en voz alta a una llamada que ya no existía, gastando Whisper y
+      // ElevenLabs por el camino. El estado de la conexión WebRTC no avisa:
+      // con Meta se queda en `connected`. Este evento es el único aviso real.
+      if (ev.eventType === 'call' && ev.status === 'terminate') {
+        import('./llamadas.js')
+          .then(({ colgar }) => {
+            if (colgar(ev.waMessageId, { motivo: 'colgó quien llamaba' })) {
+              log(MOD, `llamada ${ev.waMessageId}: colgaron — sesión cerrada`)
+            }
+          })
+          .catch(e => log(MOD, 'no se pudo cerrar la llamada —', e.message))
+      }
     } catch (e) {
       log(MOD, `ERROR guardando wamid=${ev.waMessageId || '-'} —`, e.message)
     }
