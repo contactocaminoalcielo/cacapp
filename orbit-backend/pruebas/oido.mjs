@@ -91,6 +91,31 @@ r.push(await casoInterrupcion('un golpe corto NO le interrumpe', async o => {
   await alimentarEnVivo(o, ECO, 400)
 }, false))
 
+// ── Un turno que revienta NO puede llevarse el proceso ────────────────────
+//
+// 🩸 El 21-ago un 400 de la API de Claude dentro del turno mató el backend
+// entero. El callback se lanza sin esperarlo, así que su excepción quedaba como
+// promesa sin recoger — y desde Node 15 eso es `process.exit`, no un aviso.
+{
+  let sinRecoger = null
+  const vigia = (razon) => { sinRecoger = razon }
+  process.on('unhandledRejection', vigia)
+
+  const oido = new Oido({
+    alTerminarDeHablar: async () => { throw new Error('400 saldo agotado (simulado)') },
+  })
+  alimentarDurante(oido, VOZ, 1200)
+  await new Promise(res => setTimeout(res, 1200))    // que salte el reloj y el turno
+  await new Promise(res => setImmediate(res))        // y que Node procese la promesa
+  oido.parar()
+  process.off('unhandledRejection', vigia)
+
+  const bien = sinRecoger === null
+  r.push(bien)
+  console.log(`${bien ? '✓' : '✗'} un turno que revienta no deja promesa sin recoger`
+    + `${sinRecoger ? ` — quedó "${sinRecoger.message}"` : ''}`)
+}
+
 const casosRuido = [
   ['Gracias. Gracias. Gracias. Gracias.', 20000, true],
   ['Gracias.', 800, false],

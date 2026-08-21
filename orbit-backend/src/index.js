@@ -1184,6 +1184,24 @@ app.get(['/digitales/:id/archivo', '/memoriales/:id/archivo'], async (req, res) 
   }
 })
 
+// ── Red de seguridad: una promesa sin recoger NO puede tumbar el backend ──
+//
+// 🩸 EL 21-AGO ESTO NOS COSTÓ EL SERVICIO ENTERO. Un 400 de la API de Claude
+// ("saldo agotado") ocurrió dentro del callback de una llamada de voz. Ese
+// callback se lanza sin esperarlo, así que el error quedó como promesa sin
+// recoger — y desde Node 15 eso no es un aviso, es `process.exit`. Se murió el
+// backend completo: el agente de WhatsApp de 203 clínicas, los jobs y el portal
+// de fotos, por un error de una llamada telefónica.
+//
+// Cada sitio debe seguir capturando lo suyo; esto es el último cortafuegos, no
+// una excusa para no hacerlo. Lo que NO se hace aquí es silenciarlo: se registra
+// entero, porque un fallo que no tumba nada y tampoco se ve es peor.
+process.on('unhandledRejection', (razon) => {
+  const detalle = razon instanceof Error ? `${razon.message}
+${razon.stack}` : String(razon)
+  log('[proceso] PROMESA SIN RECOGER —', detalle.slice(0, 1000))
+})
+
 const PORT = parseInt(process.env.PORT) || 8787
 app.listen(PORT, () => {
   log(`orbit-backend escuchando en :${PORT} (TZ=${process.env.TZ || 'UTC'})`)

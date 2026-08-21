@@ -144,7 +144,7 @@ async function pensar({ agente, historial, dicho, alFrase = null, sistema = null
   const system = sistema || await construirSistema(agente)
 
   const t0 = Date.now()
-  let texto = '', pendiente = '', primeraFrase = null, frases = 0
+  let texto = '', pendiente = '', primeraFrase = null, frases = 0, fallo = null
 
   // Cada frase entera sale por aquí en cuanto está escrita. Quien llame decide
   // qué hacer con ella: en una llamada, sintetizarla y ponerla a sonar mientras
@@ -155,52 +155,70 @@ async function pensar({ agente, historial, dicho, alFrase = null, sistema = null
     alFrase?.(frase, frases)
   }
 
-  const stream = await cliente.messages.create({
-    model: agente.modelo || 'claude-sonnet-5',
-    max_tokens: 400,
-    // Sin razonar: medido, con razonamiento no emite nada hasta el final.
-    thinking: { type: 'disabled' },
-    system: [
-      ...system,
-      {
-        type: 'text',
-        text: 'ESTÁS HABLANDO POR TELÉFONO, no escribiendo. Frases cortas y '
-          + 'naturales, como se habla. Nada de listas, viñetas, asteriscos ni '
-          + 'enlaces: nada de eso se puede pronunciar. Si tienes que dar un '
-          + 'dato largo, dilo despacio y ofrece repetirlo. Y responde a lo que '
-          + 'te preguntaron, sin rodeos: quien llama está esperando en silencio.',
-      },
-    ],
-    messages: [...historial, { role: 'user', content: dicho }],
-    stream: true,
-  })
+  // 🩸 NADA DE AQUÍ PUEDE LANZAR HACIA FUERA. A `pensar` se le llama desde un
+  // callback que nadie espera, así que una excepción se convierte en una promesa
+  // sin recoger — y eso, desde Node 15, MATA EL PROCESO. Pasó el 21-ago: un 400
+  // de "saldo agotado" en mitad de una llamada se llevó por delante el backend
+  // entero (agente de WhatsApp de 203 clínicas, jobs y portal incluidos). El
+  // fallo sale como dato en `fallo`, y quien llama decide qué decirle a la
+  // persona. Ver también la red de seguridad de `index.js`.
+  const escribir = async () => {
+      const stream = await cliente.messages.create({
+      model: agente.modelo || 'claude-sonnet-5',
+      max_tokens: 400,
+      // Sin razonar: medido, con razonamiento no emite nada hasta el final.
+      thinking: { type: 'disabled' },
+      system: [
+        ...system,
+        {
+          type: 'text',
+          text: 'ESTÁS HABLANDO POR TELÉFONO, no escribiendo. Frases cortas y '
+            + 'naturales, como se habla. Nada de listas, viñetas, asteriscos ni '
+            + 'enlaces: nada de eso se puede pronunciar. Si tienes que dar un '
+            + 'dato largo, dilo despacio y ofrece repetirlo. Y responde a lo que '
+            + 'te preguntaron, sin rodeos: quien llama está esperando en silencio.',
+        },
+      ],
+      messages: [...historial, { role: 'user', content: dicho }],
+      stream: true,
+    })
 
-  for await (const ev of stream) {
-    if (ev.type !== 'content_block_delta' || ev.delta?.type !== 'text_delta') continue
-    texto += ev.delta.text
-    pendiente += ev.delta.text
-    // Todas las que quepan, no solo la primera: si el modelo escribe rápido
-    // pueden completarse dos en el mismo trozo, y dejarlas esperando al
-    // siguiente delta añade silencio por nada.
-    for (;;) {
-      // La PRIMERA se corta antes (15 caracteres en vez de 30): "¡Hola! Claro
-      // que sí." es una frase perfectamente natural para empezar a sonar, y
-      // cada décima que se gana ahí es silencio que quien llama no oye. De la
-      // segunda en adelante ya no hay prisa —suena mientras se escribe— y trozos
-      // más largos suenan mejor.
-      const [frase, resto] = siguienteFrase(pendiente, frases === 0 ? 15 : 30)
-      if (!frase) break
-      pendiente = resto
-      soltar(frase)
+    for await (const ev of stream) {
+      if (ev.type !== 'content_block_delta' || ev.delta?.type !== 'text_delta') continue
+      texto += ev.delta.text
+      pendiente += ev.delta.text
+      // Todas las que quepan, no solo la primera: si el modelo escribe rápido
+      // pueden completarse dos en el mismo trozo, y dejarlas esperando al
+      // siguiente delta añade silencio por nada.
+      for (;;) {
+        // La PRIMERA se corta antes (15 caracteres en vez de 30): "¡Hola! Claro
+        // que sí." es una frase perfectamente natural para empezar a sonar, y
+        // cada décima que se gana ahí es silencio que quien llama no oye. De la
+        // segunda en adelante ya no hay prisa —suena mientras se escribe— y trozos
+        // más largos suenan mejor.
+        const [frase, resto] = siguienteFrase(pendiente, frases === 0 ? 15 : 30)
+        if (!frase) break
+        pendiente = resto
+        soltar(frase)
+      }
     }
+
+    // El final casi nunca cierra en punto y aparte limpio. Lo que quede se dice
+    // igual: perderlo sería cortarle la última frase a quien está escuchando.
+    const cola = pendiente.trim()
+    if (cola) soltar(cola)
   }
 
-  // El final casi nunca cierra en punto y aparte limpio. Lo que quede se dice
-  // igual: perderlo sería cortarle la última frase a quien está escuchando.
-  const cola = pendiente.trim()
-  if (cola) soltar(cola)
+  try {
+    await escribir()
+  } catch (e) {
+    // El mensaje del SDK trae el JSON entero de la API: para el registro sirve,
+    // pero lo que importa es que esto salga como DATO y no como excepción.
+    fallo = e?.error?.error?.message || e?.message || 'el modelo falló'
+    log(MOD, `el modelo falló — ${String(fallo).slice(0, 200)}`)
+  }
 
-  return { texto: texto.trim(), primeraFrase, frases, ms: Date.now() - t0 }
+  return { texto: texto.trim(), primeraFrase, frases, fallo, ms: Date.now() - t0 }
 }
 
 /**
@@ -238,6 +256,31 @@ export async function rellenos(agente) {
     log(MOD, `relleno listo: ${audios.length} frase(s) pregeneradas`)
   }
   return audios
+}
+
+/**
+ * "Perdona, no te pude responder" — ya en audio, antes de necesitarlo.
+ *
+ * 🩸 Quedarse mudo es lo peor que puede pasar en una llamada: quien llama no
+ * sabe si sigue ahí, si se cortó o si tiene que repetir. Pasó el 21-ago —el
+ * cerebro devolvió un 400 y la llamada murió en silencio— y desde fuera parecía
+ * que la línea se había caído.
+ *
+ * Se pregenera al empezar la llamada a propósito: justo cuando hace falta es
+ * cuando algo no está funcionando, y no es momento de depender de nada más.
+ */
+const disculpaCache = new Map()
+
+export async function disculpa(agente) {
+  const clave = `${agente.voz_id}|${agente.voz_modelo}`
+  if (disculpaCache.has(clave)) return disculpaCache.get(clave)
+  const v = await sintetizar({
+    agente,
+    texto: 'Perdona, tuve un problema para responderte. ¿Me lo repites, por favor?',
+  })
+  if (v.error) return null
+  disculpaCache.set(clave, v.audio)
+  return v.audio
 }
 
 /**
@@ -329,6 +372,10 @@ export async function turno({ agente, audio, wav = null, historial = [], msAudio
   tiempos.pensar = Date.now() - tPensar
   tiempos.primeraFrase = pensado.primeraFrase?.ms ?? null
   tiempos.frases = pensado.frases
+  // Si falló Y no llegó a decir nada, el fallo es la respuesta. Si alcanzó a
+  // soltar alguna frase antes de romperse, esa frase ya está sonando: se sigue
+  // adelante con lo que hay en vez de disculparse encima de ello.
+  if (pensado.fallo && !pensado.texto) return { error: pensado.fallo, tiempos }
   if (!pensado.texto) return { error: 'el agente no dijo nada', tiempos }
 
   if (alFrase) {

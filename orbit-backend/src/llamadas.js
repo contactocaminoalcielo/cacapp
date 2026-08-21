@@ -500,7 +500,11 @@ export class Oido {
 
     this.vozDesde = null
     this.interrupciones++
-    this.alInterrumpir({ nivel: nivel.toFixed(4), pisoEco: pisoEco.toFixed(4), listón: listón.toFixed(4) })
+    try {
+      this.alInterrumpir({ nivel: nivel.toFixed(4), pisoEco: pisoEco.toFixed(4), listón: listón.toFixed(4) })
+    } catch (e) {
+      log(MOD, `no se pudo atender la interrupción — ${e.message}`)
+    }
   }
 
   revisar() {
@@ -523,7 +527,15 @@ export class Oido {
     if (pcm.length < 48000 * 2 * 0.5) return
     this.sordo = true
     this.turnos++
-    this.alTerminarDeHablar(pcm, { motivo, ms, turno: this.turnos, niveles: resumenNiveles(niveles) })
+    // 🩸 `.catch` OBLIGATORIO. Este callback es asíncrono y se lanza sin
+    // esperarlo. Si revienta —y revienta: la API de Claude devolvió un 400 por
+    // saldo agotado el 21-ago— la promesa queda sin recoger, y desde Node 15
+    // eso NO es un aviso: MATA EL PROCESO. Se llevó por delante el backend
+    // entero (agente de WhatsApp de 203 clínicas, jobs, portal) por un error de
+    // una llamada de voz. Ver también la red de seguridad en `index.js`.
+    Promise.resolve(
+      this.alTerminarDeHablar(pcm, { motivo, ms, turno: this.turnos, niveles: resumenNiveles(niveles) })
+    ).catch(e => log(MOD, `el turno reventó — ${e.message}`))
   }
 
   volverAEscuchar() {
@@ -611,7 +623,7 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
   try {
     const { RTCPeerConnection, MediaStreamTrack, useOPUS } = await import('werift')
     const Opus = (await import('opusscript')).default
-    const { turno, wavDePcm, rellenos, prepararSistema } = await import('./voz-conversacion.js')
+    const { turno, wavDePcm, rellenos, disculpa, prepararSistema } = await import('./voz-conversacion.js')
 
     pc = new RTCPeerConnection({
       codecs: { audio: [useOPUS()] },
@@ -644,6 +656,9 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
       // El contexto del agente también: son dos consultas y 24 KB de texto que
       // no tienen por qué estar entre que la persona calla y el agente contesta.
       prepararSistema(agente).catch(() => null),
+      // Por si el cerebro falla a mitad de llamada. Se pregenera ahora porque
+      // justo cuando hace falta es cuando algo no está funcionando.
+      disculpa(agente).catch(() => null),
     ])
 
     const pre = await accionLlamada({ phoneNumberId, callId, accion: 'pre_accept', sdp })
@@ -652,7 +667,7 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
     if (acc.error) return log(MOD, `${callId}: accept falló — ${acc.error}`)
     log(MOD, `${callId}: conversación ACEPTADA (${Date.now() - t0} ms)`)
 
-    const [saludo, muletillas, sistema] = await preparativos
+    const [saludo, muletillas, sistema, perdon] = await preparativos
     const decodificador = new Opus(48000, 1, Opus.Application.VOIP)
     let iMuletilla = 0
 
@@ -724,6 +739,9 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
         }
         if (r.error) {
           log(MOD, `${callId}: turno falló — ${r.error}`)
+          // Quedarse mudo es lo peor que puede pasar aquí: quien llama no sabe
+          // si sigue ahí, si se cortó o si tiene que repetir. Que lo diga.
+          if (perdon) return decir(perdon)
           return oido.volverAEscuchar()
         }
         historial.push({ role: 'user', content: r.transcripcion })
