@@ -203,6 +203,102 @@ async function reproducir(track, paquetes, tipoCarga) {
 }
 
 /**
+ * La boca de la llamada: UNA sola pista de audio, continua, de principio a fin.
+ *
+ * 🩸 AQUÍ ESTABA LA MULETILLA QUE NO SE OÍA. Cada vez que el agente decía algo
+ * se llamaba a `reproducir`, y `reproducir` inventa un SSRC, una numeración y
+ * una marca de tiempo NUEVOS Y AL AZAR. Para quien recibe, eso no es "el mismo
+ * que sigue hablando": es una fuente de audio distinta que aparece de la nada,
+ * con un reloj que no cuadra con nada. El receptor tira esos primeros paquetes
+ * mientras vuelve a sincronizar — y la muletilla, que dura segundo y medio,
+ * cabe entera en ese hueco. Las respuestas largas sobrevivían porque perder su
+ * primer segundo no se nota tanto.
+ *
+ * Una llamada = una boca. El SSRC no cambia nunca, la numeración no salta, y el
+ * reloj AVANZA TAMBIÉN DURANTE LOS SILENCIOS: si el agente calla nueve segundos
+ * pensando, la marca de tiempo tiene que haber avanzado esos nueve segundos, o
+ * lo siguiente que diga llega fechado en el pasado.
+ */
+export class Boca {
+  constructor(pista, tipoCarga) {
+    this.pista = pista
+    this.tipoCarga = tipoCarga
+    this.ssrc = Math.floor(Math.random() * 0xffffffff)
+    this.secuencia = Math.floor(Math.random() * 0xffff)
+    this.marca = Math.floor(Math.random() * 0xffffffff)
+    this.finAnterior = null      // cuándo dejó de sonar lo último
+    this.cola = Promise.resolve()
+    // Sube cada vez que lo callan. Lo que estaba sonando y lo que esperaba en
+    // la cola llevan la generación con la que se encolaron: si no coincide, ya
+    // no vale. Es la forma barata de cancelar sin dejar audio zombi.
+    this.generacion = 0
+    this.hablando = false
+  }
+
+  /** Encola algo que decir. Suena después de lo que ya estaba sonando. */
+  decir(audio) {
+    const gen = this.generacion
+    this.cola = this.cola
+      .catch(() => {})
+      .then(() => (gen === this.generacion ? this.emitir(audio, gen) : undefined))
+    return this.cola
+  }
+
+  /** Cállate ya: lo que suena se corta y lo que espera se descarta. */
+  callar() {
+    this.generacion++
+    this.hablando = false
+  }
+
+  /** Se resuelve cuando no queda nada por decir. */
+  silencio() {
+    return this.cola.catch(() => {})
+  }
+
+  async emitir(audio, gen) {
+    const paquetes = await aPaquetesOpus(audio)
+    if (gen !== this.generacion) return
+    const { RtpPacket, RtpHeader } = await import('werift')
+
+    const inicio = Date.now()
+    // El silencio también ocupa tiempo en el reloj de RTP. Sin esto, tras una
+    // pausa larga el audio nuevo llega con una marca de hace nueve segundos y
+    // el receptor lo trata como un paquete que llegó tardísimo: lo descarta.
+    if (this.finAnterior !== null) {
+      const hueco = Math.max(0, inicio - this.finAnterior)
+      this.marca = (this.marca + Math.round(hueco / 20) * 960) >>> 0
+    }
+
+    this.hablando = true
+    try {
+      for (let i = 0; i < paquetes.length; i++) {
+        if (gen !== this.generacion) break
+        this.pista.writeRtp(new RtpPacket(new RtpHeader({
+          payloadType: this.tipoCarga,
+          sequenceNumber: this.secuencia,
+          timestamp: this.marca,
+          ssrc: this.ssrc,
+          // Arranque de locución tras un silencio: es lo que le dice al
+          // receptor que puede reajustar su cola sin dar el audio por perdido.
+          marker: i === 0,
+        }), paquetes[i]))
+
+        this.secuencia = (this.secuencia + 1) & 0xffff
+        this.marca = (this.marca + 960) >>> 0
+
+        // Plazos absolutos, no esperas de 20 ms sumadas: cada vuelta tarda algo
+        // más y ese exceso se acumula hasta arrastrar la voz.
+        const espera = inicio + (i + 1) * 20 - Date.now()
+        if (espera > 0) await new Promise(r => setTimeout(r, espera))
+      }
+    } finally {
+      this.hablando = false
+      this.finAnterior = Date.now()
+    }
+  }
+}
+
+/**
  * Contesta una llamada entrante y dice una frase.
  *
  * Devuelve deprisa: Meta da entre 30 y 60 segundos desde el webhook para
@@ -284,26 +380,45 @@ export async function contestarConFrase({ phoneNumberId, callId, sdpOffer, agent
  * porque en una llamada no hay navegador que nos avise.
  */
 export class Oido {
-  constructor({ alTerminarDeHablar, silencioMs = 800, umbral = 0.012, topeTurnoMs = 15_000 }) {
+  constructor({
+    alTerminarDeHablar,
+    alInterrumpir = null,
+    silencioMs = 800,
+    umbral = 0.012,
+    topeTurnoMs = 15_000,
+    interrupcionMs = 400,
+  }) {
     this.alTerminarDeHablar = alTerminarDeHablar
+    this.alInterrumpir = alInterrumpir
     this.silencioMs = silencioMs
     this.umbral = umbral
     this.topeTurnoMs = topeTurnoMs
+    this.interrupcionMs = interrupcionMs
     this.trozos = []
     this.msAudio = 0            // cuánto audio lleva acumulado este turno
     this.niveles = []           // para poder afinar el umbral con datos, no a ojo
     this.huboVoz = false
     this.calladoDesde = null
     this.ultimoTrozo = null     // cuándo llegó el último paquete RTP
-    this.sordo = false          // mientras el agente habla, no se escucha
+    this.sordo = false          // mientras el agente habla, no se captura
+    // Lo que se oye MIENTRAS el agente habla. Casi todo es su propio eco, y
+    // saber a qué nivel suena ese eco es lo que permite distinguirlo de alguien
+    // interrumpiendo de verdad. Ver `vigilar()`.
+    this.ecoReciente = []
+    this.vozDesde = null
+    this.interrupciones = 0
+    // 🩸 Qué turno se está atendiendo. Sin esto, un turno abandonado —porque le
+    // interrumpieron— sigue vivo por dentro: sus frases se siguen encolando y
+    // su final vuelve a poner el oído a cero, borrando lo que la persona acaba
+    // de decir. El número sube cada vez que empieza o se abandona un turno, y
+    // todo lo que llega tarde se compara contra él.
+    this.turnos = 0
     // 🩸 El reloj es PROPIO a propósito. Ver `revisar()`.
     this.reloj = setInterval(() => this.revisar(), 100)
   }
 
   /** Un trozo de PCM de 20 ms recién descodificado. */
   alimentar(pcm) {
-    if (this.sordo) return
-
     // Energía media (RMS). Con PCM de 16 bits, dividir entre 32768 deja el
     // valor entre 0 y 1, que es la misma escala que usa la página de pruebas —
     // así el umbral afinado allí sirve aquí.
@@ -313,6 +428,10 @@ export class Oido {
       suma += m * m
     }
     const nivel = Math.sqrt(suma / (pcm.length / 2))
+
+    // Mientras el agente habla NO se captura, pero sí se escucha: es la única
+    // forma de que se le pueda interrumpir.
+    if (this.sordo) return this.vigilar(nivel)
 
     this.ultimoTrozo = Date.now()
     this.niveles.push(nivel)
@@ -353,6 +472,37 @@ export class Oido {
    * que ya se había hablado se quedaba en el buffer para siempre y el agente
    * no contestaba jamás.
    */
+  /**
+   * ¿Alguien está hablando POR ENCIMA del agente?
+   *
+   * 🩸 EL PROBLEMA NO ES OÍR, ES DISTINGUIR. Mientras el agente habla, lo que
+   * entra por la línea es sobre todo SU PROPIO ECO, y un umbral fijo lo toma
+   * por una persona: el agente se interrumpe a sí mismo en bucle y la llamada
+   * se vuelve un disparate. Por eso el listón no es fijo — se mide el eco de
+   * los últimos segundos y hay que superarlo CLARAMENTE, y además sostenerlo:
+   * un golpe de 20 ms no interrumpe a nadie, una frase sí.
+   */
+  vigilar(nivel) {
+    this.ecoReciente.push(nivel)
+    if (this.ecoReciente.length > 150) this.ecoReciente.shift()   // ~3 s
+    if (!this.alInterrumpir) return
+
+    // Hasta tener con qué comparar, no se interrumpe: arrancar a ciegas es
+    // justo cuando el eco todavía no se ha medido.
+    if (this.ecoReciente.length < 25) return
+    const orden = [...this.ecoReciente].sort((a, b) => a - b)
+    const pisoEco = orden[Math.floor(orden.length / 2)]
+    const listón = Math.max(this.umbral * 4, pisoEco * 3)
+
+    if (nivel <= listón) { this.vozDesde = null; return }
+    this.vozDesde ??= Date.now()
+    if (Date.now() - this.vozDesde < this.interrupcionMs) return
+
+    this.vozDesde = null
+    this.interrupciones++
+    this.alInterrumpir({ nivel: nivel.toFixed(4), pisoEco: pisoEco.toFixed(4), listón: listón.toFixed(4) })
+  }
+
   revisar() {
     if (this.sordo || !this.huboVoz) return
     const desde = this.calladoDesde ?? this.ultimoTrozo
@@ -372,16 +522,20 @@ export class Oido {
     // el eco del propio agente. Contestar a eso es peor que ignorarlo.
     if (pcm.length < 48000 * 2 * 0.5) return
     this.sordo = true
-    this.alTerminarDeHablar(pcm, { motivo, ms, niveles: resumenNiveles(niveles) })
+    this.turnos++
+    this.alTerminarDeHablar(pcm, { motivo, ms, turno: this.turnos, niveles: resumenNiveles(niveles) })
   }
 
   volverAEscuchar() {
+    // Lo que estuviera en marcha queda invalidado: ver `turnos`.
+    this.turnos++
     this.trozos = []
     this.msAudio = 0
     this.niveles = []
     this.huboVoz = false
     this.calladoDesde = null
     this.ultimoTrozo = null
+    this.vozDesde = null
     this.sordo = false
   }
 
@@ -457,7 +611,7 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
   try {
     const { RTCPeerConnection, MediaStreamTrack, useOPUS } = await import('werift')
     const Opus = (await import('opusscript')).default
-    const { turno, wavDePcm, rellenos } = await import('./voz-conversacion.js')
+    const { turno, wavDePcm, rellenos, prepararSistema } = await import('./voz-conversacion.js')
 
     pc = new RTCPeerConnection({
       codecs: { audio: [useOPUS()] },
@@ -487,6 +641,9 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
     const preparativos = Promise.all([
       sintetizar({ agente, texto: 'Camino al Cielo, buenas. ¿En qué te puedo ayudar?' }),
       rellenos(agente),
+      // El contexto del agente también: son dos consultas y 24 KB de texto que
+      // no tienen por qué estar entre que la persona calla y el agente contesta.
+      prepararSistema(agente).catch(() => null),
     ])
 
     const pre = await accionLlamada({ phoneNumberId, callId, accion: 'pre_accept', sdp })
@@ -495,35 +652,38 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
     if (acc.error) return log(MOD, `${callId}: accept falló — ${acc.error}`)
     log(MOD, `${callId}: conversación ACEPTADA (${Date.now() - t0} ms)`)
 
-    const [saludo, muletillas] = await preparativos
+    const [saludo, muletillas, sistema] = await preparativos
     const decodificador = new Opus(48000, 1, Opus.Application.VOIP)
     let iMuletilla = 0
 
-    // 🩸 UNA SOLA COSA SUENA A LA VEZ. La muletilla se lanza sin esperarla (esa
-    // es toda su gracia: sonar YA mientras se piensa), así que si el turno sale
-    // rápido, la respuesta empezaría a escribir en la MISMA pista mientras la
-    // muletilla sigue sonando: dos numeraciones RTP mezcladas y un audio que
-    // llega picado. Encolar cuesta nada y lo hace imposible.
-    let sonando = Promise.resolve()
-    const reproducirEnCola = (audio) => {
-      sonando = sonando
-        .catch(() => {})
-        .then(async () => reproducir(salida, await aPaquetesOpus(audio), tipoCarga))
-      return sonando
-    }
+    // Una llamada, una boca: pista continua, sin saltos de SSRC ni de reloj.
+    const boca = new Boca(salida, tipoCarga)
 
     const decir = async (audio) => {
       oido.sordo = true
       try {
-        await reproducirEnCola(audio)
+        await boca.decir(audio)
       } finally {
-        // Un respiro antes de volver a escuchar: la cola del propio audio en la
+        // Un respiro antes de volver a capturar: la cola del propio audio en la
         // línea se tomaría por voz de la clínica.
         setTimeout(() => oido.volverAEscuchar(), 250)
       }
     }
 
     const oido = new Oido({
+      // ── Interrumpir al agente (barge-in) ──
+      // Antes el agente era un contestador: soltaba el párrafo entero pasara lo
+      // que pasara, y hablarle encima no servía de nada. Ahora se calla en
+      // cuanto oye una voz clara por encima de su propio eco: lo que estaba
+      // diciendo se corta en seco y se pone a escuchar.
+      alInterrumpir: (medida) => {
+        if (!viva || !boca.hablando) return
+        log(MOD, `${callId}: me interrumpen — nivel ${medida.nivel} sobre un eco de `
+          + `${medida.pisoEco} (listón ${medida.listón})`)
+        boca.callar()
+        oido.volverAEscuchar()
+      },
+
       alTerminarDeHablar: async (pcm, corte) => {
         if (!viva) return
         const t = Date.now()
@@ -534,10 +694,28 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
         // La muletilla suena YA, mientras se piensa. Es lo que convierte tres
         // segundos de silencio en una conversación normal.
         const m = muletillas[iMuletilla++ % (muletillas.length || 1)]
-        if (m) reproducirEnCola(Buffer.from(m.audio, 'base64')).catch(() => {})
+        if (m) boca.decir(Buffer.from(m.audio, 'base64')).catch(() => {})
 
-        const r = await turno({ agente, wav: wavDePcm(pcm, 48000), historial, msAudio: corte?.ms })
-        if (!viva) return
+        // 🩸 SE HABLA MIENTRAS SE PIENSA. Antes se esperaba a que el modelo
+        // terminara de escribir TODO, luego se sintetizaba TODO, y solo
+        // entonces empezaba a sonar: los tres tiempos, uno detrás de otro.
+        // Medido en la llamada real del 21-ago: 3,3 s de oír + 6,3 s de pensar
+        // + 1,4 s de hablar = once segundos de silencio. Ahora cada frase sale
+        // en cuanto está escrita, así que solo se espera a la PRIMERA.
+        const vigente = () => viva && corte.turno === oido.turnos
+        const r = await turno({
+          agente,
+          wav: wavDePcm(pcm, 48000),
+          historial,
+          sistema,
+          msAudio: corte?.ms,
+          // Solo si este sigue siendo el turno vigente: si le interrumpieron,
+          // las frases que el modelo todavía estaba escribiendo no deben sonar.
+          alFrase: (audio) => {
+            if (viva && corte.turno === oido.turnos) boca.decir(audio).catch(() => {})
+          },
+        })
+        if (!vigente()) return log(MOD, `${callId}: turno abandonado (le interrumpieron)`)
         // Whisper no devuelve vacío con el silencio: devuelve una muletilla de
         // subtítulos. Contestarla es peor que callarse — ver `esRuido`.
         if (r.ruido) {
@@ -551,8 +729,13 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
         historial.push({ role: 'user', content: r.transcripcion })
         historial.push({ role: 'assistant', content: r.respuesta })
         log(MOD, `${callId}: "${r.transcripcion.slice(0, 40)}" → "${r.respuesta.slice(0, 40)}"`
-          + ` (${Date.now() - t} ms)`)
-        await decir(Buffer.from(r.audio, 'base64'))
+          + ` (${r.tiempos?.frases} frase(s), ${Date.now() - t} ms hasta la última)`)
+
+        // Ya está todo encolado; solo queda esperar a que termine de sonar para
+        // volver a capturar. Si le interrumpieron, `callar()` ya vació la cola.
+        try { await boca.silencio() } finally {
+          setTimeout(() => { if (vigente() && oido.sordo) oido.volverAEscuchar() }, 250)
+        }
       },
     })
 

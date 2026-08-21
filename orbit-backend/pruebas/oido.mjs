@@ -53,6 +53,44 @@ r.push(await caso('habla y calla', async o => {
 // 3. Habla y el audio DEJA DE LLEGAR (colgó, o DTX): antes se quedaba colgado.
 r.push(await caso('habla y se corta el audio', o => alimentarDurante(o, VOZ, 1200), 'reloj'))
 
+// ── Interrumpir al agente mientras habla (barge-in) ───────────────────────
+//
+// Lo delicado no es oír, es distinguir: mientras el agente habla, por la línea
+// entra sobre todo SU PROPIO ECO. Un listón fijo lo toma por una persona y el
+// agente se interrumpe a sí mismo en bucle.
+const ECO = pcm(0.02)          // el agente oyéndose a sí mismo
+const PERSONA = pcm(0.25)      // alguien hablando encima, claramente más alto
+
+async function casoInterrupcion(nombre, guion, esperado) {
+  let interrumpio = false
+  const oido = new Oido({
+    alTerminarDeHablar: () => {},
+    alInterrumpir: () => { interrumpio = true },
+  })
+  oido.sordo = true            // el agente está hablando
+  await guion(oido)
+  oido.parar()
+  const bien = interrumpio === esperado
+  console.log(`${bien ? '✓' : '✗'} ${nombre}: ${interrumpio ? 'interrumpió' : 'no interrumpió'}`
+    + ` (se esperaba que ${esperado ? 'sí' : 'no'})`)
+  return bien
+}
+
+r.push(await casoInterrupcion('el eco del propio agente NO le interrumpe', async o => {
+  await alimentarEnVivo(o, ECO, 1500)
+}, false))
+
+r.push(await casoInterrupcion('una voz clara y sostenida SÍ le interrumpe', async o => {
+  alimentarDurante(o, ECO, 1000)                 // primero mide su eco
+  await alimentarEnVivo(o, PERSONA, 700)
+}, true))
+
+r.push(await casoInterrupcion('un golpe corto NO le interrumpe', async o => {
+  alimentarDurante(o, ECO, 1000)
+  await alimentarEnVivo(o, PERSONA, 200)
+  await alimentarEnVivo(o, ECO, 400)
+}, false))
+
 const casosRuido = [
   ['Gracias. Gracias. Gracias. Gracias.', 20000, true],
   ['Gracias.', 800, false],

@@ -135,13 +135,25 @@ export function esRuido(texto, msAudio = null) {
  * herramienta que el modelo quiera usar añade una vuelta entera, y eso hay que
  * medirlo aparte y a conciencia, no mezclado con esto.
  */
-async function pensar({ agente, historial, dicho, alPrimeraFrase = null }) {
+async function pensar({ agente, historial, dicho, alFrase = null, sistema = null }) {
   const Anthropic = (await import('@anthropic-ai/sdk')).default
   const cliente = new Anthropic({ apiKey: process.env.CLAUDE_KEY })
-  const system = await construirSistema(agente)
+  // Construirlo cuesta dos consultas y 24 KB de texto, y es IDÉNTICO en cada
+  // turno de la misma llamada. Quien llama lo prepara una vez, en paralelo con
+  // la negociación, y aquí ya no cuesta nada. Ver `prepararSistema`.
+  const system = sistema || await construirSistema(agente)
 
   const t0 = Date.now()
-  let texto = '', pendiente = '', primeraFrase = null
+  let texto = '', pendiente = '', primeraFrase = null, frases = 0
+
+  // Cada frase entera sale por aquí en cuanto está escrita. Quien llame decide
+  // qué hacer con ella: en una llamada, sintetizarla y ponerla a sonar mientras
+  // el modelo escribe la siguiente.
+  const soltar = (frase) => {
+    frases++
+    primeraFrase ??= { texto: frase, ms: Date.now() - t0 }
+    alFrase?.(frase, frases)
+  }
 
   const stream = await cliente.messages.create({
     model: agente.modelo || 'claude-sonnet-5',
@@ -167,16 +179,28 @@ async function pensar({ agente, historial, dicho, alPrimeraFrase = null }) {
     if (ev.type !== 'content_block_delta' || ev.delta?.type !== 'text_delta') continue
     texto += ev.delta.text
     pendiente += ev.delta.text
-    if (primeraFrase === null) {
-      const [frase] = siguienteFrase(pendiente)
-      if (frase) {
-        primeraFrase = { texto: frase, ms: Date.now() - t0 }
-        alPrimeraFrase?.(primeraFrase)
-      }
+    // Todas las que quepan, no solo la primera: si el modelo escribe rápido
+    // pueden completarse dos en el mismo trozo, y dejarlas esperando al
+    // siguiente delta añade silencio por nada.
+    for (;;) {
+      // La PRIMERA se corta antes (15 caracteres en vez de 30): "¡Hola! Claro
+      // que sí." es una frase perfectamente natural para empezar a sonar, y
+      // cada décima que se gana ahí es silencio que quien llama no oye. De la
+      // segunda en adelante ya no hay prisa —suena mientras se escribe— y trozos
+      // más largos suenan mejor.
+      const [frase, resto] = siguienteFrase(pendiente, frases === 0 ? 15 : 30)
+      if (!frase) break
+      pendiente = resto
+      soltar(frase)
     }
   }
 
-  return { texto: texto.trim(), primeraFrase, ms: Date.now() - t0 }
+  // El final casi nunca cierra en punto y aparte limpio. Lo que quede se dice
+  // igual: perderlo sería cortarle la última frase a quien está escuchando.
+  const cola = pendiente.trim()
+  if (cola) soltar(cola)
+
+  return { texto: texto.trim(), primeraFrase, frases, ms: Date.now() - t0 }
 }
 
 /**
@@ -217,6 +241,18 @@ export async function rellenos(agente) {
 }
 
 /**
+ * El contexto del agente, listo para toda la llamada.
+ *
+ * Se llama una sola vez, en paralelo con la negociación de la llamada, y su
+ * resultado se reusa en cada turno. Dentro de una llamada el contexto no
+ * cambia, y sacarlo del camino crítico son dos consultas menos entre que la
+ * persona calla y el agente contesta.
+ */
+export async function prepararSistema(agente) {
+  return construirSistema(agente)
+}
+
+/**
  * Envuelve PCM crudo en una cabecera WAV.
  *
  * En una LLAMADA el audio ya llega descodificado, así que pasarlo por ffmpeg
@@ -242,7 +278,7 @@ export function wavDePcm(pcm, hz = 48000) {
  * el cliente a propósito: esto es un laboratorio, y no quiero que una prueba
  * ensucie la bandeja ni la bitácora del agente de verdad.
  */
-export async function turno({ agente, audio, wav = null, historial = [], msAudio = null }) {
+export async function turno({ agente, audio, wav = null, historial = [], msAudio = null, alFrase = null, sistema = null }) {
   const t0 = Date.now()
   const tiempos = {}
 
@@ -263,10 +299,51 @@ export async function turno({ agente, audio, wav = null, historial = [], msAudio
   }
 
   const tPensar = Date.now()
-  const pensado = await pensar({ agente, historial, dicho: oido.texto })
+
+  // ── Con `alFrase`: se habla MIENTRAS se piensa (el camino de la llamada) ──
+  //
+  // 🩸 ES LA DIFERENCIA ENTRE ONCE SEGUNDOS Y DOS. Esperar a que el modelo
+  // termine de escribir, sintetizar el párrafo entero y solo entonces empezar a
+  // sonar, suma los tres tiempos uno detrás de otro. Encadenados, quien llama
+  // deja de oír silencio en cuanto está la PRIMERA frase; lo demás se va
+  // sintetizando mientras suena lo anterior y no se nota.
+  //
+  // La cadena importa: las frases tienen que sonar EN ORDEN, así que cada una
+  // espera a que la anterior haya sido entregada aunque su síntesis termine
+  // antes.
+  let cadena = Promise.resolve()
+  let primerSonido = null
+  const entregar = (frase) => {
+    cadena = cadena.then(async () => {
+      const v = await sintetizar({ agente, texto: frase })
+      if (v.error) return log(MOD, `no se pudo decir "${frase.slice(0, 30)}" — ${v.error}`)
+      primerSonido ??= Date.now() - tPensar
+      await alFrase(v.audio)
+    }).catch(e => log(MOD, `frase perdida — ${e.message}`))
+  }
+
+  const pensado = await pensar({
+    agente, historial, dicho: oido.texto, sistema,
+    alFrase: alFrase ? entregar : null,
+  })
   tiempos.pensar = Date.now() - tPensar
   tiempos.primeraFrase = pensado.primeraFrase?.ms ?? null
+  tiempos.frases = pensado.frases
   if (!pensado.texto) return { error: 'el agente no dijo nada', tiempos }
+
+  if (alFrase) {
+    await cadena
+    tiempos.primerSonido = primerSonido
+    tiempos.total = Date.now() - t0
+    // Lo que de verdad esperó quien llama antes de oír algo: transcribir, más
+    // lo que tardó la primera frase en estar escrita y sintetizada.
+    tiempos.silencioReal = tiempos.transcribir + (primerSonido ?? tiempos.pensar)
+    log(MOD, `turno: ${tiempos.audio ?? '?'}ms de audio · oír ${tiempos.transcribir}ms`
+      + ` · 1ª frase escrita ${tiempos.primeraFrase}ms, sonando ${primerSonido}ms`
+      + ` · ${pensado.frases} frase(s) en ${tiempos.pensar}ms`
+      + ` → silencio real ${tiempos.silencioReal}ms`)
+    return { transcripcion: oido.texto, respuesta: pensado.texto, tiempos }
+  }
 
   const tHablar = Date.now()
   const voz = await sintetizar({ agente, texto: pensado.texto })

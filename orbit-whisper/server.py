@@ -49,21 +49,50 @@ CONTEXTO = (
     'Cajicá, Zipaquirá, Mosquera, Funza, Madrid, Soacha y Tenjo.'
 )
 
+# ── Dos modelos, y no es por gusto ─────────────────────────────────────────
+# Una NOTA DE VOZ de WhatsApp puede durar dos minutos, traer ruido y gente
+# hablando lejos: ahi la calidad manda y nadie esta esperando. Una LLAMADA es lo
+# contrario — frases cortas y claras, pero con alguien callado al otro lado.
+#
+# Medido en este servidor con 5,76 s de audio real en espanol:
+#     tiny 1,7 s | base 2,2 s | small 6,9 s | medium 14,8 s
+# ...y los cuatro transcribieron EXACTAMENTE lo mismo. Nueve veces mas lento
+# para el mismo resultado no tiene sentido en una llamada.
+MODELO_RAPIDO = os.environ.get('WHISPER_MODELO_RAPIDO', 'base')
+
 print(f'[whisper] cargando el modelo {MODELO} ({HILOS} hilos)...', flush=True)
 modelo = WhisperModel(MODELO, device='cpu', compute_type='int8', cpu_threads=HILOS)
 print('[whisper] listo', flush=True)
+
+# El rapido se carga la PRIMERA VEZ que se pide, no al arrancar: si nadie usa
+# voz, no ocupa memoria ni retrasa el arranque del servicio.
+_rapido = None
+_candado_rapido = threading.Lock()
+
+
+def modelo_rapido():
+    global _rapido
+    if _rapido is None:
+        with _candado_rapido:
+            if _rapido is None:
+                print(f'[whisper] cargando el modelo rapido {MODELO_RAPIDO}...', flush=True)
+                _rapido = WhisperModel(MODELO_RAPIDO, device='cpu',
+                                       compute_type='int8', cpu_threads=HILOS)
+                print('[whisper] rapido listo', flush=True)
+    return _rapido
 
 # CTranslate2 aguanta llamadas concurrentes, pero con 6 núcleos compartidos con
 # Postgres no hay nada que ganar solapando: se atiende de a una y se acaba antes.
 turno = threading.Lock()
 
 
-def transcribir(datos: bytes) -> dict:
+def transcribir(datos: bytes, rapido: bool = False) -> dict:
+    usar = modelo_rapido() if rapido else modelo
     with tempfile.NamedTemporaryFile(suffix='.audio', delete=True) as f:
         f.write(datos)
         f.flush()
         with turno:
-            segmentos, info = modelo.transcribe(
+            segmentos, info = usar.transcribe(
                 f.name,
                 language='es',
                 task='transcribe',
@@ -81,6 +110,7 @@ def transcribir(datos: bytes) -> dict:
         'texto': texto,
         'duracion': round(getattr(info, 'duration', 0) or 0, 1),
         'idioma': getattr(info, 'language', 'es'),
+        'modelo': MODELO_RAPIDO if rapido else MODELO,
     }
 
 
@@ -95,11 +125,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/health':
-            return self._responder(200, {'ok': True, 'modelo': MODELO})
+            return self._responder(200, {'ok': True, 'modelo': MODELO, 'rapido': MODELO_RAPIDO})
         self._responder(404, {'ok': False, 'error': 'no existe'})
 
     def do_POST(self):
-        if self.path != '/transcribir':
+        # `?rapido=1` pide el modelo pequeno. Lo elige QUIEN LLAMA, porque solo
+        # el sabe si hay alguien esperando al telefono o es una nota de voz que
+        # se procesa cuando se pueda.
+        ruta = self.path.split('?')[0]
+        rapido = 'rapido=1' in self.path
+        if ruta != '/transcribir':
             return self._responder(404, {'ok': False, 'error': 'no existe'})
 
         largo = int(self.headers.get('Content-Length') or 0)
@@ -110,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
 
         datos = self.rfile.read(largo)
         try:
-            self._responder(200, transcribir(datos))
+            self._responder(200, transcribir(datos, rapido))
         except Exception as e:  # noqa: BLE001 — nunca debe tumbar el servicio
             print(f'[whisper] ERROR transcribiendo — {e}', flush=True)
             self._responder(500, {'ok': False, 'error': str(e)})
