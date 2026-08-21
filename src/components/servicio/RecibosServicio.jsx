@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { db } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parseDate, parsearErrorDB } from '@/lib/utils'
-import { cargarComprobantesServicio } from '@/lib/comprobantes'
-import { FileText, Camera, ChevronUp, ChevronDown } from 'lucide-react'
+import { cargarComprobantesServicio, subirComprobantePago } from '@/lib/comprobantes'
+import { FileText, Camera, ChevronUp, ChevronDown, Paperclip, AlertCircle } from 'lucide-react'
 
 // ── Recibos guardados del servicio ────────────────────────────────────────────
 // Muestra los recibos del técnico y distingue cuál lleva el valor real que
@@ -18,6 +19,10 @@ export default function RecibosServicio({ servicioId }) {
   const [compsOpen, setCompsOpen]       = useState(false)
   const [compsLoading, setCompsLoading] = useState(false)
   const [compsError, setCompsError]     = useState('')
+  const [subiendo, setSubiendo]         = useState(false)
+  const [subirError, setSubirError]     = useState('')
+  const { personalData } = useAuth()
+  const puedeSubir = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
 
   useEffect(() => {
     let activo = true
@@ -62,6 +67,46 @@ export default function RecibosServicio({ servicioId }) {
     try { setComps(await cargarComprobantesServicio(servicioId)) }
     catch (e) { setCompsError(parsearErrorDB(e)) }
     finally { setCompsLoading(false) }
+  }
+
+  // Adjuntar un comprobante a un pago YA registrado. Es la unica ruta cuando el
+  // pago se guardo sin comprobante: la cartera de Finanzas deja de listar el
+  // servicio en cuanto el saldo llega a 0, y el detalle del cuadre solo alcanza
+  // los recibos del tecnico. `recibo_id` queda NULL a proposito (migracion 018):
+  // el comprobante se ata al servicio y no interfiere con el "comprobante
+  // activo" del recibo del tecnico.
+  async function subirComprobante(file) {
+    setSubiendo(true); setSubirError('')
+    try {
+      const subido = await subirComprobantePago(servicioId, file)
+      const { data: creado, error } = await db.from('recibo_comprobantes').insert({
+        servicio_id:  servicioId,
+        bucket:       subido.bucket,
+        storage_path: subido.storage_path,
+        mime_type:    subido.mime_type,
+        estado:       'APROBADO',
+        uploaded_by:  personalData?.id || null,
+      }).select('id, bucket, storage_path, mime_type, estado').single()
+      // Si la fila no queda, el archivo huerfano no le sirve a nadie: se borra.
+      if (error) {
+        await db.storage.from(subido.bucket).remove([subido.storage_path])
+        throw error
+      }
+      const { data: signed } = await db.storage.from(creado.bucket || 'evidencias')
+        .createSignedUrl(creado.storage_path, 300)
+      setComps(prev => [...(prev || []), { ...creado, url: signed?.signedUrl || '' }])
+      // Rastro para la trazabilidad del servicio (best-effort, no bloquea).
+      await db.from('novedades_servicio').insert({
+        servicio_id:    servicioId,
+        tipo_novedad:   'NOTA',
+        descripcion:    'Comprobante de pago adjuntado desde la ficha del servicio.',
+        registrado_por: personalData?.id || null,
+      })
+    } catch (e) {
+      setSubirError(parsearErrorDB(e))
+    } finally {
+      setSubiendo(false)
+    }
   }
 
   if (recibos === null) return (
@@ -195,40 +240,58 @@ export default function RecibosServicio({ servicioId }) {
         {compsOpen ? <ChevronUp size={13} style={{ color: '#1E40AF' }} /> : <ChevronDown size={13} style={{ color: '#1E40AF' }} />}
       </button>
       {compsOpen && (
-        compsLoading ? (
-          <div className="text-[11px] text-gray-400 px-1 py-2">Cargando comprobantes…</div>
-        ) : compsError ? (
-          <div className="text-[11px] text-red-600 bg-red-50 rounded-lg px-3 py-2">{compsError}</div>
-        ) : !comps?.length ? (
-          <div className="text-[11px] text-gray-400 px-1 py-2">No hay comprobantes subidos para este servicio.</div>
-        ) : (
-          <div className="grid grid-cols-3 gap-2">
-            {comps.map(c => {
-              const esPdf = (c.mime_type || '').toLowerCase() === 'application/pdf' || /\.pdf($|\?)/i.test(c.storage_path || '')
-              const est = ESTADO_COMP[c.estado]
-              return (
-                <a key={c.id} href={c.url} target="_blank" rel="noopener noreferrer"
-                  className="group relative rounded-lg overflow-hidden bg-blue-50 border block"
-                  style={{ aspectRatio: '1/1', borderColor: '#BFDBFE' }}
-                  title={c.estado ? `Comprobante · ${c.estado}` : 'Comprobante'}>
-                  {esPdf ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[10px] font-bold" style={{ color: '#1E40AF' }}>
-                      <FileText size={20} /> PDF
-                    </div>
-                  ) : (
-                    <img src={c.url} alt="Comprobante" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
-                  )}
-                  {est && (
-                    <span className="absolute top-1 left-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{ background: est.bg, color: est.color }}>
-                      {est.label}
-                    </span>
-                  )}
-                </a>
-              )
-            })}
-          </div>
-        )
+        <div className="space-y-2">
+          {compsLoading ? (
+            <div className="text-[11px] text-gray-400 px-1 py-2">Cargando comprobantes…</div>
+          ) : compsError ? (
+            <div className="text-[11px] text-red-600 bg-red-50 rounded-lg px-3 py-2">{compsError}</div>
+          ) : !comps?.length ? (
+            <div className="text-[11px] text-gray-400 px-1 py-2">No hay comprobantes subidos para este servicio.</div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              {comps.map(c => {
+                const esPdf = (c.mime_type || '').toLowerCase() === 'application/pdf' || /\.pdf($|\?)/i.test(c.storage_path || '')
+                const est = ESTADO_COMP[c.estado]
+                return (
+                  <a key={c.id} href={c.url} target="_blank" rel="noopener noreferrer"
+                    className="group relative rounded-lg overflow-hidden bg-blue-50 border block"
+                    style={{ aspectRatio: '1/1', borderColor: '#BFDBFE' }}
+                    title={c.estado ? `Comprobante · ${c.estado}` : 'Comprobante'}>
+                    {esPdf ? (
+                      <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[10px] font-bold" style={{ color: '#1E40AF' }}>
+                        <FileText size={20} /> PDF
+                      </div>
+                    ) : (
+                      <img src={c.url} alt="Comprobante" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
+                    )}
+                    {est && (
+                      <span className="absolute top-1 left-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full"
+                        style={{ background: est.bg, color: est.color }}>
+                        {est.label}
+                      </span>
+                    )}
+                  </a>
+                )
+              })}
+            </div>
+          )}
+          {/* El pago pudo registrarse sin comprobante: esta es la ruta para adjuntarlo despues */}
+          {puedeSubir && !compsLoading && (
+            <>
+              <label
+                className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-dashed px-3 py-2 text-[11px] font-bold transition-colors ${subiendo ? 'cursor-wait bg-gray-100 text-gray-400' : 'cursor-pointer bg-white hover:bg-blue-50'}`}
+                style={{ borderColor: '#BFDBFE', color: subiendo ? undefined : '#1E40AF' }}
+                title="Subir el comprobante de un pago ya registrado">
+                <Paperclip size={12} /> {subiendo ? 'Subiendo comprobante…' : 'Adjuntar comprobante'}
+                <input type="file" accept="image/*,application/pdf" disabled={subiendo} className="sr-only"
+                  onChange={async e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) await subirComprobante(f) }} />
+              </label>
+              {subirError
+                ? <div className="flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[10px] text-red-700"><AlertCircle size={11} className="mt-0.5 shrink-0" /> {subirError}</div>
+                : <p className="text-[9px] text-gray-400 text-center">Imagen o PDF · máximo 8 MB.</p>}
+            </>
+          )}
+        </div>
       )}
     </div>
   )

@@ -1960,11 +1960,13 @@ export default function Finanzas() {
                                   >
                                     Registrar pago
                                   </button>
-                                  {comprobantesSet.has(s.id) && (
+                                  {/* El clip se muestra tambien SIN comprobante: si el pago se
+                                      registro sin adjuntarlo, esta es la ruta para subirlo. */}
+                                  {(comprobantesSet.has(s.id) || puedeEditarCuadre) && (
                                     <button
                                       onClick={() => setComprobanteItem({ servicio_id: s.id, mascota_nombre: nombreMascota(s) })}
-                                      title="Ver comprobante de pago"
-                                      className="w-7 h-7 flex items-center justify-center rounded-lg border text-[#1A5CD8] hover:bg-[#EFF6FF] transition-colors"
+                                      title={comprobantesSet.has(s.id) ? 'Ver comprobante de pago' : 'Sin comprobante — adjuntar uno'}
+                                      className={`w-7 h-7 flex items-center justify-center rounded-lg border transition-colors hover:bg-[#EFF6FF] hover:text-[#1A5CD8] ${comprobantesSet.has(s.id) ? 'text-[#1A5CD8]' : 'text-gray-300'}`}
                                       style={{ borderColor: 'rgba(30,80,40,0.15)' }}
                                     >
                                       <Paperclip size={13} />
