@@ -240,7 +240,29 @@ const HERRAMIENTAS = [{
  * catálogo de etiquetas, que es una tabla editable. Si se cablearan aquí, un
  * cambio de categorías obligaría a desplegar.
  */
-export async function construirHerramientas() {
+export async function construirHerramientas(agente = null) {
+  const agenteId = agente?.id ?? null
+
+  // 🩸 QUÉ HERRAMIENTAS TIENE ESTE AGENTE ES UN DATO, NO CÓDIGO (migración 110).
+  // Lo que una herramienta HACE sigue siendo código y va a seguir siéndolo —
+  // registrar una solicitud escribe en la operación. Lo que se configura es
+  // cuáles tiene cada agente y cómo se le explican al modelo. Sin eso, el
+  // agente de otra empresa heredaba `registrar_solicitud` y le ofrecía a sus
+  // clientes registrarse en una funeraria de mascotas de Bogotá.
+  //
+  // Sin fila, no la tiene: un agente nuevo empieza sin herramientas y se le va
+  // dando lo que necesite. Es la opción segura por defecto.
+  const { rows: habilitadas } = await pool.query(
+    `SELECT clave, descripcion FROM public.agente_wa_herramientas
+      WHERE agente_id = $1 AND activa ORDER BY orden, id`,
+    [agenteId]
+  )
+  const permitidas = new Map(habilitadas.map(h => [h.clave, h]))
+  const tiene = (clave) => permitidas.has(clave)
+  // La descripción de la tabla MANDA sobre la del código: es lo que permite
+  // explicarle la misma herramienta distinto a dos empresas sin desplegar.
+  const texto = (clave, porDefecto) => permitidas.get(clave)?.descripcion || porDefecto
+
   // `solo_sistema` fuera: esas las pone el servidor (FALLO_AGENTE cuando el
   // agente revienta, AUDIO_O_IMAGEN cuando llega algo que no puede leer). Si
   // entraran en el enum, el modelo podría marcar "el agente no pudo responder"
@@ -248,24 +270,27 @@ export async function construirHerramientas() {
   // creerle a la única señal que avisa de los fallos mudos. Ver migración 093.
   const { rows: etiquetas } = await pool.query(
     `SELECT clave, nombre, descripcion FROM public.whatsapp_etiquetas
-      WHERE activo AND NOT solo_sistema ORDER BY orden, id`
+      WHERE activo AND NOT solo_sistema
+        AND (agente_id IS NULL OR agente_id = $1)
+      ORDER BY orden, id`,
+    [agenteId]
   )
   // Los interactivos (migración 100) también salen de un catálogo editable: la
   // `descripcion` de cada uno es lo que el modelo lee para saber cuándo usarlo.
   // Añadir un menú nuevo NO exige tocar el motor ni desplegar.
-  const interactivos = await catalogoParaAgente().catch(() => [])
+  const interactivos = await catalogoParaAgente(agenteId).catch(() => [])
   const extra = []
-  if (interactivos.length) {
+  if (interactivos.length && tiene('enviar_interactivo')) {
     extra.push({
       name: 'enviar_interactivo',
-      description:
+      description: texto('enviar_interactivo',
         'Manda un mensaje con BOTONES, un MENÚ o un BOTÓN DE ENLACE, en vez de escribirlo. ' +
         'A la veterinaria le sale algo que se toca: es más rápido para ella y evita que ' +
         'conteste algo que no esperabas.\n\n' +
         '⚠️ El mensaje se envía TAL CUAL está configurado, así que no repitas su contenido en ' +
         'tu respuesta ni anuncies que lo vas a mandar. Y no lo uses para cualquier cosa: solo ' +
-        'cuando encaje con lo que estás preguntando.\n\n' +
-        'Disponibles:\n'
+        'cuando encaje con lo que estás preguntando.')
+        + '\n\nDisponibles:\n'
         + interactivos.map(i => `- ${i.clave} (${i.nombre}): ${i.descripcion || ''}`).join('\n'),
       input_schema: {
         type: 'object',
@@ -284,17 +309,17 @@ export async function construirHerramientas() {
   // tarifario, instructivos. Si no hay ninguno cargado, la herramienta NO se
   // ofrece — un enum vacío es un 400 de la API, y prometer un archivo que no
   // existe es peor que decir que no se tiene.
-  const materiales = await catalogoDeMateriales().catch(() => [])
-  if (materiales.length) {
+  const materiales = await catalogoDeMateriales(agenteId).catch(() => [])
+  if (materiales.length && tiene('enviar_material')) {
     extra.push({
       name: 'enviar_material',
-      description:
+      description: texto('enviar_material',
         'Manda un ARCHIVO del catálogo: el brochure, el tarifario o lo que haya cargado ' +
         'coordinación. Úsalo cuando te pidan material para enseñárselo a una familia, o ' +
         'cuando un documento explique mejor que un párrafo lo que te están preguntando.\n\n' +
         '⚠️ Solo puedes mandar los de esta lista. Si te piden otra cosa, no la inventes ni ' +
-        'prometas mandarla: dilo y pásalo a coordinación.\n\n' +
-        'Disponibles:\n'
+        'prometas mandarla: dilo y pásalo a coordinación.\n\n')
+        + 'Disponibles:\n'
         + materiales.map(m => `- ${m.clave} (${m.nombre}): ${m.descripcion || ''}`).join('\n'),
       input_schema: {
         type: 'object',
@@ -309,16 +334,21 @@ export async function construirHerramientas() {
     })
   }
 
-  if (!etiquetas.length) return [...HERRAMIENTAS, ...extra]
+  // Las dos del negocio, solo si este agente las tiene encendidas.
+  const propias = HERRAMIENTAS
+    .filter(h => tiene(h.name))
+    .map(h => ({ ...h, description: texto(h.name, h.description) }))
 
-  return [...HERRAMIENTAS, ...extra, {
+  if (!etiquetas.length || !tiene('clasificar_conversacion')) return [...propias, ...extra]
+
+  return [...propias, ...extra, {
     name: 'clasificar_conversacion',
-    description:
+    description: texto('clasificar_conversacion',
       'Etiqueta esta conversación para que coordinación sepa qué necesita atención. ' +
       'Úsala en cuanto entiendas de qué va el mensaje, y SIEMPRE que escales algo a una ' +
       'persona: la etiqueta es lo único que hace visible la conversación en el tablero. ' +
-      'No la repitas si ya pusiste esa misma etiqueta antes en la conversación.\n\n' +
-      'Etiquetas disponibles:\n'
+      'No la repitas si ya pusiste esa misma etiqueta antes en la conversación.\n\n')
+      + 'Etiquetas disponibles:\n'
       + etiquetas.map(e => `- ${e.clave} (${e.nombre}): ${e.descripcion || ''}`).join('\n'),
     input_schema: {
       type: 'object',
@@ -1697,7 +1727,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
 
   try {
     const [system, herramientas] = await Promise.all([
-      construirSistema(agente), construirHerramientas(),
+      construirSistema(agente), construirHerramientas(agente),
     ])
     let hastaId = 0
     let messages

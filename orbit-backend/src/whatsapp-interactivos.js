@@ -36,10 +36,20 @@ const corta = (s, n) => {
 }
 
 /** Los que puede usar el agente, con su descripción: alimenta el enum de la herramienta. */
-export async function catalogoParaAgente() {
+/**
+ * Los interactivos que puede usar un agente.
+ *
+ * `agenteId` filtra por dueño (migración 110). `agente_id` nulo en una fila
+ * significa "de todos": así conviven los catálogos propios de cada agente con
+ * los comunes, sin obligar a duplicar lo que de verdad se comparte.
+ */
+export async function catalogoParaAgente(agenteId = null) {
   const { rows } = await pool.query(
     `SELECT clave, nombre, descripcion, tipo FROM public.whatsapp_interactivos
-      WHERE activo AND usa_agente ORDER BY orden, id`
+      WHERE activo AND usa_agente
+        AND (agente_id IS NULL OR agente_id = $1)
+      ORDER BY orden, id`,
+    [agenteId]
   )
   return rows
 }

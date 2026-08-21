@@ -27,10 +27,20 @@ const MAX_BYTES = TOPE_MB.document * 1048576
  * Los que puede usar el agente, con su descripción: alimenta el enum de la
  * herramienta. Sin `archivo` — aquí solo se decide, no se manda.
  */
-export async function catalogoDeMateriales() {
+/**
+ * Los archivos que puede mandar un agente.
+ *
+ * `agenteId` filtra por dueño (migración 110). `agente_id` nulo en una fila
+ * significa "de todos": así conviven los catálogos propios de cada agente con
+ * los comunes, sin obligar a duplicar lo que de verdad se comparte.
+ */
+export async function catalogoDeMateriales(agenteId = null) {
   const { rows } = await pool.query(
     `SELECT clave, nombre, descripcion FROM public.whatsapp_materiales
-      WHERE activo AND usa_agente ORDER BY orden, id`
+      WHERE activo AND usa_agente
+        AND (agente_id IS NULL OR agente_id = $1)
+      ORDER BY orden, id`,
+    [agenteId]
   )
   return rows
 }
