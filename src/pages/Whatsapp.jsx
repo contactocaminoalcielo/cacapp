@@ -290,7 +290,7 @@ export default function Whatsapp() {
                   </BotonLinea>
                   {lineas.map(id => (
                     <BotonLinea key={id} activa={filtroLinea === id} onClick={() => setFiltroLinea(id)}>
-                      {nombreLinea[id] || `línea …${String(id).slice(-4)}`}
+                      {etiquetaLinea(id, nombreLinea)}
                     </BotonLinea>
                   ))}
                 </div>
@@ -432,6 +432,21 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
       </AnimatePresence>
     </div>
   )
+}
+
+/**
+ * Cómo se llama una línea en el selector.
+ *
+ * 🩸 UN AGENTE PUEDE ATENDER VARIAS LÍNEAS: hoy mismo, la real y la de pruebas
+ * cuelgan del mismo agente. Poner solo su nombre daba DOS botones idénticos —
+ * imposible saber cuál es cuál, que es justo lo contrario de lo que hace falta.
+ * Cuando el nombre se repite, se desempata con los últimos cuatro dígitos.
+ */
+function etiquetaLinea(id, nombres) {
+  const nombre = nombres[id]
+  if (!nombre) return `línea …${String(id).slice(-4)}`
+  const repetido = Object.entries(nombres).filter(([, n]) => n === nombre).length > 1
+  return repetido ? `${nombre} …${String(id).slice(-4)}` : nombre
 }
 
 /** Elegir la línea. Sin esto, dos líneas se leen como una sola conversación. */
