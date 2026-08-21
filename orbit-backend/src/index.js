@@ -44,6 +44,10 @@ import {
   listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
 import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
+import {
+  resumen as resumenCostos, listaPrecios, guardarPrecio,
+  saldoElevenLabs, sincronizarMeta, trm as trmActual, refrescarMetaSiHaceFalta,
+} from './costos.js'
 import { turno as turnoDeVoz, rellenos as rellenosDeVoz } from './voz-conversacion.js'
 import { paginaDePrueba } from './voz-pagina.js'
 import {
@@ -603,6 +607,53 @@ app.post('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'agente/guardar', e) }
+})
+
+// ── Control de costos (migración 108) ──
+// ⚠️ Dos segmentos SIEMPRE, por lo que se explica justo debajo: `/agente/costos`
+// a secas lo leería `GET /agente/:clave` como si "costos" fuera un agente.
+
+app.get('/agente/costos/resumen', requireAuth, rolAgente, async (req, res) => {
+  try {
+    // Por defecto, el mes en curso en hora de Bogotá: es el periodo con el que
+    // factura Anthropic y el que David va a comparar contra su Console.
+    // Lo de Meta se pone al día por detrás: el panel no espera por ello.
+    refrescarMetaSiHaceFalta()
+    const hoy = new Date()
+    const desde = req.query.desde || new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), 1)).toISOString()
+    const hasta = req.query.hasta || new Date(Date.now() + 86400_000).toISOString()
+    const [datos, eleven, tasa] = await Promise.all([
+      resumenCostos({ desde, hasta }),
+      saldoElevenLabs(),
+      trmActual(),
+    ])
+    res.json({ ok: true, desde, hasta, trm: tasa, elevenlabs: eleven, ...datos })
+  } catch (e) { errorInterno(res, 'agente/costos', e) }
+})
+
+app.get('/agente/costos/precios', requireAuth, rolAgente, async (req, res) => {
+  try {
+    res.json({ ok: true, precios: await listaPrecios() })
+  } catch (e) { errorInterno(res, 'agente/costos/precios', e) }
+})
+
+app.patch('/agente/costos/precio/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const usd = Number(req.body?.usd)
+    if (!Number.isFinite(usd) || usd < 0) {
+      return res.status(400).json({ ok: false, error: 'El precio tiene que ser un número positivo' })
+    }
+    await guardarPrecio({ id: parseInt(req.params.id, 10), usd, nota: req.body?.nota })
+    res.json({ ok: true })
+  } catch (e) { errorInterno(res, 'agente/costos/precio', e) }
+})
+
+// Traer de Meta lo que de verdad cobró. Se hace a petición y también por cron:
+// el día en curso sigue creciendo, así que se vuelve a pedir sin duplicar.
+app.post('/agente/costos/meta', requireAuth, rolAgente, async (req, res) => {
+  try {
+    res.json(await sincronizarMeta({ dias: parseInt(req.body?.dias, 10) || 30 }))
+  } catch (e) { errorInterno(res, 'agente/costos/meta', e) }
 })
 
 // ── Valoraciones y reglas (migración 099) ──

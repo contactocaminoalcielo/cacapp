@@ -23,6 +23,7 @@
 // tercero en nombre de Camino al Cielo.
 import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
+import { registrar as registrarCosto } from './costos.js'
 import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
 import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
 import { catalogoDeMateriales, enviarMaterial } from './whatsapp-materiales.js'
@@ -1661,6 +1662,11 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
   let salida = null
   let tokIn = 0, tokOut = 0, fallo = null
   const cache = { creados: 0, leidos: 0 }
+  // Los tokens de entrada QUE NO VINIERON DE LA CACHE, aparte. `tokIn` los
+  // agrupa todos para la bitacora, pero para el dinero hay que separarlos: la
+  // entrada normal, la escritura de cache y la lectura de cache tienen tres
+  // precios distintos, y entre el mas caro y el mas barato hay 20 veces.
+  let entradaFresca = 0
 
   try {
     const [system, herramientas] = await Promise.all([
@@ -1718,6 +1724,7 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
       tokOut += u.output_tokens || 0
       cache.creados += u.cache_creation_input_tokens || 0
       cache.leidos  += u.cache_read_input_tokens || 0
+      entradaFresca += u.input_tokens || 0
 
       // El texto se acumula VUELTA A VUELTA, no se lee al final: el modelo habla
       // mientras usa herramientas (`[text, tool_use]` en la misma respuesta) y la
@@ -1842,6 +1849,22 @@ export async function ejecutar({ agente, contacto, origen = 'PRUEBA', mensajePru
         tokIn, tokOut, fallo,
       ]
     ).catch(e => log(MOD, 'no se pudo escribir la bitácora —', e.message))
+
+    // El libro de cuentas (migración 108). Va aparte de la bitácora y con su
+    // propio manejo de errores: son dos cosas distintas y ninguna de las dos
+    // puede impedir que la clínica reciba su respuesta.
+    registrarCosto({
+      proveedor: 'ANTHROPIC',
+      canal: origen === 'PRUEBA' ? 'PRUEBA' : 'CHAT',
+      clave: agente.modelo,
+      agenteId: agente.id,
+      referencia: contacto,
+      tokensEntrada: entradaFresca,
+      tokensSalida: tokOut,
+      cacheEscritura: cache.creados,
+      cacheLectura: cache.leidos,
+      detalle: { vueltas: usadas.length, ms: Date.now() - inicio, error: fallo || undefined },
+    })
   }
 }
 

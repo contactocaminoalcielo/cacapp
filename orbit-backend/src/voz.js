@@ -17,6 +17,7 @@
 //   · Se sintetiza FRASE A FRASE. Esperar a que el modelo termine de escribir
 //     para empezar a hablar suma los dos tiempos; encadenarlos los solapa.
 import { log } from './db.js'
+import { registrar as registrarCosto } from './costos.js'
 
 const MOD = '[voz]'
 const API = 'https://api.elevenlabs.io/v1'
@@ -76,7 +77,13 @@ function credenciales() {
  * `alPrimerByte` se llama en cuanto llega el primer trozo. Es LA medida que
  * importa: es el instante en que la persona al teléfono deja de oír silencio.
  */
-export async function sintetizar({ agente, texto, formato = FORMATO_POR_DEFECTO, alPrimerByte = null }) {
+export async function sintetizar({
+  agente, texto, formato = FORMATO_POR_DEFECTO, alPrimerByte = null,
+  // Para el libro de cuentas: de qué llamada salió esto. ElevenLabs cobra por
+  // carácter, así que cada frase que dice el agente cuesta — incluidas las
+  // muletillas y el saludo, que se pagan la primera vez y luego se reusan.
+  canal = 'VOZ', referencia = null,
+}) {
   const { key, error } = credenciales()
   if (error) return { error }
   if (!agente?.voz_id) return { error: 'Este agente no tiene voz configurada (agente_wa.voz_id)' }
@@ -117,5 +124,18 @@ export async function sintetizar({ agente, texto, formato = FORMATO_POR_DEFECTO,
   }
 
   const audio = Buffer.concat(trozos)
+
+  registrarCosto({
+    proveedor: 'ELEVENLABS',
+    canal,
+    clave: agente.voz_modelo || 'eleven_flash_v2_5',
+    agenteId: agente.id ?? null,
+    referencia,
+    // Lo que cuenta ElevenLabs es el texto que se le manda, ya limpio — no el
+    // original con markdown, que aquí ya se quitó.
+    caracteres: limpio.length,
+    detalle: { voz: agente.voz_id, formato, ms: Date.now() - t0 },
+  })
+
   return { audio, primerByte, total: Date.now() - t0, texto: limpio }
 }

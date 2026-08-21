@@ -723,6 +723,7 @@ export async function conversar({ phoneNumberId, callId, sdpOffer, agente }) {
           wav: wavDePcm(pcm, 48000),
           historial,
           sistema,
+          referencia: callId,
           msAudio: corte?.ms,
           // Solo si este sigue siendo el turno vigente: si le interrumpieron,
           // las frases que el modelo todavía estaba escribiendo no deben sonar.

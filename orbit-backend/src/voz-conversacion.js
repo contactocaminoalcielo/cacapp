@@ -17,6 +17,7 @@
 import { log } from './db.js'
 import { construirSistema } from './agente-wa.js'
 import { sintetizar, siguienteFrase } from './voz.js'
+import { registrar as registrarCosto } from './costos.js'
 
 const MOD = '[voz-conv]'
 const WHISPER = process.env.WHISPER_URL || 'http://orbit-whisper:8788'
@@ -145,6 +146,7 @@ async function pensar({ agente, historial, dicho, alFrase = null, sistema = null
 
   const t0 = Date.now()
   let texto = '', pendiente = '', primeraFrase = null, frases = 0, fallo = null
+  const uso = { entrada: 0, salida: 0, cacheEscritura: 0, cacheLectura: 0 }
 
   // Cada frase entera sale por aquí en cuanto está escrita. Quien llame decide
   // qué hacer con ella: en una llamada, sintetizarla y ponerla a sonar mientras
@@ -184,6 +186,17 @@ async function pensar({ agente, historial, dicho, alFrase = null, sistema = null
     })
 
     for await (const ev of stream) {
+      // El consumo llega repartido en dos eventos del flujo: la entrada (con
+      // el desglose de caché) en `message_start`, y la salida al final en
+      // `message_delta`. Si no se recogen aquí, el gasto de las LLAMADAS no
+      // aparece en ninguna parte — y es el más caro por conversación.
+      if (ev.type === 'message_start') {
+        const u = ev.message?.usage || {}
+        uso.entrada += u.input_tokens || 0
+        uso.cacheEscritura += u.cache_creation_input_tokens || 0
+        uso.cacheLectura += u.cache_read_input_tokens || 0
+      }
+      if (ev.type === 'message_delta') uso.salida += ev.usage?.output_tokens || 0
       if (ev.type !== 'content_block_delta' || ev.delta?.type !== 'text_delta') continue
       texto += ev.delta.text
       pendiente += ev.delta.text
@@ -218,7 +231,7 @@ async function pensar({ agente, historial, dicho, alFrase = null, sistema = null
     log(MOD, `el modelo falló — ${String(fallo).slice(0, 200)}`)
   }
 
-  return { texto: texto.trim(), primeraFrase, frases, fallo, ms: Date.now() - t0 }
+  return { texto: texto.trim(), primeraFrase, frases, fallo, uso, ms: Date.now() - t0 }
 }
 
 /**
@@ -321,7 +334,7 @@ export function wavDePcm(pcm, hz = 48000) {
  * el cliente a propósito: esto es un laboratorio, y no quiero que una prueba
  * ensucie la bandeja ni la bitácora del agente de verdad.
  */
-export async function turno({ agente, audio, wav = null, historial = [], msAudio = null, alFrase = null, sistema = null }) {
+export async function turno({ agente, audio, wav = null, historial = [], msAudio = null, alFrase = null, sistema = null, referencia = null }) {
   const t0 = Date.now()
   const tiempos = {}
 
@@ -372,6 +385,23 @@ export async function turno({ agente, audio, wav = null, historial = [], msAudio
   tiempos.pensar = Date.now() - tPensar
   tiempos.primeraFrase = pensado.primeraFrase?.ms ?? null
   tiempos.frases = pensado.frases
+
+  // El libro de cuentas (migración 108). Un turno de voz gasta bastante más que
+  // un mensaje de chat —el contexto entero por cada frase que se dice— y sin
+  // esto ese gasto no aparecía por ninguna parte.
+  const u = pensado.uso || {}
+  registrarCosto({
+    proveedor: 'ANTHROPIC',
+    canal: alFrase ? 'VOZ' : 'PRUEBA',
+    clave: agente.modelo || 'claude-sonnet-5',
+    agenteId: agente.id ?? null,
+    referencia,
+    tokensEntrada: u.entrada || 0,
+    tokensSalida: u.salida || 0,
+    cacheEscritura: u.cacheEscritura || 0,
+    cacheLectura: u.cacheLectura || 0,
+    detalle: { msAudio: tiempos.audio, pensar: tiempos.pensar, error: pensado.fallo || undefined },
+  })
   // Si falló Y no llegó a decir nada, el fallo es la respuesta. Si alcanzó a
   // soltar alguna frase antes de romperse, esa frase ya está sonando: se sigue
   // adelante con lo que hay en vez de disculparse encima de ello.

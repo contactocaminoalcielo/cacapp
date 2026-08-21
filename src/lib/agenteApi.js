@@ -205,3 +205,25 @@ export const actualizarRegla = (id, datos) =>
 
 export const borrarRegla = (id) =>
   orbitApi(`/agente/reglas/regla/${id}`, { method: 'DELETE' })
+
+// ── Control de costos (migración 108) ──
+//
+// Lo que devuelve el backend ya viene sumado en SQL: aquí no se agrega nada.
+// Sumar en React se rompe solo en cuanto haya volumen, y encima en silencio.
+
+export const cargarCostos = ({ desde, hasta } = {}) => {
+  const q = new URLSearchParams()
+  if (desde) q.set('desde', desde)
+  if (hasta) q.set('hasta', hasta)
+  const s = q.toString()
+  return orbitApi(`/agente/costos/resumen${s ? `?${s}` : ''}`)
+}
+
+export const cargarPrecios = () => orbitApi('/agente/costos/precios')
+
+export const guardarPrecio = (id, usd, nota) =>
+  orbitApi(`/agente/costos/precio/${id}`, { method: 'PATCH', body: { usd, nota } })
+
+/** Le pide a Meta lo que de verdad cobró. El día en curso todavía crece. */
+export const sincronizarCostosMeta = (dias = 30) =>
+  orbitApi('/agente/costos/meta', { method: 'POST', body: { dias } })

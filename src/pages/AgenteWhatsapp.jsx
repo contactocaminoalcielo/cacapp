@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import ReglasYCorrecciones from '@/components/agente/ReglasYCorrecciones'
+import PanelCostos from '@/components/agente/PanelCostos'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -21,7 +22,7 @@ import {
 } from '@/lib/agenteApi'
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
-  FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check,
+  FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check, Wallet,
   History, HelpCircle, RefreshCw, User, MessageSquare, Scale,
 } from 'lucide-react'
 
@@ -544,6 +545,13 @@ export default function AgenteWhatsapp() {
                 placeholder="805890339283619" />
             </Campo>
           </div>
+        </section>
+
+        {/* ── Control de costos (migración 108) ── */}
+        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <Cabecera icono={Wallet} titulo="Cuánto cuesta"
+            sub="Lo que se ha gastado de verdad, no un estimado: tokens de Claude, caracteres de la voz y lo que factura Meta. Separado por dónde se fue." />
+          <PanelCostos agenteId={agente.id} />
         </section>
 
         {/* ── Correcciones y reglas (migración 099) ── */}
