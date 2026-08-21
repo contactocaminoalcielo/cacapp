@@ -39,9 +39,9 @@ const Digitales          = lazy(() => import('@/pages/Digitales'))
 const Ofertas            = lazy(() => import('@/pages/Ofertas'))
 const Whatsapp           = lazy(() => import('@/pages/Whatsapp'))
 const AgenteWhatsapp     = lazy(() => import('@/pages/AgenteWhatsapp'))
+const AgentesIA          = lazy(() => import('@/pages/AgentesIA'))
+const CostosIA           = lazy(() => import('@/pages/CostosIA'))
 const PlantillasWhatsapp = lazy(() => import('@/pages/PlantillasWhatsapp'))
-const InteractivosWhatsapp = lazy(() => import('@/pages/InteractivosWhatsapp'))
-const MaterialesWhatsapp = lazy(() => import('@/pages/MaterialesWhatsapp'))
 
 function FullScreenLoader() {
   return (
@@ -101,10 +101,17 @@ function AppRoutes({ rol }) {
             {routes.has('/digitales')      && <Route path="/digitales"      element={<Digitales />} />}
             {routes.has('/ofertas')        && <Route path="/ofertas"        element={<Ofertas />} />}
             {routes.has('/whatsapp')       && <Route path="/whatsapp"       element={<Whatsapp />} />}
-            {routes.has('/agente-whatsapp') && <Route path="/agente-whatsapp" element={<AgenteWhatsapp />} />}
+            {/* ── Agentes IA ── */}
+            {routes.has('/agentes') && <Route path="/agentes" element={<AgentesIA />} />}
+            {routes.has('/agentes') && <Route path="/agentes/:clave" element={<AgenteWhatsapp />} />}
+            {routes.has('/costos-ia') && <Route path="/costos-ia" element={<CostosIA />} />}
+            {/* Los enlaces viejos siguen funcionando: hay marcadores del navegador
+                y enlaces pegados en chats apuntando a estas rutas. Redirigir es
+                gratis; un 404 en una pantalla que existía ayer, no. */}
+            {routes.has('/agentes') && <Route path="/agente-whatsapp" element={<Navigate to="/agentes/VETERINARIAS" replace />} />}
+            {routes.has('/agentes') && <Route path="/materiales-whatsapp" element={<Navigate to="/agentes/VETERINARIAS" replace />} />}
+            {routes.has('/agentes') && <Route path="/interactivos-whatsapp" element={<Navigate to="/agentes/VETERINARIAS" replace />} />}
             {routes.has('/plantillas-whatsapp') && <Route path="/plantillas-whatsapp" element={<PlantillasWhatsapp />} />}
-            {routes.has('/interactivos-whatsapp') && <Route path="/interactivos-whatsapp" element={<InteractivosWhatsapp />} />}
-            {routes.has('/materiales-whatsapp') && <Route path="/materiales-whatsapp" element={<MaterialesWhatsapp />} />}
             {/* Ruta anterior del módulo (marcadores guardados) */}
             {routes.has('/digitales')      && <Route path="/memoriales"     element={<Navigate to="/digitales" replace />} />}
             <Route path="*" element={<Navigate to={redirectTo} replace />} />

@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
-  MessageCircle, Bot, FileText, SquareStack, Paperclip } from 'lucide-react'
+  MessageCircle, Bot, FileText } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { filterNavGroups } from '@/lib/roles'
@@ -36,16 +36,24 @@ const ALL_NAV_GROUPS = [
   {
     label: 'CLIENTES',
     items: [
-      { path: '/whatsapp',     label: 'WhatsApp',         icon: MessageCircle, badge: 'whatsapp' },
-      { path: '/agente-whatsapp', label: 'Agente WA',     icon: Bot },
-      { path: '/plantillas-whatsapp', label: 'Plantillas WA', icon: FileText },
-      { path: '/interactivos-whatsapp', label: 'Botones y menús', icon: SquareStack },
-      { path: '/materiales-whatsapp', label: 'Materiales WA', icon: Paperclip },
       { path: '/gestion',      label: 'Gestión',         icon: Users },
       { path: '/nps',          label: 'NPS & Postventa',  icon: Star,  badge: 'nps' },
       { path: '/digitales',    label: 'Digitales',        icon: Film },
       { path: '/ofertas',      label: 'Ofertas',          icon: Tag },
       { path: '/presequiales', label: 'Pre-Exequiales',     icon: Heart },
+    ],
+  },
+  {
+    // 🩸 Antes esto eran CINCO entradas sueltas dentro de CLIENTES, mezcladas
+    // con Gestión y NPS, y ninguna decía a qué agente pertenecía. Con más
+    // líneas por llegar, cada una habría sumado tres entradas más. Ahora el
+    // menú tiene una puerta por concepto y lo de cada agente vive dentro de él.
+    label: 'AGENTES IA',
+    items: [
+      { path: '/whatsapp',  label: 'Bandeja WhatsApp', icon: MessageCircle, badge: 'whatsapp' },
+      { path: '/agentes',   label: 'Agentes',          icon: Bot },
+      { path: '/plantillas-whatsapp', label: 'Plantillas', icon: FileText },
+      { path: '/costos-ia', label: 'Costos',           icon: Wallet },
     ],
   },
   {

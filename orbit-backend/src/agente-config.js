@@ -26,6 +26,34 @@ const CAMPOS_KB = `id, agente_id, tipo, titulo, texto, mime, bytes, orden, activ
 // El agente
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Todos los agentes, con lo justo para pintar la lista.
+ *
+ * Existe porque **van a llegar más líneas**: el módulo ya no puede dar por
+ * hecho que el agente es uno solo y llamarse "el agente". Cada fila de
+ * `agente_wa` es una línea distinta, con su número, su modelo y su voz.
+ *
+ * Se cuentan las piezas de conocimiento y las reglas aquí, en SQL, para que la
+ * lista no tenga que pedir el detalle de cada agente solo para enseñar dos
+ * números.
+ */
+export async function listarAgentes() {
+  const { rows } = await pool.query(
+    `SELECT a.id, a.clave, a.nombre, a.activo, a.modelo, a.effort,
+            a.phone_number_ids, a.voz_activa, a.voz_id, a.actualizado_en,
+            (SELECT count(*)::int FROM public.agente_wa_conocimiento k
+              WHERE k.agente_id = a.id AND k.activo)                        AS piezas,
+            (SELECT count(*)::int FROM public.agente_wa_reglas r
+              WHERE r.agente_id = a.id AND r.activo)                        AS reglas,
+            (SELECT count(*)::int FROM public.agente_wa_ejecuciones e
+              WHERE e.agente_id = a.id AND e.creado_en > now() - interval '7 days'
+                AND e.error IS NULL)                                        AS respuestas_7d
+       FROM public.agente_wa a
+      ORDER BY a.activo DESC, a.nombre`
+  )
+  return { status: 200, body: { ok: true, agentes: rows } }
+}
+
 export async function obtenerAgente({ clave = 'VETERINARIAS' } = {}) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, activo, instrucciones, modelo, effort, max_turnos,

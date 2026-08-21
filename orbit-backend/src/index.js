@@ -38,7 +38,7 @@ import {
   subirCabecera, buscarServicios,
 } from './whatsapp-plantillas.js'
 import {
-  obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
+  listarAgentes, obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
   borrarConocimiento, archivoConocimiento, listarEjecuciones,
   valorarRespuesta, listarValoraciones, aplicarValoracion, descartarValoracion,
   listarReglas, crearRegla, guardarRegla, borrarRegla,
@@ -607,6 +607,14 @@ app.post('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'agente/guardar', e) }
+})
+
+// Dos segmentos, por lo mismo que todo lo que cuelga de `/agente`.
+app.get('/agente/lista/todos', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await listarAgentes()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/lista', e) }
 })
 
 // ── Control de costos (migración 108) ──

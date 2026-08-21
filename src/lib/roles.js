@@ -12,7 +12,7 @@ const ACCESO_TOTAL = {
     '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
     '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
-    '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agente-whatsapp', '/plantillas-whatsapp', '/interactivos-whatsapp', '/materiales-whatsapp',
+    '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',
   ]),
 }
 

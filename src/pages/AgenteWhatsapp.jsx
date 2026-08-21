@@ -7,11 +7,14 @@
 // Los datos NO vienen de Supabase: las tablas `agente_wa*` no están expuestas
 // por PostgREST. Todo entra por orbit-backend con JWT + rol. Ver lib/agenteApi.js.
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useParams, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import ReglasYCorrecciones from '@/components/agente/ReglasYCorrecciones'
-import PanelCostos from '@/components/agente/PanelCostos'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import MaterialesWhatsapp from '@/pages/MaterialesWhatsapp'
+import InteractivosWhatsapp from '@/pages/InteractivosWhatsapp'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -22,13 +25,18 @@ import {
 } from '@/lib/agenteApi'
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
-  FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check, Wallet,
+  FileText, Table2, Image as ImageIcon, FileType, Upload, BookOpen, Settings2, Check, ArrowLeft,
   History, HelpCircle, RefreshCw, User, MessageSquare, Scale,
 } from 'lucide-react'
 
 const ICONO_TIPO = { TEXTO: FileText, TABLA: Table2, IMAGEN: ImageIcon, DOCUMENTO: FileType }
 
 export default function AgenteWhatsapp() {
+  // El agente viene de la URL. Antes estaba fijo en 'VETERINARIAS' porque solo
+  // había uno; van a llegar más líneas y cada una es una fila de `agente_wa`.
+  const { clave = 'VETERINARIAS' } = useParams()
+
+  const [pestana, setPestana]       = useState('cerebro')
   const [agente, setAgente]         = useState(null)
   const [kb, setKb]                 = useState([])
   const [resumen, setResumen]       = useState(null)
@@ -52,7 +60,7 @@ export default function AgenteWhatsapp() {
 
   const refrescar = useCallback(async () => {
     try {
-      const r = await cargarAgente()
+      const r = await cargarAgente(clave)
       setAgente(r.agente)
       setKb(r.conocimiento || [])
       setResumen(r.resumen || null)
@@ -76,7 +84,7 @@ export default function AgenteWhatsapp() {
     } finally {
       setCargando(false)
     }
-  }, [])
+  }, [clave])
 
   useEffect(() => { refrescar() }, [refrescar])
 
@@ -241,6 +249,13 @@ export default function AgenteWhatsapp() {
       <div className="p-4 md:p-6 space-y-6 max-w-5xl mx-auto">
         {error && <Aviso tono="error" onCerrar={() => setError(null)}>{error}</Aviso>}
 
+        <Link
+          to="/agentes"
+          className="inline-flex items-center gap-1.5 text-[13px] text-neutral-500 hover:text-neutral-900 no-underline"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" /> Todos los agentes
+        </Link>
+
         {/* ── Estado ── */}
         <motion.section
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
@@ -295,341 +310,375 @@ export default function AgenteWhatsapp() {
           </Aviso>
         )}
 
-        {/* ── Contexto ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-3">
-          <Cabecera icono={BookOpen} titulo="Contexto"
-            sub="Quién es, cómo habla y qué puede o no puede decir. Es lo primero que lee en cada conversación." />
-          <Textarea
-            value={instrucciones}
-            onChange={e => setInstrucciones(e.target.value)}
-            rows={12}
-            className="font-mono text-sm leading-relaxed"
-            placeholder="Eres el asistente de WhatsApp de Camino al Cielo para veterinarias aliadas…"
-          />
-          <p className="text-xs text-neutral-500">
-            {instrucciones.length.toLocaleString('es-CO')} caracteres. Sé concreto: el agente sigue
-            estas instrucciones al pie de la letra y no sabe nada que no esté aquí o en la base de
-            conocimiento.
-          </p>
-        </section>
+        {/* ── Todo lo del agente, en pestañas ──
+            Antes esto era una sola columna de siete tarjetas: había que bajar
+            media pantalla para llegar a la bitácora, y los materiales y los
+            botones vivían en OTRAS dos entradas del menú, sin nada que dijera
+            que eran de este agente. Con más líneas por venir, esa forma no
+            escalaba: cada agente nuevo habría sumado tres entradas más al menú. */}
+        <Tabs value={pestana} onValueChange={setPestana} className="space-y-5">
+          <TabsList className="flex-wrap">
+            <TabsTrigger value="cerebro">Cerebro</TabsTrigger>
+            <TabsTrigger value="ajustes">Ajustes</TabsTrigger>
+            <TabsTrigger value="reglas">Reglas</TabsTrigger>
+            <TabsTrigger value="materiales">Materiales</TabsTrigger>
+            <TabsTrigger value="interactivos">Botones y menús</TabsTrigger>
+            <TabsTrigger value="bitacora">Bitácora</TabsTrigger>
+          </TabsList>
 
-        {/* ── Base de conocimiento ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
-          <Cabecera icono={BookOpen} titulo="Base de conocimiento"
-            sub="Lo que puede consultar para responder. Si no está aquí, no lo sabe." />
-
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(TIPOS_KB).map(([tipo, meta]) => {
-              const Icono = ICONO_TIPO[tipo]
-              return (
-                <Button key={tipo} variant="outline" size="sm" onClick={() => abrirNueva(tipo)}>
-                  <Icono className="w-4 h-4 mr-1.5" /><Plus className="w-3 h-3 mr-1" />{meta.label}
-                </Button>
-              )
-            })}
-          </div>
-
-          <AnimatePresence>
-            {nueva && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                  <p className="text-sm font-medium text-neutral-800">
-                    Nueva pieza — {TIPOS_KB[nueva.tipo].label}
-                  </p>
-                  <p className="text-xs text-neutral-500">{TIPOS_KB[nueva.tipo].ayuda}</p>
-
-                  <Input
-                    value={nueva.titulo}
-                    onChange={e => setNueva(n => ({ ...n, titulo: e.target.value }))}
-                    placeholder="Título (para que lo reconozcas después)"
-                  />
-
-                  {nueva.tipo === 'IMAGEN' ? (
-                    <div className="space-y-2">
-                      <input
-                        ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-                        className="hidden"
-                        onChange={e => tomarArchivo(e.target.files?.[0])}
-                      />
-                      <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-                        <Upload className="w-4 h-4 mr-1.5" />
-                        {nueva.nombreArchivo || 'Elegir imagen'}
-                      </Button>
-                      {nueva.archivo_base64 && (
-                        <img
-                          src={`data:${nueva.mime};base64,${nueva.archivo_base64}`}
-                          alt="" className="max-h-48 rounded-lg border"
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <input
-                        ref={fileRef} type="file" accept=".txt,.md,.csv,text/plain,text/markdown,text/csv"
-                        className="hidden"
-                        onChange={e => tomarArchivo(e.target.files?.[0])}
-                      />
-                      <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-                        <Upload className="w-4 h-4 mr-1.5" />
-                        {nueva.nombreArchivo || 'Subir .txt / .md / .csv'}
-                      </Button>
-                      <Textarea
-                        value={nueva.texto}
-                        onChange={e => setNueva(n => ({ ...n, texto: e.target.value }))}
-                        rows={8} className="font-mono text-xs"
-                        placeholder="…o pega el contenido aquí"
-                      />
-                    </div>
-                  )}
-
-                  {errorPieza && <Aviso tono="error">{errorPieza}</Aviso>}
-
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={guardarPieza} disabled={subiendo}>
-                      {subiendo ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Plus className="w-4 h-4 mr-1.5" />}
-                      Agregar
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setNueva(null)}>Cancelar</Button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {!kb.length ? (
-            <p className="text-sm text-neutral-500 py-6 text-center">
-              Todavía no hay nada cargado. El agente solo sabrá lo que digas en el contexto.
+          <TabsContent value="cerebro" className="space-y-6 mt-0">
+          {/* ── Contexto ── */}
+          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-3">
+            <Cabecera icono={BookOpen} titulo="Contexto"
+              sub="Quién es, cómo habla y qué puede o no puede decir. Es lo primero que lee en cada conversación." />
+            <Textarea
+              value={instrucciones}
+              onChange={e => setInstrucciones(e.target.value)}
+              rows={12}
+              className="font-mono text-sm leading-relaxed"
+              placeholder="Eres el asistente de WhatsApp de Camino al Cielo para veterinarias aliadas…"
+            />
+            <p className="text-xs text-neutral-500">
+              {instrucciones.length.toLocaleString('es-CO')} caracteres. Sé concreto: el agente sigue
+              estas instrucciones al pie de la letra y no sabe nada que no esté aquí o en la base de
+              conocimiento.
             </p>
-          ) : (
-            <ul className="divide-y rounded-xl border">
-              {kb.map(p => {
-                const Icono = ICONO_TIPO[p.tipo]
+          </section>
+
+          {/* ── Base de conocimiento ── */}
+          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+            <Cabecera icono={BookOpen} titulo="Base de conocimiento"
+              sub="Lo que puede consultar para responder. Si no está aquí, no lo sabe." />
+
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(TIPOS_KB).map(([tipo, meta]) => {
+                const Icono = ICONO_TIPO[tipo]
                 return (
-                  <li key={p.id} className={`p-3 ${p.activo ? '' : 'bg-neutral-50'}`}>
-                    <div className="flex items-start gap-3">
-                      <Icono className={`w-4 h-4 mt-1 shrink-0 ${p.activo ? 'text-neutral-500' : 'text-neutral-300'}`} />
-                      <div className="min-w-0 flex-1">
-                        <p className={`text-sm font-medium truncate ${p.activo ? 'text-neutral-900' : 'text-neutral-400'}`}>
-                          {p.titulo}
-                        </p>
-                        <p className="text-xs text-neutral-500">
-                          {TIPOS_KB[p.tipo].label}
-                          {p.tipo === 'IMAGEN'
-                            ? ` · ${(p.bytes / 1024).toFixed(0)} kB`
-                            : ` · ${(p.texto?.length || 0).toLocaleString('es-CO')} caracteres`}
-                          {!p.activo && ' · desactivada'}
-                        </p>
-                        {previews[p.id] && (
-                          <img src={previews[p.id]} alt="" className="mt-2 max-h-56 rounded-lg border" />
-                        )}
-                      </div>
-                      <div className="flex gap-1 shrink-0">
-                        {p.tipo === 'IMAGEN' && (
-                          <Button variant="ghost" size="sm" onClick={() => verImagen(p)} title="Ver">
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="sm" onClick={() => alternarPieza(p)}
-                          title={p.activo ? 'Desactivar' : 'Activar'}>
-                          {p.activo ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => eliminarPieza(p)} title="Eliminar">
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </Button>
-                      </div>
-                    </div>
-                  </li>
+                  <Button key={tipo} variant="outline" size="sm" onClick={() => abrirNueva(tipo)}>
+                    <Icono className="w-4 h-4 mr-1.5" /><Plus className="w-3 h-3 mr-1" />{meta.label}
+                  </Button>
                 )
               })}
-            </ul>
-          )}
+            </div>
 
-          {resumen && (
-            <p className="text-xs text-neutral-500">
-              Contexto activo: <strong>{resumen.piezas_activas}</strong> piezas ·{' '}
-              <strong>{resumen.caracteres_texto.toLocaleString('es-CO')}</strong> caracteres ·{' '}
-              <strong>{resumen.imagenes}</strong> imágenes · ≈{' '}
-              <strong>{tokens.toLocaleString('es-CO')}</strong> tokens por conversación.
-            </p>
-          )}
-        </section>
+            <AnimatePresence>
+              {nueva && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                    <p className="text-sm font-medium text-neutral-800">
+                      Nueva pieza — {TIPOS_KB[nueva.tipo].label}
+                    </p>
+                    <p className="text-xs text-neutral-500">{TIPOS_KB[nueva.tipo].ayuda}</p>
 
-        {/* ── Ajustes ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
-          <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
+                    <Input
+                      value={nueva.titulo}
+                      onChange={e => setNueva(n => ({ ...n, titulo: e.target.value }))}
+                      placeholder="Título (para que lo reconozcas después)"
+                    />
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Campo label="Modelo" className="sm:col-span-2"
-              ayuda={MODELOS.find(m => m.valor === ajustes.modelo)?.ayuda}>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {MODELOS.map(m => {
-                  const elegido = ajustes.modelo === m.valor
-                  const costo   = costoConversacion({ modelo: m.valor, contexto: tokens })
+                    {nueva.tipo === 'IMAGEN' ? (
+                      <div className="space-y-2">
+                        <input
+                          ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          onChange={e => tomarArchivo(e.target.files?.[0])}
+                        />
+                        <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                          <Upload className="w-4 h-4 mr-1.5" />
+                          {nueva.nombreArchivo || 'Elegir imagen'}
+                        </Button>
+                        {nueva.archivo_base64 && (
+                          <img
+                            src={`data:${nueva.mime};base64,${nueva.archivo_base64}`}
+                            alt="" className="max-h-48 rounded-lg border"
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <input
+                          ref={fileRef} type="file" accept=".txt,.md,.csv,text/plain,text/markdown,text/csv"
+                          className="hidden"
+                          onChange={e => tomarArchivo(e.target.files?.[0])}
+                        />
+                        <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                          <Upload className="w-4 h-4 mr-1.5" />
+                          {nueva.nombreArchivo || 'Subir .txt / .md / .csv'}
+                        </Button>
+                        <Textarea
+                          value={nueva.texto}
+                          onChange={e => setNueva(n => ({ ...n, texto: e.target.value }))}
+                          rows={8} className="font-mono text-xs"
+                          placeholder="…o pega el contenido aquí"
+                        />
+                      </div>
+                    )}
+
+                    {errorPieza && <Aviso tono="error">{errorPieza}</Aviso>}
+
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={guardarPieza} disabled={subiendo}>
+                        {subiendo ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Plus className="w-4 h-4 mr-1.5" />}
+                        Agregar
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setNueva(null)}>Cancelar</Button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {!kb.length ? (
+              <p className="text-sm text-neutral-500 py-6 text-center">
+                Todavía no hay nada cargado. El agente solo sabrá lo que digas en el contexto.
+              </p>
+            ) : (
+              <ul className="divide-y rounded-xl border">
+                {kb.map(p => {
+                  const Icono = ICONO_TIPO[p.tipo]
                   return (
-                    <button
-                      key={m.valor} type="button"
-                      onClick={() => setAjustes(a => ({ ...a, modelo: m.valor }))}
-                      className={`rounded-xl border p-3 text-left transition ${
-                        elegido
-                          ? 'border-neutral-900 bg-neutral-900 text-white'
-                          : 'border-neutral-200 hover:border-neutral-400'
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold">{m.label}</span>
-                      <span className={`block text-xs ${elegido ? 'text-neutral-300' : 'text-neutral-500'}`}>
-                        ${m.entrada} / ${m.salida} por millón
-                      </span>
-                      <span className={`block text-xs mt-1 ${elegido ? 'text-white' : 'text-neutral-700'}`}>
-                        ≈ {pesos(costo)} por conversación
-                      </span>
-                    </button>
+                    <li key={p.id} className={`p-3 ${p.activo ? '' : 'bg-neutral-50'}`}>
+                      <div className="flex items-start gap-3">
+                        <Icono className={`w-4 h-4 mt-1 shrink-0 ${p.activo ? 'text-neutral-500' : 'text-neutral-300'}`} />
+                        <div className="min-w-0 flex-1">
+                          <p className={`text-sm font-medium truncate ${p.activo ? 'text-neutral-900' : 'text-neutral-400'}`}>
+                            {p.titulo}
+                          </p>
+                          <p className="text-xs text-neutral-500">
+                            {TIPOS_KB[p.tipo].label}
+                            {p.tipo === 'IMAGEN'
+                              ? ` · ${(p.bytes / 1024).toFixed(0)} kB`
+                              : ` · ${(p.texto?.length || 0).toLocaleString('es-CO')} caracteres`}
+                            {!p.activo && ' · desactivada'}
+                          </p>
+                          {previews[p.id] && (
+                            <img src={previews[p.id]} alt="" className="mt-2 max-h-56 rounded-lg border" />
+                          )}
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          {p.tipo === 'IMAGEN' && (
+                            <Button variant="ghost" size="sm" onClick={() => verImagen(p)} title="Ver">
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" onClick={() => alternarPieza(p)}
+                            title={p.activo ? 'Desactivar' : 'Activar'}>
+                            {p.activo ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => eliminarPieza(p)} title="Eliminar">
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                    </li>
                   )
                 })}
-              </div>
-              <p className="mt-2 text-xs text-neutral-500">
-                Estimado sobre 6 respuestas y el contexto actual ({tokens.toLocaleString('es-CO')} tokens).
-                Es una cuenta de servilleta: la bitácora guarda los tokens reales de cada conversación.
+              </ul>
+            )}
+
+            {resumen && (
+              <p className="text-xs text-neutral-500">
+                Contexto activo: <strong>{resumen.piezas_activas}</strong> piezas ·{' '}
+                <strong>{resumen.caracteres_texto.toLocaleString('es-CO')}</strong> caracteres ·{' '}
+                <strong>{resumen.imagenes}</strong> imágenes · ≈{' '}
+                <strong>{tokens.toLocaleString('es-CO')}</strong> tokens por conversación.
               </p>
-            </Campo>
+            )}
+          </section>
 
-            <Campo label="Profundidad de razonamiento"
-              ayuda={EFFORT_OPCIONES.find(o => o.valor === ajustes.effort)?.ayuda}>
-              <select
-                value={ajustes.effort}
-                onChange={e => setAjustes(a => ({ ...a, effort: e.target.value }))}
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
-              >
-                {EFFORT_OPCIONES.map(o => <option key={o.valor} value={o.valor}>{o.label}</option>)}
-              </select>
-            </Campo>
+          </TabsContent>
 
-            <Campo label="Tope de respuestas por conversación"
-              ayuda="Al superarlo deja de responder y la conversación queda para una persona.">
-              <Input type="number" min={1} max={200} value={ajustes.max_turnos}
-                onChange={e => setAjustes(a => ({ ...a, max_turnos: e.target.value }))} />
-            </Campo>
+          <TabsContent value="ajustes" className="space-y-6 mt-0">
+          {/* ── Ajustes ── */}
+          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+            <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
 
-            <Campo label="Espera antes de responder (segundos)"
-              ayuda="Las clínicas escriben de tres en tres. El agente aguarda este silencio para contestar UNA vez a todo. Corto interrumpe a media frase; largo parece abandono.">
-              <Input type="number" min={0} max={120} value={ajustes.espera_s}
-                onChange={e => setAjustes(a => ({ ...a, espera_s: e.target.value }))} />
-            </Campo>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Campo label="Modelo" className="sm:col-span-2"
+                ayuda={MODELOS.find(m => m.valor === ajustes.modelo)?.ayuda}>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {MODELOS.map(m => {
+                    const elegido = ajustes.modelo === m.valor
+                    const costo   = costoConversacion({ modelo: m.valor, contexto: tokens })
+                    return (
+                      <button
+                        key={m.valor} type="button"
+                        onClick={() => setAjustes(a => ({ ...a, modelo: m.valor }))}
+                        className={`rounded-xl border p-3 text-left transition ${
+                          elegido
+                            ? 'border-neutral-900 bg-neutral-900 text-white'
+                            : 'border-neutral-200 hover:border-neutral-400'
+                        }`}
+                      >
+                        <span className="block text-sm font-semibold">{m.label}</span>
+                        <span className={`block text-xs ${elegido ? 'text-neutral-300' : 'text-neutral-500'}`}>
+                          ${m.entrada} / ${m.salida} por millón
+                        </span>
+                        <span className={`block text-xs mt-1 ${elegido ? 'text-white' : 'text-neutral-700'}`}>
+                          ≈ {pesos(costo)} por conversación
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="mt-2 text-xs text-neutral-500">
+                  Estimado sobre 6 respuestas y el contexto actual ({tokens.toLocaleString('es-CO')} tokens).
+                  Es una cuenta de servilleta: la bitácora guarda los tokens reales de cada conversación.
+                </p>
+              </Campo>
 
-            <Campo label="Espera máxima (segundos)"
-              ayuda="Techo contado desde el primer mensaje sin responder. Sin él, quien escribe sin pausas no recibiría respuesta nunca. No puede ser menor que la espera.">
-              <Input type="number" min={0} max={300} value={ajustes.espera_max_s}
-                onChange={e => setAjustes(a => ({ ...a, espera_max_s: e.target.value }))} />
-            </Campo>
+              <Campo label="Profundidad de razonamiento"
+                ayuda={EFFORT_OPCIONES.find(o => o.valor === ajustes.effort)?.ayuda}>
+                <select
+                  value={ajustes.effort}
+                  onChange={e => setAjustes(a => ({ ...a, effort: e.target.value }))}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                >
+                  {EFFORT_OPCIONES.map(o => <option key={o.valor} value={o.valor}>{o.label}</option>)}
+                </select>
+              </Campo>
 
-            <Campo label="Volver sobre el enlace (minutos)"
-              ayuda="Si mandó el enlace de registro y nadie contestó, vuelve a preguntar una sola vez. 0 lo apaga. Se cancela solo si contestan, si llega la solicitud o si la toma una persona.">
-              <Input type="number" min={0} max={1440} value={ajustes.seg_minutos}
-                onChange={e => setAjustes(a => ({ ...a, seg_minutos: e.target.value }))} />
-            </Campo>
+              <Campo label="Tope de respuestas por conversación"
+                ayuda="Al superarlo deja de responder y la conversación queda para una persona.">
+                <Input type="number" min={1} max={200} value={ajustes.max_turnos}
+                  onChange={e => setAjustes(a => ({ ...a, max_turnos: e.target.value }))} />
+              </Campo>
 
-            <Campo label="Qué dice al volver" className="sm:col-span-2"
-              ayuda="El mensaje exacto del recordatorio. Ofrecer tomar los datos por chat es lo que recupera el registro.">
-              <textarea rows={2} value={ajustes.seg_texto}
-                onChange={e => setAjustes(a => ({ ...a, seg_texto: e.target.value }))}
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
-            </Campo>
+              <Campo label="Espera antes de responder (segundos)"
+                ayuda="Las clínicas escriben de tres en tres. El agente aguarda este silencio para contestar UNA vez a todo. Corto interrumpe a media frase; largo parece abandono.">
+                <Input type="number" min={0} max={120} value={ajustes.espera_s}
+                  onChange={e => setAjustes(a => ({ ...a, espera_s: e.target.value }))} />
+              </Campo>
 
-            <Campo label="Líneas donde responde" className="sm:col-span-2"
-              ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna.">
-              <Input value={ajustes.phone_number_ids}
-                onChange={e => setAjustes(a => ({ ...a, phone_number_ids: e.target.value }))}
-                placeholder="805890339283619" />
-            </Campo>
-          </div>
-        </section>
+              <Campo label="Espera máxima (segundos)"
+                ayuda="Techo contado desde el primer mensaje sin responder. Sin él, quien escribe sin pausas no recibiría respuesta nunca. No puede ser menor que la espera.">
+                <Input type="number" min={0} max={300} value={ajustes.espera_max_s}
+                  onChange={e => setAjustes(a => ({ ...a, espera_max_s: e.target.value }))} />
+              </Campo>
 
-        {/* ── Control de costos (migración 108) ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
-          <Cabecera icono={Wallet} titulo="Cuánto cuesta"
-            sub="Lo que se ha gastado de verdad, no un estimado: tokens de Claude, caracteres de la voz y lo que factura Meta. Separado por dónde se fue." />
-          <PanelCostos agenteId={agente.id} />
-        </section>
+              <Campo label="Volver sobre el enlace (minutos)"
+                ayuda="Si mandó el enlace de registro y nadie contestó, vuelve a preguntar una sola vez. 0 lo apaga. Se cancela solo si contestan, si llega la solicitud o si la toma una persona.">
+                <Input type="number" min={0} max={1440} value={ajustes.seg_minutos}
+                  onChange={e => setAjustes(a => ({ ...a, seg_minutos: e.target.value }))} />
+              </Campo>
 
-        {/* ── Correcciones y reglas (migración 099) ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
-          <Cabecera icono={Scale} titulo="Correcciones y reglas"
-            sub="Lo que marcas en el chat llega aquí. Tú decides qué se convierte en norma para el agente." />
-          <ReglasYCorrecciones agenteId={agente.id} onCambio={refrescar} />
-        </section>
+              <Campo label="Qué dice al volver" className="sm:col-span-2"
+                ayuda="El mensaje exacto del recordatorio. Ofrecer tomar los datos por chat es lo que recupera el registro.">
+                <textarea rows={2} value={ajustes.seg_texto}
+                  onChange={e => setAjustes(a => ({ ...a, seg_texto: e.target.value }))}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
+              </Campo>
 
-        {/* ── Bitácora ── */}
-        <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <Cabecera icono={History} titulo="Lo que ha respondido"
-              sub="Cada conversación que atendió, con lo que le preguntaron y lo que contestó. Es donde se ve si está haciendo bien el trabajo." />
-            <div className="flex items-center gap-2 shrink-0">
-              {verBitacora && (
-                <button onClick={cargarBitacora} title="Actualizar"
-                  className="p-1.5 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 cursor-pointer">
-                  <RefreshCw className={`w-4 h-4 ${cargandoBit ? 'animate-spin' : ''}`} />
-                </button>
-              )}
-              <Button variant="secondary" onClick={() => setVerBitacora(v => !v)}>
-                {verBitacora ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
-                {verBitacora ? 'Ocultar' : 'Ver'}
-              </Button>
+              <Campo label="Líneas donde responde" className="sm:col-span-2"
+                ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna.">
+                <Input value={ajustes.phone_number_ids}
+                  onChange={e => setAjustes(a => ({ ...a, phone_number_ids: e.target.value }))}
+                  placeholder="805890339283619" />
+              </Campo>
             </div>
-          </div>
+          </section>
 
-          {verBitacora && (cargandoBit && !ejecuciones.length ? (
-            <p className="text-sm text-neutral-400 flex items-center gap-2 py-4">
-              <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
-            </p>
-          ) : !ejecuciones.length ? (
-            <p className="text-sm text-neutral-500 py-4">
-              Todavía no ha respondido nada. Aparecerá aquí en cuanto atienda su primera conversación.
-            </p>
-          ) : (
-            <>
-              {/* Lo que no supo: es la razón de ser de esta pantalla */}
-              <div className={`rounded-xl border p-4 ${vacios.length ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-neutral-50'}`}>
-                <div className="flex items-start gap-2.5">
-                  <HelpCircle className={`w-5 h-5 shrink-0 mt-0.5 ${vacios.length ? 'text-orange-600' : 'text-neutral-400'}`} />
-                  <div className="min-w-0 flex-1">
-                    <h4 className="font-semibold text-neutral-900 text-sm">
-                      Lo que no supo responder{vacios.length > 0 && ` · ${vacios.length}`}
-                    </h4>
-                    {vacios.length === 0 ? (
-                      <p className="text-sm text-neutral-500 mt-1">
-                        Nada pendiente: respondió todo con lo que tiene cargado.
-                      </p>
-                    ) : (
-                      <>
-                        <p className="text-[13px] text-neutral-600 mt-1 mb-3">
-                          Preguntas reales que tuvo que pasar a una persona. Escribe la respuesta
-                          arriba, en la base de conocimiento, y deja de escalarlas.
+          </TabsContent>
+
+          <TabsContent value="reglas" className="space-y-6 mt-0">
+          {/* ── Correcciones y reglas (migración 099) ── */}
+          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+            <Cabecera icono={Scale} titulo="Correcciones y reglas"
+              sub="Lo que marcas en el chat llega aquí. Tú decides qué se convierte en norma para el agente." />
+            <ReglasYCorrecciones agenteId={agente.id} onCambio={refrescar} />
+          </section>
+
+          </TabsContent>
+
+          {/* ⚠️ Materiales y botones son catálogos GLOBALES todavía, no por
+              agente: la tabla no tiene columna `agente_id`. Se muestran aquí
+              porque es donde se buscan, pero cuando llegue la segunda línea
+              habrá que separarlos o las dos compartirán brochure y menús. */}
+          <TabsContent value="materiales" className="mt-0">
+            <MaterialesWhatsapp embebido />
+          </TabsContent>
+
+          <TabsContent value="interactivos" className="mt-0">
+            <InteractivosWhatsapp embebido />
+          </TabsContent>
+
+          <TabsContent value="bitacora" className="space-y-6 mt-0">
+          {/* ── Bitácora ── */}
+          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <Cabecera icono={History} titulo="Lo que ha respondido"
+                sub="Cada conversación que atendió, con lo que le preguntaron y lo que contestó. Es donde se ve si está haciendo bien el trabajo." />
+              <div className="flex items-center gap-2 shrink-0">
+                {verBitacora && (
+                  <button onClick={cargarBitacora} title="Actualizar"
+                    className="p-1.5 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 cursor-pointer">
+                    <RefreshCw className={`w-4 h-4 ${cargandoBit ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+                <Button variant="secondary" onClick={() => setVerBitacora(v => !v)}>
+                  {verBitacora ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+                  {verBitacora ? 'Ocultar' : 'Ver'}
+                </Button>
+              </div>
+            </div>
+
+            {verBitacora && (cargandoBit && !ejecuciones.length ? (
+              <p className="text-sm text-neutral-400 flex items-center gap-2 py-4">
+                <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
+              </p>
+            ) : !ejecuciones.length ? (
+              <p className="text-sm text-neutral-500 py-4">
+                Todavía no ha respondido nada. Aparecerá aquí en cuanto atienda su primera conversación.
+              </p>
+            ) : (
+              <>
+                {/* Lo que no supo: es la razón de ser de esta pantalla */}
+                <div className={`rounded-xl border p-4 ${vacios.length ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-neutral-50'}`}>
+                  <div className="flex items-start gap-2.5">
+                    <HelpCircle className={`w-5 h-5 shrink-0 mt-0.5 ${vacios.length ? 'text-orange-600' : 'text-neutral-400'}`} />
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-semibold text-neutral-900 text-sm">
+                        Lo que no supo responder{vacios.length > 0 && ` · ${vacios.length}`}
+                      </h4>
+                      {vacios.length === 0 ? (
+                        <p className="text-sm text-neutral-500 mt-1">
+                          Nada pendiente: respondió todo con lo que tiene cargado.
                         </p>
-                        <ul className="space-y-2">
-                          {vacios.map(v => (
-                            <li key={v.id} className="rounded-lg bg-white border border-orange-200 px-3 py-2">
-                              <p className="text-sm text-neutral-900">{v.pregunta}</p>
-                              <p className="text-[11px] text-neutral-400 mt-0.5">
-                                {v.contacto} · {new Date(v.cuando).toLocaleString('es-CO')}
-                              </p>
-                            </li>
-                          ))}
-                        </ul>
-                      </>
-                    )}
+                      ) : (
+                        <>
+                          <p className="text-[13px] text-neutral-600 mt-1 mb-3">
+                            Preguntas reales que tuvo que pasar a una persona. Escribe la respuesta
+                            arriba, en la base de conocimiento, y deja de escalarlas.
+                          </p>
+                          <ul className="space-y-2">
+                            {vacios.map(v => (
+                              <li key={v.id} className="rounded-lg bg-white border border-orange-200 px-3 py-2">
+                                <p className="text-sm text-neutral-900">{v.pregunta}</p>
+                                <p className="text-[11px] text-neutral-400 mt-0.5">
+                                  {v.contacto} · {new Date(v.cuando).toLocaleString('es-CO')}
+                                </p>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="space-y-3">
-                {ejecuciones.map(e => <Ejecucion key={e.id} e={e} />)}
-              </div>
-            </>
-          ))}
-        </section>
+                <div className="space-y-3">
+                  {ejecuciones.map(e => <Ejecucion key={e.id} e={e} />)}
+                </div>
+              </>
+            ))}
+          </section>
+
+          </TabsContent>
+        </Tabs>
 
         {/* ── Guardar ── */}
         <div className="sticky bottom-4 flex justify-end">

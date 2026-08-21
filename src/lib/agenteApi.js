@@ -61,6 +61,9 @@ export const EFFORT_OPCIONES = [
   { valor: 'max',    label: 'Máximo',   ayuda: 'Sin límite práctico. Solo si la calidad lo justifica.' },
 ]
 
+/** Todos los agentes, para la portada del módulo. Ya no hay "el" agente. */
+export const listarAgentes = () => orbitApi('/agente/lista/todos')
+
 export const cargarAgente = (clave = 'VETERINARIAS') => orbitApi(`/agente/${clave}`)
 
 export const guardarAgente = (clave, datos) =>

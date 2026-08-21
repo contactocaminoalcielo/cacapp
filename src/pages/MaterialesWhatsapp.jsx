@@ -24,7 +24,15 @@ import {
 
 const ICONO = { imagen: ImageIcon, video: Film, documento: FileText }
 
-export default function MaterialesWhatsapp() {
+/**
+ * `embebido`: la misma pantalla, montada como pestaña dentro de un agente.
+ *
+ * Se hace con una bandera en vez de partir el archivo en dos porque es
+ * EXACTAMENTE la misma pantalla: lo único que sobra al incrustarla es la
+ * cabecera de página y el margen exterior, que ya los pone quien la contiene.
+ * Duplicar el componente para eso condena a arreglar cada bug dos veces.
+ */
+export default function MaterialesWhatsapp({ embebido = false }) {
   const [lista, setLista] = useState([])
   const [cargando, setCargando] = useState(true)
   const [sel, setSel] = useState(null)
@@ -114,8 +122,8 @@ export default function MaterialesWhatsapp() {
 
   return (
     <>
-      <Topbar titulo="Materiales de WhatsApp" />
-      <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
+      {!embebido && <Topbar />}
+      <div className={embebido ? 'space-y-4' : 'p-4 sm:p-6 max-w-6xl mx-auto space-y-4'}>
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex gap-2.5">
           <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
