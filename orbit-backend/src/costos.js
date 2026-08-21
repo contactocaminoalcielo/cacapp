@@ -97,6 +97,13 @@ export async function registrar({
   origenUnico = null, costoUsd = null,
 }) {
   try {
+    // Un intento que falló antes de consumir nada (el 400 de saldo agotado, sin
+    // ir más lejos) no es un gasto. Apuntarlo sumaría "respuestas" que nunca
+    // existieron y el promedio por conversación saldría bajo sin motivo.
+    const algo = tokensEntrada || tokensSalida || cacheEscritura || cacheLectura
+               || caracteres || unidades
+    if (!algo && costoUsd === null) return
+
     const cuando = ocurridoEn || new Date()
     let costo = costoUsd
 
@@ -145,10 +152,16 @@ export async function registrar({
  * se rompe solo en cuanto haya volumen — y ya nos pasó con los reportes, donde
  * `PGRST_DB_MAX_ROWS` cortaba la consulta sin avisar.
  */
-export async function resumen({ desde, hasta }) {
+export async function resumen({ desde, hasta, granularidad = 'DIA' }) {
   const rango = [desde, hasta]
+  const paso = granularidad === 'HORA' ? 'hour' : 'day'
+  // El eje se devuelve como TEXTO ya formado, no como fecha.
+  // 🩸 Si se devuelve una marca de tiempo sin zona, el navegador la vuelve a
+  // interpretar en SU zona y el gráfico se desplaza cinco horas — justo el
+  // error que hace que el gasto de la noche aparezca al día siguiente.
+  const molde = granularidad === 'HORA' ? 'YYYY-MM-DD HH24' : 'YYYY-MM-DD'
 
-  const [total, porProveedor, porCanal, porDia, caras] = await Promise.all([
+  const [total, porProveedor, porCanal, porDia, caras, hoy] = await Promise.all([
     pool.query(
       `SELECT COALESCE(SUM(costo_usd), 0)::float8 AS usd, COUNT(*)::int AS eventos
          FROM public.costos_uso WHERE ocurrido_en >= $1 AND ocurrido_en < $2`, rango),
@@ -171,9 +184,9 @@ export async function resumen({ desde, hasta }) {
         GROUP BY 1, 2 ORDER BY 3 DESC`, rango),
 
     pool.query(
-      // La fecha se agrupa en hora de Bogotá, no en UTC: si no, el gasto de la
-      // noche se contabiliza al día siguiente y el gráfico miente.
-      `SELECT (ocurrido_en AT TIME ZONE 'America/Bogota')::date AS dia,
+      // Se agrupa en hora de Bogotá, no en UTC: si no, lo que se gasta de noche
+      // se contabiliza al día siguiente y el gráfico miente.
+      `SELECT to_char(date_trunc('${paso}', ocurrido_en AT TIME ZONE 'America/Bogota'), '${molde}') AS dia,
               COALESCE(SUM(costo_usd), 0)::float8 AS usd,
               COALESCE(SUM(costo_usd) FILTER (WHERE proveedor = 'ANTHROPIC'),  0)::float8 AS anthropic,
               COALESCE(SUM(costo_usd) FILTER (WHERE proveedor = 'ELEVENLABS'), 0)::float8 AS elevenlabs,
@@ -188,6 +201,20 @@ export async function resumen({ desde, hasta }) {
          FROM public.costos_uso
         WHERE ocurrido_en >= $1 AND ocurrido_en < $2 AND referencia IS NOT NULL
         GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10`, rango),
+
+    // ── Lo de HOY, siempre ──
+    // Va aparte del periodo elegido a propósito: la pregunta "¿cómo vamos hoy?"
+    // no debería obligar a cambiar el filtro y perder de vista el mes. Se
+    // calcula contra el día de Bogotá, que es el que vive quien lo mira.
+    pool.query(
+      `SELECT COALESCE(SUM(costo_usd), 0)::float8 AS usd,
+              COUNT(*)::int AS eventos,
+              COALESCE(SUM(costo_usd) FILTER (WHERE proveedor = 'ANTHROPIC'),  0)::float8 AS anthropic,
+              COALESCE(SUM(costo_usd) FILTER (WHERE proveedor = 'ELEVENLABS'), 0)::float8 AS elevenlabs,
+              COALESCE(SUM(costo_usd) FILTER (WHERE proveedor = 'META'),       0)::float8 AS meta
+         FROM public.costos_uso
+        WHERE (ocurrido_en AT TIME ZONE 'America/Bogota')::date
+              = (now() AT TIME ZONE 'America/Bogota')::date`),
   ])
 
   return {
@@ -196,6 +223,8 @@ export async function resumen({ desde, hasta }) {
     porCanal:     porCanal.rows,
     porDia:       porDia.rows,
     caras:        caras.rows,
+    hoy:          hoy.rows[0],
+    granularidad,
   }
 }
 

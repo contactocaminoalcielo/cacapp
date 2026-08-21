@@ -211,10 +211,11 @@ export const borrarRegla = (id) =>
 // Lo que devuelve el backend ya viene sumado en SQL: aquí no se agrega nada.
 // Sumar en React se rompe solo en cuanto haya volumen, y encima en silencio.
 
-export const cargarCostos = ({ desde, hasta } = {}) => {
+export const cargarCostos = ({ desde, hasta, granularidad } = {}) => {
   const q = new URLSearchParams()
   if (desde) q.set('desde', desde)
   if (hasta) q.set('hasta', hasta)
+  if (granularidad) q.set('granularidad', granularidad)
   const s = q.toString()
   return orbitApi(`/agente/costos/resumen${s ? `?${s}` : ''}`)
 }

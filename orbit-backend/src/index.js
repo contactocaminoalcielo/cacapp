@@ -622,8 +622,11 @@ app.get('/agente/costos/resumen', requireAuth, rolAgente, async (req, res) => {
     const hoy = new Date()
     const desde = req.query.desde || new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), 1)).toISOString()
     const hasta = req.query.hasta || new Date(Date.now() + 86400_000).toISOString()
+    // Por horas cuando el rango es corto: un solo día en un gráfico "por día"
+    // es una barra sola, que no dice nada. Con horas se ve el ritmo real.
+    const granularidad = req.query.granularidad === 'HORA' ? 'HORA' : 'DIA'
     const [datos, eleven, tasa] = await Promise.all([
-      resumenCostos({ desde, hasta }),
+      resumenCostos({ desde, hasta, granularidad }),
       saldoElevenLabs(),
       trmActual(),
     ])

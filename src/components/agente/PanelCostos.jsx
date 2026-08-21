@@ -46,6 +46,7 @@ const NOMBRE_CANAL = {
 }
 
 const PERIODOS = [
+  { clave: 'hoy',  label: 'Hoy' },
   { clave: 'mes',  label: 'Este mes' },
   { clave: 'd7',   label: '7 días' },
   { clave: 'd30',  label: '30 días' },
@@ -53,10 +54,36 @@ const PERIODOS = [
 
 function rango(clave) {
   const hasta = new Date(Date.now() + 86400_000)
+  if (clave === 'hoy') {
+    // El día que vive quien mira, no el de UTC: a las 7 de la tarde en Bogotá
+    // ya es el día siguiente en Londres, y "hoy" empezaría a las 7 p.m.
+    const h = new Date()
+    return {
+      desde: new Date(h.getFullYear(), h.getMonth(), h.getDate()),
+      hasta,
+      granularidad: 'HORA',
+    }
+  }
   if (clave === 'd7')  return { desde: new Date(Date.now() - 7  * 86400_000), hasta }
   if (clave === 'd30') return { desde: new Date(Date.now() - 30 * 86400_000), hasta }
   const h = new Date()
   return { desde: new Date(h.getFullYear(), h.getMonth(), 1), hasta }
+}
+
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+
+/**
+ * La etiqueta del eje, a partir del texto que manda el backend.
+ *
+ * Llega ya formado (`2026-08-21` o `2026-08-21 14`) y se parte a mano en vez de
+ * pasarlo por `new Date`: convertirlo a fecha lo reinterpretaría en la zona del
+ * navegador y desplazaría el gráfico cinco horas.
+ */
+function etiquetaEje(texto, granularidad) {
+  const t = String(texto || '')
+  if (granularidad === 'HORA') return `${t.slice(11, 13)}:00`
+  const [, m, d] = t.split('-')
+  return `${d} ${MESES[parseInt(m, 10) - 1] || ''}`
 }
 
 /** Dólares con los decimales que hagan falta: 0,003 USD no puede salir "0,00". */
@@ -84,8 +111,10 @@ export default function PanelCostos({ agenteId }) {
   const cargar = useCallback(async () => {
     setCargando(true); setError(null)
     try {
-      const { desde, hasta } = rango(periodo)
-      const r = await cargarCostos({ desde: desde.toISOString(), hasta: hasta.toISOString() })
+      const { desde, hasta, granularidad } = rango(periodo)
+      const r = await cargarCostos({
+        desde: desde.toISOString(), hasta: hasta.toISOString(), granularidad,
+      })
       if (!r?.ok) throw new Error(r?.error || 'No se pudo cargar el consumo')
       setDatos(r)
     } catch (e) {
@@ -107,22 +136,39 @@ export default function PanelCostos({ agenteId }) {
   // Recharts necesita una fila por día con una columna por serie. El backend ya
   // devuelve exactamente eso; aquí solo se le pone el día en formato corto.
   const serie = useMemo(() => (datos?.porDia || []).map(d => ({
-    dia: new Date(d.dia).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }),
+    dia: etiquetaEje(d.dia, datos?.granularidad),
     ANTHROPIC: d.anthropic, ELEVENLABS: d.elevenlabs, META: d.meta, total: d.usd,
   })), [datos])
 
   const trm = datos?.trm || 4000
   const total = datos?.total?.usd || 0
   const eleven = datos?.elevenlabs || {}
+  const hoy = datos?.hoy || {}
 
   return (
     <div className="space-y-5">
       {/* ── Periodo y total ── */}
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-neutral-500">Gasto del periodo</p>
-          <p className="text-3xl font-semibold text-neutral-900 tabular-nums">{usd(total)}</p>
-          <p className="text-sm text-neutral-500 tabular-nums">≈ {cop(total, trm)}</p>
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-neutral-500">
+              {periodo === 'hoy' ? 'Gasto de hoy' : 'Gasto del periodo'}
+            </p>
+            <p className="text-3xl font-semibold text-neutral-900 tabular-nums">{usd(total)}</p>
+            <p className="text-sm text-neutral-500 tabular-nums">≈ {cop(total, trm)}</p>
+          </div>
+
+          {/* Hoy va SIEMPRE, mires el periodo que mires: "¿cómo vamos hoy?" no
+              debería costar un clic ni hacerte perder de vista el mes. */}
+          {periodo !== 'hoy' && (
+            <div className="pl-8 border-l border-neutral-200">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">Hoy</p>
+              <p className="text-xl font-semibold text-neutral-900 tabular-nums">{usd(hoy.usd)}</p>
+              <p className="text-[12px] text-neutral-500 tabular-nums">
+                {hoy.eventos ? `${miles(hoy.eventos)} consumos · ${cop(hoy.usd, trm)}` : 'sin consumo todavía'}
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <div className="flex rounded-lg border border-neutral-200 p-0.5">
@@ -181,7 +227,9 @@ export default function PanelCostos({ agenteId }) {
       {/* ── Día a día ── */}
       <div className="rounded-xl border border-neutral-200 p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
-          <h4 className="text-sm font-semibold text-neutral-900">Día a día</h4>
+          <h4 className="text-sm font-semibold text-neutral-900">
+            {periodo === 'hoy' ? 'Hora a hora' : 'Día a día'}
+          </h4>
           <div className="flex items-center gap-3">
             {['ANTHROPIC', 'ELEVENLABS', 'META'].map(k => (
               <span key={k} className="flex items-center gap-1.5 text-[11px] text-neutral-600">
@@ -194,7 +242,9 @@ export default function PanelCostos({ agenteId }) {
 
         {!serie.length ? (
           <p className="text-sm text-neutral-500 py-8 text-center">
-            Sin consumo registrado en este periodo.
+            {periodo === 'hoy'
+              ? 'Hoy todavía no se ha gastado nada.'
+              : 'Sin consumo registrado en este periodo.'}
           </p>
         ) : (
           <div className="h-56 -ml-2">
