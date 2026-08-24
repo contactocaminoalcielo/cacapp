@@ -47,11 +47,27 @@ export function olvidarPrecios() {
  * gastó en agosto se sigue explicando con el precio de agosto. Recalcular el
  * pasado con el precio nuevo daría un total que no cuadra con ninguna factura.
  */
+/**
+ * El id del modelo, sin la fecha.
+ *
+ * 🩸 UN FALLO QUE DEJABA EL COSTO EN CERO. En la petición puede viajar
+ * `claude-haiku-4-5-20251001` mientras la tabla guarda `claude-haiku-4-5`: no
+ * casaban, no había precio, y el renglón se apuntaba con costo 0. El panel
+ * seguía enseñando un número perfectamente creíble y equivocado.
+ *
+ * Se normaliza aquí y no con filas duplicadas en la tabla: mantener dos por
+ * modelo es garantizar que un día se olvide una.
+ */
+function sinFecha(clave) {
+  return String(clave || '').replace(/-\d{8}$/, '')
+}
+
 function precioVigente(lista, proveedor, clave, concepto, cuando) {
   const dia = (cuando instanceof Date ? cuando : new Date(cuando)).toISOString().slice(0, 10)
+  const buscada = sinFecha(clave)
   let elegido = null
   for (const p of lista) {
-    if (p.proveedor !== proveedor || p.clave !== clave || p.concepto !== concepto) continue
+    if (p.proveedor !== proveedor || sinFecha(p.clave) !== buscada || p.concepto !== concepto) continue
     const desde = p.vigente_desde instanceof Date
       ? p.vigente_desde.toISOString().slice(0, 10)
       : String(p.vigente_desde).slice(0, 10)
