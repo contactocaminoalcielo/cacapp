@@ -13,6 +13,7 @@ import {
   guardarTarjetas, huecosDe, subirCabecera, tarjetasDe, conValores,
 } from '@/lib/plantillasWa'
 import { leerArchivo } from '@/lib/materialesApi'
+import { FormatoTextoWhatsapp, TextoWhatsapp } from '@/components/whatsapp/FormatoTextoWhatsapp'
 
 const tarjetaVacia = () => ({
   texto: '', handle: '', material_id: null, archivo: null, preview: null, botones: [],
@@ -72,6 +73,8 @@ export default function ConstructorCarrusel({ original = null, agenteId, onClose
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState(null)
   const archivos = useRef([])
+  const cuerpoRef = useRef(null)
+  const textoActivoRef = useRef(null)
   const editar = !!original
   const named = f.formato === 'NAMED'
 
@@ -313,8 +316,9 @@ export default function ConstructorCarrusel({ original = null, agenteId, onClose
                 </select>
               </Campo>
               <Campo id="carrusel-cuerpo" label="Mensaje principal" help="Aparece encima de las tarjetas." className="sm:col-span-2">
-                <Textarea id="carrusel-cuerpo" rows={4} value={f.cuerpo} onChange={e => set('cuerpo', e.target.value)}
+                <Textarea ref={cuerpoRef} id="carrusel-cuerpo" rows={4} value={f.cuerpo} onChange={e => set('cuerpo', e.target.value)}
                           placeholder={named ? 'Hola {{nombre}}, conoce nuestras opciones:' : 'Hola {{1}}, conoce nuestras opciones:'} />
+                <FormatoTextoWhatsapp textareaRef={cuerpoRef} value={f.cuerpo} onChange={v => set('cuerpo', v)} />
                 <Ejemplos prefijo="BODY" texto={f.cuerpo} valores={ejemplos} setValores={setEjemplos} />
               </Campo>
               <Campo id="carrusel-medio" label="Medio de las tarjetas" className="sm:col-span-2">
@@ -372,9 +376,11 @@ export default function ConstructorCarrusel({ original = null, agenteId, onClose
                 </Campo>
 
                 <Campo id={`texto-tarjeta-${activa}`} label="Texto de la tarjeta">
-                  <Textarea id={`texto-tarjeta-${activa}`} rows={4} value={card.texto}
+                  <Textarea ref={textoActivoRef} id={`texto-tarjeta-${activa}`} rows={4} value={card.texto}
                             onChange={e => cambiarTarjeta(activa, 'texto', e.target.value)}
                             placeholder={named ? 'Plan {{plan}} · Desde {{precio}}' : 'Plan {{1}} · Desde {{2}}'} />
+                  <FormatoTextoWhatsapp textareaRef={textoActivoRef} value={card.texto}
+                                         onChange={v => cambiarTarjeta(activa, 'texto', v)} />
                   <Ejemplos prefijo={`CARD:${activa}:BODY`} texto={card.texto} valores={ejemplos} setValores={setEjemplos} />
                 </Campo>
 
@@ -418,7 +424,7 @@ function PreviaCarrusel({ plantilla, tarjetas, ejemplos }) {
   const valsTop = Object.fromEntries(huecosDe(cuerpo).map(h => [h, ejemplos[`BODY:${h}`]]))
   return <div className="overflow-hidden rounded-2xl bg-[#E7F3E9] p-3">
     <div className="mb-2 max-w-[92%] rounded-lg rounded-tl-sm bg-white p-3 text-sm text-slate-800 shadow-sm">
-      {conValores(cuerpo, valsTop) || <span className="italic text-slate-400">Mensaje principal</span>}
+      {cuerpo ? <TextoWhatsapp texto={conValores(cuerpo, valsTop)} /> : <span className="italic text-slate-400">Mensaje principal</span>}
     </div>
     <div className="flex snap-x gap-2 overflow-x-auto pb-2" aria-label="Vista previa de tarjetas">
       {tarjetas.map((t, i) => {
@@ -428,7 +434,9 @@ function PreviaCarrusel({ plantilla, tarjetas, ejemplos }) {
             ? <video src={t.preview} className="h-28 w-full object-cover" muted />
             : <img src={t.preview} alt={`Vista previa de la tarjeta ${i + 1}`} className="h-28 w-full object-cover" />)
             : <div className="grid h-28 place-items-center bg-slate-100 text-slate-400">{plantilla.components[1]?.cards?.[i]?.components?.[0]?.format === 'VIDEO' ? <Film /> : <ImageIcon />}</div>}
-          <div className="p-3 text-xs leading-relaxed text-slate-700 min-h-16">{conValores(t.texto, vals) || 'Texto de la tarjeta'}</div>
+          <div className="p-3 text-xs leading-relaxed text-slate-700 min-h-16 whitespace-pre-wrap">
+            {t.texto ? <TextoWhatsapp texto={conValores(t.texto, vals)} /> : 'Texto de la tarjeta'}
+          </div>
           <div className="border-t border-slate-100">
             {t.botones.map((b, j) => <div key={j} className="border-b border-slate-100 px-2 py-2 text-center text-xs font-semibold text-[#0a7cff] last:border-0">
               {b.type === 'URL' ? <Link2 className="mr-1 inline h-3 w-3" /> : <MessageSquareReply className="mr-1 inline h-3 w-3" />}{b.text || `Botón ${j + 1}`}

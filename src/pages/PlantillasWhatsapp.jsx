@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import ConstructorCarrusel from '@/components/whatsapp/ConstructorCarrusel'
+import { FormatoTextoWhatsapp, TextoWhatsapp } from '@/components/whatsapp/FormatoTextoWhatsapp'
 import {
   listarPlantillas, crearPlantilla, editarPlantilla, borrarPlantilla, enviarPlantilla,
   subirCabecera, asignarCabecera, buscarServicios, guardarTarjetas, autorizarPlantilla,
@@ -464,7 +465,7 @@ function VistaPrevia({ p, valores = {} }) {
           </div>
         )}
         <p className="text-[12.5px] text-gray-800 whitespace-pre-wrap leading-snug">
-          {conValores(cuerpo, valores) || <span className="italic text-gray-400">(sin texto)</span>}
+          {cuerpo ? <TextoWhatsapp texto={conValores(cuerpo, valores)} /> : <span className="italic text-gray-400">(sin texto)</span>}
         </p>
         {pie && <p className="text-[10.5px] text-gray-400">{pie}</p>}
       </div>
@@ -491,7 +492,7 @@ function VistaPrevia({ p, valores = {} }) {
                   <MediaIcon className="w-5 h-5" />
                 </div>
                 <p className="min-h-14 p-2.5 text-[11.5px] leading-relaxed text-gray-800 whitespace-pre-wrap">
-                  {conValores(body?.text, valores) || <span className="italic text-gray-400">Sin texto</span>}
+                  {body?.text ? <TextoWhatsapp texto={conValores(body.text, valores)} /> : <span className="italic text-gray-400">Sin texto</span>}
                 </p>
                 {cardButtons.map((b, j) => (
                   <div key={j} className="border-t border-gray-100 px-2 py-1.5 text-center text-[11px] font-semibold text-[#0a7cff]">
@@ -887,6 +888,7 @@ function Constructor({ original, agenteId, onCerrar, onGuardada }) {
                       placeholder={named
                         ? 'Hola {{cliente}}, los recordatorios de {{mascota}} ya están listos.'
                         : 'Hola {{1}}, los recordatorios de {{2}} ya están listos.'} />
+            <FormatoTextoWhatsapp textareaRef={cuerpoRef} value={f.cuerpo} onChange={v => set('cuerpo', v)} />
             <div className="flex gap-2 mt-1.5">
               {named && (
                 <Input value={nombreHueco} className="h-8 max-w-[200px]"
