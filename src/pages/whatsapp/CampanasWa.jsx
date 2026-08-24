@@ -24,7 +24,7 @@ import {
 import { huecosDePlantilla, conValores, componente } from '@/lib/plantillasWa'
 import {
   Plus, Loader2, Send, X, AlertTriangle, Users, Pause, Play, Ban, Trash2,
-  RefreshCw, Eye, Megaphone, Check, Search,
+  RefreshCw, Eye, Megaphone, Check, Search, Upload, FileSpreadsheet,
 } from 'lucide-react'
 
 export default function CampanasWa({ plantillas = [], agenteId = null, abrirCon = null, onAbierto }) {
@@ -337,9 +337,21 @@ function Asistente({ plantillas, prefijada, agenteId = null, onCerrar, onCreada 
                   Sí
                 </label>
               ) : fl.tipo === 'lista' ? (
-                <Textarea rows={5} value={f.filtros[fl.clave] || ''}
-                          placeholder={'573001234567\n3009876543'}
-                          onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null); setElegidos(new Set()) }} />
+                // Dos caminos para lo mismo, nunca los dos a la vez: pegar
+                // treinta números o importar un archivo con trescientos. Con
+                // los dos abiertos, nadie sabría cuál manda.
+                Array.isArray(f.filtros[fl.clave]) ? (
+                  <YaImportado filas={f.filtros[fl.clave]} huecos={huecos}
+                               onQuitar={() => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: '' } })); setPrevia(null); setElegidos(new Set()) }} />
+                ) : (
+                  <div className="space-y-2">
+                    <Textarea rows={5} value={f.filtros[fl.clave] || ''}
+                              placeholder={'573001234567\n3009876543'}
+                              onChange={e => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: e.target.value } })); setPrevia(null); setElegidos(new Set()) }} />
+                    <ImportarNumeros huecos={huecos}
+                                     onImportar={filas => { setF(p => ({ ...p, filtros: { ...p.filtros, [fl.clave]: filas } })); setPrevia(null); setElegidos(new Set()) }} />
+                  </div>
+                )
               ) : (
                 <Input type={fl.tipo === 'numero' ? 'number' : 'text'} min={fl.tipo === 'numero' ? 1 : undefined}
                        className={fl.tipo === 'numero' ? 'w-32' : undefined}
@@ -375,6 +387,8 @@ function Asistente({ plantillas, prefijada, agenteId = null, onCerrar, onCreada 
                     ? 'una lista de números no trae datos de Orbit.'
                     : 'esos datos están mapeados a un servicio, y aquí el destinatario no es una familia.'}
                   {' '}Escribe qué debe decir; será lo mismo para todos.
+                  {(previa?.huecosCubiertos || []).length > 0
+                    && ' Los que trae el archivo ya están resueltos y no salen aquí.'}
                 </p>
               </div>
               {faltantes.map(h => {
@@ -547,6 +561,312 @@ function TablaDestinos({ destinos, columnas, elegidos, setElegidos, busca, setBu
 }
 
 /** De `{{1}}` o `{{mascota}}` a la clave con destino que usa el backend. */
+// ─────────────────────────────────────────────────────────────────────────────
+// Importar una lista de un archivo
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Un CSV, partido de verdad.
+ *
+ * No vale `split(',')`: una columna entrecomillada con una coma dentro
+ * ("Gómez, María") partiría la fila en dos y el número acabaría desplazado una
+ * casilla — el peor de los fallos posibles aquí, porque no se nota hasta que el
+ * mensaje llega a quien no era.
+ */
+function partirCSV(texto, sep) {
+  const filas = []
+  let campo = '', fila = [], entrecomillado = false
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i]
+    if (entrecomillado) {
+      if (c === '"') {
+        if (texto[i + 1] === '"') { campo += '"'; i++ } else entrecomillado = false
+      } else campo += c
+    } else if (c === '"') entrecomillado = true
+    else if (c === sep) { fila.push(campo); campo = '' }
+    else if (c === '\n') { fila.push(campo); filas.push(fila); fila = []; campo = '' }
+    else if (c !== '\r') campo += c
+  }
+  if (campo !== '' || fila.length) { fila.push(campo); filas.push(fila) }
+  return filas
+    .map(f => f.map(x => x.trim()))
+    .filter(f => f.some(x => x))
+}
+
+/** Excel guarda con `;` en español y con `,` en inglés; Sheets a veces con tabulador. */
+function separadorDe(primeraLinea) {
+  const cuenta = c => primeraLinea.split(c).length - 1
+  return [';', '\t', ','].sort((a, b) => cuenta(b) - cuenta(a))[0]
+}
+
+const soloDigitos = v => String(v || '').replace(/\D/g, '')
+
+/** Espejo de `aInternacional` del backend: 10 dígitos que empiezan por 3 son Colombia. */
+function aInternacional(v) {
+  const d = soloDigitos(v)
+  if (d.length === 10 && d.startsWith('3')) return '57' + d
+  return d
+}
+
+const sinTildes = v => String(v || '').toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+/**
+ * Qué es cada columna, adivinado por su encabezado.
+ *
+ * Adivinar no es opcional: con seis columnas y un desplegable por cada una,
+ * quien importa acaba dejándolo a medias. Se adivina y se enseña para que lo
+ * corrija, que es distinto de decidir por él.
+ */
+function adivinarColumna(encabezado, huecos, yaUsadas) {
+  const h = sinTildes(encabezado)
+  if (!h) return ''
+  if (!yaUsadas.has('contacto') && /(tel|cel|whats|movil|numero|contacto)/.test(h)) return 'contacto'
+  if (!yaUsadas.has('nombre') && /(nombre|cliente|familia|veterinaria|clinica|destinatario)/.test(h)) return 'nombre'
+  const hueco = huecos.find(x => sinTildes(x.hueco) === h && !yaUsadas.has(x.clave))
+  return hueco ? hueco.clave : ''
+}
+
+/** Lo que ya se importó, en una línea: cuántos son y qué traen. */
+function YaImportado({ filas, huecos, onQuitar }) {
+  const conDatos = new Set()
+  for (const f of filas) for (const k of Object.keys(f.valores || {})) conDatos.add(k)
+  const etiqueta = k => `{{${huecos.find(h => h.clave === k)?.hueco || k.split(':')[1]}}}`
+
+  return (
+    <div className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
+      <FileSpreadsheet className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[12.5px] font-semibold text-emerald-900">
+          {filas.length} número(s) importados
+        </p>
+        <p className="text-[11.5px] text-emerald-800">
+          {filas.some(f => f.nombre) && 'Traen nombre. '}
+          {conDatos.size
+            ? `Cada uno trae lo suyo para ${[...conDatos].map(etiqueta).join(', ')}.`
+            : 'Sin datos por persona: lo que diga la plantilla será igual para todos.'}
+        </p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={onQuitar} className="text-gray-400 hover:text-red-600">
+        <X className="w-3.5 h-3.5" />
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * Importar números de un archivo.
+ *
+ * 🩸 Lo que NO hace: importar y mandar. Entre lo uno y lo otro está la previa,
+ * la tabla de destinatarios y el botón de crear, que es donde se ve a cuántos
+ * va. Un importador que arrancara el envío convertiría un archivo mal armado en
+ * trescientos mensajes.
+ */
+function ImportarNumeros({ huecos, onImportar }) {
+  const { alert: showAlert } = useConfirm()
+  const [filas, setFilas] = useState(null)      // lo leído, sin interpretar
+  const [encabezados, setEncabezados] = useState(null)
+  const [mapa, setMapa] = useState([])          // qué es cada columna
+  const [archivo, setArchivo] = useState('')
+
+  async function leer(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    // Un .xlsx es un zip, no un texto: leerlo aquí daría caracteres sueltos y
+    // un "no encontré números" que no explica nada.
+    if (/\.(xlsx|xls|numbers|ods)$/i.test(file.name)) {
+      await showAlert(
+        'Este es un archivo de Excel. Ábrelo y usa "Guardar como → CSV (delimitado por comas)"; '
+        + 'ese sí se puede leer aquí.',
+        { title: 'Guárdalo como CSV' })
+      return
+    }
+
+    const texto = await file.text()
+    const limpio = texto.replace(/^\uFEFF/, '')   // la marca que mete Excel al inicio
+    const leidas = partirCSV(limpio, separadorDe(limpio.split(/\r?\n/)[0] || ''))
+    if (!leidas.length) {
+      await showAlert('El archivo está vacío o no se pudo leer.', { title: 'Nada que importar' })
+      return
+    }
+
+    // ¿La primera fila son títulos o ya es gente? Si ninguna casilla tiene
+    // pinta de teléfono, son títulos.
+    const primera = leidas[0]
+    const esEncabezado = !primera.some(c => soloDigitos(c).length >= 10)
+    const cuerpo = esEncabezado ? leidas.slice(1) : leidas
+    const titulos = esEncabezado
+      ? primera
+      : primera.map((_, i) => `Columna ${i + 1}`)
+
+    const usadas = new Set()
+    const adivinado = titulos.map(t => {
+      const papel = esEncabezado ? adivinarColumna(t, huecos, usadas) : ''
+      if (papel) usadas.add(papel)
+      return papel
+    })
+    // Sin encabezados que leer, o con ninguno reconocible: la columna con más
+    // teléfonos es la de los teléfonos.
+    if (!adivinado.includes('contacto')) {
+      const puntajes = titulos.map((_, i) =>
+        cuerpo.filter(f => soloDigitos(f[i]).length >= 10).length)
+      const mejor = puntajes.indexOf(Math.max(...puntajes))
+      if (puntajes[mejor] > 0) adivinado[mejor] = 'contacto'
+    }
+
+    setArchivo(file.name)
+    setEncabezados(titulos)
+    setFilas(cuerpo)
+    setMapa(adivinado)
+  }
+
+  const iContacto = mapa.indexOf('contacto')
+  const cuentas = useMemo(() => {
+    if (!filas || iContacto < 0) return null
+    const vistos = new Set()
+    let validos = 0, invalidos = 0, repetidos = 0
+    const ejemplosMalos = []
+    for (const f of filas) {
+      const n = aInternacional(f[iContacto])
+      if (n.length < 10) {
+        invalidos++
+        if (ejemplosMalos.length < 3 && String(f[iContacto] || '').trim()) {
+          ejemplosMalos.push(String(f[iContacto]).trim())
+        }
+        continue
+      }
+      if (vistos.has(n)) { repetidos++; continue }
+      vistos.add(n); validos++
+    }
+    return { validos, invalidos, repetidos, ejemplosMalos }
+  }, [filas, iContacto])
+
+  function usar() {
+    const vistos = new Set()
+    const salida = []
+    for (const f of filas) {
+      const contacto = aInternacional(f[iContacto])
+      if (contacto.length < 10 || vistos.has(contacto)) continue
+      vistos.add(contacto)
+      const valores = {}
+      mapa.forEach((papel, i) => {
+        if (!papel || papel === 'contacto' || papel === 'nombre') return
+        const v = String(f[i] ?? '').trim()
+        if (v) valores[papel] = v
+      })
+      const iNombre = mapa.indexOf('nombre')
+      salida.push({
+        contacto,
+        nombre: iNombre >= 0 ? String(f[iNombre] ?? '').trim() : '',
+        valores,
+      })
+    }
+    onImportar(salida)
+    setFilas(null); setEncabezados(null); setMapa([]); setArchivo('')
+  }
+
+  const opciones = [
+    { valor: '', etiqueta: '— no usar —' },
+    { valor: 'contacto', etiqueta: 'Número de WhatsApp' },
+    { valor: 'nombre', etiqueta: 'Nombre (solo para reconocerlo)' },
+    ...huecos.map(h => ({ valor: h.clave, etiqueta: `Dato de {{${h.hueco}}}` })),
+  ]
+
+  if (!filas) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200
+                          text-[12px] font-semibold text-gray-600 hover:border-gray-300 hover:text-gray-800
+                          cursor-pointer transition">
+          <Upload className="w-3.5 h-3.5" /> Importar de un archivo
+          <input type="file" className="hidden" accept=".csv,.txt,.tsv,text/csv,text/plain" onChange={leer} />
+        </label>
+        <span className="text-[11px] text-gray-400">
+          CSV con una columna de números. Si trae más —nombre, mascota, fecha—, cada quien recibe lo suyo.
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+      <div className="flex items-center gap-2">
+        <FileSpreadsheet className="w-4 h-4 text-[#1A5CD8]" />
+        <p className="text-[12.5px] font-semibold text-gray-800 truncate">{archivo}</p>
+        <span className="text-[11.5px] text-gray-400">{filas.length} fila(s)</span>
+        <Button size="sm" variant="ghost" className="ml-auto text-gray-400"
+                onClick={() => { setFilas(null); setEncabezados(null); setMapa([]) }}>
+          <X className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+
+      <p className="text-[11.5px] text-gray-500">
+        Di qué es cada columna. Lo que dejes en «no usar» no se importa.
+      </p>
+
+      <TableWrap>
+        <Table>
+          <thead>
+            <Tr>
+              {encabezados.map((t, i) => (
+                <Th key={i}>
+                  <div className="space-y-1">
+                    <p className="truncate max-w-[160px]" title={t}>{t}</p>
+                    <select value={mapa[i] || ''}
+                            onChange={e => setMapa(m => {
+                              const v = e.target.value
+                              // Un papel no puede estar en dos columnas: el
+                              // número saldría de una y el nombre de la otra
+                              // sin que nadie lo note.
+                              return m.map((x, j) => (j === i ? v : (v && x === v ? '' : x)))
+                            })}
+                            className="h-7 px-1.5 rounded-md border border-gray-200 text-[11px] font-normal bg-white">
+                      {opciones.map(o => <option key={o.valor} value={o.valor}>{o.etiqueta}</option>)}
+                    </select>
+                  </div>
+                </Th>
+              ))}
+            </Tr>
+          </thead>
+          <tbody>
+            {filas.slice(0, 4).map((f, i) => (
+              <Tr key={i}>
+                {encabezados.map((_, j) => (
+                  <Td key={j}><span className="text-[11.5px]">{f[j] || ''}</span></Td>
+                ))}
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      </TableWrap>
+
+      {iContacto < 0 ? (
+        <p className="text-[12px] text-amber-700">
+          <AlertTriangle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+          Falta decir cuál es la columna del número de WhatsApp.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button size="sm" onClick={usar} disabled={!cuentas?.validos}>
+            <Check className="w-3.5 h-3.5 mr-1" /> Usar {cuentas?.validos || 0} número(s)
+          </Button>
+          <p className="text-[11.5px] text-gray-500">
+            {cuentas?.repetidos > 0 && <>{cuentas.repetidos} repetido(s) se cuentan una vez. </>}
+            {cuentas?.invalidos > 0 && (
+              <span className="text-amber-700">
+                {cuentas.invalidos} sin número válido se quedan fuera
+                {cuentas.ejemplosMalos.length > 0 && <> (p. ej. «{cuentas.ejemplosMalos.join('», «')}»)</>}.
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function claveDe(huecos, marca) {
   const nombre = marca.replace(/[{}]/g, '')
   return huecos.find(h => h.hueco === nombre)?.clave || `BODY:${nombre}`

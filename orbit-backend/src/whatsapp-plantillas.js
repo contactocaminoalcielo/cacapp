@@ -347,8 +347,14 @@ function huecosDeComponente(p, destino) {
   return huecosDe(texto).map(h => (named ? { destino, param: h } : { destino, posicion: Number(h) }))
 }
 
-/** Todos los huecos, incluidos cuerpo y botones de cada tarjeta. */
-function huecosDePlantilla(p) {
+/**
+ * Todos los huecos, incluidos cuerpo y botones de cada tarjeta.
+ *
+ * Se exporta porque las campañas necesitan saber qué huecos EXISTEN, no solo
+ * cuáles están mapeados: un hueco sin mapear no aparece en
+ * `whatsapp_plantilla_variables` y salía en blanco sin que nadie lo avisara.
+ */
+export function huecosDePlantilla(p) {
   const named = p?.parameter_format === 'NAMED'
   const de = (destino, texto) => huecosDe(texto).map(h => ({
     destino,
@@ -372,7 +378,7 @@ function huecosDePlantilla(p) {
 }
 
 /** La clave con la que se guarda y se busca un hueco. */
-const claveHueco = h => `${h.destino}:${h.param ?? h.posicion}`
+export const claveHueco = h => `${h.destino}:${h.param ?? h.posicion}`
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Crear y editar

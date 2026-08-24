@@ -22,6 +22,7 @@
 import { pool, log } from './db.js'
 import {
   obtenerPlantilla, mandarPlantilla, valoresDeFuente, campoSirvePara,
+  huecosDePlantilla, claveHueco,
   variablesDe as variablesDePlantilla,
 } from './whatsapp-plantillas.js'
 
@@ -140,11 +141,15 @@ const AUDIENCIAS = [
     clave: 'LISTA',
     etiqueta: 'Lista de números',
     fuente: 'MANUAL',
-    ayuda: 'Pegas los números, uno por línea. Los huecos de la plantilla se rellenan con lo que escribas para todos.',
+    ayuda: 'Pegas los números o importas un archivo. Si el archivo trae más columnas —un nombre, '
+      + 'una mascota, una fecha—, cada quien recibe LO SUYO; lo que no venga en el archivo se '
+      + 'escribe una vez y vale para todos.',
     filtros: [
       { clave: 'numeros', etiqueta: 'Números', tipo: 'lista', ayuda: 'Uno por línea, con o sin indicativo' },
     ],
-    columnas: [],
+    // El nombre solo existe cuando viene de un archivo importado; en una lista
+    // pegada la columna sale vacía y no estorba.
+    columnas: [{ clave: 'nombre', etiqueta: 'Nombre' }],
     // Sin SQL: los destinatarios los escribe una persona. Ver `destinosDe`.
     sql: null,
     params: () => [],
@@ -195,6 +200,19 @@ async function destinosDe(audiencia, filtros = {}) {
   if (a.sql) {
     const { rows } = await pool.query(a.sql, a.params(filtros))
     filas = rows
+  } else if (Array.isArray(filtros.numeros) && filtros.numeros.some(n => n && typeof n === 'object')) {
+    // Importado de un archivo: cada fila puede traer SUS datos (migración 117).
+    // Se vuelve a validar aquí y no se confía en lo que mandó la pantalla: un
+    // número mal formado no falla al importarlo, falla al enviarlo.
+    filas = filtros.numeros
+      .map(x => (x && typeof x === 'object' ? x : { contacto: x }))
+      .map(x => ({
+        ref_id: null,
+        nombre: String(x.nombre || '').trim().slice(0, 120) || null,
+        contacto: aInternacional(x.contacto),
+        valores: valoresLimpios(x.valores),
+      }))
+      .filter(x => x.contacto.length >= 10)
   } else {
     // Lista pegada: una persona escribió estos números.
     const crudos = Array.isArray(filtros.numeros)
@@ -224,11 +242,36 @@ async function destinosDe(audiencia, filtros = {}) {
   )
   const noMolestar = new Set(bloqueados.map(b => b.contacto))
 
+  // Qué huecos trae ya resueltos el propio archivo: son los que NO hay que
+  // pedir como valor fijo. Sin esto, importar una columna "mascota" seguiría
+  // exigiendo escribir una mascota igual para los 300.
+  const cubiertos = new Set()
+  for (const f of unicos) for (const k of Object.keys(f.valores || {})) cubiertos.add(k)
+
   return {
     destinos: unicos.filter(u => !noMolestar.has(u.contacto)),
     excluidos: unicos.filter(u => noMolestar.has(u.contacto)).length,
     fuente: a.fuente,
+    huecosCubiertos: [...cubiertos],
   }
+}
+
+/**
+ * Los datos de una fila importada, saneados.
+ *
+ * La clave tiene la forma `BODY:mascota` y la decide la plantilla, no el
+ * archivo: aquí solo se admite lo que se parece a una clave de hueco. Guardar
+ * lo que venga sería meter en la base lo que traiga un CSV de cualquier sitio.
+ */
+function valoresLimpios(v) {
+  if (!v || typeof v !== 'object') return {}
+  const out = {}
+  for (const [k, valor] of Object.entries(v)) {
+    if (!/^(HEADER|BODY|BUTTON|CARD:[0-9]+:(BODY|BUTTON:[0-9]+)):[A-Za-z0-9_]+$/.test(k)) continue
+    const texto = String(valor ?? '').trim()
+    if (texto) out[k] = texto.slice(0, 900)
+  }
+  return out
 }
 
 /**
@@ -246,9 +289,27 @@ export async function previsualizar({
   if (r.error) return { status: 422, body: { ok: false, error: r.error } }
 
   const { body: { variables } } = await variablesDePlantilla({ plantilla, idioma, agenteId })
-  const sinFuente = variables
-    .filter(v => !campoSirvePara(v.campo, r.fuente))
-    .map(v => `{{${v.param ?? v.posicion}}}`)
+  const mapeado = new Map(variables.map(v => [`${v.destino}:${v.param ?? v.posicion}`, v.campo]))
+
+  // 🩸 Los huecos se leen de la plantilla REAL, no del mapeo. Un hueco SIN
+  // mapear no está en `whatsapp_plantilla_variables`, así que no aparecía en
+  // esta lista, nadie le escribía un valor fijo y la campaña entera se iba en
+  // OMITIDO al enviar —con el aviso llegando destinatario a destinatario.
+  const { plantilla: enMeta } = await obtenerPlantilla(
+    plantilla, idioma, process.env.WHATSAPP_ACCESS_TOKEN, await wabaDeAgente(agenteId))
+  const todos = enMeta
+    ? huecosDePlantilla(enMeta).map(h => ({ clave: claveHueco(h), marca: h.param ?? h.posicion }))
+    // Si Meta no responde, la previa sigue saliendo con lo que se sabe: es
+    // mejor que una pantalla en blanco.
+    : variables.map(v => ({ clave: `${v.destino}:${v.param ?? v.posicion}`, marca: v.param ?? v.posicion }))
+
+  const cubiertos = new Set(r.huecosCubiertos || [])
+  const vistos = new Set()
+  const sinFuente = todos
+    .filter(h => !cubiertos.has(h.clave))
+    .filter(h => !campoSirvePara(mapeado.get(h.clave), r.fuente))
+    .filter(h => !vistos.has(h.marca) && vistos.add(h.marca))
+    .map(h => `{{${h.marca}}}`)
 
   // Cómo saldría de verdad, resuelto: solo el primero. Resolver los 900 serían
   // 900 consultas para pintar una previa que nadie lee entera.
@@ -257,7 +318,7 @@ export async function previsualizar({
     ? [{ ...primero, valores: (await valoresDeFuente({
         plantilla, idioma, fuente: r.fuente, refId: primero.ref_id, agenteId,
       })).valores || {} }]
-    : primero ? [{ ...primero, valores: {} }] : []
+    : primero ? [{ ...primero, valores: primero.valores || {} }] : []
 
   return {
     status: 200,
@@ -267,6 +328,9 @@ export async function previsualizar({
       excluidos: r.excluidos,
       fuente: r.fuente,
       columnas: audienciaPorClave(audiencia)?.columnas || [],
+      // Los que el propio archivo importado ya resuelve: la pantalla los marca
+      // como cubiertos en vez de pedirlos otra vez.
+      huecosCubiertos: r.huecosCubiertos || [],
       // Los huecos que esta audiencia NO puede rellenar. Se escriben a mano una
       // vez (valores fijos) o la campaña saldrá con blancos.
       huecosSinDato: sinFuente,
@@ -344,9 +408,10 @@ export async function crearCampana({
     // Un solo INSERT con todos: 203 idas y vueltas a la base para armar una
     // lista es tiempo que la pantalla pasa esperando sin decir nada.
     await cliente.query(
-      `INSERT INTO public.whatsapp_campana_destinos (campana_id, contacto, ref_id, nombre)
-       SELECT $1, x.contacto, x.ref_id, x.nombre
-         FROM jsonb_to_recordset($2::jsonb) AS x(contacto text, ref_id text, nombre text)
+      `INSERT INTO public.whatsapp_campana_destinos (campana_id, contacto, ref_id, nombre, valores)
+       SELECT $1, x.contacto, x.ref_id, x.nombre, COALESCE(x.valores, '{}'::jsonb)
+         FROM jsonb_to_recordset($2::jsonb)
+              AS x(contacto text, ref_id text, nombre text, valores jsonb)
        ON CONFLICT (campana_id, contacto) DO NOTHING`,
       [c.id, JSON.stringify(elegidos)]
     )
@@ -552,14 +617,17 @@ async function unLatido() {
   const fijos = c.valores_fijos || {}
 
   const { rows: lote } = await pool.query(
-    `SELECT id, contacto, ref_id, nombre FROM public.whatsapp_campana_destinos
+    `SELECT id, contacto, ref_id, nombre, valores FROM public.whatsapp_campana_destinos
       WHERE campana_id = $1 AND estado = 'PENDIENTE' ORDER BY id LIMIT $2`,
     [c.id, cupo]
   )
 
   for (const d of lote) {
     let contacto = d.contacto
-    const dados = { ...fijos }
+    // El orden importa y es este: lo fijo es el suelo, lo que trajo el archivo
+    // pisa lo fijo, y lo que se lee de Orbit ahora mismo pisa a los dos —es el
+    // único dato del que sabemos que está vigente.
+    const dados = { ...fijos, ...(d.valores || {}) }
 
     // Los datos se leen AHORA, no cuando se armó la lista: si la clínica cambió
     // de número entre una cosa y la otra, el mensaje va al nuevo. Es el bug de
