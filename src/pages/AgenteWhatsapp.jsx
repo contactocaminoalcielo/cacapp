@@ -81,6 +81,7 @@ export default function AgenteWhatsapp() {
         max_turnos:       r.agente.max_turnos,
         memoria_mensajes: r.agente.memoria_mensajes || 20,
         phone_number_ids: (r.agente.phone_number_ids || []).join(', '),
+        waba_id:          r.agente.waba_id || '',
         // Se muestran en SEGUNDOS: nadie piensa en milisegundos, y pedirlos así
         // invita a equivocarse por un factor de mil justo en el número que
         // decide si el agente interrumpe a media frase.
@@ -131,6 +132,7 @@ export default function AgenteWhatsapp() {
       || Number(ajustes.max_turnos) !== agente.max_turnos
       || Number(ajustes.memoria_mensajes) !== (agente.memoria_mensajes || 20)
       || ajustes.phone_number_ids !== (agente.phone_number_ids || []).join(', ')
+      || ajustes.waba_id !== (agente.waba_id || '')
       || Number(ajustes.espera_s) * 1000 !== (agente.espera_ms ?? 12000)
       || Number(ajustes.espera_max_s) * 1000 !== (agente.espera_max_ms ?? 30000)
       || Number(ajustes.seg_minutos) !== (agente.seguimiento_enlace_minutos ?? 15)
@@ -153,6 +155,7 @@ export default function AgenteWhatsapp() {
         max_turnos:       Number(ajustes.max_turnos),
         memoria_mensajes: Number(ajustes.memoria_mensajes),
         phone_number_ids: ids,
+        waba_id:          ajustes.waba_id.trim(),
         espera_ms:        Math.round(Number(ajustes.espera_s) * 1000),
         espera_max_ms:    Math.round(Number(ajustes.espera_max_s) * 1000),
         seguimiento_enlace_minutos: Number(ajustes.seg_minutos),
@@ -612,10 +615,20 @@ export default function AgenteWhatsapp() {
               </Campo>
 
               <Campo label="Líneas donde responde" className="sm:col-span-2"
-                ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna.">
+                ayuda="Identificadores de número de Meta, separados por coma. Vacío = no responde en ninguna. La PRIMERA es por la que salen sus plantillas.">
                 <Input value={ajustes.phone_number_ids}
                   onChange={e => setAjustes(a => ({ ...a, phone_number_ids: e.target.value }))}
                   placeholder="805890339283619" />
+              </Campo>
+
+              {/* Las plantillas viven en la CUENTA (WABA), no en el número, y no
+                  viajan entre cuentas: sin esto, el día que entre una empresa con
+                  su propia cuenta vería aquí las plantillas de la otra. */}
+              <Campo label="Cuenta de WhatsApp (WABA)" className="sm:col-span-2"
+                ayuda="Dónde viven SUS plantillas. Vacío = la cuenta por defecto del servidor. Cópialo de WhatsApp Manager.">
+                <Input value={ajustes.waba_id}
+                  onChange={e => setAjustes(a => ({ ...a, waba_id: e.target.value }))}
+                  placeholder="596644673438490" />
               </Campo>
             </div>
           </section>

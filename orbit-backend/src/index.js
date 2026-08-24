@@ -36,7 +36,8 @@ import {
 import {
   listarPlantillas, crearPlantilla, editarPlantilla, borrarPlantilla, enviarPlantilla,
   camposDisponibles, variablesDe, guardarVariables, valoresPara,
-  subirCabecera, buscarServicios,
+  subirCabecera, asignarCabecera, buscarServicios,
+  guardarTarjetas, guardarPlantillaDeAgente,
 } from './whatsapp-plantillas.js'
 import {
   listarAgentes, obtenerAgente, guardarAgente, agregarConocimiento, actualizarConocimiento,
@@ -91,8 +92,11 @@ app.use('/whatsapp/archivo', express.json({ limit: '90mb' }))
 // Los materiales del catálogo (101) se suben por aquí, también en base64.
 app.use('/whatsapp/materiales', express.json({ limit: '90mb' }))
 // La imagen/PDF de la cabecera de una plantilla se sube a Meta antes de crearla
-// (Resumable Upload API) y viaja en base64, igual que lo anterior.
-app.use('/whatsapp/plantillas-cabecera', express.json({ limit: '30mb' }))
+// (Resumable Upload API) y viaja en base64, igual que lo anterior. 90 MB por lo
+// mismo que los materiales: con 30 MB, un PDF de 25 MB se caía con un 413 que
+// no dice nada — y desde que la cabecera se guarda además como material, es
+// exactamente el mismo archivo por el mismo camino.
+app.use('/whatsapp/plantillas-cabecera', express.json({ limit: '90mb' }))
 
 app.use(express.json())
 
@@ -299,9 +303,9 @@ app.post('/voz/turno', express.json({ limit: '25mb' }), async (req, res) => {
 // Son el único modo de escribirle a alguien fuera de la ventana de 24h. Viven
 // en la WABA (`WHATSAPP_WABA_ID`), no en Orbit: la lista siempre viene de Meta,
 // que es quien manda sobre el estado de aprobación.
-app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (_req, res) => {
+app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await listarPlantillas()
+    const r = await listarPlantillas({ agenteId: req.query.agenteId || null })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/listar', e) }
 })
@@ -311,7 +315,7 @@ app.post('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
     const r = await crearPlantilla({
       nombre: req.body?.nombre, idioma: req.body?.idioma,
       categoria: req.body?.categoria, componentes: req.body?.componentes,
-      formato: req.body?.formato,
+      formato: req.body?.formato, agenteId: req.body?.agenteId || null,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/crear', e) }
@@ -326,6 +330,7 @@ app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, rolBandeja, async (
     const r = await editarPlantilla({
       id: req.body?.id, nombre: req.params.nombre, categoria: req.body?.categoria,
       componentes: req.body?.componentes, formato: req.body?.formato,
+      agenteId: req.body?.agenteId || null,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/editar', e) }
@@ -333,7 +338,7 @@ app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, rolBandeja, async (
 
 app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await borrarPlantilla({ nombre: req.params.nombre })
+    const r = await borrarPlantilla({ nombre: req.params.nombre, agenteId: req.query.agenteId || null })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/borrar', e) }
 })
@@ -352,6 +357,12 @@ app.post('/whatsapp/plantillas-cabecera', requireAuth, rolBandeja, async (req, r
   try {
     const r = await subirCabecera({
       base64: req.body?.base64, mime: req.body?.mime, nombre: req.body?.nombre,
+      // Con el agente, el archivo queda en SU catálogo; con la plantilla, con un
+      // nombre por el que se pueda reconocer dentro de un año.
+      agenteId: req.body?.agenteId || null, plantilla: req.body?.plantilla || null,
+      // Una plantilla que ya existe solo necesita el archivo del envío, no otro
+      // `handle`: subirlo a Meta otra vez sería una llamada que solo puede fallar.
+      aMeta: req.body?.soloGuardar !== true,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/cabecera', e) }
@@ -368,7 +379,10 @@ app.get('/whatsapp/plantillas-servicios', requireAuth, rolBandeja, async (req, r
 
 app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await variablesDe({ plantilla: req.params.nombre, idioma: req.query.idioma })
+    const r = await variablesDe({
+      plantilla: req.params.nombre, idioma: req.query.idioma,
+      agenteId: req.query.agenteId || null,
+    })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/variables', e) }
 })
@@ -380,16 +394,58 @@ app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async
       variables: Array.isArray(req.body?.variables) ? req.body.variables : [],
       // `undefined` = no se habla de la cabecera y no se toca; `null` = se quita.
       cabecera: 'cabecera' in (req.body || {}) ? req.body.cabecera : undefined,
+      agenteId: req.body?.agenteId || null,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/guardar-variables', e) }
 })
 
+// Qué archivo lleva la cabecera AL ENVIAR. Aparte del mapeo de variables: son
+// dos decisiones distintas y juntarlas hacía que guardar una borrara la otra.
+app.put('/whatsapp/plantillas/:nombre/cabecera', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await asignarCabecera({
+      plantilla: req.params.nombre, idioma: req.body?.idioma,
+      materialId: req.body?.materialId || null, url: req.body?.url || null,
+      agenteId: req.body?.agenteId || null,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/cabecera-asignar', e) }
+})
+
+// Medios de cada tarjeta AL ENVIAR. Los handles usados al crear la plantilla
+// no se pueden reutilizar para mandar el mensaje real.
+app.put('/whatsapp/plantillas/:nombre/tarjetas', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await guardarTarjetas({
+      agenteId: req.body?.agenteId || null,
+      plantilla: req.params.nombre, idioma: req.body?.idioma,
+      tarjetas: Array.isArray(req.body?.tarjetas) ? req.body.tarjetas : [],
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/tarjetas', e) }
+})
+
+// Lista blanca del agente: existir en la WABA no concede permiso al modelo.
+app.put('/whatsapp/plantillas/:nombre/agente', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await guardarPlantillaDeAgente({
+      agenteId: req.body?.agenteId, plantilla: req.params.nombre,
+      idioma: req.body?.idioma, clave: req.body?.clave,
+      descripcion: req.body?.descripcion, activa: req.body?.activa !== false,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-plantillas/agente', e) }
+})
+
 app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, rolBandeja, async (req, res) => {
   try {
     const r = await valoresPara({
       plantilla: req.params.nombre, idioma: req.query.idioma, servicioId: req.params.servicioId,
+      agenteId: req.query.agenteId || null,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/valores', e) }
@@ -407,6 +463,9 @@ app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (
       servicioId: req.body?.servicioId || null,
       variables: Array.isArray(req.body?.variables) ? req.body.variables : null,
       variablesBoton: Array.isArray(req.body?.variablesBoton) ? req.body.variablesBoton : null,
+      // Por qué línea sale. Sin esto salía por la primera del `.env`, que con un
+      // segundo agente es la línea de la otra empresa (migración 115).
+      agenteId: req.body?.agenteId || null,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)
@@ -428,6 +487,7 @@ app.post('/whatsapp/campanas/previsualizar', requireAuth, rolBandeja, async (req
     const r = await previsualizar({
       audiencia: req.body?.audiencia, filtros: req.body?.filtros,
       plantilla: req.body?.plantilla, idioma: req.body?.idioma,
+      agenteId: req.body?.agenteId || null,
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-campanas/previsualizar', e) }
@@ -451,6 +511,9 @@ app.post('/whatsapp/campanas', requireAuth, rolBandeja, async (req, res) => {
       // recalcula en el servidor.
       seleccion: Array.isArray(req.body?.seleccion) ? req.body.seleccion : null,
       valoresFijos: req.body?.valoresFijos, porHora: req.body?.porHora,
+      // Por qué línea sale, guardado con la campaña: se crea un día y se envía
+      // otro (migración 115).
+      agenteId: req.body?.agenteId || null,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)

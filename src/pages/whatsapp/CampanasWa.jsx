@@ -27,7 +27,7 @@ import {
   RefreshCw, Eye, Megaphone, Check, Search,
 } from 'lucide-react'
 
-export default function CampanasWa({ plantillas = [], abrirCon = null, onAbierto }) {
+export default function CampanasWa({ plantillas = [], agenteId = null, abrirCon = null, onAbierto }) {
   const { alert: showAlert, confirm } = useConfirm()
   const [campanas, setCampanas] = useState([])
   const [cargando, setCargando] = useState(true)
@@ -131,7 +131,7 @@ export default function CampanasWa({ plantillas = [], abrirCon = null, onAbierto
       )}
 
       {creando && (
-        <Asistente plantillas={aprobadas} prefijada={prefijada}
+        <Asistente plantillas={aprobadas} prefijada={prefijada} agenteId={agenteId}
                    onCerrar={() => setCreando(false)}
                    onCreada={async () => { setCreando(false); await cargar() }} />
       )}
@@ -225,7 +225,7 @@ function Ficha({ c, onVer, onBorrar, onAccion }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
+function Asistente({ plantillas, prefijada, agenteId = null, onCerrar, onCreada }) {
   const { alert: showAlert } = useConfirm()
   const [audiencias, setAudiencias] = useState([])
   const [f, setF] = useState({
@@ -257,6 +257,9 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
       const r = await previsualizar({
         audiencia: f.audiencia, filtros: f.filtros,
         plantilla: f.plantilla, idioma: plantilla?.language,
+        // El mapeo de la plantilla es del agente: sin decir cuál, la previa
+        // saldría con los huecos de otro.
+        agenteId,
       })
       setPrevia(r)
       setElegidos(new Set((r.destinos || []).map(d => d.contacto)))
@@ -275,6 +278,10 @@ function Asistente({ plantillas, prefijada, onCerrar, onCreada }) {
         audiencia: f.audiencia, filtros: f.filtros, valoresFijos: fijos,
         seleccion: [...elegidos],
         porHora: Number(f.porHora) || 200,
+        // Por qué línea sale, guardado con la campaña: se crea un día y se
+        // envía otro, y "la primera línea del servidor" puede no ser la misma
+        // ese día (migración 115).
+        agenteId,
       })
       onCreada()
     } catch (e) {

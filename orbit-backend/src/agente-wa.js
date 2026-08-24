@@ -27,6 +27,9 @@ import { motorDe } from './motores/index.js'
 import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
 import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
 import { catalogoDeMateriales, enviarMaterial } from './whatsapp-materiales.js'
+import {
+  catalogoPlantillasParaAgente, enviarPlantilla as enviarPlantillaAprobada,
+} from './whatsapp-plantillas.js'
 import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 
@@ -138,7 +141,9 @@ const ESCRIBIENDO_MS = 20000
 
 // Herramientas cuyo resultado NO cambia lo que hay que decir: son papeleo o
 // ya enviaron algo. Ver el corte del bucle en `ejecutar`.
-const DE_TRAMITE = new Set(['clasificar_conversacion', 'enviar_interactivo', 'enviar_material'])
+const DE_TRAMITE = new Set([
+  'clasificar_conversacion', 'enviar_interactivo', 'enviar_material', 'enviar_plantilla',
+])
 
 const HERRAMIENTAS = [{
   name: 'enviar_enlace_registro',
@@ -243,6 +248,13 @@ export const HERRAMIENTAS_DISPONIBLES = [
     resumen: 'Aplica etiquetas del catálogo del agente para ordenar la atención.',
     propia_del_negocio: false,
     orden: 5,
+  },
+  {
+    clave: 'enviar_plantilla',
+    nombre: 'Enviar plantillas y carruseles',
+    resumen: 'Envía una plantilla aprobada de la lista autorizada para este agente.',
+    propia_del_negocio: false,
+    orden: 6,
   },
 ]
 
@@ -351,6 +363,34 @@ export async function construirHerramientas(agente = null) {
           clave: {
             type: 'string', enum: materiales.map(m => m.clave),
             description: 'Cuál de los de arriba es el que te piden.',
+          },
+        },
+        required: ['clave'],
+      },
+    })
+  }
+
+  // Plantillas y carruseles aprobados. No se ofrecen todos los de la WABA: una
+  // fila explícita en `agente_wa_plantillas` concede el permiso. Así el modelo
+  // nunca puede inventar un nombre ni disparar una campaña que no era para él.
+  const plantillas = await catalogoPlantillasParaAgente(agenteId).catch(() => [])
+  if (plantillas.length && tiene('enviar_plantilla')) {
+    extra.push({
+      name: 'enviar_plantilla',
+      description: texto('enviar_plantilla',
+        'Manda una PLANTILLA APROBADA o un CARRUSEL del catálogo cuando encaje con lo que '
+        + 'la persona acaba de pedir. El mensaje se envía de verdad: no copies sus tarjetas '
+        + 'en texto ni anuncies que lo vas a mandar. Usa únicamente una clave disponible.')
+        + '\n\nDisponibles:\n'
+        + plantillas.map(p => `- ${p.clave}: ${p.descripcion || p.plantilla}`).join('\n'),
+      input_schema: {
+        type: 'object',
+        properties: {
+          clave: { type: 'string', enum: plantillas.map(p => p.clave) },
+          valores: {
+            type: 'object',
+            description: 'Solo si la plantilla tiene variables: diccionario por clave exacta (ej. BODY:nombre o CARD:0:BODY:1).',
+            additionalProperties: { type: 'string' },
           },
         },
         required: ['clave'],
@@ -2007,6 +2047,23 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
               return { ok: false, error: 'No se pudo enviar el archivo.',
                 nota: 'No expliques el fallo ni lo cites: dile que se lo hace llegar coordinación, y etiqueta la conversación.' }
             })
+          } else if (bloque.nombre === 'enviar_plantilla') {
+            const permitidas = await catalogoPlantillasParaAgente(agente.id)
+            const elegida = permitidas.find(p => p.clave === bloque.entrada?.clave)
+            if (!elegida) {
+              out = { ok: false, error: 'Esa plantilla no está autorizada para este agente.' }
+            } else {
+              const valores = bloque.entrada?.valores && typeof bloque.entrada.valores === 'object'
+                && !Array.isArray(bloque.entrada.valores) ? bloque.entrada.valores : {}
+              const r = await enviarPlantillaAprobada({
+                contacto, nombre: elegida.plantilla, idioma: elegida.idioma,
+                valores, agenteId: agente.id, personalId: null,
+              })
+              out = r.body?.ok
+                ? { ok: true, enviado: elegida.clave,
+                    nota: 'La plantilla o carrusel YA le llegó. No repitas las tarjetas en texto.' }
+                : { ok: false, error: r.body?.error || 'No se pudo enviar la plantilla.' }
+            }
           } else if (bloque.nombre === 'clasificar_conversacion') {
             out = await clasificarConversacion({ entrada: bloque.entrada, contacto })
             // Se guarda en la bitácora, no solo en la conversación: la etiqueta

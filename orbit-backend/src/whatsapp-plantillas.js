@@ -40,6 +40,11 @@
 //   WHATSAPP_APP_ID       — opcional: si falta se deduce del propio token
 import { pool, log } from './db.js'
 import { construirEnlace } from './reglas-imagenes.js'
+// El archivo de una cabecera se guarda en el MISMO catálogo que el brochure y
+// el tarifario (migración 101). No hay un segundo almacén de archivos: el que
+// se sube aquí se puede reutilizar en otra plantilla y se ve donde se ven
+// todos. Ver `whatsapp_plantilla_cabecera` en la migración 102.
+import { guardarMaterial } from './whatsapp-materiales.js'
 
 const MOD = '[wa-plantillas]'
 const GRAPH = 'https://graph.facebook.com'
@@ -55,11 +60,60 @@ const CATEGORIAS = ['UTILITY', 'MARKETING', 'AUTHENTICATION']
 const version = () => process.env.WHATSAPP_API_VERSION || 'v26.0'
 const waba = () => (process.env.WHATSAPP_WABA_ID || '').trim()
 
-function credenciales() {
+function credenciales(cuenta = null) {
   const token = process.env.WHATSAPP_ACCESS_TOKEN
   if (!token) return { error: 'Falta WHATSAPP_ACCESS_TOKEN en el servidor' }
-  if (!waba()) return { error: 'Falta WHATSAPP_WABA_ID en el servidor: no se sabe en qué cuenta crear las plantillas' }
-  return { token }
+  const wabaId = String(cuenta || '').trim() || waba()
+  if (!wabaId) return { error: 'Falta WHATSAPP_WABA_ID en el servidor: no se sabe en qué cuenta crear las plantillas' }
+  return { token, cuenta: wabaId }
+}
+
+/**
+ * En qué cuenta viven las plantillas de un agente y por qué línea salen
+ * (migración 115).
+ *
+ * 🩸 Hasta la 115 las dos cosas eran constantes del `.env`: la cuenta era
+ * `WHATSAPP_WABA_ID` y la línea de salida era **la primera** de
+ * `WHATSAPP_ALLOWED_PHONE_IDS`. Con un solo agente eso acertaba por casualidad
+ * —la primera de la lista resulta ser la buena—; con el segundo, la plantilla
+ * saldría por la línea de la otra empresa sin dar un solo error. Es el mismo
+ * fallo mudo que la migración 109 cerró en la bandeja.
+ *
+ * Sin agente se conserva el comportamiento viejo, que es lo que usan los
+ * caminos que todavía no lo pasan.
+ */
+async function contexto(agenteId = null) {
+  const lineasEnv = (process.env.WHATSAPP_ALLOWED_PHONE_IDS || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+
+  let agente = null
+  if (agenteId) {
+    const { rows: [a] } = await pool.query(
+      `SELECT id, clave, nombre, waba_id, phone_number_ids
+         FROM public.agente_wa WHERE id = $1`,
+      [Number(agenteId)]
+    )
+    if (!a) return { error: `No existe el agente ${agenteId}` }
+    agente = a
+  }
+
+  const { token, cuenta, error } = credenciales(agente?.waba_id)
+  if (error) return { error }
+
+  // Con agente, la línea es LA SUYA y punto: caer a la del `.env` sería mandar
+  // por la empresa que no es y no enterarse.
+  const linea = agente ? (agente.phone_number_ids || [])[0] || null : lineasEnv[0] || null
+
+  return { token, cuenta, linea, agente }
+}
+
+/** Compatibilidad: lo que no trae agente pertenece a Veterinarias. */
+async function agenteLocalId(agenteId = null) {
+  if (Number(agenteId) > 0) return Number(agenteId)
+  const { rows: [a] } = await pool.query(
+    `SELECT id FROM public.agente_wa ORDER BY (clave = 'VETERINARIAS') DESC, id LIMIT 1`
+  )
+  return a?.id || null
 }
 
 /**
@@ -101,11 +155,11 @@ const CAMPOS_META = 'name,status,category,previous_category,language,components,
  * consentimiento. Si no se muestra, el cambio pasa desapercibido hasta la
  * factura.
  */
-export async function listarPlantillas() {
-  const { token, error } = credenciales()
+export async function listarPlantillas({ agenteId = null } = {}) {
+  const { token, cuenta, agente, linea, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
 
-  let ruta = `${waba()}/message_templates?limit=200&fields=${CAMPOS_META}`
+  let ruta = `${cuenta}/message_templates?limit=200&fields=${CAMPOS_META}`
   const plantillas = []
 
   while (ruta) {
@@ -116,14 +170,135 @@ export async function listarPlantillas() {
     ruta = siguiente ? siguiente.replace(`${GRAPH}/${version()}/`, '') : null
   }
 
+  const localId = await agenteLocalId(agenteId)
+  const { rows: asignadas } = localId
+    ? await pool.query(
+        `SELECT clave, plantilla, idioma, descripcion, activa
+           FROM public.agente_wa_plantillas WHERE agente_id = $1`, [localId]
+      )
+    : { rows: [] }
+  const porPlantilla = new Map(asignadas.map(a => [`${a.plantilla}:${a.idioma}`, a]))
+
   return {
     status: 200,
     body: {
       ok: true,
-      waba: waba(),
+      waba: cuenta,
+      // Con qué línea se va a trabajar, dicho antes de enviar nada: una
+      // plantilla se ve igual en las dos cuentas y no hay forma de notar por la
+      // pantalla que salió por la línea equivocada.
+      agente: agente
+        ? { id: agente.id, clave: agente.clave, nombre: agente.nombre, linea }
+        : null,
       total: plantillas.length,
-      plantillas: plantillas.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+      plantillas: plantillas
+        .map(p => ({ ...p, orbit: porPlantilla.get(`${p.name}:${p.language}`) || null }))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     },
+  }
+}
+
+/** Autoriza o revoca una plantilla concreta para un agente. */
+export async function guardarPlantillaDeAgente({
+  agenteId, plantilla, idioma = 'es_MX', clave = null, descripcion = null, activa = true,
+}) {
+  const id = await agenteLocalId(agenteId)
+  if (!id) return { status: 404, body: { ok: false, error: 'No existe el agente' } }
+  if (!NOMBRE_VALIDO.test(String(plantilla || ''))) {
+    return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
+  }
+  const portable = String(clave || plantilla || '').toUpperCase()
+    .replace(/[^A-Z0-9_]/g, '_').replace(/_+/g, '_').slice(0, 50)
+  if (!/^[A-Z][A-Z0-9_]{2,49}$/.test(portable)) {
+    return { status: 422, body: { ok: false, error: 'La clave debe tener letras, números o guion bajo' } }
+  }
+  if (!activa) {
+    await pool.query(
+      `DELETE FROM public.agente_wa_plantillas
+        WHERE agente_id = $1 AND plantilla = $2 AND idioma = $3`,
+      [id, plantilla, idioma]
+    )
+    return { status: 200, body: { ok: true, activa: false } }
+  }
+  const { rows: [fila] } = await pool.query(
+    `INSERT INTO public.agente_wa_plantillas
+       (agente_id, clave, plantilla, idioma, descripcion, activa)
+     VALUES ($1,$2,$3,$4,$5,true)
+     ON CONFLICT (agente_id, plantilla, idioma) DO UPDATE
+       SET clave=EXCLUDED.clave, descripcion=EXCLUDED.descripcion, activa=true
+     RETURNING clave, plantilla, idioma, descripcion, activa`,
+    [id, portable, plantilla, idioma, String(descripcion || '').trim().slice(0, 1000) || null]
+  )
+  return { status: 200, body: { ok: true, asignacion: fila } }
+}
+
+/** Lista blanca compacta que se entrega al motor del agente. */
+export async function catalogoPlantillasParaAgente(agenteId) {
+  if (!(Number(agenteId) > 0)) return []
+  const { rows } = await pool.query(
+    `SELECT clave, plantilla, idioma, descripcion
+       FROM public.agente_wa_plantillas
+      WHERE agente_id = $1 AND activa
+      ORDER BY orden, id`,
+    [Number(agenteId)]
+  )
+  return rows
+}
+
+/** Reemplaza el medio de cada tarjeta después de crear/editar el carrusel. */
+export async function guardarTarjetas({
+  agenteId, plantilla, idioma = 'es_MX', tarjetas = [], personalId = null,
+}) {
+  const id = await agenteLocalId(agenteId)
+  if (!id) return { status: 404, body: { ok: false, error: 'No existe el agente' } }
+  if (!NOMBRE_VALIDO.test(String(plantilla || ''))) {
+    return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
+  }
+  if (!Array.isArray(tarjetas) || tarjetas.length < 2 || tarjetas.length > 10) {
+    return { status: 422, body: { ok: false, error: 'El carrusel necesita entre 2 y 10 tarjetas' } }
+  }
+  const mala = tarjetas.find((t, i) => Number(t?.card_index) !== i
+    || (!Number(t?.material_id) && !String(t?.url || '').trim()))
+  if (mala) {
+    return { status: 422, body: { ok: false, error: 'Cada tarjeta necesita su archivo y una posición consecutiva' } }
+  }
+  const idsMaterial = [...new Set(tarjetas.map(t => Number(t.material_id)).filter(Boolean))]
+  if (idsMaterial.length) {
+    const { rows } = await pool.query(
+      `SELECT id FROM public.whatsapp_materiales
+        WHERE id = ANY($1::bigint[]) AND agente_id IS NOT DISTINCT FROM $2::integer`,
+      [idsMaterial, id]
+    )
+    if (rows.length !== idsMaterial.length) {
+      return {
+        status: 422,
+        body: { ok: false, error: 'Uno de los archivos no pertenece al catálogo de este agente' },
+      }
+    }
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `DELETE FROM public.whatsapp_plantilla_tarjetas
+        WHERE agente_id = $1 AND plantilla = $2 AND idioma = $3`, [id, plantilla, idioma]
+    )
+    for (const t of tarjetas) {
+      await client.query(
+        `INSERT INTO public.whatsapp_plantilla_tarjetas
+           (agente_id, plantilla, idioma, card_index, material_id, url, actualizado_por)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, plantilla, idioma, Number(t.card_index), Number(t.material_id) || null,
+         String(t.url || '').trim() || null, personalId]
+      )
+    }
+    await client.query('COMMIT')
+    return { status: 200, body: { ok: true, tarjetas: tarjetas.length } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    return { status: 500, body: { ok: false, error: e.message } }
+  } finally {
+    client.release()
   }
 }
 
@@ -135,9 +310,9 @@ export async function listarPlantillas() {
  * plantilla aprobada, no quien pulsa "Enviar". Si alguien la edita en WhatsApp
  * Manager, el envío sigue saliendo bien sin tocar Orbit.
  */
-export async function obtenerPlantilla(nombre, idioma, token) {
+export async function obtenerPlantilla(nombre, idioma, token, cuenta = null) {
   const r = await meta(
-    `${waba()}/message_templates?name=${encodeURIComponent(nombre)}`
+    `${String(cuenta || '').trim() || waba()}/message_templates?name=${encodeURIComponent(nombre)}`
     + `&language=${encodeURIComponent(JSON.stringify([idioma]))}`
     + `&fields=${CAMPOS_META}`,
     { token }
@@ -150,6 +325,9 @@ export async function obtenerPlantilla(nombre, idioma, token) {
 
 /** El componente de un tipo. */
 const componente = (p, tipo) => (p?.components || []).find(c => c.type === tipo)
+
+/** Las tarjetas del carrusel, tal como las devuelve Meta. */
+const tarjetasDePlantilla = p => componente(p, 'CAROUSEL')?.cards || []
 
 /** Los huecos de un texto, en orden de aparición y sin repetir. */
 function huecosDe(texto) {
@@ -167,6 +345,30 @@ function huecosDeComponente(p, destino) {
     : componente(p, destino)?.text
   const named = p?.parameter_format === 'NAMED'
   return huecosDe(texto).map(h => (named ? { destino, param: h } : { destino, posicion: Number(h) }))
+}
+
+/** Todos los huecos, incluidos cuerpo y botones de cada tarjeta. */
+function huecosDePlantilla(p) {
+  const named = p?.parameter_format === 'NAMED'
+  const de = (destino, texto) => huecosDe(texto).map(h => ({
+    destino,
+    ...(named ? { param: h } : { posicion: Number(h) }),
+  }))
+  const cab = componente(p, 'HEADER')
+  const boton = componente(p, 'BUTTONS')?.buttons?.find(b => b.type === 'URL' && huecosDe(b.url).length)
+  const todos = [
+    ...(cab?.format === 'TEXT' ? de('HEADER', cab.text) : []),
+    ...de('BODY', componente(p, 'BODY')?.text),
+    ...de('BUTTON', boton?.url),
+  ]
+  tarjetasDePlantilla(p).forEach((tarjeta, cardIndex) => {
+    const comps = tarjeta.components || []
+    todos.push(...de(`CARD:${cardIndex}:BODY`, comps.find(c => c.type === 'BODY')?.text))
+    ;(comps.find(c => c.type === 'BUTTONS')?.buttons || []).forEach((b, buttonIndex) => {
+      if (b.type === 'URL') todos.push(...de(`CARD:${cardIndex}:BUTTON:${buttonIndex}`, b.url))
+    })
+  })
+  return todos
 }
 
 /** La clave con la que se guarda y se busca un hueco. */
@@ -224,9 +426,49 @@ function revisar({ nombre, categoria, componentes, formato = 'POSITIONAL', nueva
     problemas.push('El título admite como mucho una variable.')
   }
 
+  const carrusel = componentes.find(c => c?.type === 'CAROUSEL')
+  const tarjetas = carrusel?.cards || []
+  if (carrusel) {
+    if (tarjetas.length < 2 || tarjetas.length > 10) {
+      problemas.push('El carrusel necesita entre 2 y 10 tarjetas.')
+    }
+    const formaEsperada = tarjetas[0]
+      ? (tarjetas[0].components || []).find(c => c.type === 'BUTTONS')?.buttons?.map(b => b.type).join(',') || ''
+      : ''
+    const medioEsperado = tarjetas[0]
+      ? (tarjetas[0].components || []).find(c => c.type === 'HEADER')?.format
+      : null
+    tarjetas.forEach((tarjeta, i) => {
+      const comps = tarjeta?.components || []
+      const header = comps.find(c => c.type === 'HEADER')
+      const body = comps.find(c => c.type === 'BODY')
+      const buttons = comps.find(c => c.type === 'BUTTONS')?.buttons || []
+      if (!['IMAGE', 'VIDEO'].includes(header?.format)) {
+        problemas.push(`La tarjeta ${i + 1} necesita una imagen o un video.`)
+      } else if (!header.example?.header_handle?.[0]) {
+        problemas.push(`Sube el archivo de la tarjeta ${i + 1} antes de guardar.`)
+      }
+      if (i > 0 && header?.format !== medioEsperado) {
+        problemas.push('Todas las tarjetas deben usar el mismo tipo de medio.')
+      }
+      if (!String(body?.text || '').trim()) problemas.push(`La tarjeta ${i + 1} necesita texto.`)
+      if (buttons.length > 2 || buttons.some(b => !['URL', 'QUICK_REPLY'].includes(b.type))) {
+        problemas.push(`La tarjeta ${i + 1} solo puede llevar hasta dos botones de enlace o respuesta rápida.`)
+      }
+      const forma = buttons.map(b => b.type).join(',')
+      if (i > 0 && forma !== formaEsperada) {
+        problemas.push('Todas las tarjetas deben tener la misma cantidad y tipo de botones, en el mismo orden.')
+      }
+    })
+  }
+
   // Cada hueco necesita su ejemplo: sin él Meta rechaza, y su error llega
   // después de que la persona ya creyó haber terminado.
-  for (const c of componentes) {
+  const revisables = [
+    ...componentes.filter(c => c?.type !== 'CAROUSEL'),
+    ...tarjetas.flatMap((t, i) => (t.components || []).map(c => ({ ...c, _sitio: `tarjeta ${i + 1}` }))),
+  ]
+  for (const c of revisables) {
     const huecos = huecosDe(c?.text)
     if (!huecos.length) continue
 
@@ -245,15 +487,15 @@ function revisar({ nombre, categoria, componentes, formato = 'POSITIONAL', nueva
     } else {
       const esperados = [...new Set(huecos.map(Number))].sort((a, b) => a - b)
       if (esperados.some(n => !Number.isInteger(n) || n < 1)) {
-        problemas.push(`En ${c.type} hay una variable que no es un número: usa {{1}}, {{2}}… o cambia la plantilla a variables con nombre.`)
+        problemas.push(`En ${c._sitio || c.type} hay una variable que no es un número: usa {{1}}, {{2}}… o cambia la plantilla a variables con nombre.`)
       } else if (esperados[0] !== 1 || esperados.some((n, i) => n !== i + 1)) {
-        problemas.push(`En ${c.type} las variables deben ir seguidas desde {{1}} (encontradas: ${esperados.join(', ')}).`)
+        problemas.push(`En ${c._sitio || c.type} las variables deben ir seguidas desde {{1}} (encontradas: ${esperados.join(', ')}).`)
       }
       const ejemplos = c.type === 'BODY'
         ? (c.example?.body_text?.[0] || [])
         : (c.example?.header_text || [])
       if (ejemplos.filter(e => String(e || '').trim()).length !== esperados.length) {
-        problemas.push(`En ${c.type} hay ${esperados.length} variable(s) y ${ejemplos.length} ejemplo(s): Meta necesita uno por variable para poder revisarla.`)
+        problemas.push(`En ${c._sitio || c.type} hay ${esperados.length} variable(s) y ${ejemplos.length} ejemplo(s): Meta necesita uno por variable para poder revisarla.`)
       }
     }
   }
@@ -261,8 +503,11 @@ function revisar({ nombre, categoria, componentes, formato = 'POSITIONAL', nueva
   return problemas
 }
 
-export async function crearPlantilla({ nombre, idioma = 'es_MX', categoria = 'UTILITY', componentes, formato = 'POSITIONAL' }) {
-  const { token, error } = credenciales()
+export async function crearPlantilla({
+  nombre, idioma = 'es_MX', categoria = 'UTILITY', componentes, formato = 'POSITIONAL',
+  agenteId = null,
+}) {
+  const { token, cuenta, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
 
   const problemas = revisar({ nombre, categoria, componentes, formato })
@@ -270,7 +515,7 @@ export async function crearPlantilla({ nombre, idioma = 'es_MX', categoria = 'UT
     return { status: 422, body: { ok: false, error: problemas[0], problemas } }
   }
 
-  const r = await meta(`${waba()}/message_templates`, {
+  const r = await meta(`${cuenta}/message_templates`, {
     metodo: 'POST', token,
     cuerpo: {
       name: nombre, language: idioma, category: categoria,
@@ -312,8 +557,10 @@ export async function crearPlantilla({ nombre, idioma = 'es_MX', categoria = 'UT
  * otra. Y **mientras Meta la revisa no se deja editar** — hay que esperar a que
  * la apruebe o la rechace.
  */
-export async function editarPlantilla({ id, nombre, categoria, componentes, formato = 'POSITIONAL' }) {
-  const { token, error } = credenciales()
+export async function editarPlantilla({
+  id, nombre, categoria, componentes, formato = 'POSITIONAL', agenteId = null,
+}) {
+  const { token, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
   if (!id) return { status: 422, body: { ok: false, error: 'Falta el id de la plantilla a editar' } }
 
@@ -354,14 +601,14 @@ export async function editarPlantilla({ id, nombre, categoria, componentes, form
  * con `POST /{waba}/assigned_users`. Si vuelve a salir ese error, mirar
  * `GET /{waba}/assigned_users`, no `debug_token`.
  */
-export async function borrarPlantilla({ nombre }) {
-  const { token, error } = credenciales()
+export async function borrarPlantilla({ nombre, agenteId = null }) {
+  const { token, cuenta, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
   if (!NOMBRE_VALIDO.test(String(nombre || ''))) {
     return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
   }
 
-  const r = await meta(`${waba()}/message_templates?name=${encodeURIComponent(nombre)}`, {
+  const r = await meta(`${cuenta}/message_templates?name=${encodeURIComponent(nombre)}`, {
     metodo: 'DELETE', token,
   })
   if (!r.ok) {
@@ -376,13 +623,24 @@ export async function borrarPlantilla({ nombre }) {
       },
     }
   }
+  const localId = await agenteLocalId(agenteId)
   // El mapeo de una plantilla que ya no existe solo estorba: la clave es el
   // nombre, y un nombre reutilizado heredaría huecos de otra plantilla.
   await pool.query(
-    `DELETE FROM public.whatsapp_plantilla_variables WHERE plantilla = $1`, [nombre]
+    `DELETE FROM public.whatsapp_plantilla_variables
+      WHERE plantilla = $1 AND agente_id IS NOT DISTINCT FROM $2`, [nombre, localId]
   ).catch(e => log(MOD, 'no se pudo limpiar el mapeo —', e.message))
   await pool.query(
-    `DELETE FROM public.whatsapp_plantilla_cabecera WHERE plantilla = $1`, [nombre]
+    `DELETE FROM public.whatsapp_plantilla_cabecera
+      WHERE plantilla = $1 AND agente_id IS NOT DISTINCT FROM $2`, [nombre, localId]
+  ).catch(() => {})
+  await pool.query(
+    `DELETE FROM public.whatsapp_plantilla_tarjetas
+      WHERE plantilla = $1 AND agente_id = $2`, [nombre, localId]
+  ).catch(() => {})
+  await pool.query(
+    `DELETE FROM public.agente_wa_plantillas
+      WHERE plantilla = $1 AND agente_id = $2`, [nombre, localId]
   ).catch(() => {})
 
   log(MOD, `plantilla ${nombre} borrada`)
@@ -415,17 +673,53 @@ async function appId(token) {
 }
 
 /**
- * Sube un archivo a Meta y devuelve el `handle` que pide la cabecera.
+ * Una clave de material que no le pise el sitio a nada.
+ *
+ * Las cabeceras van al mismo catálogo que el brochure, así que la clave puede
+ * chocar con un material de verdad. Reutilizar la fila de otra cabecera es lo
+ * que se quiere (mismo archivo, misma fila); pisar el brochure de alguien, no.
+ */
+async function claveDeCabecera(base, agenteId) {
+  const raiz = ('CAB_' + String(base || 'archivo'))
+    .toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/_+/g, '_').slice(0, 56)
+  for (let i = 0; i < 10; i++) {
+    const clave = i ? `${raiz}_${i + 1}` : raiz
+    const { rows: [m] } = await pool.query(
+      `SELECT id, usa_agente FROM public.whatsapp_materiales
+        WHERE clave = $1 AND agente_id IS NOT DISTINCT FROM $2::integer`,
+      [clave, agenteId == null ? null : Number(agenteId)]
+    )
+    if (!m) return { clave, id: null }
+    // Una fila que ya era la cabecera de una plantilla se reaprovecha; la del
+    // brochure de alguien, no.
+    if (!m.usa_agente) return { clave, id: m.id }
+  }
+  return { clave: `${raiz}_${Date.now().toString(36).toUpperCase()}`, id: null }
+}
+
+/**
+ * Sube un archivo a Meta, devuelve el `handle` que pide la cabecera **y se
+ * queda con el archivo**.
  *
  * Son DOS llamadas y ninguna se parece a la de subir un archivo a una
  * conversación: se abre una sesión de subida contra la APP (no contra el
  * número) y luego se manda el binario con `Authorization: OAuth` —con `Bearer`
  * falla— y `file_offset: 0`.
  *
- * El handle solo sirve para dar de alta la plantilla; **al enviarla hay que
- * volver a mandar el medio**, y de eso se ocupa `whatsapp_plantilla_cabecera`.
+ * 🩸 El handle **solo sirve para dar de alta la plantilla**: al enviarla hay que
+ * volver a mandar el medio. Hasta hoy el archivo se tiraba después de aprobar y
+ * la plantilla nacía imposible de enviar ("no tiene archivo asignado"), con la
+ * única salida de volver a subir el mismo archivo a mano en otra pantalla. Por
+ * eso aquí se guarda además en el catálogo de materiales y se devuelve su id:
+ * quien crea la plantilla ya no tiene que hacer nada más.
  */
-export async function subirCabecera({ base64, mime, nombre = 'archivo' }) {
+export async function subirCabecera({
+  base64, mime, nombre = 'archivo', agenteId = null, plantilla = null, guardar = true,
+  // Una plantilla que YA existe no necesita otro `handle`: lo único que le falta
+  // es el archivo con el que se envía. Subirlo a Meta otra vez sería una llamada
+  // que solo puede fallar.
+  aMeta = true,
+}) {
   const { token, error } = credenciales()
   if (error) return { status: 500, body: { ok: false, error } }
 
@@ -433,6 +727,8 @@ export async function subirCabecera({ base64, mime, nombre = 'archivo' }) {
   try { buf = Buffer.from(String(base64 || ''), 'base64') }
   catch { return { status: 400, body: { ok: false, error: 'No se pudo leer el archivo' } } }
   if (!buf.length) return { status: 400, body: { ok: false, error: 'El archivo llegó vacío' } }
+
+  if (!aMeta) return guardarComoMaterial({ base64, mime, nombre, agenteId, plantilla, handle: null })
 
   const app = await appId(token)
   if (!app) return { status: 500, body: { ok: false, error: 'No se pudo saber el id de la app de Meta (WHATSAPP_APP_ID)' } }
@@ -454,7 +750,87 @@ export async function subirCabecera({ base64, mime, nombre = 'archivo' }) {
     log(MOD, 'Meta rechazó la subida de la cabecera —', detalle)
     return { status: 502, body: { ok: false, error: `No se pudo subir el archivo: ${detalle}` } }
   }
-  return { status: 200, body: { ok: true, handle: data.h } }
+
+  if (!guardar) return { status: 200, body: { ok: true, handle: data.h } }
+  return guardarComoMaterial({ base64, mime, nombre, agenteId, plantilla, handle: data.h })
+}
+
+/**
+ * El archivo de la cabecera, guardado para los ENVÍOS.
+ *
+ * `usa_agente: false` a propósito: es la cabecera de una plantilla, no algo que
+ * el agente deba ofrecer por su cuenta en mitad de una conversación.
+ */
+async function guardarComoMaterial({ base64, mime, nombre, agenteId, plantilla, handle }) {
+  const { clave, id } = await claveDeCabecera(plantilla || nombre.replace(/\.[^.]+$/, ''), agenteId)
+  const guardado = await guardarMaterial({
+    id,
+    datos: {
+      clave,
+      nombre: plantilla ? `Cabecera de ${plantilla}` : `Cabecera — ${nombre}`,
+      descripcion: null,
+      nombre_archivo: nombre,
+      usa_agente: false,
+      activo: true,
+      base64, mime,
+      agente_id: agenteId,
+    },
+  })
+  if (!guardado.body.ok) {
+    // Si el archivo YA está en Meta, la plantilla se puede crear igual: lo que
+    // falta es poder enviarla. Se dice, no se calla, pero no se tumba el alta.
+    if (handle) {
+      log(MOD, 'la cabecera se subió a Meta pero no se pudo guardar —', guardado.body.error)
+      return {
+        status: 200,
+        body: {
+          ok: true, handle, material_id: null,
+          aviso: `El archivo se subió a Meta, pero no se pudo guardar para los envíos (${guardado.body.error}). `
+            + 'Tendrás que asignarlo a mano en "Datos" antes de enviar la plantilla.',
+        },
+      }
+    }
+    return guardado
+  }
+
+  return { status: 200, body: { ok: true, handle, material_id: guardado.body.id, clave } }
+}
+
+/**
+ * Qué archivo acompaña a la cabecera de esta plantilla AL ENVIARLA.
+ *
+ * Va aparte de `guardarVariables` a propósito: guardar el mapeo de los huecos y
+ * decidir el archivo son dos cosas distintas, y meterlas en la misma llamada
+ * obligaba a mandar siempre las dos —una pantalla que solo sabe del archivo
+ * habría borrado el mapeo del cuerpo sin querer.
+ */
+export async function asignarCabecera({
+  plantilla, idioma = 'es_MX', materialId = null, url = null, agenteId = null, personalId = null,
+}) {
+  if (!NOMBRE_VALIDO.test(String(plantilla || ''))) {
+    return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
+  }
+  const localId = await agenteLocalId(agenteId)
+  const enlace = String(url || '').trim()
+  try {
+    await pool.query(
+      `DELETE FROM public.whatsapp_plantilla_cabecera
+        WHERE agente_id IS NOT DISTINCT FROM $1 AND plantilla = $2 AND idioma = $3`,
+      [localId, plantilla, idioma]
+    )
+    if (materialId || enlace) {
+      await pool.query(
+          `INSERT INTO public.whatsapp_plantilla_cabecera
+             (agente_id, plantilla, idioma, material_id, url, actualizado_por)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+        [localId, plantilla, idioma, materialId ? Number(materialId) : null, enlace || null, personalId]
+      )
+    }
+    log(MOD, `${plantilla}: archivo de cabecera ${materialId || enlace ? 'asignado' : 'quitado'}`)
+    return { status: 200, body: { ok: true } }
+  } catch (e) {
+    return { status: 500, body: { ok: false, error: e.message } }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -732,11 +1108,11 @@ export function camposDisponibles() {
  * armó la lista. Congelarlo repetiría el bug de los envíos que salían al
  * WhatsApp viejo por leer un snapshot.
  */
-export async function valoresDeFuente({ plantilla, idioma = 'es_MX', fuente, refId }) {
+export async function valoresDeFuente({ plantilla, idioma = 'es_MX', fuente, refId, agenteId = null }) {
   const f = FUENTES[fuente]
   if (!f) return { ok: false, error: `Fuente desconocida: ${fuente}` }
 
-  const { body: { variables } } = await variablesDe({ plantilla, idioma })
+  const { body: { variables } } = await variablesDe({ plantilla, idioma, agenteId })
   const { rows: [datos] } = await pool.query(f.sql, [refId])
   if (!datos) return { ok: false, error: `Ya no existe esa ${f.etiqueta}` }
 
@@ -757,24 +1133,39 @@ export async function valoresDeFuente({ plantilla, idioma = 'es_MX', fuente, ref
   return { ok: true, valores, sinDato, contacto: aInternacional(datos.contacto || datos.cliente_whatsapp) }
 }
 
-export async function variablesDe({ plantilla, idioma = 'es_MX' }) {
+export async function variablesDe({ plantilla, idioma = 'es_MX', agenteId = null }) {
+  const localId = await agenteLocalId(agenteId)
   const { rows } = await pool.query(
     `SELECT destino, posicion, param, campo FROM public.whatsapp_plantilla_variables
-      WHERE plantilla = $1 AND idioma = $2 ORDER BY destino, posicion NULLS LAST, param`,
-    [plantilla, idioma]
+      WHERE agente_id IS NOT DISTINCT FROM $1 AND plantilla = $2 AND idioma = $3
+      ORDER BY destino, posicion NULLS LAST, param`,
+    [localId, plantilla, idioma]
   )
   const { rows: [cab] } = await pool.query(
-    `SELECT c.material_id, c.url, m.nombre AS material_nombre, m.mime AS material_mime
+    `SELECT c.material_id, c.url, m.nombre AS material_nombre, m.mime AS material_mime,
+            m.nombre_archivo AS material_archivo
        FROM public.whatsapp_plantilla_cabecera c
        LEFT JOIN public.whatsapp_materiales m ON m.id = c.material_id
-      WHERE c.plantilla = $1 AND c.idioma = $2`,
-    [plantilla, idioma]
+      WHERE c.agente_id IS NOT DISTINCT FROM $1 AND c.plantilla = $2 AND c.idioma = $3`,
+    [localId, plantilla, idioma]
   )
-  return { status: 200, body: { ok: true, variables: rows, cabecera: cab || null } }
+  const { rows: tarjetas } = await pool.query(
+    `SELECT t.card_index, t.material_id, t.url, m.nombre AS material_nombre,
+            m.mime AS material_mime, m.nombre_archivo AS material_archivo
+       FROM public.whatsapp_plantilla_tarjetas t
+       LEFT JOIN public.whatsapp_materiales m ON m.id = t.material_id
+      WHERE t.agente_id = $1 AND t.plantilla = $2 AND t.idioma = $3
+      ORDER BY t.card_index`,
+    [localId, plantilla, idioma]
+  )
+  return { status: 200, body: { ok: true, variables: rows, cabecera: cab || null, tarjetas } }
 }
 
 /** Reemplaza el mapeo entero: es más simple de razonar que ir campo por campo. */
-export async function guardarVariables({ plantilla, idioma = 'es_MX', variables = [], cabecera = undefined, personalId = null }) {
+export async function guardarVariables({
+  plantilla, idioma = 'es_MX', variables = [], cabecera = undefined,
+  agenteId = null, personalId = null,
+}) {
   if (!NOMBRE_VALIDO.test(String(plantilla || ''))) {
     return { status: 422, body: { ok: false, error: 'Nombre de plantilla inválido' } }
   }
@@ -790,20 +1181,22 @@ export async function guardarVariables({ plantilla, idioma = 'es_MX', variables 
   if (paramMalo) {
     return { status: 422, body: { ok: false, error: `"${paramMalo.param}" no vale como nombre de variable` } }
   }
+  const localId = await agenteLocalId(agenteId)
 
   const cliente = await pool.connect()
   try {
     await cliente.query('BEGIN')
     await cliente.query(
-      `DELETE FROM public.whatsapp_plantilla_variables WHERE plantilla = $1 AND idioma = $2`,
-      [plantilla, idioma]
+      `DELETE FROM public.whatsapp_plantilla_variables
+        WHERE agente_id IS NOT DISTINCT FROM $1 AND plantilla = $2 AND idioma = $3`,
+      [localId, plantilla, idioma]
     )
     for (const v of variables) {
       await cliente.query(
-        `INSERT INTO public.whatsapp_plantilla_variables
-           (plantilla, idioma, destino, posicion, param, campo, creado_por)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [plantilla, idioma, v.destino || 'BODY',
+          `INSERT INTO public.whatsapp_plantilla_variables
+           (agente_id, plantilla, idioma, destino, posicion, param, campo, creado_por)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [localId, plantilla, idioma, v.destino || 'BODY',
          v.param ? null : Number(v.posicion), v.param || null, v.campo, personalId]
       )
     }
@@ -813,15 +1206,16 @@ export async function guardarVariables({ plantilla, idioma = 'es_MX', variables 
     // archivo de la cabecera sin que nadie lo pidiera.
     if (cabecera !== undefined) {
       await cliente.query(
-        `DELETE FROM public.whatsapp_plantilla_cabecera WHERE plantilla = $1 AND idioma = $2`,
-        [plantilla, idioma]
+        `DELETE FROM public.whatsapp_plantilla_cabecera
+          WHERE agente_id IS NOT DISTINCT FROM $1 AND plantilla = $2 AND idioma = $3`,
+        [localId, plantilla, idioma]
       )
       if (cabecera && (cabecera.material_id || String(cabecera.url || '').trim())) {
         await cliente.query(
           `INSERT INTO public.whatsapp_plantilla_cabecera
-             (plantilla, idioma, material_id, url, actualizado_por)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [plantilla, idioma, cabecera.material_id || null,
+             (agente_id, plantilla, idioma, material_id, url, actualizado_por)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [localId, plantilla, idioma, cabecera.material_id || null,
            String(cabecera.url || '').trim() || null, personalId]
         )
       }
@@ -862,13 +1256,13 @@ function aInternacional(v) {
   return d
 }
 
-export async function valoresPara({ plantilla, idioma = 'es_MX', servicioId }) {
+export async function valoresPara({ plantilla, idioma = 'es_MX', servicioId, agenteId = null }) {
   // Sin esto, un id mal pegado sale como "Error interno" (22P02) y parece que
   // la pantalla está rota.
   if (!UUID.test(String(servicioId || ''))) {
     return { status: 422, body: { ok: false, error: 'Ese no es el id de un servicio' } }
   }
-  const { body: { variables } } = await variablesDe({ plantilla, idioma })
+  const { body: { variables } } = await variablesDe({ plantilla, idioma, agenteId })
   const { rows: [datos] } = await pool.query(RESOLVER, [servicioId])
   if (!datos) return { status: 404, body: { ok: false, error: 'No se encontró ese servicio' } }
 
@@ -903,15 +1297,30 @@ export async function valoresPara({ plantilla, idioma = 'es_MX', servicioId }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Los bytes de la cabecera media configurada, si la hay. */
-async function cabeceraDe(plantilla, idioma) {
+async function cabeceraDe(plantilla, idioma, agenteId = null) {
+  const localId = await agenteLocalId(agenteId)
   const { rows: [c] } = await pool.query(
     `SELECT c.url, m.archivo, m.mime, m.nombre_archivo
        FROM public.whatsapp_plantilla_cabecera c
        LEFT JOIN public.whatsapp_materiales m ON m.id = c.material_id
-      WHERE c.plantilla = $1 AND c.idioma = $2`,
-    [plantilla, idioma]
+      WHERE c.agente_id IS NOT DISTINCT FROM $1 AND c.plantilla = $2 AND c.idioma = $3`,
+    [localId, plantilla, idioma]
   )
   return c || null
+}
+
+/** Los medios de las tarjetas, sin traerlos hasta que haga falta enviar. */
+async function mediosDeTarjetas(plantilla, idioma, agenteId = null) {
+  const localId = await agenteLocalId(agenteId)
+  const { rows } = await pool.query(
+    `SELECT t.card_index, t.url, m.archivo, m.mime, m.nombre_archivo
+       FROM public.whatsapp_plantilla_tarjetas t
+       LEFT JOIN public.whatsapp_materiales m ON m.id = t.material_id
+      WHERE t.agente_id = $1 AND t.plantilla = $2 AND t.idioma = $3
+      ORDER BY t.card_index`,
+    [localId, plantilla, idioma]
+  )
+  return new Map(rows.map(r => [Number(r.card_index), r]))
 }
 
 /** Sube el medio de la cabecera al número y devuelve su id en Meta. */
@@ -953,15 +1362,27 @@ async function mediaDeCabecera(buf, mime, nombre, phoneNumberId, token) {
  *
  * `dados` es un diccionario por hueco: `{ 'BODY:1': 'Toby', 'HEADER:mascota': 'Toby' }`.
  */
-export async function mandarPlantilla({ plantilla, contacto, dados = {}, personalId = null }) {
-  const { token, error } = credenciales()
+export async function mandarPlantilla({ plantilla, contacto, dados = {}, personalId = null, agenteId = null }) {
+  const { token, linea, agente, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
 
   const num = aInternacional(contacto)
   if (num.length < 10) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
-  const desde = (process.env.WHATSAPP_ALLOWED_PHONE_IDS || '').split(',').map(s => s.trim()).filter(Boolean)[0]
-  if (!desde) return { status: 500, body: { ok: false, error: 'No hay número configurado para enviar' } }
+  // 🩸 La línea es la del agente, no "la primera del `.env`". Ver `contexto`.
+  const desde = linea
+  if (!desde) {
+    return {
+      status: 400,
+      body: {
+        ok: false,
+        error: agente
+          ? `El agente "${agente.nombre}" no tiene ninguna línea asignada: sin línea no hay por dónde salir. `
+            + 'Asígnasela en Agentes IA → Ajustes.'
+          : 'No hay número configurado para enviar',
+      },
+    }
+  }
 
   const nombre = plantilla.name
   const idioma = plantilla.language
@@ -974,11 +1395,16 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
 
   const componentes = []
   const faltan = []
-  const recoger = (destino) => huecosDeComponente(plantilla, destino).map(h => {
+  const recogerHuecos = (destino, huecos) => huecos.map(h => {
     const valor = dados[claveHueco(h)]
     if (!String(valor ?? '').trim()) faltan.push(`${destino} {{${h.param ?? h.posicion}}}`)
     return parametro(h, valor)
   })
+  const recoger = (destino) => recogerHuecos(destino, huecosDeComponente(plantilla, destino))
+  const recogerTexto = (destino, texto) => recogerHuecos(
+    destino,
+    huecosDe(texto).map(h => ({ destino, ...(named ? { param: h } : { posicion: Number(h) }) }))
+  )
 
   // ── Cabecera ──
   const cab = componente(plantilla, 'HEADER')
@@ -988,7 +1414,7 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
   } else if (cab && cab.format !== 'LOCATION') {
     // Meta NO reutiliza el archivo con el que se aprobó la plantilla: hay que
     // mandarlo en cada envío. De ahí `whatsapp_plantilla_cabecera`.
-    const conf = await cabeceraDe(nombre, idioma)
+    const conf = await cabeceraDe(nombre, idioma, agenteId)
     const clase = cab.format.toLowerCase()   // image | video | document
     if (!conf) {
       return {
@@ -1023,6 +1449,58 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
     if (p.length) componentes.push({ type: 'button', sub_type: 'url', index: String(iUrl), parameters: p })
   }
 
+  // ── Carrusel ──
+  // La definición aprobada decide cuántas tarjetas hay, su medio y la posición
+  // de los botones. Orbit únicamente rellena los huecos y vuelve a subir el
+  // archivo configurado para cada tarjeta.
+  const tarjetas = tarjetasDePlantilla(plantilla)
+  if (tarjetas.length) {
+    const medios = await mediosDeTarjetas(nombre, idioma, agenteId)
+    const cards = []
+    for (let cardIndex = 0; cardIndex < tarjetas.length; cardIndex++) {
+      const tarjeta = tarjetas[cardIndex]
+      const defs = tarjeta.components || []
+      const header = defs.find(c => c.type === 'HEADER')
+      const body = defs.find(c => c.type === 'BODY')
+      const buttons = defs.find(c => c.type === 'BUTTONS')?.buttons || []
+      const conf = medios.get(cardIndex)
+      if (!conf) {
+        return {
+          status: 422,
+          body: { ok: false, error: `La tarjeta ${cardIndex + 1} no tiene archivo configurado para el envío.` },
+        }
+      }
+
+      const clase = String(header?.format || '').toLowerCase()
+      const cardComponents = []
+      if (conf.archivo) {
+        const sub = await mediaDeCabecera(conf.archivo, conf.mime, conf.nombre_archivo, desde, token)
+        if (sub.error) {
+          return { status: 502, body: { ok: false, error: `No se pudo subir la tarjeta ${cardIndex + 1}: ${sub.error}` } }
+        }
+        cardComponents.push({ type: 'header', parameters: [{ type: clase, [clase]: { id: sub.id } }] })
+      } else if (conf.url) {
+        cardComponents.push({ type: 'header', parameters: [{ type: clase, [clase]: { link: conf.url } }] })
+      } else {
+        return { status: 422, body: { ok: false, error: `La tarjeta ${cardIndex + 1} perdió su archivo.` } }
+      }
+
+      const cuerpoTarjeta = recogerTexto(`CARD:${cardIndex}:BODY`, body?.text)
+      if (cuerpoTarjeta.length) cardComponents.push({ type: 'body', parameters: cuerpoTarjeta })
+
+      buttons.forEach((b, buttonIndex) => {
+        if (b.type !== 'URL' || !huecosDe(b.url).length) return
+        const destino = `CARD:${cardIndex}:BUTTON:${buttonIndex}`
+        const params = recogerTexto(destino, b.url)
+        if (params.length) {
+          cardComponents.push({ type: 'button', sub_type: 'url', index: String(buttonIndex), parameters: params })
+        }
+      })
+      cards.push({ card_index: cardIndex, components: cardComponents })
+    }
+    componentes.push({ type: 'carousel', cards })
+  }
+
   if (faltan.length) {
     return {
       status: 422,
@@ -1041,8 +1519,10 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
     },
   })
 
-  const textos = componentes
-    .flatMap(c => (c.parameters || []).filter(p => p.type === 'text').map(p => p.text))
+  const textos = componentes.flatMap(c => c.type === 'carousel'
+    ? c.cards.flatMap(card => card.components
+        .flatMap(cc => (cc.parameters || []).filter(p => p.type === 'text').map(p => p.text)))
+    : (c.parameters || []).filter(p => p.type === 'text').map(p => p.text))
 
   if (!r.ok) {
     log(MOD, `Meta rechazó el envío de ${nombre} a ${num} —`, r.error)
@@ -1102,13 +1582,14 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
  */
 export async function enviarPlantilla({
   contacto, nombre, idioma = 'es_MX', valores = {}, servicioId = null, personalId = null,
+  agenteId = null,
   // Compatibilidad con la forma vieja (arrays posicionales).
   variables = null, variablesBoton = null,
 }) {
-  const { token, error } = credenciales()
+  const { token, cuenta, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
 
-  const { plantilla, error: errPlantilla, status: stPlantilla } = await obtenerPlantilla(nombre, idioma, token)
+  const { plantilla, error: errPlantilla, status: stPlantilla } = await obtenerPlantilla(nombre, idioma, token, cuenta)
   if (!plantilla) return { status: stPlantilla || 502, body: { ok: false, error: errPlantilla } }
   if (plantilla.status !== 'APPROVED') {
     return { status: 409, body: { ok: false, error: `La plantilla está ${plantilla.status}: Meta solo deja enviar las aprobadas.` } }
@@ -1123,11 +1604,11 @@ export async function enviarPlantilla({
   // Con un servicio, los valores salen de Orbit y no de lo que teclee nadie —
   // que es el punto de asignar variables (migración 097).
   if (servicioId) {
-    const r = await valoresPara({ plantilla: nombre, idioma, servicioId })
+    const r = await valoresPara({ plantilla: nombre, idioma, servicioId, agenteId })
     if (!r.body.ok) return { status: r.status, body: r.body }
     for (const [k, v] of Object.entries(r.body.valores)) { if (v) dados[k] = v }
     if (num.length < 10 && r.body.contacto) num = r.body.contacto
   }
 
-  return mandarPlantilla({ plantilla, contacto: num, dados, personalId })
+  return mandarPlantilla({ plantilla, contacto: num, dados, personalId, agenteId })
 }

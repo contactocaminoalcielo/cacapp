@@ -9,8 +9,15 @@
 // (migraciones 097 y 102). Ver `orbit-backend/src/whatsapp-plantillas.js`.
 import { orbitApi } from '@/lib/orbitApi'
 
-export function listarPlantillas() {
-  return orbitApi('/whatsapp/plantillas')
+/**
+ * Las plantillas de la cuenta del agente.
+ *
+ * Una plantilla vive en una WABA y sale por una línea, y las dos cosas son del
+ * AGENTE (migración 115). Sin decir cuál, se usa la del `.env` — que es lo que
+ * hubo siempre y acertaba mientras hubo un solo agente.
+ */
+export function listarPlantillas(agenteId = null) {
+  return orbitApi(`/whatsapp/plantillas${agenteId ? `?agenteId=${agenteId}` : ''}`)
 }
 
 export function crearPlantilla(cuerpo) {
@@ -31,8 +38,10 @@ export function editarPlantilla(nombre, cuerpo) {
   })
 }
 
-export function borrarPlantilla(nombre) {
-  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}`, { method: 'DELETE' })
+export function borrarPlantilla(nombre, agenteId = null) {
+  return orbitApi(
+    `/whatsapp/plantillas/${encodeURIComponent(nombre)}${agenteId ? `?agenteId=${agenteId}` : ''}`,
+    { method: 'DELETE' })
 }
 
 export function enviarPlantilla(nombre, cuerpo) {
@@ -41,10 +50,43 @@ export function enviarPlantilla(nombre, cuerpo) {
   })
 }
 
-/** Sube la imagen/video/PDF de una cabecera y devuelve el `handle` de Meta. */
-export function subirCabecera({ base64, mime, nombre }) {
+/**
+ * Sube la imagen/video/PDF de una cabecera.
+ *
+ * Devuelve el `handle` que Meta pide para APROBAR la plantilla y el
+ * `material_id` del archivo guardado, que es el que se manda en CADA envío:
+ * Meta no reutiliza el del alta. Antes solo devolvía el handle y la plantilla
+ * nacía sin archivo con el que enviarse.
+ *
+ * `soloGuardar` para una plantilla que ya existe: solo le falta el archivo del
+ * envío, no otro handle.
+ */
+export function subirCabecera({ base64, mime, nombre, agenteId = null, plantilla = null, soloGuardar = false }) {
   return orbitApi('/whatsapp/plantillas-cabecera', {
-    method: 'POST', body: { base64, mime, nombre },
+    method: 'POST', body: { base64, mime, nombre, agenteId, plantilla, soloGuardar },
+  })
+}
+
+/** Guarda qué material se vuelve a subir para cada tarjeta al enviar. */
+export function guardarTarjetas(nombre, idioma, agenteId, tarjetas) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/tarjetas`, {
+    method: 'PUT', body: { idioma, agenteId, tarjetas },
+  })
+}
+
+/** Concede o revoca al agente el permiso de usar una plantilla aprobada. */
+export function autorizarPlantilla(nombre, {
+  agenteId, idioma = 'es_MX', clave = null, descripcion = null, activa = true,
+}) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/agente`, {
+    method: 'PUT', body: { agenteId, idioma, clave, descripcion, activa },
+  })
+}
+
+/** Qué archivo acompaña a la cabecera al ENVIAR. `null` lo quita. */
+export function asignarCabecera(nombre, idioma, { materialId = null, url = null } = {}, agenteId = null) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/cabecera`, {
+    method: 'PUT', body: { idioma, materialId, url, agenteId },
   })
 }
 
@@ -151,6 +193,9 @@ export function variablesDe(texto) {
 /** El componente de un tipo dentro de una plantilla de Meta. */
 export const componente = (p, tipo) => (p?.components || []).find(c => c.type === tipo)
 
+export const tarjetasDe = p => componente(p, 'CAROUSEL')?.cards || []
+export const esCarrusel = p => tarjetasDe(p).length > 0
+
 export const esNamed = p => p?.parameter_format === 'NAMED'
 
 /** El botón de enlace con variable, si lo tiene. */
@@ -168,11 +213,19 @@ export function huecosDePlantilla(p) {
   const de = (destino, texto) =>
     huecosDe(texto).map(h => ({ destino, hueco: h, clave: `${destino}:${h}` }))
   const cab = componente(p, 'HEADER')
-  return [
+  const todos = [
     ...(cab?.format === 'TEXT' ? de('HEADER', cab.text) : []),
     ...de('BODY', componente(p, 'BODY')?.text),
     ...de('BUTTON', botonConVariable(p)?.url),
   ]
+  tarjetasDe(p).forEach((tarjeta, cardIndex) => {
+    const comps = tarjeta.components || []
+    todos.push(...de(`CARD:${cardIndex}:BODY`, comps.find(c => c.type === 'BODY')?.text))
+    ;(comps.find(c => c.type === 'BUTTONS')?.buttons || []).forEach((b, buttonIndex) => {
+      if (b.type === 'URL') todos.push(...de(`CARD:${cardIndex}:BUTTON:${buttonIndex}`, b.url))
+    })
+  })
+  return todos
 }
 
 /** Cuántas variables tiene el cuerpo. Es lo que hay que rellenar para enviarla. */
@@ -207,12 +260,12 @@ export function camposDisponibles() {
   return orbitApi('/whatsapp/plantillas-campos')
 }
 
-export function variablesDePlantilla(nombre, idioma = 'es_MX') {
-  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/variables?idioma=${idioma}`)
+export function variablesDePlantilla(nombre, idioma = 'es_MX', agenteId = null) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/variables?idioma=${idioma}${agenteId ? `&agenteId=${agenteId}` : ''}`)
 }
 
-export function guardarVariables(nombre, idioma, variables, cabecera) {
-  const body = { idioma, variables }
+export function guardarVariables(nombre, idioma, variables, cabecera, agenteId = null) {
+  const body = { idioma, variables, agenteId }
   // Solo se manda la cabecera si hay algo que decir sobre ella: mandar `null`
   // sin querer borraría el archivo asignado.
   if (cabecera !== undefined) body.cabecera = cabecera
@@ -221,8 +274,8 @@ export function guardarVariables(nombre, idioma, variables, cabecera) {
   })
 }
 
-export function valoresDeServicio(nombre, servicioId, idioma = 'es_MX') {
-  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/valores/${servicioId}?idioma=${idioma}`)
+export function valoresDeServicio(nombre, servicioId, idioma = 'es_MX', agenteId = null) {
+  return orbitApi(`/whatsapp/plantillas/${encodeURIComponent(nombre)}/valores/${servicioId}?idioma=${idioma}${agenteId ? `&agenteId=${agenteId}` : ''}`)
 }
 
 /** Los campos del catálogo agrupados como se muestran en el desplegable. */

@@ -278,8 +278,9 @@ const SCHEMA = 'orbit-agent/v1'
  * reglas, herramientas con sus descripciones propias, catálogos y motor.
  *
  * ⚠️ Lo que NO va, a propósito:
- *   · Los `phone_number_ids` — son de ESTE Meta, no del sistema de destino, y
- *     copiarlos haría que dos agentes se pelearan por la misma línea.
+ *   · Los `phone_number_ids` y el `waba_id` — son de ESTE Meta, no del sistema
+ *     de destino, y copiarlos haría que dos agentes se pelearan por la misma
+ *     línea y por las mismas plantillas.
  *   · `activo` — llega apagado, siempre. Ver `crearAgente`.
  *   · La bitácora y los costos: son historia de este sistema, no definición.
  *   · Los archivos binarios de los materiales, que pueden pesar megas. Van sus
@@ -295,7 +296,7 @@ export async function exportarAgente(clave) {
   if (!a) return { status: 404, body: { ok: false, error: 'No existe ese agente' } }
 
   const q = async (sql) => (await pool.query(sql, [a.id])).rows
-  const [conocimiento, reglas, herramientas, materiales, interactivos, etiquetas] = await Promise.all([
+  const [conocimiento, reglas, herramientas, materiales, interactivos, etiquetas, plantillas] = await Promise.all([
     q(`SELECT tipo, titulo, texto, mime, bytes,
               CASE WHEN archivo IS NULL THEN NULL ELSE encode(archivo, 'base64') END AS archivo_base64,
               orden, activo FROM public.agente_wa_conocimiento
@@ -311,6 +312,8 @@ export async function exportarAgente(clave) {
         WHERE agente_id = $1 ORDER BY orden, id`),
     q(`SELECT clave, nombre, descripcion, grupo, color, activo, orden FROM public.whatsapp_etiquetas
         WHERE agente_id = $1 ORDER BY orden, id`),
+    q(`SELECT clave, plantilla, idioma, descripcion, activa, orden
+         FROM public.agente_wa_plantillas WHERE agente_id = $1 ORDER BY orden, id`),
   ])
 
   const secreto = rutaDeSecreto(herramientas)
@@ -332,12 +335,14 @@ export async function exportarAgente(clave) {
         exportado_en: new Date().toISOString(),
         agente,
         conocimiento, reglas, herramientas,
-        catalogos: { materiales, interactivos, etiquetas },
+        catalogos: { materiales, interactivos, etiquetas, plantillas },
         // Se dice lo que NO viaja, para que quien lo importe no lo dé por hecho.
         no_incluye: [
           'phone_number_ids (son de este Meta)',
+          'waba_id (la cuenta de WhatsApp también es de este Meta)',
           'activo (llega apagado)',
           'archivos binarios de los materiales (solo sus claves)',
+          'imágenes y videos de carruseles (se vuelven a vincular en la WABA destino)',
           'imágenes de la base de conocimiento (solo su título)',
           'bitácora y costos (historia, no definición)',
           'credenciales, tokens y llaves de proveedores',
@@ -451,6 +456,16 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
          i.boton_texto, JSON.stringify(i.opciones ?? []), i.url,
          i.usa_agente !== false, i.activo !== false, i.orden || 0])
     }
+    for (const p of cat.plantillas || []) {
+      // El nombre lógico viaja, pero queda APAGADO: la plantilla y sus medios
+      // deben existir y estar aprobados en la WABA del sistema de destino.
+      await cliente.query(
+        `INSERT INTO public.agente_wa_plantillas
+           (agente_id, clave, plantilla, idioma, descripcion, activa, orden)
+         VALUES ($1,$2,$3,$4,$5,false,$6)
+         ON CONFLICT (agente_id, clave) DO NOTHING`,
+        [agenteId, p.clave, p.plantilla, p.idioma || 'es_MX', p.descripcion || null, p.orden || 0])
+    }
     await cliente.query('COMMIT')
   } catch (e) {
     await cliente.query('ROLLBACK')
@@ -465,6 +480,7 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
   // Los materiales llevan archivo, y el archivo no viaja. Se dice cuáles hay que
   // volver a subir en vez de dejar al agente prometiendo un PDF que no existe.
   const faltanArchivos = (d.catalogos?.materiales || []).map(m => m.clave)
+  const faltanPlantillas = (d.catalogos?.plantillas || []).map(p => p.clave)
   log(MOD, `agente ${nueva} importado (apagado, sin líneas) por personal=${personalId || '?'}`)
   return {
     status: 200,
@@ -478,6 +494,9 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
           : []),
         ...(imagenesPendientes.length
           ? [`Hay que volver a subir estas imágenes de la base de conocimiento: ${imagenesPendientes.join(', ')}`]
+          : []),
+        ...(faltanPlantillas.length
+          ? [`Hay que crear o vincular y aprobar estas plantillas/carruseles en la WABA destino: ${faltanPlantillas.join(', ')}`]
           : []),
       ],
     },

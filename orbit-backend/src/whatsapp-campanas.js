@@ -239,11 +239,13 @@ async function destinosDe(audiencia, filtros = {}) {
  * se puede rellenar cuando el destinatario es una veterinaria, y sin este aviso
  * uno se entera con 203 mensajes ya enviados.
  */
-export async function previsualizar({ audiencia, filtros = {}, plantilla, idioma = 'es_MX' }) {
+export async function previsualizar({
+  audiencia, filtros = {}, plantilla, idioma = 'es_MX', agenteId = null,
+}) {
   const r = await destinosDe(audiencia, filtros)
   if (r.error) return { status: 422, body: { ok: false, error: r.error } }
 
-  const { body: { variables } } = await variablesDePlantilla({ plantilla, idioma })
+  const { body: { variables } } = await variablesDePlantilla({ plantilla, idioma, agenteId })
   const sinFuente = variables
     .filter(v => !campoSirvePara(v.campo, r.fuente))
     .map(v => `{{${v.param ?? v.posicion}}}`)
@@ -252,7 +254,9 @@ export async function previsualizar({ audiencia, filtros = {}, plantilla, idioma
   // 900 consultas para pintar una previa que nadie lee entera.
   const primero = r.destinos[0]
   const muestra = primero?.ref_id
-    ? [{ ...primero, valores: (await valoresDeFuente({ plantilla, idioma, fuente: r.fuente, refId: primero.ref_id })).valores || {} }]
+    ? [{ ...primero, valores: (await valoresDeFuente({
+        plantilla, idioma, fuente: r.fuente, refId: primero.ref_id, agenteId,
+      })).valores || {} }]
     : primero ? [{ ...primero, valores: {} }] : []
 
   return {
@@ -287,6 +291,10 @@ export async function crearCampana({
   // quitar a alguien.
   seleccion = null,
   valoresFijos = {}, porHora = 200, personalId = null,
+  // Por qué línea sale (migración 115). Se guarda con la campaña porque una
+  // campaña se crea un día y se envía otro: sin esto, al reanudarla mañana
+  // saldría por la línea que estuviera primera en el `.env` ese día.
+  agenteId = null,
 }) {
   if (!String(nombre || '').trim()) {
     return { status: 422, body: { ok: false, error: 'Ponle un nombre: es como la vas a reconocer después' } }
@@ -298,7 +306,8 @@ export async function crearCampana({
   // Se comprueba que la plantilla exista y esté aprobada ANTES de armar la
   // lista: crear una campaña de 203 destinos contra una plantilla en revisión
   // es trabajo que no se puede usar.
-  const { plantilla: p, error } = await obtenerPlantilla(plantilla, idioma, process.env.WHATSAPP_ACCESS_TOKEN)
+  const { plantilla: p, error } = await obtenerPlantilla(
+    plantilla, idioma, process.env.WHATSAPP_ACCESS_TOKEN, await wabaDeAgente(agenteId))
   if (!p) return { status: 404, body: { ok: false, error } }
   if (p.status !== 'APPROVED') {
     return { status: 409, body: { ok: false, error: `La plantilla está ${p.status}: Meta solo deja enviar las aprobadas.` } }
@@ -325,11 +334,12 @@ export async function crearCampana({
     await cliente.query('BEGIN')
     const { rows: [c] } = await cliente.query(
       `INSERT INTO public.whatsapp_campanas
-         (nombre, plantilla, idioma, audiencia, filtros, valores_fijos, por_hora, creada_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+         (nombre, plantilla, idioma, audiencia, filtros, valores_fijos, por_hora, creada_por, agente_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [String(nombre).trim().slice(0, 120), plantilla, idioma, audiencia,
        JSON.stringify(filtros), JSON.stringify(valoresFijos),
-       Math.min(Math.max(Number(porHora) || 200, 1), 3600), personalId]
+       Math.min(Math.max(Number(porHora) || 200, 1), 3600), personalId,
+       agenteId ? Number(agenteId) : null]
     )
     // Un solo INSERT con todos: 203 idas y vueltas a la base para armar una
     // lista es tiempo que la pantalla pasa esperando sin decir nada.
@@ -349,6 +359,21 @@ export async function crearCampana({
   } finally {
     cliente.release()
   }
+}
+
+/**
+ * La cuenta de WhatsApp de un agente (migración 115).
+ *
+ * Una plantilla vive en una WABA. Si la campaña sale por la línea de otra
+ * empresa, hay que buscarla en la cuenta de ESA empresa: buscarla en la del
+ * `.env` diría "no existe la plantilla" con la plantilla delante.
+ */
+async function wabaDeAgente(agenteId) {
+  if (!agenteId) return null
+  const { rows: [a] } = await pool.query(
+    `SELECT waba_id FROM public.agente_wa WHERE id = $1`, [Number(agenteId)]
+  )
+  return a?.waba_id || null
 }
 
 const CONTEOS = `
@@ -516,7 +541,8 @@ async function unLatido() {
   const cupo = Math.min(c.por_hora - ultima_hora, TOPE_POR_LATIDO)
   if (cupo <= 0) return
 
-  const { plantilla, error } = await obtenerPlantilla(c.plantilla, c.idioma, process.env.WHATSAPP_ACCESS_TOKEN)
+  const { plantilla, error } = await obtenerPlantilla(
+    c.plantilla, c.idioma, process.env.WHATSAPP_ACCESS_TOKEN, await wabaDeAgente(c.agente_id))
   if (!plantilla) return pausar(c.id, `No se pudo leer la plantilla: ${error}`)
   if (plantilla.status !== 'APPROVED') {
     return pausar(c.id, `La plantilla pasó a ${plantilla.status} y Meta solo deja enviar las aprobadas.`)
@@ -541,6 +567,7 @@ async function unLatido() {
     if (d.ref_id && audiencia?.fuente) {
       const v = await valoresDeFuente({
         plantilla: c.plantilla, idioma: c.idioma, fuente: audiencia.fuente, refId: d.ref_id,
+        agenteId: c.agente_id || null,
       })
       if (!v.ok) {
         await pool.query(
@@ -553,7 +580,9 @@ async function unLatido() {
       if (v.contacto) contacto = v.contacto
     }
 
-    const r = await mandarPlantilla({ plantilla, contacto, dados, personalId: c.creada_por })
+    const r = await mandarPlantilla({
+      plantilla, contacto, dados, personalId: c.creada_por, agenteId: c.agente_id || null,
+    })
 
     if (r.body.ok) {
       await pool.query(

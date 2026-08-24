@@ -43,7 +43,7 @@ export async function listarAgentes() {
   const { rows } = await pool.query(
     `SELECT a.id, a.clave, a.nombre, a.etiqueta_menu, a.activo, a.categoria,
             a.objetivo, a.proveedor, a.modelo, a.effort,
-            a.phone_number_ids, a.voz_activa, a.voz_id, a.actualizado_en,
+            a.phone_number_ids, a.waba_id, a.voz_activa, a.voz_id, a.actualizado_en,
             (SELECT count(*)::int FROM public.agente_wa_conocimiento k
               WHERE k.agente_id = a.id AND k.activo)                        AS piezas,
             (SELECT count(*)::int FROM public.agente_wa_reglas r
@@ -61,7 +61,7 @@ export async function obtenerAgente({ clave = 'VETERINARIAS' } = {}) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, etiqueta_menu, activo, categoria, objetivo, idioma,
             instrucciones, proveedor, modelo, effort, max_turnos, memoria_mensajes,
-            phone_number_ids, espera_ms, espera_max_ms,
+            phone_number_ids, waba_id, espera_ms, espera_max_ms,
             seguimiento_enlace_minutos, seguimiento_enlace_texto, creado_en, actualizado_en
        FROM public.agente_wa WHERE clave = $1`,
     [clave]
@@ -185,6 +185,16 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
     set('idioma', idioma)
   }
   if (datos.activo !== undefined) set('activo', !!datos.activo)
+  // La cuenta de WhatsApp donde viven SUS plantillas (migración 115). Vacío = la
+  // del servidor, que es lo que hay hoy. Es un id numérico de Meta: dejar colar
+  // cualquier texto acabaría en un 404 de Graph difícil de leer.
+  if (datos.waba_id !== undefined) {
+    const wabaId = String(datos.waba_id || '').trim()
+    if (wabaId && !/^[0-9]{5,25}$/.test(wabaId)) {
+      return { status: 400, body: { ok: false, error: 'La cuenta de WhatsApp (WABA) es un número: cópialo de WhatsApp Manager' } }
+    }
+    set('waba_id', wabaId || null)
+  }
   if (datos.proveedor !== undefined) {
     const proveedor = String(datos.proveedor || '').trim().toUpperCase()
     if (!proveedor) return { status: 400, body: { ok: false, error: 'proveedor no puede ir vacío' } }

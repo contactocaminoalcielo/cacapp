@@ -25,24 +25,35 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import ConstructorCarrusel from '@/components/whatsapp/ConstructorCarrusel'
 import {
   listarPlantillas, crearPlantilla, editarPlantilla, borrarPlantilla, enviarPlantilla,
-  subirCabecera, buscarServicios,
+  subirCabecera, asignarCabecera, buscarServicios, guardarTarjetas, autorizarPlantilla,
   ESTADOS, CATEGORIAS, IDIOMAS, FORMATOS, CABECERAS, BOTONES, esMedia,
-  huecosDe, componente, esNamed, huecosDePlantilla, conValores,
+  huecosDe, componente, esNamed, huecosDePlantilla, conValores, esCarrusel, tarjetasDe,
   camposDisponibles, variablesDePlantilla, guardarVariables, valoresDeServicio, porGrupo,
 } from '@/lib/plantillasWa'
-import { cargarMateriales, leerArchivo } from '@/lib/materialesApi'
+import { cargarMateriales, leerArchivo, TOPE_POR_CLASE, comoLlega, pesoLegible } from '@/lib/materialesApi'
+import { listarAgentes } from '@/lib/agenteApi'
 import CampanasWa from '@/pages/whatsapp/CampanasWa'
 import {
   Plus, Loader2, RefreshCw, Trash2, Send, X, AlertTriangle, MessageSquare,
   Link2, Reply, Search, Database, Check, Pencil, Phone, Copy, Image as ImageIcon,
-  FileText, Film, MapPin, Upload, Megaphone,
+  FileText, Film, MapPin, Upload, Megaphone, Bot, Layers3,
 } from 'lucide-react'
+
+/**
+ * El agente elegido se recuerda entre visitas: quien administra la línea de
+ * veterinarias no quiere volver a elegirla cada vez que entra.
+ */
+const RECUERDO = 'orbit.plantillas.agente'
 
 const VACIA = {
   nombre: '', idioma: 'es_MX', categoria: 'UTILITY', formato: 'NAMED',
-  cabTipo: '', cabTexto: '', cabHandle: '', cabArchivo: null,
+  // `cabHandle` es el pase para que Meta REVISE la plantilla; `cabMaterialId`
+  // es el archivo que se manda en CADA envío. No son lo mismo y hacen falta los
+  // dos: Meta no reutiliza el del alta.
+  cabTipo: '', cabTexto: '', cabHandle: '', cabArchivo: null, cabMaterialId: null,
   cuerpo: '', pie: '', botones: [],
 }
 
@@ -50,6 +61,9 @@ export default function PlantillasWhatsapp() {
   const { alert: showAlert, confirm } = useConfirm()
   const [plantillas, setPlantillas] = useState([])
   const [waba, setWaba] = useState('')
+  const [agentes, setAgentes] = useState([])
+  const [agenteId, setAgenteId] = useState(() => Number(localStorage.getItem(RECUERDO)) || null)
+  const [linea, setLinea] = useState(null)
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState(null)
   const [busqueda, setBusqueda] = useState('')
@@ -69,19 +83,45 @@ export default function PlantillasWhatsapp() {
     camposDisponibles().then(r => setCampos(r.campos || [])).catch(() => {})
   }, [])
 
+  // 🩸 Una plantilla vive en una cuenta de WhatsApp y sale por UNA línea, y las
+  // dos cosas son del agente. Mientras hubo uno solo daba igual; con el segundo
+  // —la otra empresa— una plantilla enviada por la línea que no es no da ningún
+  // error: llega, y llega desde el número equivocado.
+  useEffect(() => {
+    listarAgentes()
+      .then(r => {
+        const lista = r.agentes || []
+        setAgentes(lista)
+        setAgenteId(prev => {
+          if (prev && lista.some(a => a.id === prev)) return prev
+          // El que de verdad puede enviar: encendido y con línea.
+          const util = lista.find(a => a.activo && (a.phone_number_ids || []).length)
+          return (util || lista[0])?.id || null
+        })
+      })
+      .catch(() => {})
+  }, [])
+
+  const agente = useMemo(() => agentes.find(a => a.id === agenteId) || null, [agentes, agenteId])
+
+  useEffect(() => {
+    if (agenteId) localStorage.setItem(RECUERDO, String(agenteId))
+  }, [agenteId])
+
   const cargar = useCallback(async (conSpinner = true) => {
     if (conSpinner) setCargando(true)
     try {
-      const r = await listarPlantillas()
+      const r = await listarPlantillas(agenteId)
       setPlantillas(r.plantillas || [])
       setWaba(r.waba || '')
+      setLinea(r.agente?.linea || null)
       setError(null)
     } catch (e) {
       setError(e.message)
     } finally {
       setCargando(false)
     }
-  }, [])
+  }, [agenteId])
 
   useEffect(() => { cargar() }, [cargar])
 
@@ -90,7 +130,8 @@ export default function PlantillasWhatsapp() {
     if (!q) return plantillas
     return plantillas.filter(p =>
       p.name?.toLowerCase().includes(q)
-      || componente(p, 'BODY')?.text?.toLowerCase().includes(q))
+      || componente(p, 'BODY')?.text?.toLowerCase().includes(q)
+      || tarjetasDe(p).some(card => card.components?.find(c => c.type === 'BODY')?.text?.toLowerCase().includes(q)))
   }, [plantillas, busqueda])
 
   // Las que Meta reclasificó: se cobran distinto de lo que se pidió, y si nadie
@@ -106,10 +147,25 @@ export default function PlantillasWhatsapp() {
     )
     if (!ok) return
     try {
-      await borrarPlantilla(p.name)
+      await borrarPlantilla(p.name, agenteId)
       await cargar(false)
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo borrar' })
+    }
+  }
+
+  async function cambiarPermiso(p) {
+    const activar = !p.orbit?.activa
+    try {
+      await autorizarPlantilla(p.name, {
+        agenteId, idioma: p.language,
+        clave: p.orbit?.clave || p.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
+        descripcion: p.orbit?.descripcion || componente(p, 'BODY')?.text || p.name,
+        activa: activar,
+      })
+      await cargar(false)
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo cambiar el permiso del agente' })
     }
   }
 
@@ -128,8 +184,11 @@ export default function PlantillasWhatsapp() {
           ))}
         </div>
 
+        <SelectorAgente agentes={agentes} agenteId={agenteId} onElegir={setAgenteId}
+                        agente={agente} linea={linea} waba={waba} />
+
         {pestana === 'campanas' ? (
-          <CampanasWa plantillas={plantillas} abrirCon={masivoDe}
+          <CampanasWa plantillas={plantillas} agenteId={agenteId} abrirCon={masivoDe}
                       onAbierto={() => setMasivoDe(null)} />
         ) : (
         <>
@@ -146,12 +205,14 @@ export default function PlantillasWhatsapp() {
           <Button onClick={() => setEditando('nueva')}>
             <Plus className="w-4 h-4 mr-1.5" /> Nueva plantilla
           </Button>
+          <Button onClick={() => setEditando('nuevo-carrusel')} className="bg-[#0B1D4F] hover:bg-[#102A6B]">
+            <Layers3 className="w-4 h-4 mr-1.5" /> Nuevo carrusel
+          </Button>
         </div>
 
         <p className="text-[12px] text-gray-400">
           Una plantilla es la única forma de escribirle a alguien pasadas 24 horas desde su
-          último mensaje. Meta las revisa antes de dejarlas usar
-          {waba && <> · cuenta <span className="font-mono">{waba}</span></>}
+          último mensaje. Meta las revisa antes de dejarlas usar.
         </p>
 
         {reclasificadas.length > 0 && (
@@ -186,6 +247,7 @@ export default function PlantillasWhatsapp() {
               <Tarjeta key={p.id || p.name} p={p}
                        onEnviar={() => setEnviando(p)} onBorrar={() => quitar(p)}
                        onEditar={() => setEditando(p)} onMapear={() => setMapeando(p)}
+                       onAutorizar={() => cambiarPermiso(p)}
                        onMasivo={() => { setMasivoDe(p.name); setPestana('campanas') }} />
             ))}
           </div>
@@ -195,16 +257,26 @@ export default function PlantillasWhatsapp() {
       </div>
 
       <AnimatePresence>
-        {editando && (
-          <Constructor original={editando === 'nueva' ? null : editando}
+        {editando && editando !== 'nuevo-carrusel' && !esCarrusel(editando) && (
+          <Constructor original={editando === 'nueva' ? null : editando} agenteId={agenteId}
                        onCerrar={() => setEditando(null)}
                        onGuardada={async () => { setEditando(null); await cargar(false) }} />
         )}
+        {editando && (editando === 'nuevo-carrusel' || esCarrusel(editando)) && (
+          <ConstructorCarrusel
+            original={editando === 'nuevo-carrusel' ? null : editando}
+            agenteId={agenteId}
+            onClose={() => setEditando(null)}
+            onSaved={async () => { setEditando(null); await cargar(false) }}
+          />
+        )}
         {enviando && (
-          <Enviar p={enviando} campos={campos} onCerrar={() => setEnviando(null)} />
+          <Enviar p={enviando} campos={campos} agenteId={agenteId} agente={agente}
+                  onCerrar={() => setEnviando(null)} />
         )}
         {mapeando && (
-          <Mapeo p={mapeando} campos={campos} onCerrar={() => setMapeando(null)} />
+          <Mapeo p={mapeando} campos={campos} agenteId={agenteId}
+                 onCerrar={() => setMapeando(null)} />
         )}
       </AnimatePresence>
     </>
@@ -213,11 +285,71 @@ export default function PlantillasWhatsapp() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear, onMasivo }) {
+/**
+ * De qué agente son estas plantillas.
+ *
+ * 🩸 No es un adorno: una plantilla vive en una cuenta de WhatsApp (WABA) y sale
+ * por UNA línea, y las dos cosas son del agente. Enviar por la línea de la otra
+ * empresa **no da ningún error** —el mensaje llega, desde el número que no es—,
+ * así que la única defensa es que se vea antes de pulsar Enviar.
+ */
+function SelectorAgente({ agentes, agenteId, onElegir, agente, linea, waba }) {
+  if (!agentes.length) {
+    return (
+      <div className="flex gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200">
+        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+        <p className="text-[12.5px] text-amber-900">
+          No hay ningún agente creado, así que se está trabajando con la cuenta y la línea
+          por defecto del servidor. Crea uno en <b>Agentes IA → Agregar agente</b>.
+        </p>
+      </div>
+    )
+  }
+
+  const sinLinea = agente && !linea
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-white border border-gray-100 shadow-sm">
+      <div className="flex items-center gap-2">
+        <Bot className="w-4 h-4 text-[#1A5CD8]" />
+        <span className="text-[11.5px] font-semibold text-gray-600">Agente</span>
+      </div>
+
+      {agentes.length > 1 ? (
+        <select value={agenteId || ''} onChange={e => onElegir(Number(e.target.value))}
+                className="h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white font-semibold">
+          {agentes.map(a => (
+            <option key={a.id} value={a.id}>{a.nombre}{a.activo ? '' : ' (apagado)'}</option>
+          ))}
+        </select>
+      ) : (
+        <span className="text-[13px] font-semibold text-gray-800">{agentes[0].nombre}</span>
+      )}
+
+      <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+        {waba && <span>cuenta <span className="font-mono">{waba}</span></span>}
+        {linea
+          ? <span>sale por la línea <span className="font-mono">{linea}</span></span>
+          : null}
+      </div>
+
+      {sinLinea && (
+        <p className="w-full text-[11.5px] text-amber-700">
+          <AlertTriangle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+          Este agente no tiene ninguna línea asignada: se pueden crear plantillas, pero no
+          enviarlas. Asígnasela en <b>Agentes IA → Ajustes</b>.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear, onMasivo, onAutorizar }) {
   const est = ESTADOS[p.status] || { label: p.status, clase: 'bg-gray-100 text-gray-600 border-gray-200' }
   const cuerpo = componente(p, 'BODY')?.text || ''
   const huecos = huecosDePlantilla(p)
   const cambiada = p.previous_category && p.previous_category !== p.category
+  const carrusel = esCarrusel(p)
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm space-y-2.5">
@@ -257,9 +389,19 @@ function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear, onMasivo }) {
                 : 'Sin variables: solo sirve para este texto exacto'}>
           {huecos.length ? `${huecos.length} variable(s)` : 'texto fijo'}
         </span>
+        {carrusel && (
+          <span className="px-2 py-0.5 rounded-md text-[10.5px] font-semibold bg-indigo-50 text-indigo-700">
+            <Layers3 className="inline w-3 h-3 mr-1 -mt-0.5" />{tarjetasDe(p).length} tarjetas
+          </span>
+        )}
+        {p.orbit?.activa && (
+          <span className="px-2 py-0.5 rounded-md text-[10.5px] font-semibold bg-emerald-50 text-emerald-700">
+            <Bot className="inline w-3 h-3 mr-1 -mt-0.5" />Agente autorizado
+          </span>
+        )}
 
         <div className="ml-auto flex gap-1">
-          {huecos.length > 0 && (
+          {(huecos.length > 0 || carrusel) && (
             <Button size="sm" variant="outline" onClick={onMapear} title="Decir qué dato de Orbit va en cada variable">
               <Database className="w-3.5 h-3.5 mr-1" /> Datos
             </Button>
@@ -272,6 +414,10 @@ function Tarjeta({ p, onEnviar, onBorrar, onEditar, onMapear, onMasivo }) {
           </Button>
           {p.status === 'APPROVED' && (
             <>
+              <Button size="sm" variant={p.orbit?.activa ? 'secondary' : 'outline'} onClick={onAutorizar}
+                      title={p.orbit?.activa ? 'Quitar permiso al agente' : 'Permitir que el agente la envíe cuando corresponda'}>
+                <Bot className="w-3.5 h-3.5 mr-1" />{p.orbit?.activa ? 'Quitar del agente' : 'Usar en agente'}
+              </Button>
               <Button size="sm" variant="outline" onClick={onMasivo}
                       title="Mandarla a muchos a la vez">
                 <Megaphone className="w-3.5 h-3.5" />
@@ -301,6 +447,7 @@ function VistaPrevia({ p, valores = {} }) {
   const pie = componente(p, 'FOOTER')?.text
   const botones = componente(p, 'BUTTONS')?.buttons || []
   const Icono = ICONO_CAB[cab?.format]
+  const cards = tarjetasDe(p)
 
   return (
     <div className="rounded-xl bg-[#E7F3E9] p-2.5 space-y-1.5">
@@ -330,6 +477,33 @@ function VistaPrevia({ p, valores = {} }) {
           {b.text || (b.type === 'COPY_CODE' ? 'Copiar código' : '')}
         </div>
       ))}
+      {cards.length > 0 && (
+        <div className="flex snap-x gap-2 overflow-x-auto pb-1" aria-label="Tarjetas del carrusel">
+          {cards.map((card, i) => {
+            const comps = card.components || []
+            const header = comps.find(c => c.type === 'HEADER')
+            const body = comps.find(c => c.type === 'BODY')
+            const cardButtons = comps.find(c => c.type === 'BUTTONS')?.buttons || []
+            const MediaIcon = header?.format === 'VIDEO' ? Film : ImageIcon
+            return (
+              <article key={i} className="w-52 shrink-0 snap-start overflow-hidden rounded-xl border border-white/70 bg-white shadow-sm">
+                <div className="grid h-24 place-items-center bg-gray-100 text-gray-400">
+                  <MediaIcon className="w-5 h-5" />
+                </div>
+                <p className="min-h-14 p-2.5 text-[11.5px] leading-relaxed text-gray-800 whitespace-pre-wrap">
+                  {conValores(body?.text, valores) || <span className="italic text-gray-400">Sin texto</span>}
+                </p>
+                {cardButtons.map((b, j) => (
+                  <div key={j} className="border-t border-gray-100 px-2 py-1.5 text-center text-[11px] font-semibold text-[#0a7cff]">
+                    {b.type === 'URL' ? <Link2 className="inline w-3 h-3 mr-1" /> : <Reply className="inline w-3 h-3 mr-1" />}
+                    {b.text}
+                  </div>
+                ))}
+              </article>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -350,7 +524,7 @@ function desdePlantilla(p) {
     // Meta devuelve la URL de su CDN donde estaba el `handle`, y esa URL no vale
     // para volver a crearla: si se cambia una plantilla con imagen hay que
     // subir el archivo otra vez. Se avisa en la pantalla, no se adivina.
-    cabHandle: '', cabArchivo: null,
+    cabHandle: '', cabArchivo: null, cabMaterialId: null,
     cuerpo: componente(p, 'BODY')?.text || '',
     pie: pie?.text || '',
     botones,
@@ -376,16 +550,27 @@ function ejemplosDe(p) {
   return out
 }
 
-function Constructor({ original, onCerrar, onGuardada }) {
+function Constructor({ original, agenteId, onCerrar, onGuardada }) {
   const { alert: showAlert } = useConfirm()
   const editar = !!original
   const [f, setF] = useState(() => desdePlantilla(original))
   const [ejemplos, setEjemplos] = useState(() => ejemplosDe(original))
   const [guardando, setGuardando] = useState(false)
   const [subiendo, setSubiendo] = useState(false)
+  // El archivo que HOY se manda con esta plantilla. Meta devuelve una URL de su
+  // CDN que no sirve para nada, así que sin esto no había forma de saber si la
+  // plantilla que se está editando ya tiene con qué enviarse.
+  const [cabGuardada, setCabGuardada] = useState(null)
   const archivoRef = useRef(null)
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
   const ejemplo = k => ejemplos[k] || ''
+
+  useEffect(() => {
+    if (!editar) return
+    variablesDePlantilla(original.name, original.language, agenteId)
+      .then(r => setCabGuardada(r.cabecera || null))
+      .catch(() => {})
+  }, [editar, original?.name, original?.language])
 
   const named = f.formato === 'NAMED'
   const huecosCuerpo = huecosDe(f.cuerpo)
@@ -428,11 +613,35 @@ function Constructor({ original, onCerrar, onGuardada }) {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+
+    // El tope de verdad es POR TIPO: WhatsApp admite 64 MB en un documento pero
+    // solo 5 en una imagen. Decirlo aquí, y no cuando Meta lo rechace con un
+    // error que no explica nada.
+    const { clase, aviso } = comoLlega(file.type)
+    const tope = TOPE_POR_CLASE[clase]
+    if (tope && file.size > tope * 1048576) {
+      await showAlert(
+        `Pesa ${pesoLegible(file.size)} y WhatsApp solo admite ${tope} MB en `
+        + `${clase === 'imagen' ? 'una imagen' : clase === 'video' ? 'un video' : 'un archivo así'}.`,
+        { title: 'Demasiado grande' })
+      return
+    }
+    if (aviso) await showAlert(aviso, { title: 'Ojo con el formato' })
+
     setSubiendo(true)
     try {
       const base64 = await leerArchivo(file)
-      const r = await subirCabecera({ base64, mime: file.type, nombre: file.name })
-      setF(p => ({ ...p, cabHandle: r.handle, cabArchivo: { nombre: file.name, mime: file.type } }))
+      // Se sube UNA vez y sirve para dos cosas: el `handle` con el que Meta la
+      // revisa y el archivo guardado que se manda en cada envío.
+      const r = await subirCabecera({
+        base64, mime: file.type, nombre: file.name,
+        agenteId, plantilla: f.nombre.trim() || null,
+      })
+      setF(p => ({
+        ...p, cabHandle: r.handle, cabMaterialId: r.material_id || null,
+        cabArchivo: { nombre: file.name, mime: file.type },
+      }))
+      if (r.aviso) await showAlert(r.aviso, { title: 'Subido, con un pero' })
     } catch (err) {
       await showAlert(err.message, { title: 'No se pudo subir el archivo' })
     } finally {
@@ -512,12 +721,26 @@ function Constructor({ original, onCerrar, onGuardada }) {
 
       const r = editar
         ? await editarPlantilla(f.nombre, {
-            id: original.id, categoria: f.categoria, componentes, formato: f.formato,
+            id: original.id, categoria: f.categoria, componentes, formato: f.formato, agenteId,
           })
         : await crearPlantilla({
             nombre: f.nombre.trim(), idioma: f.idioma, categoria: f.categoria,
-            componentes, formato: f.formato,
+            componentes, formato: f.formato, agenteId,
           })
+      // 🩸 Meta NO reutiliza el archivo con el que aprobó la plantilla: hay que
+      // mandarlo en cada envío. Sin esto la plantilla nacía imposible de enviar
+      // ("no tiene archivo asignado") y había que subir el mismo archivo otra
+      // vez en otra pantalla.
+      if (esMedia(f.cabTipo) && f.cabMaterialId) {
+        try {
+          await asignarCabecera(f.nombre.trim(), f.idioma, { materialId: f.cabMaterialId }, agenteId)
+        } catch (err) {
+          await showAlert(
+            `La plantilla se guardó, pero el archivo no quedó asignado para los envíos (${err.message}). `
+            + 'Asígnalo desde el botón "Datos".',
+            { title: 'Guardada a medias' })
+        }
+      }
       if (r.aviso) await showAlert(r.aviso, { title: editar ? 'Editada' : 'Enviada, con un cambio' })
       onGuardada()
     } catch (e) {
@@ -622,6 +845,18 @@ function Constructor({ original, onCerrar, onGuardada }) {
                 {editar && !f.cabHandle && (
                   <p className="text-[11px] text-amber-700">
                     Meta no devuelve el archivo original: vuelve a subirlo para poder guardar.
+                  </p>
+                )}
+                {cabGuardada?.material_id && !f.cabMaterialId && (
+                  <p className="text-[11px] text-gray-400">
+                    Para los envíos ya hay uno guardado: <b>{cabGuardada.material_archivo
+                      || cabGuardada.material_nombre}</b>. Si subes otro, lo reemplaza.
+                  </p>
+                )}
+                {f.cabMaterialId && (
+                  <p className="text-[11px] text-emerald-700">
+                    Se guarda también para los envíos: Meta no reutiliza el del alta y hay que
+                    mandarlo cada vez.
                   </p>
                 )}
               </div>
@@ -765,7 +1000,7 @@ function EjemploVar({ etiqueta, valor, onChange }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Enviar({ p, campos, onCerrar }) {
+function Enviar({ p, campos, agenteId, agente, onCerrar }) {
   const { alert: showAlert } = useConfirm()
   const [contacto, setContacto] = useState('')
   const [valores, setValores] = useState({})
@@ -785,14 +1020,14 @@ function Enviar({ p, campos, onCerrar }) {
   const [asignado, setAsignado] = useState({})
 
   useEffect(() => {
-    variablesDePlantilla(p.name, p.language)
+    variablesDePlantilla(p.name, p.language, agenteId)
       .then(r => {
         const m = {}
         for (const v of r.variables || []) m[`${v.destino}:${v.param ?? v.posicion}`] = v.campo
         setAsignado(m)
       })
       .catch(() => {})
-  }, [p.name, p.language])
+  }, [p.name, p.language, agenteId])
 
   // Buscar por lo que la gente sí tiene a mano: el nombre de la mascota, el de
   // la familia o el código de fotos. Pegar un UUID no es una opción real.
@@ -813,7 +1048,7 @@ function Enviar({ p, campos, onCerrar }) {
   async function tomar(s) {
     setServicio(s); setResultados([]); setQ(''); setAviso(null)
     try {
-      const r = await valoresDeServicio(p.name, s.id, p.language)
+      const r = await valoresDeServicio(p.name, s.id, p.language, agenteId)
       setValores(prev => ({ ...prev, ...Object.fromEntries(
         Object.entries(r.valores || {}).filter(([, v]) => v)) }))
       if (r.contacto) setContacto(r.contacto)
@@ -836,6 +1071,9 @@ function Enviar({ p, campos, onCerrar }) {
       await enviarPlantilla(p.name, {
         contacto: contacto.replace(/\D/g, ''), idioma: p.language,
         valores, servicioId: servicio?.id || null,
+        // Por qué línea sale. Sin esto salía por la primera del `.env`, que con
+        // un segundo agente es el número de la otra empresa.
+        agenteId,
       })
       await showAlert('Enviada. Aparecerá en la bandeja de WhatsApp.', { title: 'Listo' })
       onCerrar()
@@ -902,6 +1140,13 @@ function Enviar({ p, campos, onCerrar }) {
           <Input value={contacto} onChange={e => setContacto(e.target.value)} placeholder="573001234567" />
         </Campo>
 
+        {agente && (
+          <p className="text-[11px] text-gray-400 -mt-2">
+            Sale por <b>{agente.nombre}</b>
+            {(agente.phone_number_ids || [])[0] && <> · línea <span className="font-mono">{agente.phone_number_ids[0]}</span></>}
+          </p>
+        )}
+
         {huecos.map(h => {
           const campo = mapa[asignado[h.clave]]
           return (
@@ -941,37 +1186,83 @@ function Enviar({ p, campos, onCerrar }) {
  * por mascota hay un paso — que es exactamente lo que pasó con las 251 de la
  * cuenta vieja.
  */
-function Mapeo({ p, campos, onCerrar }) {
+function Mapeo({ p, campos, agenteId, onCerrar }) {
   const { alert: showAlert } = useConfirm()
   const [asignado, setAsignado] = useState({})
   const [cabecera, setCabecera] = useState(null)     // { material_id } | { url }
+  const [tarjetasConfig, setTarjetasConfig] = useState([])
   const [materiales, setMateriales] = useState([])
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
+  const [subiendo, setSubiendo] = useState(false)
+  const archivoRef = useRef(null)
 
   const huecos = huecosDePlantilla(p)
   const cuerpo = componente(p, 'BODY')?.text || ''
   const cab = componente(p, 'HEADER')
   const cabMedia = cab && esMedia(cab.format)
+  const tarjetas = tarjetasDe(p)
   const grupos = useMemo(() => porGrupo(campos), [campos])
   const porClave = useMemo(() => Object.fromEntries(campos.map(c => [c.clave, c])), [campos])
 
   useEffect(() => {
-    variablesDePlantilla(p.name, p.language)
+    variablesDePlantilla(p.name, p.language, agenteId)
       .then(r => {
         const m = {}
         for (const v of r.variables || []) m[`${v.destino}:${v.param ?? v.posicion}`] = v.campo
         setAsignado(m)
         setCabecera(r.cabecera || null)
+        setTarjetasConfig(r.tarjetas || [])
       })
       .catch(() => {})
       .finally(() => setCargando(false))
-  }, [p.name, p.language])
+  }, [p.name, p.language, agenteId])
 
   useEffect(() => {
-    if (!cabMedia) return
-    cargarMateriales().then(r => setMateriales(r.materiales || [])).catch(() => {})
-  }, [cabMedia])
+    if (!cabMedia && !tarjetas.length) return
+    cargarMateriales(agenteId).then(r => setMateriales(r.materiales || [])).catch(() => {})
+  }, [cabMedia, tarjetas.length, agenteId])
+
+  /**
+   * Subir el archivo AQUÍ.
+   *
+   * 🩸 Antes esto era un desplegable y nada más: con el catálogo vacío —que es
+   * como nace— la pantalla no dejaba hacer nada y la plantilla se quedaba sin
+   * poder enviarse. La plantilla ya existe en Meta, así que el archivo no se
+   * vuelve a subir allí: solo se guarda para los envíos.
+   */
+  async function elegirArchivo(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    const { clase, aviso } = comoLlega(file.type)
+    const tope = TOPE_POR_CLASE[clase]
+    if (tope && file.size > tope * 1048576) {
+      await showAlert(
+        `Pesa ${pesoLegible(file.size)} y WhatsApp solo admite ${tope} MB en `
+        + `${clase === 'imagen' ? 'una imagen' : clase === 'video' ? 'un video' : 'un archivo así'}.`,
+        { title: 'Demasiado grande' })
+      return
+    }
+    if (aviso) await showAlert(aviso, { title: 'Ojo con el formato' })
+
+    setSubiendo(true)
+    try {
+      const base64 = await leerArchivo(file)
+      const r = await subirCabecera({
+        base64, mime: file.type, nombre: file.name,
+        agenteId, plantilla: p.name, soloGuardar: true,
+      })
+      setCabecera({ material_id: r.material_id })
+      const lista = await cargarMateriales(agenteId).catch(() => null)
+      if (lista) setMateriales(lista.materiales || [])
+    } catch (err) {
+      await showAlert(err.message, { title: 'No se pudo subir el archivo' })
+    } finally {
+      setSubiendo(false)
+    }
+  }
 
   // Meta reclasifica de UTILITY a MARKETING cuando el texto habla de plata, y
   // MARKETING se cobra distinto. Vale la pena decirlo antes, no en la factura.
@@ -984,10 +1275,18 @@ function Mapeo({ p, campos, onCerrar }) {
       const variables = Object.entries(asignado)
         .filter(([, campo]) => campo)
         .map(([k, campo]) => {
-          const [destino, hueco] = k.split(':')
+          const partes = k.split(':')
+          const hueco = partes.pop()
+          const destino = partes.join(':')
           return named ? { destino, param: hueco, campo } : { destino, posicion: Number(hueco), campo }
         })
-      await guardarVariables(p.name, p.language, variables, cabMedia ? cabecera : undefined)
+      await guardarVariables(p.name, p.language, variables, cabMedia ? cabecera : undefined, agenteId)
+      if (tarjetas.length) {
+        await guardarTarjetas(p.name, p.language, agenteId, tarjetas.map((_, i) => {
+          const conf = tarjetasConfig.find(t => Number(t.card_index) === i)
+          return { card_index: i, material_id: conf?.material_id || null, url: conf?.url || null }
+        }))
+      }
       onCerrar()
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo guardar' })
@@ -997,10 +1296,13 @@ function Mapeo({ p, campos, onCerrar }) {
   }
 
   const fila = (h) => (
-    <div key={h.clave} className="flex items-center gap-2">
-      <span className="font-mono text-[12px] text-[#1A5CD8] w-32 shrink-0 truncate"
+    <div key={h.clave} className="grid gap-2 sm:grid-cols-[180px_1fr] sm:items-center">
+      <span className="font-mono text-[11px] text-[#1A5CD8] truncate"
             title={`${h.destino} {{${h.hueco}}}`}>
-        {h.destino === 'BUTTON' ? '🔗 ' : h.destino === 'HEADER' ? '▲ ' : ''}{`{{${h.hueco}}}`}
+        {h.destino.replace(/CARD:(\d+):BODY/, (_, i) => `Tarjeta ${Number(i) + 1} · texto`)
+          .replace(/CARD:(\d+):BUTTON:(\d+)/, (_, i, b) => `Tarjeta ${Number(i) + 1} · botón ${Number(b) + 1}`)
+          .replace('BUTTON', 'Enlace').replace('HEADER', 'Título').replace('BODY', 'Mensaje')}
+        {` · {{${h.hueco}}}`}
       </span>
       <select value={asignado[h.clave] || ''}
               onChange={e => setAsignado(a => ({ ...a, [h.clave]: e.target.value }))}
@@ -1055,19 +1357,58 @@ function Mapeo({ p, campos, onCerrar }) {
                 Meta obliga a mandar el archivo en cada envío: el que se usó para aprobarla solo
                 sirvió para la revisión. Sin esto, la plantilla no se puede enviar.
               </p>
-              <select value={cabecera?.material_id || ''}
-                      onChange={e => setCabecera(e.target.value ? { material_id: Number(e.target.value) } : null)}
-                      className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
-                <option value="">— elige un material del catálogo —</option>
-                {materiales.map(m => (
-                  <option key={m.id} value={m.id}>{m.nombre} ({m.nombre_archivo})</option>
-                ))}
-              </select>
-              {!materiales.length && (
-                <p className="text-[11px] text-amber-700">
-                  No hay materiales cargados todavía. Súbelos en Clientes → Materiales WA.
+              <div className="flex flex-wrap items-center gap-2">
+                <select value={cabecera?.material_id || ''}
+                        onChange={e => setCabecera(e.target.value ? { material_id: Number(e.target.value) } : null)}
+                        className="flex-1 min-w-[200px] h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] bg-white">
+                  <option value="">— sin archivo —</option>
+                  {materiales.map(m => (
+                    <option key={m.id} value={m.id}>{m.nombre} ({m.nombre_archivo})</option>
+                  ))}
+                </select>
+                <Button size="sm" variant="outline" onClick={() => archivoRef.current?.click()} disabled={subiendo}>
+                  {subiendo ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+                  Subir archivo
+                </Button>
+                <input ref={archivoRef} type="file" className="hidden" onChange={elegirArchivo}
+                       accept={cab.format === 'IMAGE' ? 'image/jpeg,image/png'
+                             : cab.format === 'VIDEO' ? 'video/mp4' : 'application/pdf'} />
+              </div>
+              <p className="text-[11px] text-gray-400">
+                Lo que subas aquí queda en el catálogo de materiales de este agente y se puede
+                reutilizar en otra plantilla.
+              </p>
+            </div>
+          )}
+
+          {tarjetas.length > 0 && (
+            <div className="space-y-3 pt-1">
+              <div>
+                <p className="text-[11.5px] font-semibold text-gray-600">Archivos del carrusel</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-gray-500">
+                  Cada tarjeta vuelve a subir este archivo en el envío. El orden corresponde exactamente a la vista previa.
                 </p>
-              )}
+              </div>
+              {tarjetas.map((card, i) => {
+                const header = (card.components || []).find(c => c.type === 'HEADER')
+                const conf = tarjetasConfig.find(t => Number(t.card_index) === i)
+                const compatibles = materiales.filter(m => header?.format === 'VIDEO'
+                  ? m.mime?.startsWith('video/') : m.mime?.startsWith('image/'))
+                return (
+                  <div key={i} className="grid gap-2 rounded-xl border border-gray-200 bg-gray-50/60 p-3 sm:grid-cols-[110px_1fr] sm:items-center">
+                    <span className="text-xs font-semibold text-gray-700">Tarjeta {i + 1}</span>
+                    <select value={conf?.material_id || ''}
+                            onChange={e => setTarjetasConfig(xs => {
+                              const resto = xs.filter(x => Number(x.card_index) !== i)
+                              return [...resto, { card_index: i, material_id: e.target.value ? Number(e.target.value) : null }]
+                            })}
+                            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-2.5 text-[13px]">
+                      <option value="">— elige {header?.format === 'VIDEO' ? 'un video' : 'una imagen'} —</option>
+                      {compatibles.map(m => <option key={m.id} value={m.id}>{m.nombre} ({m.nombre_archivo})</option>)}
+                    </select>
+                  </div>
+                )
+              })}
             </div>
           )}
 
