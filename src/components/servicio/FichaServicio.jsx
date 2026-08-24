@@ -59,6 +59,9 @@ export default function FichaServicio({ servicioId, onClose }) {
   const [items, setItems]       = useState([])
   const [novedades, setNovedades] = useState([])
   const [contactos, setContactos] = useState([])
+  // Se incrementa cuando algo de dentro cambia el servicio (corregir un cobro):
+  // la ficha se recarga sola en vez de quedarse mostrando el valor viejo.
+  const [recarga, setRecarga] = useState(0)
 
   useEffect(() => {
     if (!servicioId) return
@@ -118,7 +121,7 @@ export default function FichaServicio({ servicioId, onClose }) {
       }
     })()
     return () => { activo = false }
-  }, [servicioId])
+  }, [servicioId, recarga])
 
   const m   = svc?.mascotas || {}
   const cli = m.clientes || {}
@@ -360,7 +363,7 @@ export default function FichaServicio({ servicioId, onClose }) {
           )}
 
           {/* Recibos + comprobantes (cuál afecta Finanzas) */}
-          <RecibosServicio servicioId={servicioId} />
+          <RecibosServicio servicioId={servicioId} onCambio={() => setRecarga(n => n + 1)} />
 
           {/* Evidencias */}
           {evidencias.length > 0 && (

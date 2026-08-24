@@ -3,7 +3,8 @@ import { db } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parseDate, parsearErrorDB } from '@/lib/utils'
 import { cargarComprobantesServicio, subirComprobantePago } from '@/lib/comprobantes'
-import { FileText, Camera, ChevronUp, ChevronDown, Paperclip, AlertCircle } from 'lucide-react'
+import { useConfirm } from '@/contexts/ConfirmContext'
+import { FileText, Camera, ChevronUp, ChevronDown, Paperclip, AlertCircle, RotateCcw, X } from 'lucide-react'
 
 // ── Recibos guardados del servicio ────────────────────────────────────────────
 // Muestra los recibos del técnico y distingue cuál lleva el valor real que
@@ -12,7 +13,7 @@ import { FileText, Camera, ChevronUp, ChevronDown, Paperclip, AlertCircle } from
 // recibo VETERINARIA es el documento informativo del mismo cobro para la vet,
 // y los CLIENTE viejos son versiones regeneradas que no suman.
 // Usado en el modal del Kanban y en la ficha del Historial (Gestión).
-export default function RecibosServicio({ servicioId }) {
+export default function RecibosServicio({ servicioId, onCambio }) {
   const [recibos, setRecibos]           = useState(null)   // null = cargando
   const [pdfFiles, setPdfFiles]         = useState([])     // PDFs del recibo en storage
   const [comps, setComps]               = useState(null)   // null = aún no cargados (lazy)
@@ -21,8 +22,17 @@ export default function RecibosServicio({ servicioId }) {
   const [compsError, setCompsError]     = useState('')
   const [subiendo, setSubiendo]         = useState(false)
   const [subirError, setSubirError]     = useState('')
+  const [corrigiendo, setCorrigiendo] = useState(null)   // recibo_id con el panel abierto
+  const [motivo, setMotivo]            = useState('')
+  const [corrError, setCorrError]      = useState('')
+  const [corrSaving, setCorrSaving]    = useState(false)
+  const [corrOk, setCorrOk]            = useState('')
   const { personalData } = useAuth()
+  const { confirm } = useConfirm()
   const puedeSubir = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+  // Corregir un cobro mueve dinero en el cuadre que el técnico firma: es de
+  // coordinación, no del técnico.
+  const puedeCorregir = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
 
   useEffect(() => {
     let activo = true
@@ -107,6 +117,44 @@ export default function RecibosServicio({ servicioId }) {
     } finally {
       setSubiendo(false)
     }
+  }
+
+  // ── "El técnico marcó cobrado y no cobró" ───────────────────────────────────
+  // Hasta la migración 114 esto solo se podía arreglar por SQL. Lo único que
+  // Orbit dejaba tocar era el desplegable de estado_pago del Kanban, que cambia
+  // ESA columna y nada más: el servicio quedaba "pendiente" mientras el recibo y
+  // el cuadre seguían cobrándole el efectivo al técnico. La RPC lo deja como si
+  // el recibo se hubiera emitido bien, marcado "pago pendiente".
+  async function corregirCobro(r) {
+    const texto = motivo.trim()
+    if (!texto) { setCorrError('Escribe por qué se corrige (queda en la bitácora del servicio).'); return }
+    const ok = await confirm(
+      `Se anulará el cobro de ${fmt(r.valor_cobrado || 0)} del recibo No. ${r.numero_recibo}: el recibo queda como PAGO PENDIENTE, ` +
+      'sus medios de pago se borran y el cobro vuelve a quedar abierto en Cartera. El recibo y la bitácora NO se borran.',
+      { title: '¿El técnico no recibió este dinero?', variant: 'danger', confirmLabel: 'Sí, corregir el cobro' }
+    )
+    if (!ok) return
+    setCorrSaving(true); setCorrError(''); setCorrOk('')
+    try {
+      const { data, error } = await db.rpc('revertir_cobro_recibo', {
+        p_recibo_id: r.id,
+        p_actor_id:  personalData?.id || null,
+        p_actor_rol: personalData?.rol || null,
+        p_motivo:    texto,
+      })
+      if (error) throw error
+      setCorrigiendo(null); setMotivo('')
+      setCorrOk(data?.ya_revertido
+        ? 'Este recibo ya estaba sin cobro; no había nada que corregir.'
+        : `Cobro corregido: ${fmt(data?.valor_revertido || 0)} dejaron de contar. El servicio quedó en ${data?.estado_pago}.`)
+      const { data: frescos } = await db.from('recibos_tecnico')
+        .select('id, numero_recibo, tipo, fecha_emision, hora_emision, valor_total, valor_cobrado, medios_pago, datos_form, created_at, personal:tecnico_id(nombre, apellido)')
+        .eq('servicio_id', servicioId).order('created_at', { ascending: false })
+      setRecibos(frescos || [])
+      onCambio?.()
+    } catch (e) {
+      setCorrError(parsearErrorDB(e))
+    } finally { setCorrSaving(false) }
   }
 
   if (recibos === null) return (
@@ -203,14 +251,57 @@ export default function RecibosServicio({ servicioId }) {
                 ))}
               </div>
             )}
-            <div className="text-[10px] text-gray-400">
-              {r.fecha_emision ? parseDate(r.fecha_emision)?.toLocaleDateString('es-CO') : '—'}
-              {r.hora_emision ? ` · ${String(r.hora_emision).slice(0, 5)}` : ''}
-              {tecNombre ? ` · ${tecNombre}` : ''}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-[10px] text-gray-400">
+                {r.fecha_emision ? parseDate(r.fecha_emision)?.toLocaleDateString('es-CO') : '—'}
+                {r.hora_emision ? ` · ${String(r.hora_emision).slice(0, 5)}` : ''}
+                {tecNombre ? ` · ${tecNombre}` : ''}
+              </div>
+              {/* Solo tiene sentido donde hay dinero registrado */}
+              {puedeCorregir && (r.valor_cobrado || 0) > 0 && corrigiendo !== r.id && (
+                <button onClick={() => { setCorrigiendo(r.id); setMotivo(''); setCorrError(''); setCorrOk('') }}
+                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors hover:bg-red-100"
+                  style={{ background: '#FEE2E2', color: '#991B1B' }}
+                  title="El técnico marcó este cobro por error y no recibió el dinero">
+                  <RotateCcw size={10} /> No se cobró — corregir
+                </button>
+              )}
             </div>
+
+            {corrigiendo === r.id && (
+              <div className="rounded-lg p-2.5 space-y-2" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-[11px] text-red-800">
+                    Se anula el cobro de <b>{fmt(r.valor_cobrado || 0)}</b>: el recibo queda como <b>pago pendiente</b>,
+                    el servicio vuelve a quedar por cobrar y el cuadro del técnico deja de cobrárselo.
+                    El recibo y la bitácora se conservan.
+                  </div>
+                  <button onClick={() => { setCorrigiendo(null); setCorrError('') }} className="text-red-300 hover:text-red-500 shrink-0">
+                    <X size={13} />
+                  </button>
+                </div>
+                <textarea
+                  value={motivo} onChange={e => setMotivo(e.target.value)} rows={2}
+                  placeholder="¿Por qué se corrige? Queda en la bitácora del servicio."
+                  className="w-full text-[11px] rounded-lg border border-red-200 px-2 py-1.5 outline-none focus:border-red-400 resize-none"
+                />
+                {corrError && <div className="text-[10px] text-red-600 flex items-center gap-1"><AlertCircle size={10} /> {corrError}</div>}
+                <button onClick={() => corregirCobro(r)} disabled={corrSaving || !motivo.trim()}
+                  className="text-[11px] font-bold px-3 py-1.5 rounded-lg text-white disabled:opacity-40"
+                  style={{ background: '#B91C1C' }}>
+                  {corrSaving ? 'Corrigiendo…' : 'Confirmar la corrección'}
+                </button>
+              </div>
+            )}
           </div>
         )
       })}
+
+      {corrOk && (
+        <div className="text-[11px] rounded-lg px-3 py-2" style={{ background: '#DCFCE7', color: '#166534' }}>
+          {corrOk}
+        </div>
+      )}
 
       {/* PDFs en storage que no calzan con ningún recibo listado (números viejos) */}
       {(() => {

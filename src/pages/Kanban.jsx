@@ -3570,7 +3570,7 @@ export default function Kanban() {
                 </div>
 
                 {/* ── Recibos guardados: cuál afecta Finanzas + comprobantes ── */}
-                <RecibosServicio servicioId={selected.servicio_id} />
+                <RecibosServicio servicioId={selected.servicio_id} onCambio={cargar} />
 
                 <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><Pencil size={10} /> Notas</div>
