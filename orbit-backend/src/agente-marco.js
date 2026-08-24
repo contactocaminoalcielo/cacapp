@@ -338,6 +338,7 @@ export async function exportarAgente(clave) {
           'phone_number_ids (son de este Meta)',
           'activo (llega apagado)',
           'archivos binarios de los materiales (solo sus claves)',
+          'imágenes de la base de conocimiento (solo su título)',
           'bitácora y costos (historia, no definición)',
           'credenciales, tokens y llaves de proveedores',
         ],
@@ -375,6 +376,9 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
   if (!creado.body?.ok) return creado
   const agenteId = creado.body.agente.id
 
+  // Las piezas de IMAGEN no viajan en la definición: se apuntan aquí para
+  // avisar al final. Va FUERA del try porque los avisos se arman después.
+  const imagenesPendientes = []
   const cliente = await pool.connect()
   try {
     await cliente.query('BEGIN')
@@ -395,17 +399,17 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
 
     for (const k of d.conocimiento || []) {
       if (!['TEXTO', 'TABLA', 'IMAGEN', 'DOCUMENTO'].includes(k.tipo)) continue
+      // ⚠️ Las piezas de IMAGEN se saltan: el binario NO viaja en la definición
+      // (igual que los materiales), así que crearlas aquí dejaría al agente con
+      // una imagen vacía en su base de conocimiento — peor que no tenerla,
+      // porque parece que está. Se listan en los avisos para volver a subirlas.
+      if (k.tipo === 'IMAGEN') { imagenesPendientes.push(k.titulo || 'sin título'); continue }
       await cliente.query(
         `INSERT INTO public.agente_wa_conocimiento
-           (agente_id, tipo, titulo, texto, archivo, mime, bytes, orden, activo)
-         VALUES ($1,$2,$3,$4,
-                 CASE WHEN $2='IMAGEN' THEN decode($5,'base64') ELSE NULL END,
-                 CASE WHEN $2='IMAGEN' THEN $6 ELSE NULL END,
-                 CASE WHEN $2='IMAGEN' THEN $7 ELSE NULL END,$8,$9)`,
+           (agente_id, tipo, titulo, texto, orden, activo)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
         [agenteId, k.tipo, String(k.titulo || 'Sin título').slice(0, 200),
-         k.tipo === 'IMAGEN' ? null : String(k.texto || ''),
-         k.tipo === 'IMAGEN' ? String(k.archivo_base64 || '') : '',
-         k.mime || null, Number(k.bytes) || null, k.orden || 0, k.activo !== false])
+         String(k.texto || ''), k.orden || 0, k.activo !== false])
     }
     for (const r of d.reglas || []) {
       await cliente.query(
@@ -418,9 +422,15 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
       if (!conocidas.has(h.clave)) continue
       await cliente.query(
         `INSERT INTO public.agente_wa_herramientas (agente_id, clave, activa, descripcion, config, orden)
-         VALUES ($1,$2,$3,$4,COALESCE($5,'{}'::jsonb),$6)
+         VALUES ($1,$2,$3,$4,COALESCE($5::jsonb,'{}'::jsonb),$6)
          ON CONFLICT (agente_id, clave) DO NOTHING`,
-        [agenteId, h.clave, h.activa !== false, h.descripcion || null, h.config || null, h.orden || 0])
+        [agenteId, h.clave, h.activa !== false, h.descripcion || null,
+         // 🩸 Se serializa a mano y se castea. `node-pg` convierte un OBJETO a
+         // JSON, pero un ARRAY a literal de array de PostgreSQL —que no es JSON
+         // válido— y la columna jsonb lo rechaza con "invalid input syntax for
+         // type json", sin decir cuál de los INSERT fue.
+         JSON.stringify(h.config && typeof h.config === 'object' ? h.config : {}),
+         h.orden || 0])
     }
     const cat = d.catalogos || {}
     for (const e of cat.etiquetas || []) {
@@ -434,10 +444,12 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
       await cliente.query(
         `INSERT INTO public.whatsapp_interactivos
            (agente_id, clave, nombre, descripcion, tipo, encabezado, cuerpo, pie, boton_texto, opciones, url, usa_agente, activo, orden)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14)
          ON CONFLICT (agente_id, clave) DO NOTHING`,
         [agenteId, i.clave, i.nombre, i.descripcion, i.tipo, i.encabezado, i.cuerpo, i.pie,
-         i.boton_texto, i.opciones, i.url, i.usa_agente !== false, i.activo !== false, i.orden || 0])
+         // Mismo motivo que arriba: `opciones` es un ARRAY.
+         i.boton_texto, JSON.stringify(i.opciones ?? []), i.url,
+         i.usa_agente !== false, i.activo !== false, i.orden || 0])
     }
     await cliente.query('COMMIT')
   } catch (e) {
@@ -463,6 +475,9 @@ export async function importarAgente({ definicion, clave = null, personalId }) {
         'Nace APAGADO y sin líneas: asígnale su número de Meta y enciéndelo cuando esté listo.',
         ...(faltanArchivos.length
           ? [`Hay que volver a subir estos materiales (el archivo no viaja): ${faltanArchivos.join(', ')}`]
+          : []),
+        ...(imagenesPendientes.length
+          ? [`Hay que volver a subir estas imágenes de la base de conocimiento: ${imagenesPendientes.join(', ')}`]
           : []),
       ],
     },
