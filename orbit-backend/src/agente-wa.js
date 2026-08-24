@@ -161,6 +161,10 @@ function anthropic() {
 // Es la ÚNICA escritura del agente sobre la operación, y no confirma nada: deja
 // la solicitud pendiente para que decida un humano.
 
+// Herramientas cuyo resultado NO cambia lo que hay que decir: son papeleo o
+// ya enviaron algo. Ver el corte del bucle en `ejecutar`.
+const DE_TRAMITE = new Set(['clasificar_conversacion', 'enviar_interactivo', 'enviar_material'])
+
 const HERRAMIENTAS = [{
   name: 'enviar_enlace_registro',
   description:
@@ -1860,19 +1864,32 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       }
       messages.push({ role: 'user', content: resultados })
 
-      // Si la vuelta SOLO etiquetó, no hay nada que devolverle al modelo: la
-      // etiqueta es papeleo interno y la veterinaria no la ve. Darle otro turno
-      // es justo lo que producía el mensaje que dice DOS VECES lo mismo — el
-      // modelo escribe su respuesta, etiqueta, y en la vuelta siguiente vuelve a
-      // rematar ("ya quedó marcado para que coordinación…"). Medido el 13-ago:
-      // pasaba en 3 de cada 4 respuestas que escalaban.
-      // Se exige `textos.length`: si etiquetó SIN haber dicho nada todavía, el
-      // turno extra es lo único que puede producir la respuesta — cortar ahí
-      // dejaría a la vet sin contestación, que es peor que una repetición.
-      const soloEtiquetas = respuesta.content
+      // Si la vuelta SOLO hizo TRÁMITE, no hay nada que devolverle al modelo y
+      // la vuelta siguiente costaría un contexto entero (18.000 tokens) para
+      // devolver un texto vacío — o peor.
+      //
+      // Etiquetar es papeleo interno que la veterinaria no ve. Darle otro turno
+      // es justo lo que producía el mensaje que dice DOS VECES lo mismo: el
+      // modelo escribe su respuesta, etiqueta, y en la vuelta siguiente remata
+      // ("ya quedó marcado para que coordinación…"). Medido el 13-ago: pasaba en
+      // 3 de cada 4 respuestas que escalaban.
+      //
+      // Mandar un material o un interactivo es lo mismo: el archivo YA le llegó,
+      // y el resultado de la herramienta le dice explícitamente que no lo repita.
+      // Lo único que puede hacer con otro turno es desobedecer eso.
+      //
+      // ⚠️ Las que NO son de trámite se quedan fuera a propósito:
+      // `enviar_enlace_registro` devuelve el enlace que hay que PEGAR, y
+      // `registrar_solicitud` puede responder "te falta el peso". En las dos, el
+      // turno siguiente es donde está la respuesta de verdad.
+      //
+      // Se exige `textos.length`: si hizo trámite SIN haber dicho nada todavía,
+      // el turno extra es lo único que puede producir la respuesta — cortar ahí
+      // dejaría a la vet sin contestación, que es peor que gastar una vuelta.
+      const soloTramite = respuesta.content
         .filter(b => b.type === 'tool_use')
-        .every(b => b.name === 'clasificar_conversacion')
-      if (soloEtiquetas && textos.length) break
+        .every(b => DE_TRAMITE.has(b.name))
+      if (soloTramite && textos.length) break
     }
 
     salida = textos.join('\n\n').trim() || null
