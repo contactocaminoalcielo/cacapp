@@ -317,19 +317,30 @@ export default function Digitales() {
     ['TODAS', ...TIPOS].map(k => [k, basePieza.filter(pasaPieza(k)).length])), [basePieza])
 
   const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && !fueEnviado(s)), [buscados])
-  // Historial: una fila por envío, del más reciente al más viejo. Iba agrupado
-  // por servicio (el orden del pipeline), que para un historial no dice nada.
+  // UN SERVICIO = UNA LÍNEA, y por tanto esta pestaña y el chip "Enviados" del
+  // pipeline cuentan exactamente lo mismo: servicios con un envío bueno.
+  // Antes esto listaba filas de `digitales_envios` (467 = 437 buenos + 30
+  // intentos que fallaron y luego se reenviaron con éxito), así que la pestaña
+  // decía 467 y el chip 437 sin que nada explicara la diferencia. Los intentos
+  // fallidos no se pierden: van contados junto al envío que sí salió.
+  // Un servicio cuyo ÚNICO envío falló no está enviado — ese sigue en "Para
+  // enviar", que ya muestra el motivo del fallo (`ultimoError`).
   const enviados = useMemo(() =>
     buscados
-      .flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario, telefono: e.telefono || s.telefono })))
+      .map(s => {
+        const bueno = envioExitoso(s)
+        if (!bueno) return null
+        return {
+          ...bueno,
+          mascota: s.mascota,
+          propietario: s.propietario,
+          telefono: bueno.telefono || s.telefono,
+          fallidos: s.envios.filter(e => e.estado === 'ERROR').length,
+        }
+      })
+      .filter(Boolean)
       .sort((a, b) => new Date(b.enviado_en) - new Date(a.enviado_en)), [buscados])
-  // Ojo: `enviados` son ENVÍOS, no servicios — incluye los intentos fallidos y
-  // los reenvíos. Por eso su número nunca cuadra con el chip "Enviados" del
-  // pipeline, que cuenta servicios con al menos un envío bueno (467 vs 437).
-  const nEnvios = useMemo(() => ({
-    ok:  enviados.filter(e => (e.estado || 'ENVIADO') === 'ENVIADO').length,
-    err: enviados.filter(e => e.estado === 'ERROR').length,
-  }), [enviados])
+  const nFallidos = useMemo(() => enviados.reduce((n, e) => n + e.fallidos, 0), [enviados])
   const candidatosFiltrados = useMemo(() =>
     candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo, c.telefono)), [candidatos, q])
   // Los que el cliente declinó siguen a la vista, pero aparte: no se generan.
@@ -344,7 +355,7 @@ export default function Digitales() {
   const tabs = [
     ['pipeline', `Pipeline (${buscados.length})`],
     ['enviar', `Para enviar (${listos.length})`],
-    ['enviados', `Envíos (${enviados.length})`],
+    ['enviados', `Enviados (${enviados.length})`],
     ['candidatos', `Por generar (${porGenerar.length})`],
   ]
 
@@ -452,7 +463,7 @@ export default function Digitales() {
           <CandidatosList candidatos={porGenerar} declinados={declinados} busy={busy} onGenerar={generar}
             onEncuadrar={(c) => setEncuadre({ servicioId: c.servicio_id, fotoUrl: c.foto_url, mascota: c.mascota, ajuste: null })} />
         ) : tab === 'enviados' ? (
-          <EnviadosList enviados={enviados} q={q} resumen={nEnvios} />
+          <EnviadosList enviados={enviados} q={q} fallidos={nFallidos} />
         ) : tab === 'enviar' ? (
           listos.length === 0
             ? <Empty icon={Send} texto={q ? 'Nada coincide con la búsqueda.' : 'No hay servicios con todas sus piezas publicadas pendientes de envío.'} />
@@ -951,17 +962,16 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
 }
 
 // ── Historial de envíos ─────────────────────────────────────────────────────
-function EnviadosList({ enviados, q, resumen }) {
+function EnviadosList({ enviados, q, fallidos = 0 }) {
   if (!enviados.length) return <Empty icon={History} texto={q ? 'Nada coincide con la búsqueda.' : 'Aún no se ha registrado ningún envío.'} />
   return (
     <div className="grid gap-2">
-      {/* Esta lista son ENVÍOS, no servicios: los intentos fallidos y los
-          reenvíos también están aquí. Sin decirlo, el número de la pestaña
-          parecía discutir con el chip "Enviados" del pipeline. */}
+      {/* Una línea por servicio: este número es el mismo que el del chip
+          "Enviados" del pipeline. Los reintentos se cuentan aparte para que
+          nadie tenga que adivinar de dónde sale una diferencia. */}
       <div className="text-[12px] text-gray-400 px-1">
-        {enviados.length} envío{enviados.length === 1 ? '' : 's'} registrado{enviados.length === 1 ? '' : 's'}
-        {resumen ? <> · <span className="text-green-600 font-medium">{resumen.ok} entregado{resumen.ok === 1 ? '' : 's'}</span>
-        {resumen.err > 0 && <> · <span className="text-red-500 font-medium">{resumen.err} fallido{resumen.err === 1 ? '' : 's'}</span></>}</> : null}
+        {enviados.length} servicio{enviados.length === 1 ? '' : 's'} enviado{enviados.length === 1 ? '' : 's'}
+        {fallidos > 0 && <> · {fallidos} intento{fallidos === 1 ? '' : 's'} que falló antes de salir bien</>}
       </div>
       {enviados.map(e => (
         <Card key={e.id}>
@@ -983,7 +993,7 @@ function EnviadosList({ enviados, q, resumen }) {
             </div>
             <div className="text-right shrink-0">
               <div className="text-[12px] text-gray-500 font-medium flex items-center justify-end gap-1.5">
-                {e.estado === 'ERROR' && <Badge variant="red">Falló</Badge>}
+                {e.fallidos > 0 && <Badge variant="amber">{e.fallidos} intento{e.fallidos === 1 ? '' : 's'} fallido{e.fallidos === 1 ? '' : 's'}</Badge>}
                 {new Date(e.enviado_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </div>
               <div className="text-[11px] text-gray-400">
