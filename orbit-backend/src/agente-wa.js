@@ -21,9 +21,9 @@
 // ⚠️ NO confundir con `ia.js`: aquel es una llamada suelta para sugerencias
 // internas. Este mantiene conversación, usa herramientas y le habla a un
 // tercero en nombre de Camino al Cielo.
-import Anthropic from '@anthropic-ai/sdk'
 import { pool, log } from './db.js'
 import { registrar as registrarCosto } from './costos.js'
+import { motorDe } from './motores/index.js'
 import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
 import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
 import { catalogoDeMateriales, enviarMaterial } from './whatsapp-materiales.js'
@@ -128,33 +128,8 @@ const PAUSA_TRAS_PLANTILLA_MIN = 10
  */
 const ESCRIBIENDO_MS = 20000
 
-/**
- * `thinking: adaptive` y `output_config.effort` son de la familia Claude 5
- * (y Opus/Sonnet 4.6+). **Haiku 4.5 rechaza los dos con un 400**, y la pantalla
- * ofrece Haiku como la opción barata — que es justo la que uno prueba primero.
- * Mandarlos siempre dejaba al agente mudo: recibía el mensaje, fallaba al
- * llamar a Claude y la veterinaria no veía respuesta ninguna.
- *
- * Se decide por modelo, no por una lista de modelos "malos": así un modelo
- * nuevo de la familia 5 funciona sin tocar esto.
- */
-function razonamientoPara(modelo, effort) {
-  const familia5 = /^claude-(opus|sonnet|fable|mythos)-5\b/.test(modelo)
-  const cuatroSeis = /^claude-(opus|sonnet)-4-(6|7|8)\b/.test(modelo)
-  if (!familia5 && !cuatroSeis) return {}
-  return { thinking: { type: 'adaptive' }, output_config: { effort } }
-}
-
-let cliente = null
-function anthropic() {
-  if (!cliente) {
-    const apiKey = process.env.CLAUDE_KEY
-    if (!apiKey) throw new Error('CLAUDE_KEY no configurada en el backend')
-    cliente = new Anthropic({ apiKey })
-  }
-  return cliente
-}
-
+// El razonamiento y el cliente de Anthropic se mudaron a `motores/anthropic.js`
+// (migración 112): son detalles de UN motor, no del agente.
 // ─────────────────────────────────────────────────────────────────────────────
 // Herramienta: registrar la solicitud
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1682,40 +1657,30 @@ async function calentarCache() {
     const [system, herramientas] = await Promise.all([
       construirSistema(agente), construirHerramientas(agente),
     ])
-    // 🩸 EL RAZONAMIENTO FORMA PARTE DE LA CLAVE DE LA CACHÉ. Esto se montó
-    // primero con `max_tokens: 0` —el precalentado oficial, cero salida
-    // facturada— y la primera medición lo tumbó:
+    // 🩸 EL PING TIENE QUE LLAMAR COMO LLAMA EL AGENTE, y por eso va por el
+    // MISMO motor. La primera versión usaba `max_tokens: 0` de Anthropic y la
+    // medición la tumbó: el razonamiento forma parte de la clave de la caché, y
+    // mantenía caliente una entrada que el agente nunca usaba —coste sin ahorro
+    // y sin que nada lo delatara. Con el motor por medio, esto no puede volver
+    // a desalinearse: si el agente cambia de IA, el ping cambia con él.
     //
-    //     ping (sin razonar)  → leido=18077   ✅ acertaba su propia entrada
-    //     turno real (razona) → escrito=18077 🩸 escribía otra distinta
-    //
-    // O sea: habría mantenido caliente una entrada que el agente NUNCA usa, y
-    // habría costado sin ahorrar un peso. El ping tiene que llamar EXACTAMENTE
-    // como llama el agente.
-    //
-    // Y `max_tokens: 0` es incompatible con el razonamiento (la API lo rechaza),
-    // así que se usa 1: un token de salida, una cienmilésima de dólar. Comprobado
-    // que con esto el turno real SÍ aprovecha lo que dejó el ping.
-    const r = await anthropic().messages.create({
-      model: agente.modelo,
-      max_tokens: 1,
-      system,
+    // `maxTokens: 1` porque el 0 es incompatible con razonar. Un token de
+    // salida, una cienmilésima de dólar.
+    const motor = await motorDe(agente)
+    const r = await motor.pensar({
+      agente, system, herramientas, maxTokens: 1,
       messages: [{ role: 'user', content: '.' }],
-      tools: herramientas,
-      ...razonamientoPara(agente.modelo, agente.effort),
     })
     ultimaLlamadaApi = Date.now()
 
-    const u = r.usage || {}
-    const escrito = u.cache_creation_input_tokens || 0
-    const leido   = u.cache_read_input_tokens || 0
+    const escrito = r.uso.cacheEscritura
+    const leido   = r.uso.cacheLectura
     // Si SIEMPRE escribe, el prefijo no está casando y esto cuesta en vez de
-    // ahorrar. Se registra de las dos formas para que se vea sin tener que ir a
-    // buscarlo.
+    // ahorrar. Se registra de las dos formas para que se vea sin ir a buscarlo.
     registrarCosto({
       proveedor: 'ANTHROPIC', canal: 'SISTEMA', clave: agente.modelo, agenteId: agente.id,
       referencia: 'cache-caliente',
-      tokensEntrada: u.input_tokens || 0, cacheEscritura: escrito, cacheLectura: leido,
+      tokensEntrada: r.uso.entrada, cacheEscritura: escrito, cacheLectura: leido,
     })
     log(MOD, `caché ${escrito ? `REESCRITA (${escrito} tok — estaba fría)` : `caliente (${leido} tok leídos)`}`)
   } catch (e) {
@@ -1862,53 +1827,46 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       }
     }
 
+    // Con qué IA piensa este agente. Se resuelve UNA vez por ejecución: dentro
+    // del bucle sería cargar el mismo módulo en cada vuelta.
+    const motor = await motorDe(agente)
+
     let respuesta
     for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
-      respuesta = await anthropic().messages.create({
-        model:      agente.modelo,
-        max_tokens: 2048,
-        system,
-        messages,
-        tools: herramientas,
-        ...razonamientoPara(agente.modelo, agente.effort),
-      })
-      // `input_tokens` NO incluye lo que vino de la caché: el contexto (que es
-      // el grueso) se reporta aparte en cache_creation/cache_read. Sumar solo
-      // input_tokens subestima el consumo real varias veces.
+      // El motor lo dice el agente (migración 112). El resto de este bucle no
+      // sabe con qué IA está hablando: la traducción vive en `motores/`.
+      respuesta = await motor.pensar({ agente, system, messages, herramientas, maxTokens: 2048 })
       // El tráfico real también mantiene viva la caché: si una clínica escribió
       // hace diez minutos, el ping de mantenimiento sobra. Ver `calentarCache`.
       ultimaLlamadaApi = Date.now()
 
-      const u = respuesta.usage || {}
-      tokIn  += (u.input_tokens || 0)
-              + (u.cache_creation_input_tokens || 0)
-              + (u.cache_read_input_tokens || 0)
-      tokOut += u.output_tokens || 0
-      cache.creados += u.cache_creation_input_tokens || 0
-      cache.leidos  += u.cache_read_input_tokens || 0
-      entradaFresca += u.input_tokens || 0
+      // El consumo llega ya normalizado, se llame como se llame en cada API.
+      const u = respuesta.uso
+      tokIn  += u.entrada + u.cacheEscritura + u.cacheLectura
+      tokOut += u.salida
+      cache.creados += u.cacheEscritura
+      cache.leidos  += u.cacheLectura
+      entradaFresca += u.entrada
 
       // El texto se acumula VUELTA A VUELTA, no se lee al final: el modelo habla
-      // mientras usa herramientas (`[text, tool_use]` en la misma respuesta) y la
-      // última vuelta suele venir vacía porque ya lo dijo todo. Leyendo solo la
-      // última se perdía el mensaje entero — incluido el enlace que acababa de
-      // pedir. Se veía como "el agente no responde".
-      const dicho = (respuesta.content || [])
-        .filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-      if (dicho) textos.push(dicho)
+      // mientras usa herramientas y la última vuelta suele venir vacía porque ya
+      // lo dijo todo. Leyendo solo la última se perdía el mensaje entero —
+      // incluido el enlace que acababa de pedir. Se veía como "no responde".
+      if (respuesta.texto) textos.push(respuesta.texto)
 
-      if (respuesta.stop_reason !== 'tool_use') break
+      if (!motor.pidioHerramientas(respuesta)) break
 
-      // Los bloques de la respuesta viajan de vuelta tal cual: quitarlos rompe
-      // el emparejamiento tool_use/tool_result.
-      messages.push({ role: 'assistant', content: respuesta.content })
+      // Lo que dijo el modelo viaja de vuelta tal cual lo devolvió su motor:
+      // reconstruirlo rompe el emparejamiento entre lo que pidió y lo que se le
+      // contesta, y la API lo rechaza.
+      messages.push(motor.mensajeAsistente(respuesta))
 
       const resultados = []
-      for (const bloque of respuesta.content.filter(b => b.type === 'tool_use')) {
-        usadas.push(bloque.name)
+      for (const bloque of respuesta.llamadas) {
+        usadas.push(bloque.nombre)
         let out
         try {
-          if (bloque.name === 'enviar_enlace_registro') {
+          if (bloque.nombre === 'enviar_enlace_registro') {
             out = await enviarEnlaceRegistro({ contacto })
             if (out.tipo === 'ESCALAR') {
               await clasificarConversacion({ entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' }, contacto }).catch(() => {})
@@ -1921,61 +1879,62 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
               await programarSeguimiento({ agente, contacto, phoneNumberId, motivo: 'ENLACE_REGISTRO' })
                 .catch(e => log(MOD, 'no se pudo programar el seguimiento —', e.message))
             }
-          } else if (bloque.name === 'registrar_solicitud') {
-            out = await registrarSolicitud({ entrada: bloque.input, agente, contacto })
+          } else if (bloque.nombre === 'registrar_solicitud') {
+            out = await registrarSolicitud({ entrada: bloque.entrada, agente, contacto })
             // La solicitud tiene su propia etiqueta: si el agente no la pone, la
             // conversación que MÁS importa quedaría fuera del tablero.
             if (out.ok) await clasificarConversacion({ entrada: { etiqueta: 'SOLICITUD' }, contacto }).catch(() => {})
-          } else if (bloque.name === 'enviar_interactivo') {
+          } else if (bloque.nombre === 'enviar_interactivo') {
             // OJO: esta herramienta ENVÍA de verdad, no devuelve texto para que
             // el modelo lo incluya. Por eso el resultado se lo dice explícito:
             // si no, remata repitiendo por escrito lo que la vet acaba de
             // recibir como botones.
             out = await enviarInteractivo({
-              contacto, linea: phoneNumberId, clave: bloque.input?.clave,
+              contacto, linea: phoneNumberId, clave: bloque.entrada?.clave,
               personalId: null, enviarSobre,
             }).then(r => r.body?.ok
-              ? { ok: true, enviado: bloque.input?.clave,
+              ? { ok: true, enviado: bloque.entrada?.clave,
                   nota: 'Ya le llegó. NO repitas su contenido ni lo describas: solo sigue la conversación si hace falta.' }
               : { ok: false, error: r.body?.error || 'No se pudo enviar' })
-          } else if (bloque.name === 'enviar_material') {
+          } else if (bloque.nombre === 'enviar_material') {
             // Como el interactivo: ENVÍA de verdad. El archivo ya le llegó, así
             // que anunciarlo ("te lo mando en seguida") sería anunciar algo que
             // la clínica ya tiene en pantalla.
             out = await enviarMaterial({
-              contacto, linea: phoneNumberId, clave: bloque.input?.clave,
+              contacto, linea: phoneNumberId, clave: bloque.entrada?.clave,
               personalId: null, enviarSobre,
             }).then(r => {
               if (r.body?.ok) {
-                return { ok: true, enviado: bloque.input?.clave,
+                return { ok: true, enviado: bloque.entrada?.clave,
                   nota: 'El archivo YA le llegó. No digas que se lo vas a mandar: confírmalo en pasado, en una línea, y sigue.' }
               }
               // El detalle técnico se queda en el log y NO se le da al modelo:
               // probándolo, le repetía el error a la clínica tal cual ("me da un
               // error con el contacto"), que no le dice nada y suena a roto.
-              log(MOD, `no se pudo mandar ${bloque.input?.clave} a ${contacto} —`, r.body?.error)
+              log(MOD, `no se pudo mandar ${bloque.entrada?.clave} a ${contacto} —`, r.body?.error)
               return { ok: false, error: 'No se pudo enviar el archivo.',
                 nota: 'No expliques el fallo ni lo cites: dile que se lo hace llegar coordinación, y etiqueta la conversación.' }
             })
-          } else if (bloque.name === 'clasificar_conversacion') {
-            out = await clasificarConversacion({ entrada: bloque.input, contacto })
+          } else if (bloque.nombre === 'clasificar_conversacion') {
+            out = await clasificarConversacion({ entrada: bloque.entrada, contacto })
             // Se guarda en la bitácora, no solo en la conversación: la etiqueta
             // de la conversación es única y se pisa, y lo que hace falta para
             // aprender es el HISTORIAL de lo que no supo responder.
-            if (out.ok) etiquetas.push({ clave: bloque.input?.etiqueta, motivo: bloque.input?.motivo || null })
+            if (out.ok) etiquetas.push({ clave: bloque.entrada?.etiqueta, motivo: bloque.entrada?.motivo || null })
           } else {
-            out = { ok: false, error: `Herramienta desconocida: ${bloque.name}` }
+            out = { ok: false, error: `Herramienta desconocida: ${bloque.nombre}` }
           }
         } catch (e) {
-          log(MOD, `herramienta ${bloque.name} falló —`, e.message)
+          log(MOD, `herramienta ${bloque.nombre} falló —`, e.message)
           out = { ok: false, error: 'No se pudo registrar. Dile que lo hará una persona del equipo.' }
         }
         resultados.push({
-          type: 'tool_result', tool_use_id: bloque.id,
-          content: JSON.stringify(out), is_error: !out.ok,
+          id: bloque.id,
+          contenido: JSON.stringify(out),
+          error: !out.ok,
         })
       }
-      messages.push({ role: 'user', content: resultados })
+      messages.push(motor.mensajeResultados(resultados))
 
       // Si la vuelta SOLO hizo TRÁMITE, no hay nada que devolverle al modelo y
       // la vuelta siguiente costaría un contexto entero (18.000 tokens) para
@@ -1999,9 +1958,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       // Se exige `textos.length`: si hizo trámite SIN haber dicho nada todavía,
       // el turno extra es lo único que puede producir la respuesta — cortar ahí
       // dejaría a la vet sin contestación, que es peor que gastar una vuelta.
-      const soloTramite = respuesta.content
-        .filter(b => b.type === 'tool_use')
-        .every(b => DE_TRAMITE.has(b.name))
+      const soloTramite = respuesta.llamadas.every(l => DE_TRAMITE.has(l.nombre))
       if (soloTramite && textos.length) break
     }
 
