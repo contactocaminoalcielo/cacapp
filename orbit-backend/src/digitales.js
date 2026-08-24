@@ -434,6 +434,14 @@ function encolarRender(piezaId, payload) {
   return turno
 }
 
+// Tope duro del proceso hijo. `render.mjs` aplica su propio timeout dos veces
+// (selectComposition y renderMedia), pero eso solo protege lo que ya arrancó: si
+// el Chrome headless se cuelga antes, el hijo no cierra NUNCA — y sin 'close' la
+// fila se queda en GENERANDO para siempre y, peor, la cola entera se para detrás
+// de ella. Margen sobre los dos timeouts + el arranque.
+const RENDER_TIMEOUT_MS = parseInt(process.env.MEMORIAL_TIMEOUT_MS || '120000') || 120000
+const RENDER_HARD_MS = parseInt(process.env.MEMORIAL_HARD_TIMEOUT_MS) || (RENDER_TIMEOUT_MS * 2 + 120000)
+
 async function runRender(piezaId, payload) {
   await fs.promises.mkdir(DATA_DIR, { recursive: true })
   const outPath = path.join(DATA_DIR, `${piezaId}.mp4`)
@@ -445,15 +453,13 @@ async function runRender(piezaId, payload) {
   child.stderr.on('data', d => { err += d })
 
   await new Promise((resolve) => {
-    child.on('close', async (code) => {
-      let ok = false, error = null
+    let cerrado = false
+    const terminar = async (ok, error) => {
+      if (cerrado) return          // 'error' y 'close' pueden llegar los dos
+      cerrado = true
+      clearTimeout(guardia)
       try {
-        const last = out.trim().split('\n').pop() || '{}'
-        const j = JSON.parse(last)
-        ok = j.ok === true; error = j.error || null
-      } catch { error = (err || `exit ${code}`).slice(0, 500) }
-      try {
-        if (ok && fs.existsSync(outPath)) {
+        if (ok) {
           await pool.query(
             `UPDATE public.piezas_digitales SET estado='GENERADO', archivo_path=$2, generado_en=now(), error=NULL, updated_at=now() WHERE id=$1`,
             [piezaId, `${piezaId}.mp4`]
@@ -468,8 +474,51 @@ async function runRender(piezaId, payload) {
         }
       } catch (e) { log('[digitales] update post-render ERROR', e.message) }
       resolve()
+    }
+
+    const guardia = setTimeout(() => {
+      child.kill('SIGKILL')
+      terminar(false, `El render pasó de ${Math.round(RENDER_HARD_MS / 1000)} s y se canceló. Vuelve a intentarlo.`)
+    }, RENDER_HARD_MS)
+
+    // spawn puede fallar sin llegar a arrancar (ENOENT, memoria). Sin este
+    // manejador, el evento 'error' del EventEmitter se convierte en excepción.
+    child.on('error', (e) => terminar(false, `No se pudo lanzar el render: ${e.message}`))
+
+    child.on('close', (code) => {
+      let ok = false, error = null
+      try {
+        const last = out.trim().split('\n').pop() || '{}'
+        const j = JSON.parse(last)
+        ok = j.ok === true; error = j.error || null
+      } catch { error = (err || `exit ${code}`).slice(0, 500) }
+      terminar(ok && fs.existsSync(outPath), error)
     })
   })
+}
+
+// ── Renders huérfanos de un reinicio ──
+// Al arrancar, NINGÚN render puede estar en curso: la cola vive en memoria y se
+// fue con el proceso anterior. Así que toda pieza en GENERANDO es huérfana de un
+// reinicio (un deploy, un OOM, el pool agotado) y se quedaba así PARA SIEMPRE:
+// la UI solo pintaba el spinner "Generando el video…" sin un solo botón, y
+// `listarCandidatos` excluye al servicio de "Por generar" mientras la pieza no
+// esté en ERROR/DESCARTADO — no había forma de rescatarla desde Orbit.
+// Se quedaron 7 memoriales así (3 el 19-ago, el día del deploy de plantillas).
+// Se marcan ERROR para que aparezca el botón "Regenerar". NO se reencolan solas
+// a propósito: un render son ~157 s de CPU y, si lo que tumbó al backend fue el
+// propio render, el reintento automático deja el contenedor en bucle de caídas.
+export async function recuperarRendersHuerfanos() {
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE public.piezas_digitales
+          SET estado = 'ERROR',
+              error  = 'El servidor se reinició mientras se generaba el memorial. Vuelve a intentarlo.',
+              updated_at = now()
+        WHERE estado = 'GENERANDO'`
+    )
+    if (rowCount) log(`[digitales] ${rowCount} render(s) huérfano(s) de un reinicio → ERROR`)
+  } catch (e) { log('[digitales] recuperarRendersHuerfanos ERROR', e.message) }
 }
 
 export async function aprobarMemorial({ id, personalId }) {

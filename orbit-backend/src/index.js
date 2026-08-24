@@ -19,6 +19,7 @@ import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarA
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
   publicarManual, registrarEnlace, registrarEnvio, enviarZolutium, descartarPieza, servirArchivo,
+  recuperarRendersHuerfanos,
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
@@ -1284,4 +1285,7 @@ app.listen(PORT, () => {
   // Mantener caliente la caché del contexto: el 64% de la factura del agente
   // son arranques en frío. Ver `calentarCache` en agente-wa.js.
   arrancarCacheCaliente()
+  // La cola de renders del memorial vive en memoria: lo que estuviera
+  // "Generando…" cuando murió el proceso anterior no lo va a terminar nadie.
+  recuperarRendersHuerfanos()
 })

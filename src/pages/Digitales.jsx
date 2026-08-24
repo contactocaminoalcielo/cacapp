@@ -46,6 +46,16 @@ const declinadasDe = (s) => (s.declinadas || []).filter(t => !piezaDe(s, t))
 
 const publicadas = (s) => s.piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
 
+// Una pieza "en proceso" (GENERANDO / PUBLICANDO) que lleva demasiado tiempo así
+// está atascada, no trabajando: el render y el poll de Instagram viven en la
+// memoria del backend, y si ese proceso se reinició (un deploy) nadie los va a
+// terminar. El backend ahora las rescata al arrancar, pero la pantalla no puede
+// volver a quedarse en un spinner eterno sin un solo botón — pasó con 7
+// memoriales.
+const MINUTOS_ATASCO = 30
+const atascada = (p) => !!p && ['GENERANDO', 'PUBLICANDO'].includes(p.estado) &&
+  Date.now() - new Date(p.updated_at || 0).getTime() > MINUTOS_ATASCO * 60000
+
 const listoParaEnviar = (s) => {
   const tipos = tiposDe(s)
   return tipos.length > 0 && tipos.every(t => {
@@ -84,8 +94,15 @@ function plantillaAplicable(s, zolutium) {
   return null
 }
 
-// ¿Alguna pieza del servicio quedó en error (render o Instagram)?
-const conError = (s) => s.piezas.some(p => p.estado === 'ERROR' || (p.error && p.estado !== 'DESCARTADO'))
+// ¿Alguna pieza del servicio quedó en error (render o Instagram)? Las atascadas
+// entran aquí: para quien mira la lista, un render que nadie va a terminar es un
+// error, y así el filtro "Con error" también las encuentra.
+const conError = (s) => s.piezas.some(p => p.estado === 'ERROR' || atascada(p) || (p.error && p.estado !== 'DESCARTADO'))
+
+// Todo lo que llevaba el plan lo declinó el cliente: no hay nada que producir ni
+// que enviar. No son un pendiente — contaban como tal y se quedaban ahí para
+// siempre (13 servicios).
+const todoDeclinado = (s) => !tiposDe(s).length && declinadasDe(s).length > 0
 
 // Tipos que aún no tienen enlace publicado
 const piezasFaltantes = (s) => tiposDe(s).filter(t => {
@@ -113,16 +130,30 @@ function buildMensaje(plantilla, s) {
 }
 
 function estadoServicio(s) {
+  if (s.piezas.some(atascada)) return { label: 'Se quedó a medias', variant: 'red' }
   if (conError(s)) return { label: 'Con error', variant: 'red' }
   if (fueEnviado(s)) return { label: 'Enviado', variant: 'green' }
   // Todo lo que llevaba lo declinó el cliente: no hay nada que producir.
-  if (!tiposDe(s).length && declinadasDe(s).length) return { label: 'No lo desea el cliente', variant: 'gray' }
+  if (todoDeclinado(s)) return { label: 'No lo desea el cliente', variant: 'gray' }
   if (listoParaEnviar(s)) return { label: 'Listo para enviar', variant: 'green' }
   if (s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado))) {
     return { label: 'En proceso', variant: 'amber' }
   }
   return { label: 'Con pendientes', variant: 'gray' }
 }
+
+// ── Filtros del pipeline ──
+// Un solo predicado por chip: lo usan IGUAL el contador y la tabla, así que el
+// número del chip es, por definición, lo que se ve al pulsarlo.
+const PASA_ESTADO = {
+  TODOS:      () => true,
+  PENDIENTES: (s) => !fueEnviado(s) && !listoParaEnviar(s) && !todoDeclinado(s),
+  LISTOS:     (s) => !fueEnviado(s) && listoParaEnviar(s),
+  ENVIADOS:   (s) => fueEnviado(s),
+  ERROR:      (s) => conError(s),
+  DECLINADOS: (s) => todoDeclinado(s),
+}
+const pasaPieza = (k) => (s) => k === 'TODAS' || piezasFaltantes(s).includes(k)
 
 function progresoServicio(s) {
   const tipos = tiposDe(s)
@@ -173,7 +204,9 @@ export default function Digitales() {
 
   // Poll mientras haya renders o publicaciones de Instagram en curso
   useEffect(() => {
-    const enCurso = data.servicios.some(s => s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado)))
+    // Solo lo que de verdad está en curso: una pieza atascada mantenía este
+    // poll disparando dos peticiones cada 5 s para siempre.
+    const enCurso = data.servicios.some(s => s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado) && !atascada(p)))
     clearInterval(pollRef.current)
     if (enCurso) pollRef.current = setInterval(cargar, 5000)
     return () => clearInterval(pollRef.current)
@@ -269,27 +302,34 @@ export default function Digitales() {
   const buscados = useMemo(() =>
     data.servicios.filter(s => matchTexto(q, s.mascota, s.propietario, s.plan_nombre, s.plan_codigo, s.telefono)), [data, q])
 
-  const pipeline = useMemo(() => buscados.filter(s => {
-    const enviado = fueEnviado(s)
-    if (fEstado === 'PENDIENTES' && (enviado || listoParaEnviar(s))) return false
-    if (fEstado === 'LISTOS'     && !(listoParaEnviar(s) && !enviado)) return false
-    if (fEstado === 'ENVIADOS'   && !enviado) return false
-    if (fEstado === 'ERROR'      && !conError(s)) return false
-    if (fPieza !== 'TODAS' && !piezasFaltantes(s).includes(fPieza)) return false
-    return true
-  }), [buscados, fEstado, fPieza])
+  // Cada grupo de chips cuenta con el OTRO filtro ya aplicado, y la tabla aplica
+  // los dos. Antes los contadores de estado se calculaban sobre TODO el universo
+  // e ignoraban el filtro de pieza: al pulsar "Falta memorial" los chips seguían
+  // diciendo los totales y la tabla mostraba otra cosa.
+  const estadoFn = PASA_ESTADO[fEstado] || PASA_ESTADO.TODOS
+  const baseEstado = useMemo(() => buscados.filter(pasaPieza(fPieza)), [buscados, fPieza])
+  const basePieza  = useMemo(() => buscados.filter(estadoFn), [buscados, estadoFn])
+  const pipeline   = useMemo(() => baseEstado.filter(estadoFn), [baseEstado, estadoFn])
 
-  const nEstado = useMemo(() => ({
-    TODOS:      buscados.length,
-    PENDIENTES: buscados.filter(s => !fueEnviado(s) && !listoParaEnviar(s)).length,
-    LISTOS:     buscados.filter(s => !fueEnviado(s) && listoParaEnviar(s)).length,
-    ENVIADOS:   buscados.filter(fueEnviado).length,
-    ERROR:      buscados.filter(conError).length,
-  }), [buscados])
+  const nEstado = useMemo(() => Object.fromEntries(
+    Object.entries(PASA_ESTADO).map(([k, f]) => [k, baseEstado.filter(f).length])), [baseEstado])
+  const nPieza = useMemo(() => Object.fromEntries(
+    ['TODAS', ...TIPOS].map(k => [k, basePieza.filter(pasaPieza(k)).length])), [basePieza])
 
   const listos = useMemo(() => buscados.filter(s => listoParaEnviar(s) && !fueEnviado(s)), [buscados])
+  // Historial: una fila por envío, del más reciente al más viejo. Iba agrupado
+  // por servicio (el orden del pipeline), que para un historial no dice nada.
   const enviados = useMemo(() =>
-    buscados.flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario, telefono: e.telefono || s.telefono }))), [buscados])
+    buscados
+      .flatMap(s => s.envios.map(e => ({ ...e, mascota: s.mascota, propietario: s.propietario, telefono: e.telefono || s.telefono })))
+      .sort((a, b) => new Date(b.enviado_en) - new Date(a.enviado_en)), [buscados])
+  // Ojo: `enviados` son ENVÍOS, no servicios — incluye los intentos fallidos y
+  // los reenvíos. Por eso su número nunca cuadra con el chip "Enviados" del
+  // pipeline, que cuenta servicios con al menos un envío bueno (467 vs 437).
+  const nEnvios = useMemo(() => ({
+    ok:  enviados.filter(e => (e.estado || 'ENVIADO') === 'ENVIADO').length,
+    err: enviados.filter(e => e.estado === 'ERROR').length,
+  }), [enviados])
   const candidatosFiltrados = useMemo(() =>
     candidatos.filter(c => matchTexto(q, c.mascota, c.propietario, c.plan_nombre, c.plan_codigo, c.telefono)), [candidatos, q])
   // Los que el cliente declinó siguen a la vista, pero aparte: no se generan.
@@ -298,10 +338,13 @@ export default function Digitales() {
   const servicioDetalle = useMemo(() =>
     data.servicios.find(s => s.servicio_id === detalleId) || null, [data.servicios, detalleId])
 
+  // El número de la pestaña es el total de la pestaña, no el del filtro que haya
+  // puesto: antes "Pipeline (N)" cambiaba al tocar un chip y parecía que se
+  // habían perdido servicios. Lo filtrado lo dicen los chips.
   const tabs = [
-    ['pipeline', `Pipeline (${pipeline.length})`],
+    ['pipeline', `Pipeline (${buscados.length})`],
     ['enviar', `Para enviar (${listos.length})`],
-    ['enviados', `Enviados (${enviados.length})`],
+    ['enviados', `Envíos (${enviados.length})`],
     ['candidatos', `Por generar (${porGenerar.length})`],
   ]
 
@@ -372,7 +415,7 @@ export default function Digitales() {
             <>
               <div className="flex gap-1 bg-gray-100 p-1 rounded-xl flex-wrap">
                 {[['TODOS', 'Todos'], ['PENDIENTES', 'Con pendientes'], ['LISTOS', 'Listos p/ enviar'],
-                  ['ENVIADOS', 'Enviados'], ['ERROR', 'Con error']].map(([k, label]) => (
+                  ['ENVIADOS', 'Enviados'], ['ERROR', 'Con error'], ['DECLINADOS', 'No los desea']].map(([k, label]) => (
                   <button key={k} onClick={() => setFEstado(k)}
                     className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition ${
                       fEstado === k ? 'bg-white text-[#263218] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -386,7 +429,7 @@ export default function Digitales() {
                   <button key={k} onClick={() => setFPieza(k)}
                     className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition ${
                       fPieza === k ? 'bg-white text-[#263218] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                    {label}
+                    {label} <span className={fPieza === k ? 'text-gray-400' : 'text-gray-300'}>{nPieza[k]}</span>
                   </button>
                 ))}
               </div>
@@ -409,7 +452,7 @@ export default function Digitales() {
           <CandidatosList candidatos={porGenerar} declinados={declinados} busy={busy} onGenerar={generar}
             onEncuadrar={(c) => setEncuadre({ servicioId: c.servicio_id, fotoUrl: c.foto_url, mascota: c.mascota, ajuste: null })} />
         ) : tab === 'enviados' ? (
-          <EnviadosList enviados={enviados} q={q} />
+          <EnviadosList enviados={enviados} q={q} resumen={nEnvios} />
         ) : tab === 'enviar' ? (
           listos.length === 0
             ? <Empty icon={Send} texto={q ? 'Nada coincide con la búsqueda.' : 'No hay servicios con todas sus piezas publicadas pendientes de envío.'} />
@@ -668,9 +711,24 @@ function ServicioCard({
                 </Button>
               </div>
             ) : mem.estado === 'GENERANDO' ? (
-              <div className="flex items-center gap-2 text-gray-400 text-sm py-2">
-                <Loader2 className="animate-spin" size={16} /> Generando el video…
-              </div>
+              atascada(mem) ? (
+                // Sin esto la pieza se queda en un spinner sin botones y el
+                // servicio tampoco vuelve a "Por generar": era un callejón sin
+                // salida dentro de Orbit.
+                <div className="space-y-2">
+                  <div className="flex items-start gap-2 text-red-500 text-[13px]">
+                    <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                    El render se quedó a medias (el servidor se reinició mientras generaba). No va a terminar solo.
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={onGenerar} disabled={busy[s.servicio_id]}>
+                    <RefreshCw size={15} /> Regenerar
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-gray-400 text-sm py-2">
+                  <Loader2 className="animate-spin" size={16} /> Generando el video… (~2,5 min, y van de a uno)
+                </div>
+              )
             ) : mem.estado === 'ERROR' ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-red-500 text-[13px]"><AlertTriangle size={15} /> {mem.error || 'Error al generar'}</div>
@@ -712,11 +770,17 @@ function ServicioCard({
                         {busy[mem.id] ? <Loader2 className="animate-spin" size={15} /> : <Instagram size={15} />} Publicar en Instagram
                       </Button>
                     )}
-                    {mem.estado === 'PUBLICANDO' && (
+                    {mem.estado === 'PUBLICANDO' && (atascada(mem) ? (
+                      // Igual que el render: el poll de Instagram vive en memoria.
+                      // `publicarInstagram` acepta reintentar desde PUBLICANDO.
+                      <Button variant="secondary" size="sm" onClick={() => onPublicarIG(mem.id)} disabled={busy[mem.id] || !igConfigurado}>
+                        <RefreshCw size={15} /> La publicación se quedó a medias — reintentar
+                      </Button>
+                    ) : (
                       <span className="inline-flex items-center gap-2 text-[13px] text-amber-600 font-medium px-2">
                         <Loader2 className="animate-spin" size={15} /> Publicando en Instagram…
                       </span>
-                    )}
+                    ))}
                     <Button variant="secondary" size="sm" onClick={() => onEncuadrar(mem)} disabled={busy[s.servicio_id] || !s.foto_url}>
                       <Crop size={15} /> Encuadrar
                     </Button>
@@ -887,10 +951,18 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
 }
 
 // ── Historial de envíos ─────────────────────────────────────────────────────
-function EnviadosList({ enviados, q }) {
+function EnviadosList({ enviados, q, resumen }) {
   if (!enviados.length) return <Empty icon={History} texto={q ? 'Nada coincide con la búsqueda.' : 'Aún no se ha registrado ningún envío.'} />
   return (
     <div className="grid gap-2">
+      {/* Esta lista son ENVÍOS, no servicios: los intentos fallidos y los
+          reenvíos también están aquí. Sin decirlo, el número de la pestaña
+          parecía discutir con el chip "Enviados" del pipeline. */}
+      <div className="text-[12px] text-gray-400 px-1">
+        {enviados.length} envío{enviados.length === 1 ? '' : 's'} registrado{enviados.length === 1 ? '' : 's'}
+        {resumen ? <> · <span className="text-green-600 font-medium">{resumen.ok} entregado{resumen.ok === 1 ? '' : 's'}</span>
+        {resumen.err > 0 && <> · <span className="text-red-500 font-medium">{resumen.err} fallido{resumen.err === 1 ? '' : 's'}</span></>}</> : null}
+      </div>
       {enviados.map(e => (
         <Card key={e.id}>
           <CardContent className="py-3 flex items-center justify-between gap-3">
