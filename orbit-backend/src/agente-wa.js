@@ -164,74 +164,65 @@ function anthropic() {
 const HERRAMIENTAS = [{
   name: 'enviar_enlace_registro',
   description:
-    'Consigue el enlace con el que la veterinaria registra ella misma el servicio. ' +
-    'Úsala en cuanto quede claro que quieren una recogida, ANTES de ponerte a pedir ' +
-    'datos uno por uno: por el enlace la vet elige el plan viendo los precios y la ' +
-    'solicitud llega completa.\n\n' +
-    'Tú NO sabes si el número está registrado como aliado — lo comprueba el sistema y ' +
-    'te lo dice en la respuesta:\n' +
-    '- `PERSONAL`: la clínica ya es aliada. El enlace es SUYO y queda atado a ella.\n' +
-    '- `AFILIACION`: el número no está registrado. **Pega igualmente el enlace** — es el ' +
-    'de afiliación — y explícale que coordinación la revisa. Y ADEMÁS ofrécele tomarle ' +
-    'los datos de la recogida por aquí para no hacerla esperar. Las dos cosas en el ' +
-    'mismo mensaje: sin el enlace no puede afiliarse nunca.\n' +
-    '- `ESCALAR`: algo no cuadra con esa clínica; pásalo a coordinación sin mandar nada.\n\n' +
-    '⚠️ Copia el enlace EXACTAMENTE como te llega, carácter por carácter. Nunca lo ' +
-    'reconstruyas de memoria ni te inventes uno: un enlace mal copiado no abre, y el ' +
-    'personal lleva la credencial de esa veterinaria.\n' +
-    '⚠️ El enlace va DENTRO del mismo mensaje en que lo anuncias. Nunca escribas ' +
-    '"te envío el enlace" o "ya te lo mando" sin pegarlo ahí mismo: no hay un segundo ' +
-    'mensaje: si no lo pegas, la veterinaria se queda esperando algo que no va a llegar.',
+    'Consigue el enlace con el que la veterinaria registra ella misma el servicio. Úsala en ' +
+    'cuanto quede claro que quieren una recogida, ANTES de pedir datos uno por uno: por el ' +
+    'enlace elige el plan viendo precios y la solicitud llega completa.\n\n' +
+    'Tú NO sabes si el número está registrado; te lo dice la respuesta:\n' +
+    '- `PERSONAL`: ya es aliada, el enlace es SUYO.\n' +
+    '- `AFILIACION`: no está registrada. **Pega igualmente el enlace** —es el de afiliación— ' +
+    'y ADEMÁS ofrécele tomarle los datos por aquí para no hacerla esperar. Las dos cosas en ' +
+    'el mismo mensaje: sin el enlace no puede afiliarse nunca.\n' +
+    '- `ESCALAR`: algo no cuadra; pásalo a coordinación sin mandar nada.\n\n' +
+    '⚠️ Copia el enlace EXACTO, carácter por carácter: lleva la credencial de esa clínica y ' +
+    'uno mal copiado no abre. Y va DENTRO del mismo mensaje en que lo anuncias — no hay un ' +
+    'segundo mensaje: si escribes "ya te lo mando" sin pegarlo, se queda esperando.',
   input_schema: { type: 'object', properties: {}, required: [] },
 }, {
   name: 'registrar_solicitud',
   description:
     'Registra una solicitud de recogida para que coordinación la revise y confirme.\n\n' +
-    '⚠️ Llámala SOLO cuando tengas TODOS los datos obligatorios y se los hayas repetido a ' +
-    'la veterinaria para que los confirme. Por el enlace de registro el sistema obliga a ' +
-    'elegir plan y a llenarlo todo; por chat no hay quien obligue, y lo normal es que se ' +
-    'olvide el plan, el peso, la especie o el teléfono. Ese hueco lo tapas tú.\n\n' +
-    'Si te falta algo, NO la llames: pregunta lo que falte. Si la llamas incompleta te lo ' +
-    'devuelve diciendo qué falta — pero es mejor preguntar antes que hacer esperar.\n\n' +
+    '⚠️ Llámala SOLO con TODOS los datos obligatorios, y después de repetírselos a la ' +
+    'veterinaria para que los confirme: por chat nadie obliga a darlos y lo normal es que ' +
+    'falte el plan, el peso, la especie o el teléfono. Si falta algo, pregunta en vez de ' +
+    'llamarla.\n\n' +
     'No confirma horario ni asignación: después de usarla, dile que coordinación confirma ' +
     'la hora directamente.\n\n' +
-    'EXCEPCIÓN DESAMPARADO: en ese plan la mascota está abandonada en la clínica y NO hay ' +
-    'familia dueña. No pidas nombre ni WhatsApp de la familia —deja los dos campos vacíos— y ' +
-    'a cambio pregunta si quieren la prioridad de 24 h, que es un cobro aparte.',
+    'DESAMPARADO: la mascota está abandonada en la clínica y NO hay familia. Deja vacíos ' +
+    'nombre y WhatsApp de la familia, y pregunta si quieren la prioridad de 24 h, que es ' +
+    'un cobro aparte.',
   input_schema: {
     type: 'object',
     properties: {
-      cliente_nombre:   { type: 'string', description: 'SOLO el NOMBRE de pila de quien responde por la mascota. El apellido va aparte. No metas aquí el nombre de la veterinaria ni el de quien escribe: eso va en `veterinaria` y en `notas`. En un DESAMPARADO déjalo vacío: la mascota está abandonada y el servidor pone a la clínica.' },
-      cliente_apellido: { type: 'string', description: 'Apellido, SOLO si te dan nombre y apellido por separado ("Marta Gómez" → nombre "Marta", apellido "Gómez"). Si solo dicen "la familia Ruiz", eso va entero en `cliente_nombre` y este campo se deja vacío: los dos se concatenan al crear el cliente y repetirlo produce "Familia Ruiz Ruiz".' },
-      cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA, solo dígitos con indicativo. Ej: 573001234567. Es a ese número al que se le mandan las fotos y el memorial: no pongas el de la clínica. En un DESAMPARADO déjalo vacío: no hay familia.' },
-      prioridad:        { type: 'boolean', description: 'Solo para el plan DESAMPARADO: ¿pagan la prioridad para que se recoja en las primeras 24 horas? Pregúntalo, porque su recogida normal va de 24 a 48 h. En los demás planes no lo mandes.' },
+      cliente_nombre:   { type: 'string', description: 'Solo el NOMBRE de pila de quien responde por la mascota — no el de la clínica, que va en `veterinaria`. Vacío en DESAMPARADO.' },
+      cliente_apellido: { type: 'string', description: 'Apellido, solo si lo dan por separado. "La familia Ruiz" va entero en `cliente_nombre`: los dos se concatenan y saldría "Familia Ruiz Ruiz".' },
+      cliente_whatsapp: { type: 'string', description: 'WhatsApp de la FAMILIA (dígitos con indicativo, ej. 573001234567), NO el de la clínica: ahí van las fotos y el memorial. Vacío en DESAMPARADO.' },
+      prioridad:        { type: 'boolean', description: 'Solo en DESAMPARADO: ¿pagan la prioridad de 24 h? Su recogida normal va de 24 a 48. En los demás planes no lo mandes.' },
       mascota_nombre:   { type: 'string', description: 'Nombre de la mascota.' },
-      mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave, Hámster, Cobayo, Reptil, Pez u Otro. Se valida contra el catálogo: la especie decide si la tarifa es por peso o única.' },
-      mascota_peso_kg:  { type: 'number', description: 'Peso aproximado en kilogramos. Si no lo saben exacto, pide un aproximado — de esto sale el precio, no lo inventes ni lo dejes en blanco.' },
-      plan:             { type: 'string', description: 'Plan elegido. Se valida contra el catálogo; si es ambiguo (p. ej. "Exclusivo", que tiene cuatro variantes) te lo devuelve con las opciones para que preguntes cuál.' },
-      recogida_en:      { type: 'string', enum: ['veterinaria', 'domicilio'], description: 'Dónde se recoge: en la clínica ("veterinaria") o en la casa de la familia ("domicilio"). De esto depende la dirección a la que va el técnico.' },
-      quien_paga:       { type: 'string', enum: ['veterinaria', 'propietario'], description: 'Quién paga el servicio. Pregúntalo SIEMPRE, no lo asumas: cambia toda la operación posterior.' },
-      refrigeracion:    { type: 'boolean', description: '¿La clínica tiene posibilidad de refrigeración? Determina cuánto puede esperar el cuerpo.' },
-      murio_de_cancer:  { type: 'boolean', description: '¿La mascota falleció por cáncer? Si fue así hay que notificarlo.' },
-      mascota_sexo:     { type: 'string', enum: ['macho', 'hembra'], description: 'Sexo de la mascota. Se usa al escribirle a la familia y en el certificado; si te lo dicen de pasada ("la gata", "el perrito"), tómalo de ahí sin volver a preguntar.' },
-      mascota_raza:     { type: 'string', description: 'Raza, si la mencionan. No la deduzcas.' },
-      direccion:        { type: 'string', description: 'Dirección exacta de la recogida. OBLIGATORIA si la recogida es a domicilio.' },
-      ciudad:           { type: 'string', description: 'Ciudad o municipio de la recogida. OBLIGATORIA a domicilio: de ella sale el cobro del transporte, y si falta el sistema asume Bogotá y cobra $0. Pregúntala aunque parezca obvia.' },
+      mascota_especie:  { type: 'string', description: 'Perro, Gato, Conejo, Ave, Hámster, Cobayo, Reptil, Pez u Otro. Decide si la tarifa es por peso o única.' },
+      mascota_peso_kg:  { type: 'number', description: 'Kilos aproximados. De aquí sale el precio: pide un aproximado, no lo inventes ni lo dejes vacío.' },
+      plan:             { type: 'string', description: 'Plan elegido. Si es ambiguo ("Exclusivo" tiene cuatro variantes) te lo devuelve con las opciones para que preguntes.' },
+      recogida_en:      { type: 'string', enum: ['veterinaria', 'domicilio'], description: 'Dónde va el técnico: la clínica o la casa de la familia.' },
+      quien_paga:       { type: 'string', enum: ['veterinaria', 'propietario'], description: 'Pregúntalo SIEMPRE, no lo asumas: cambia toda la operación posterior.' },
+      refrigeracion:    { type: 'boolean', description: '¿La clínica puede refrigerar? Decide cuánto puede esperar el cuerpo.' },
+      murio_de_cancer:  { type: 'boolean', description: '¿Falleció por cáncer? Hay que notificarlo.' },
+      mascota_sexo:     { type: 'string', enum: ['macho', 'hembra'], description: 'Tómalo de lo que digan de pasada ("la gata", "el perrito") sin volver a preguntar.' },
+      mascota_raza:     { type: 'string', description: 'Si la mencionan. No la deduzcas.' },
+      direccion:        { type: 'string', description: 'Dirección exacta. OBLIGATORIA a domicilio.' },
+      ciudad:           { type: 'string', description: 'OBLIGATORIA a domicilio: de ella sale el cobro del transporte, y si falta el sistema asume Bogotá y cobra $0. Pregúntala aunque parezca obvia.' },
       barrio:           { type: 'string', description: 'Barrio o punto de referencia.' },
-      localidad:        { type: 'string', description: 'Localidad, si es en Bogotá y la mencionan.' },
-      hora_aproximada:  { type: 'string', description: 'Hora o franja que pidan ("hoy antes de las 6", "mañana temprano"). No la prometas tú: solo recoge lo que ellos digan.' },
-      veterinaria:      { type: 'string', description: 'Nombre de la clínica desde la que escriben, tal como lo digan.' },
+      localidad:        { type: 'string', description: 'Solo si es en Bogotá y la mencionan.' },
+      hora_aproximada:  { type: 'string', description: 'La franja que ELLOS pidan ("hoy antes de las 6"). No la prometas tú.' },
+      veterinaria:      { type: 'string', description: 'Nombre de la clínica, tal como lo digan.' },
       notas:            { type: 'string', description: 'Indicaciones especiales, horarios preferidos, cualquier detalle relevante.' },
     },
     // `cliente_nombre` y `cliente_whatsapp` NO van aquí: en un DESAMPARADO no
-    // hay familia y exigirlos en el esquema obligaría al modelo a inventárselos.
-    // La compuerta real es el servidor, que ya sabe el plan y devuelve la lista
-    // exacta de lo que falta según cuál sea.
+    // hay familia y exigirlos obligaría al modelo a inventárselos. La compuerta
+    // real es el servidor, que ya sabe el plan y dice qué falta según cuál sea.
     required: [
       'mascota_nombre', 'mascota_especie',
       'mascota_peso_kg', 'plan', 'recogida_en', 'quien_paga', 'refrigeracion',
       'murio_de_cancer',
-    ],
+    ]
   },
 }]
 
@@ -284,12 +275,10 @@ export async function construirHerramientas(agente = null) {
     extra.push({
       name: 'enviar_interactivo',
       description: texto('enviar_interactivo',
-        'Manda un mensaje con BOTONES, un MENÚ o un BOTÓN DE ENLACE, en vez de escribirlo. ' +
-        'A la veterinaria le sale algo que se toca: es más rápido para ella y evita que ' +
-        'conteste algo que no esperabas.\n\n' +
-        '⚠️ El mensaje se envía TAL CUAL está configurado, así que no repitas su contenido en ' +
-        'tu respuesta ni anuncies que lo vas a mandar. Y no lo uses para cualquier cosa: solo ' +
-        'cuando encaje con lo que estás preguntando.')
+        'Manda BOTONES, un MENÚ o un BOTÓN DE ENLACE en vez de escribirlo: a la veterinaria ' +
+        'le sale algo que se toca.\n\n' +
+        '⚠️ Se envía TAL CUAL está configurado: no repitas su contenido ni anuncies que lo ' +
+        'vas a mandar. Úsalo solo cuando encaje con lo que estás preguntando.')
         + '\n\nDisponibles:\n'
         + interactivos.map(i => `- ${i.clave} (${i.nombre}): ${i.descripcion || ''}`).join('\n'),
       input_schema: {
@@ -314,12 +303,12 @@ export async function construirHerramientas(agente = null) {
     extra.push({
       name: 'enviar_material',
       description: texto('enviar_material',
-        'Manda un ARCHIVO del catálogo: el brochure, el tarifario o lo que haya cargado ' +
-        'coordinación. Úsalo cuando te pidan material para enseñárselo a una familia, o ' +
-        'cuando un documento explique mejor que un párrafo lo que te están preguntando.\n\n' +
-        '⚠️ Solo puedes mandar los de esta lista. Si te piden otra cosa, no la inventes ni ' +
-        'prometas mandarla: dilo y pásalo a coordinación.\n\n')
-        + 'Disponibles:\n'
+        'Manda un ARCHIVO del catálogo (brochure, tarifario, lo que haya cargado ' +
+        'coordinación) cuando te pidan material o cuando un documento explique mejor que un ' +
+        'párrafo.\n\n' +
+        '⚠️ Solo los de esta lista. Si te piden otra cosa no la inventes ni prometas ' +
+        'mandarla: dilo y pásalo a coordinación.')
+        + '\n\nDisponibles:\n'
         + materiales.map(m => `- ${m.clave} (${m.nombre}): ${m.descripcion || ''}`).join('\n'),
       input_schema: {
         type: 'object',
@@ -344,11 +333,10 @@ export async function construirHerramientas(agente = null) {
   return [...propias, ...extra, {
     name: 'clasificar_conversacion',
     description: texto('clasificar_conversacion',
-      'Etiqueta esta conversación para que coordinación sepa qué necesita atención. ' +
-      'Úsala en cuanto entiendas de qué va el mensaje, y SIEMPRE que escales algo a una ' +
-      'persona: la etiqueta es lo único que hace visible la conversación en el tablero. ' +
-      'No la repitas si ya pusiste esa misma etiqueta antes en la conversación.\n\n')
-      + 'Etiquetas disponibles:\n'
+      'Etiqueta esta conversación para que coordinación sepa qué necesita atención. Úsala en ' +
+      'cuanto entiendas de qué va, y SIEMPRE que escales algo: la etiqueta es lo único que ' +
+      'hace visible la conversación en el tablero. No repitas una que ya pusiste.')
+      + '\n\nEtiquetas disponibles:\n'
       + etiquetas.map(e => `- ${e.clave} (${e.nombre}): ${e.descripcion || ''}`).join('\n'),
     input_schema: {
       type: 'object',
