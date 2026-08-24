@@ -43,7 +43,7 @@ import {
   valorarRespuesta, listarValoraciones, aplicarValoracion, descartarValoracion,
   listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
-import { probar as probarAgente, arrancarSeguimientos } from './agente-wa.js'
+import { probar as probarAgente, arrancarSeguimientos, arrancarCacheCaliente } from './agente-wa.js'
 import {
   resumen as resumenCostos, listaPrecios, guardarPrecio,
   saldoElevenLabs, sincronizarMeta, trm as trmActual, refrescarMetaSiHaceFalta,
@@ -1281,4 +1281,7 @@ app.listen(PORT, () => {
   // Los envíos masivos también: el estado vive en la tabla, así que retomar
   // una campaña a medias tras un reinicio es justo lo que tiene que pasar.
   arrancarCampanas()
+  // Mantener caliente la caché del contexto: el 64% de la factura del agente
+  // son arranques en frío. Ver `calentarCache` en agente-wa.js.
+  arrancarCacheCaliente()
 })

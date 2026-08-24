@@ -1624,6 +1624,115 @@ async function barrerPendientes() {
 
 let temporizadorSeguimientos = null
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mantener la caché del contexto caliente
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 🩸 EL 64% DE LA FACTURA SON ARRANQUES EN FRÍO. Medido del 13 al 22 de agosto:
+// $2,03 de $3,17 se fueron en ESCRIBIR la caché, 3 a 7 veces al día. Escribirla
+// cuesta el doble que la entrada normal; leerla, la décima parte. O sea que la
+// misma información vale 20 veces más según llegue en frío o en caliente.
+//
+// Se comprobó ANTES de construir esto, porque de ello dependía que sirviera:
+//
+//     T+0   escribir   escrito=6145  leido=   0
+//     T+50  leer       escrito=   0  leido=6145
+//     T+70  VEREDICTO  escrito=   0  leido=6145   ← seguía viva
+//
+// Una entrada con una hora de vida seguía caliente a los 70 minutos: **leerla
+// renueva su vida**. Si no lo hiciera, esto la encarecería en vez de abaratarla
+// (más escrituras, no menos) — y por eso no se montó hasta medirlo.
+//
+// ⚠️ SOLO SI NADIE HA ESCRITO. Un ping cuando el tráfico real ya mantuvo la
+// caché viva es dinero tirado. Con esta compuerta, en un día movido casi no se
+// dispara; en uno flojo —que es donde duele, porque el piso de $0,25 diarios se
+// paga igual con cuatro conversaciones— hace todo el trabajo.
+//
+// Cuenta hecha: de ~$12 al mes a ~$7,4. Un 37%, ya descontado lo que cuestan
+// los pings.
+
+/** Menos que la hora de vida de la caché, con margen para un ping perdido. */
+const CALIENTE_CADA_MS = 50 * 60_000
+const CALIENTE_LATIDO_MS = 10 * 60_000
+
+/** Fuera de esta franja no se calienta: nadie va a escribir a las 3 a.m. */
+const CALIENTE_DESDE = parseInt(process.env.AGENTE_CALIENTE_DESDE || '7', 10)
+const CALIENTE_HASTA = parseInt(process.env.AGENTE_CALIENTE_HASTA || '22', 10)
+
+/** Cuándo se llamó por última vez a la API — por tráfico real o por un ping. */
+let ultimaLlamadaApi = 0
+
+function horaBogota() {
+  return parseInt(new Date().toLocaleString('en-US', {
+    timeZone: 'America/Bogota', hour: '2-digit', hour12: false,
+  }), 10)
+}
+
+async function calentarCache() {
+  try {
+    if (Date.now() - ultimaLlamadaApi < CALIENTE_CADA_MS) return
+    const h = horaBogota()
+    if (h < CALIENTE_DESDE || h >= CALIENTE_HASTA) return
+
+    const { rows: [agente] } = await pool.query(
+      `SELECT id, clave, instrucciones, modelo, effort FROM public.agente_wa WHERE activo LIMIT 1`
+    )
+    if (!agente) return
+
+    const [system, herramientas] = await Promise.all([
+      construirSistema(agente), construirHerramientas(agente),
+    ])
+    // 🩸 EL RAZONAMIENTO FORMA PARTE DE LA CLAVE DE LA CACHÉ. Esto se montó
+    // primero con `max_tokens: 0` —el precalentado oficial, cero salida
+    // facturada— y la primera medición lo tumbó:
+    //
+    //     ping (sin razonar)  → leido=18077   ✅ acertaba su propia entrada
+    //     turno real (razona) → escrito=18077 🩸 escribía otra distinta
+    //
+    // O sea: habría mantenido caliente una entrada que el agente NUNCA usa, y
+    // habría costado sin ahorrar un peso. El ping tiene que llamar EXACTAMENTE
+    // como llama el agente.
+    //
+    // Y `max_tokens: 0` es incompatible con el razonamiento (la API lo rechaza),
+    // así que se usa 1: un token de salida, una cienmilésima de dólar. Comprobado
+    // que con esto el turno real SÍ aprovecha lo que dejó el ping.
+    const r = await anthropic().messages.create({
+      model: agente.modelo,
+      max_tokens: 1,
+      system,
+      messages: [{ role: 'user', content: '.' }],
+      tools: herramientas,
+      ...razonamientoPara(agente.modelo, agente.effort),
+    })
+    ultimaLlamadaApi = Date.now()
+
+    const u = r.usage || {}
+    const escrito = u.cache_creation_input_tokens || 0
+    const leido   = u.cache_read_input_tokens || 0
+    // Si SIEMPRE escribe, el prefijo no está casando y esto cuesta en vez de
+    // ahorrar. Se registra de las dos formas para que se vea sin tener que ir a
+    // buscarlo.
+    registrarCosto({
+      proveedor: 'ANTHROPIC', canal: 'SISTEMA', clave: agente.modelo, agenteId: agente.id,
+      referencia: 'cache-caliente',
+      tokensEntrada: u.input_tokens || 0, cacheEscritura: escrito, cacheLectura: leido,
+    })
+    log(MOD, `caché ${escrito ? `REESCRITA (${escrito} tok — estaba fría)` : `caliente (${leido} tok leídos)`}`)
+  } catch (e) {
+    // Que falle no puede afectar a nadie: es una optimización, no un servicio.
+    log(MOD, 'no se pudo calentar la caché —', e.message)
+  }
+}
+
+export function arrancarCacheCaliente() {
+  const iv = setInterval(calentarCache, CALIENTE_LATIDO_MS)
+  iv.unref?.()
+  log(MOD, `caché caliente: latido cada ${CALIENTE_LATIDO_MS / 60000} min, `
+    + `ping si nadie escribe en ${CALIENTE_CADA_MS / 60000} min (${CALIENTE_DESDE}-${CALIENTE_HASTA}h Bogotá)`)
+  // El primero, en cuanto arranca: tras un despliegue la caché siempre está fría.
+  setTimeout(calentarCache, 20_000).unref?.()
+}
+
 /** Lo arranca `index.js`. Idempotente: dos llamadas no dan dos barridos. */
 export function arrancarSeguimientos() {
   if (temporizadorSeguimientos) return
@@ -1766,6 +1875,10 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       // `input_tokens` NO incluye lo que vino de la caché: el contexto (que es
       // el grueso) se reporta aparte en cache_creation/cache_read. Sumar solo
       // input_tokens subestima el consumo real varias veces.
+      // El tráfico real también mantiene viva la caché: si una clínica escribió
+      // hace diez minutos, el ping de mantenimiento sobra. Ver `calentarCache`.
+      ultimaLlamadaApi = Date.now()
+
       const u = respuesta.usage || {}
       tokIn  += (u.input_tokens || 0)
               + (u.cache_creation_input_tokens || 0)
