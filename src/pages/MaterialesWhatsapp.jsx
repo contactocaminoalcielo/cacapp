@@ -32,7 +32,7 @@ const ICONO = { imagen: ImageIcon, video: Film, documento: FileText }
  * cabecera de página y el margen exterior, que ya los pone quien la contiene.
  * Duplicar el componente para eso condena a arreglar cada bug dos veces.
  */
-export default function MaterialesWhatsapp({ embebido = false }) {
+export default function MaterialesWhatsapp({ embebido = false, agenteId = null }) {
   const [lista, setLista] = useState([])
   const [cargando, setCargando] = useState(true)
   const [sel, setSel] = useState(null)
@@ -43,11 +43,11 @@ export default function MaterialesWhatsapp({ embebido = false }) {
 
   const refrescar = useCallback(async () => {
     try {
-      const r = await cargarMateriales()
+      const r = await cargarMateriales(agenteId)
       setLista(r.materiales || [])
       setError(null)
     } catch (e) { setError(e.message) } finally { setCargando(false) }
-  }, [])
+  }, [agenteId])
 
   useEffect(() => { refrescar() }, [refrescar])
 
@@ -101,7 +101,7 @@ export default function MaterialesWhatsapp({ embebido = false }) {
     if (!sel.id && !sel.base64) { setError('Elige el archivo que quieres poder mandar.'); return }
     setGuardando(true); setError(null)
     try {
-      await guardarMaterial(sel)
+      await guardarMaterial(sel, agenteId)
       setOk(true); setTimeout(() => setOk(false), 2500)
       await refrescar()
       setSel(null)

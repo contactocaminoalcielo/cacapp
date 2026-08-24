@@ -54,11 +54,14 @@ export async function catalogoParaAgente(agenteId = null) {
   return rows
 }
 
-export async function listarInteractivos() {
+export async function listarInteractivos(agenteId = null) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, descripcion, tipo, encabezado, cuerpo, pie,
-            boton_texto, opciones, url, usa_agente, activo, orden
-       FROM public.whatsapp_interactivos ORDER BY orden, id`
+            boton_texto, opciones, url, usa_agente, activo, orden, agente_id
+       FROM public.whatsapp_interactivos
+      WHERE ($1::integer IS NULL OR agente_id = $1)
+      ORDER BY orden, id`,
+    [agenteId]
   )
   return { status: 200, body: { ok: true, interactivos: rows } }
 }
@@ -177,12 +180,15 @@ function resumen(m) {
  * Recibe `enviarSobre` en vez de importarlo: whatsapp-cloud ya importa de aquí
  * indirectamente a través del agente, y el lazo cerraría un ciclo de módulos.
  */
-export async function enviarInteractivo({ contacto, linea = null, clave, personalId = null, enviarSobre }) {
+export async function enviarInteractivo({ contacto, linea = null, clave, agenteId = null, personalId = null, enviarSobre }) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
   const { rows: [m] } = await pool.query(
-    `SELECT * FROM public.whatsapp_interactivos WHERE clave = $1 AND activo`, [clave]
+    `SELECT * FROM public.whatsapp_interactivos
+      WHERE clave = $1 AND activo
+        AND ($2::integer IS NULL OR agente_id IS NULL OR agente_id = $2)
+      ORDER BY (agente_id = $2) DESC NULLS LAST LIMIT 1`, [clave, agenteId]
   )
   if (!m) return { status: 404, body: { ok: false, error: `No existe el mensaje "${clave}" o está desactivado` } }
 
@@ -266,6 +272,7 @@ export async function guardarInteractivo({ id, datos = {} }) {
 
   const clave = String(datos.clave || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
   if (!clave) return { status: 400, body: { ok: false, error: 'Falta la clave' } }
+  const agenteId = datos.agente_id == null ? null : Number(datos.agente_id)
 
   const vals = [
     clave,
@@ -289,9 +296,9 @@ export async function guardarInteractivo({ id, datos = {} }) {
         `UPDATE public.whatsapp_interactivos
             SET clave=$1, nombre=$2, descripcion=$3, tipo=$4, encabezado=$5, cuerpo=$6,
                 pie=$7, boton_texto=$8, opciones=$9::jsonb, url=$10, usa_agente=$11,
-                activo=$12, orden=$13, actualizado_en=now()
-          WHERE id=$14 RETURNING id, clave`,
-        [...vals, Number(id)]
+                activo=$12, orden=$13, agente_id=COALESCE($14,agente_id), actualizado_en=now()
+          WHERE id=$15 RETURNING id, clave`,
+        [...vals, agenteId, Number(id)]
       )
       if (!rows.length) return { status: 404, body: { ok: false, error: 'Ese mensaje ya no existe' } }
       log(MOD, `${rows[0].clave} actualizado`)
@@ -301,10 +308,10 @@ export async function guardarInteractivo({ id, datos = {} }) {
     const { rows } = await pool.query(
       `INSERT INTO public.whatsapp_interactivos
          (clave, nombre, descripcion, tipo, encabezado, cuerpo, pie, boton_texto,
-          opciones, url, usa_agente, activo, orden)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13)
+          opciones, url, usa_agente, activo, orden, agente_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14)
        RETURNING id, clave`,
-      vals
+      [...vals, agenteId]
     )
     log(MOD, `${rows[0].clave} creado`)
     return { status: 200, body: { ok: true, id: rows[0].id } }

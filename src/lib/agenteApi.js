@@ -61,8 +61,40 @@ export const EFFORT_OPCIONES = [
   { valor: 'max',    label: 'Máximo',   ayuda: 'Sin límite práctico. Solo si la calidad lo justifica.' },
 ]
 
+export const CATEGORIAS_AGENTE = [
+  { valor: 'GENERAL', label: 'General' },
+  { valor: 'VENTAS', label: 'Ventas' },
+  { valor: 'SOPORTE', label: 'Soporte' },
+  { valor: 'GESTION', label: 'Gestión' },
+  { valor: 'COBRANZAS', label: 'Cobranzas' },
+  { valor: 'ADMINISTRATIVO', label: 'Administrativo' },
+  { valor: 'OPERATIVO', label: 'Operativo' },
+]
+
 /** Todos los agentes, para la portada del módulo. Ya no hay "el" agente. */
 export const listarAgentes = () => orbitApi('/agente/lista/todos')
+
+export const cargarMotores = () => orbitApi('/agente/marco/motores')
+
+export const crearAgente = (datos) =>
+  orbitApi('/agente/marco/crear', { method: 'POST', body: datos })
+
+export const cargarHerramientas = (agenteId) =>
+  orbitApi(`/agente/marco/herramientas/${agenteId}`)
+
+export const guardarHerramientas = (agenteId, herramientas) =>
+  orbitApi(`/agente/marco/herramientas/${agenteId}`, {
+    method: 'PUT', body: { herramientas },
+  })
+
+export const exportarAgente = (clave) =>
+  orbitApi(`/agente/marco/exportar/${encodeURIComponent(clave)}`)
+
+export const importarAgente = (definicion, clave = null) =>
+  orbitApi('/agente/marco/importar', { method: 'POST', body: { definicion, clave } })
+
+export const eliminarAgente = (clave) =>
+  orbitApi(`/agente/marco/${encodeURIComponent(clave)}`, { method: 'DELETE' })
 
 export const cargarAgente = (clave = 'VETERINARIAS') => orbitApi(`/agente/${clave}`)
 

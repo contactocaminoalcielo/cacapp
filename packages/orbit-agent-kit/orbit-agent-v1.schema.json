@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.local/schemas/orbit-agent-v1.schema.json",
+  "title": "Orbit Agent Definition v1",
+  "type": "object",
+  "required": ["schema", "formato", "agente", "conocimiento", "reglas", "herramientas"],
+  "properties": {
+    "schema": { "const": "orbit-agent/v1" },
+    "formato": { "const": 1 },
+    "exportado_en": { "type": "string", "format": "date-time" },
+    "agente": {
+      "type": "object",
+      "required": ["clave", "nombre", "proveedor", "modelo", "instrucciones"],
+      "properties": {
+        "clave": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,29}$" },
+        "nombre": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "categoria": { "enum": ["GENERAL", "VENTAS", "SOPORTE", "GESTION", "COBRANZAS", "ADMINISTRATIVO", "OPERATIVO"] },
+        "objetivo": { "type": ["string", "null"], "maxLength": 1200 },
+        "idioma": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+        "instrucciones": { "type": "string" },
+        "proveedor": { "type": "string", "minLength": 1 },
+        "modelo": { "type": "string", "minLength": 1 },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+        "memoria_mensajes": { "type": "integer", "minimum": 2, "maximum": 100 }
+      },
+      "additionalProperties": true
+    },
+    "conocimiento": { "type": "array", "items": { "type": "object" } },
+    "reglas": { "type": "array", "items": { "type": "object" } },
+    "herramientas": { "type": "array", "items": { "type": "object", "required": ["clave"] } },
+    "catalogos": { "type": "object" },
+    "no_incluye": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

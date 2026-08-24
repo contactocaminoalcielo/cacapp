@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import ReglasYCorrecciones from '@/components/agente/ReglasYCorrecciones'
+import HerramientasAgente from '@/components/agente/HerramientasAgente'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import MaterialesWhatsapp from '@/pages/MaterialesWhatsapp'
 import InteractivosWhatsapp from '@/pages/InteractivosWhatsapp'
@@ -19,9 +20,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
   cargarAgente, guardarAgente, agregarPieza, actualizarPieza, borrarPieza, archivoPieza,
-  leerBase64, leerTexto, csvAMarkdown, tokensAprox, costoConversacion,
-  cargarEjecuciones, vaciosDeConocimiento,
-  TIPOS_KB, EFFORT_OPCIONES, MODELOS,
+  leerBase64, leerTexto, csvAMarkdown, tokensAprox,
+  cargarEjecuciones, cargarMotores, vaciosDeConocimiento,
+  TIPOS_KB, EFFORT_OPCIONES, CATEGORIAS_AGENTE,
 } from '@/lib/agenteApi'
 import {
   Bot, Power, Save, Plus, Trash2, Eye, EyeOff, Loader2, AlertTriangle,
@@ -42,6 +43,8 @@ export default function AgenteWhatsapp() {
   const [resumen, setResumen]       = useState(null)
   const [cargando, setCargando]     = useState(true)
   const [error, setError]           = useState(null)
+  const [motores, setMotores]       = useState([])
+  const [proveedores, setProveedores] = useState([])
 
   const [instrucciones, setInstrucciones] = useState('')
   const [ajustes, setAjustes]             = useState(null)
@@ -60,15 +63,23 @@ export default function AgenteWhatsapp() {
 
   const refrescar = useCallback(async () => {
     try {
-      const r = await cargarAgente(clave)
+      const [r, catalogo] = await Promise.all([cargarAgente(clave), cargarMotores()])
+      setMotores((catalogo.motores || []).filter(m => m.activo))
+      setProveedores(catalogo.proveedores || [])
       setAgente(r.agente)
       setKb(r.conocimiento || [])
       setResumen(r.resumen || null)
       setInstrucciones(r.agente.instrucciones || '')
       setAjustes({
+        nombre:           r.agente.nombre,
+        categoria:        r.agente.categoria || 'GENERAL',
+        objetivo:         r.agente.objetivo || '',
+        idioma:           r.agente.idioma || 'es',
+        proveedor:        r.agente.proveedor || 'ANTHROPIC',
         modelo:           r.agente.modelo,
         effort:           r.agente.effort,
         max_turnos:       r.agente.max_turnos,
+        memoria_mensajes: r.agente.memoria_mensajes || 20,
         phone_number_ids: (r.agente.phone_number_ids || []).join(', '),
         // Se muestran en SEGUNDOS: nadie piensa en milisegundos, y pedirlos así
         // invita a equivocarse por un factor de mil justo en el número que
@@ -110,9 +121,15 @@ export default function AgenteWhatsapp() {
   const sucio = useMemo(() => {
     if (!agente || !ajustes) return false
     return instrucciones !== (agente.instrucciones || '')
+      || ajustes.nombre !== agente.nombre
+      || ajustes.categoria !== (agente.categoria || 'GENERAL')
+      || ajustes.objetivo !== (agente.objetivo || '')
+      || ajustes.idioma !== (agente.idioma || 'es')
+      || ajustes.proveedor !== (agente.proveedor || 'ANTHROPIC')
       || ajustes.modelo !== agente.modelo
       || ajustes.effort !== agente.effort
       || Number(ajustes.max_turnos) !== agente.max_turnos
+      || Number(ajustes.memoria_mensajes) !== (agente.memoria_mensajes || 20)
       || ajustes.phone_number_ids !== (agente.phone_number_ids || []).join(', ')
       || Number(ajustes.espera_s) * 1000 !== (agente.espera_ms ?? 12000)
       || Number(ajustes.espera_max_s) * 1000 !== (agente.espera_max_ms ?? 30000)
@@ -125,10 +142,16 @@ export default function AgenteWhatsapp() {
     try {
       const ids = ajustes.phone_number_ids.split(',').map(s => s.trim()).filter(Boolean)
       const r = await guardarAgente(agente.clave, {
+        nombre:           ajustes.nombre,
+        categoria:        ajustes.categoria,
+        objetivo:         ajustes.objetivo,
+        idioma:           ajustes.idioma,
         instrucciones,
+        proveedor:        ajustes.proveedor,
         modelo:           ajustes.modelo,
         effort:           ajustes.effort,
         max_turnos:       Number(ajustes.max_turnos),
+        memoria_mensajes: Number(ajustes.memoria_mensajes),
         phone_number_ids: ids,
         espera_ms:        Math.round(Number(ajustes.espera_s) * 1000),
         espera_max_ms:    Math.round(Number(ajustes.espera_max_s) * 1000),
@@ -241,6 +264,8 @@ export default function AgenteWhatsapp() {
   }
 
   const tokens = resumen ? tokensAprox(resumen) : 0
+  const modelosDisponibles = motores.filter(m => m.proveedor === ajustes?.proveedor)
+  const proveedorActual = proveedores.find(p => p.proveedor === ajustes?.proveedor)
 
   return (
     <>
@@ -270,8 +295,8 @@ export default function AgenteWhatsapp() {
                 <h2 className="font-semibold text-neutral-900">{agente.nombre}</h2>
                 <p className="text-sm text-neutral-500">
                   {agente.activo
-                    ? 'Encendido: responde solo a las veterinarias en las líneas asignadas.'
-                    : 'Apagado: no responde nada. La bandeja funciona con normalidad.'}
+                    ? 'Encendido: responde en las líneas asignadas.'
+                    : 'Apagado: puedes configurarlo y probarlo sin que responda a nadie.'}
                 </p>
               </div>
             </div>
@@ -290,8 +315,8 @@ export default function AgenteWhatsapp() {
             <div className="mt-4 rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900 flex gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
-                Está hablando con veterinarias reales. Lo que responda sale a nombre de Camino al
-                Cielo — revisa la bitácora con frecuencia los primeros días.
+                Está conectado a una línea real. Sus respuestas salen a nombre de la organización
+                configurada — revisa la bitácora con frecuencia los primeros días.
               </span>
             </div>
           )}
@@ -321,6 +346,7 @@ export default function AgenteWhatsapp() {
             <TabsTrigger value="cerebro">Cerebro</TabsTrigger>
             <TabsTrigger value="ajustes">Ajustes</TabsTrigger>
             <TabsTrigger value="reglas">Reglas</TabsTrigger>
+            <TabsTrigger value="capacidades">Capacidades</TabsTrigger>
             <TabsTrigger value="materiales">Materiales</TabsTrigger>
             <TabsTrigger value="interactivos">Botones y menús</TabsTrigger>
             <TabsTrigger value="bitacora">Bitácora</TabsTrigger>
@@ -336,7 +362,7 @@ export default function AgenteWhatsapp() {
               onChange={e => setInstrucciones(e.target.value)}
               rows={12}
               className="font-mono text-sm leading-relaxed"
-              placeholder="Eres el asistente de WhatsApp de Camino al Cielo para veterinarias aliadas…"
+              placeholder="Define quién es, cómo responde, qué debe evitar y cuándo debe escalar…"
             />
             <p className="text-xs text-neutral-500">
               {instrucciones.length.toLocaleString('es-CO')} caracteres. Sé concreto: el agente sigue
@@ -498,37 +524,36 @@ export default function AgenteWhatsapp() {
             <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Campo label="Modelo" className="sm:col-span-2"
-                ayuda={MODELOS.find(m => m.valor === ajustes.modelo)?.ayuda}>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {MODELOS.map(m => {
-                    const elegido = ajustes.modelo === m.valor
-                    const costo   = costoConversacion({ modelo: m.valor, contexto: tokens })
-                    return (
-                      <button
-                        key={m.valor} type="button"
-                        onClick={() => setAjustes(a => ({ ...a, modelo: m.valor }))}
-                        className={`rounded-xl border p-3 text-left transition ${
-                          elegido
-                            ? 'border-neutral-900 bg-neutral-900 text-white'
-                            : 'border-neutral-200 hover:border-neutral-400'
-                        }`}
-                      >
-                        <span className="block text-sm font-semibold">{m.label}</span>
-                        <span className={`block text-xs ${elegido ? 'text-neutral-300' : 'text-neutral-500'}`}>
-                          ${m.entrada} / ${m.salida} por millón
-                        </span>
-                        <span className={`block text-xs mt-1 ${elegido ? 'text-white' : 'text-neutral-700'}`}>
-                          ≈ {pesos(costo)} por conversación
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <p className="mt-2 text-xs text-neutral-500">
-                  Estimado sobre 6 respuestas y el contexto actual ({tokens.toLocaleString('es-CO')} tokens).
-                  Es una cuenta de servilleta: la bitácora guarda los tokens reales de cada conversación.
-                </p>
+              <Campo label="Nombre">
+                <Input value={ajustes.nombre} onChange={e => setAjustes(a => ({ ...a, nombre: e.target.value }))} />
+              </Campo>
+
+              <Campo label="Tipo de agente">
+                <select value={ajustes.categoria} onChange={e => setAjustes(a => ({ ...a, categoria: e.target.value }))}
+                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  {CATEGORIAS_AGENTE.map(c => <option key={c.valor} value={c.valor}>{c.label}</option>)}
+                </select>
+              </Campo>
+
+              <Campo label="Objetivo" className="sm:col-span-2" ayuda="El resultado principal que orienta sus decisiones.">
+                <Textarea rows={3} value={ajustes.objetivo} onChange={e => setAjustes(a => ({ ...a, objetivo: e.target.value }))} />
+              </Campo>
+
+              <Campo label="Proveedor de IA" ayuda={proveedorActual?.listo ? 'Credencial disponible en este servidor.' : proveedorActual?.motivo}>
+                <select value={ajustes.proveedor} onChange={e => {
+                  const proveedor = e.target.value
+                  const primero = motores.find(m => m.proveedor === proveedor)
+                  setAjustes(a => ({ ...a, proveedor, modelo: primero?.modelo || '' }))
+                }} className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  {proveedores.map(p => <option key={p.proveedor} value={p.proveedor} disabled={!p.listo}>{p.proveedor}{p.listo ? '' : ' · no configurado'}</option>)}
+                </select>
+              </Campo>
+
+              <Campo label="Modelo" ayuda={motores.find(m => m.modelo === ajustes.modelo && m.proveedor === ajustes.proveedor)?.ayuda}>
+                <select value={ajustes.modelo} onChange={e => setAjustes(a => ({ ...a, modelo: e.target.value }))}
+                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  {modelosDisponibles.map(m => <option key={m.modelo} value={m.modelo}>{m.etiqueta}</option>)}
+                </select>
               </Campo>
 
               <Campo label="Profundidad de razonamiento"
@@ -546,6 +571,19 @@ export default function AgenteWhatsapp() {
                 ayuda="Al superarlo deja de responder y la conversación queda para una persona.">
                 <Input type="number" min={1} max={200} value={ajustes.max_turnos}
                   onChange={e => setAjustes(a => ({ ...a, max_turnos: e.target.value }))} />
+              </Campo>
+
+              <Campo label="Mensajes que recuerda"
+                ayuda="Historial reciente que recibe el modelo en cada respuesta. Más memoria aumenta contexto y costo.">
+                <Input type="number" min={2} max={100} value={ajustes.memoria_mensajes}
+                  onChange={e => setAjustes(a => ({ ...a, memoria_mensajes: e.target.value }))} />
+              </Campo>
+
+              <Campo label="Idioma">
+                <select value={ajustes.idioma} onChange={e => setAjustes(a => ({ ...a, idioma: e.target.value }))}
+                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  <option value="es">Español</option><option value="es-CO">Español de Colombia</option><option value="en">Inglés</option>
+                </select>
               </Campo>
 
               <Campo label="Espera antes de responder (segundos)"
@@ -594,16 +632,16 @@ export default function AgenteWhatsapp() {
 
           </TabsContent>
 
-          {/* ⚠️ Materiales y botones son catálogos GLOBALES todavía, no por
-              agente: la tabla no tiene columna `agente_id`. Se muestran aquí
-              porque es donde se buscan, pero cuando llegue la segunda línea
-              habrá que separarlos o las dos compartirán brochure y menús. */}
+          <TabsContent value="capacidades" className="space-y-6 mt-0">
+            <HerramientasAgente agenteId={agente.id} />
+          </TabsContent>
+
           <TabsContent value="materiales" className="mt-0">
-            <MaterialesWhatsapp embebido />
+            <MaterialesWhatsapp embebido agenteId={agente.id} />
           </TabsContent>
 
           <TabsContent value="interactivos" className="mt-0">
-            <InteractivosWhatsapp embebido />
+            <InteractivosWhatsapp embebido agenteId={agente.id} />
           </TabsContent>
 
           <TabsContent value="bitacora" className="space-y-6 mt-0">
@@ -701,15 +739,6 @@ export default function AgenteWhatsapp() {
       </div>
     </>
   )
-}
-
-// Anthropic factura en dólares; el peso es solo para dar magnitud, por eso la
-// tasa es aproximada y se muestran las dos cifras en vez de esconder la de USD.
-const TRM_APROX = 4000
-
-function pesos(usd) {
-  const cop = Math.round(usd * TRM_APROX)
-  return `US$${usd.toFixed(3)} · ${cop.toLocaleString('es-CO')} COP`
 }
 
 /** Una conversación de la bitácora: qué le dijeron, qué respondió y qué hizo. */

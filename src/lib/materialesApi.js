@@ -45,10 +45,11 @@ export function comoLlega(mime) {
   return { clase: 'documento', aviso: null }
 }
 
-export const cargarMateriales = () => orbitApi('/whatsapp/materiales')
+export const cargarMateriales = (agenteId = null) =>
+  orbitApi(`/whatsapp/materiales${agenteId ? `?agenteId=${agenteId}` : ''}`)
 
-export const guardarMaterial = (datos) =>
-  orbitApi('/whatsapp/materiales', { method: 'POST', body: datos })
+export const guardarMaterial = (datos, agenteId = null) =>
+  orbitApi('/whatsapp/materiales', { method: 'POST', body: { ...datos, agente_id: agenteId ?? datos.agente_id ?? null } })
 
 export const borrarMaterial = (id) =>
   orbitApi(`/whatsapp/materiales/${id}`, { method: 'DELETE' })

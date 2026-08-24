@@ -90,7 +90,7 @@ function Campo({ label, ayuda, tope, valor, children }) {
  * cabecera de página y el margen exterior, que ya los pone quien la contiene.
  * Duplicar el componente para eso condena a arreglar cada bug dos veces.
  */
-export default function InteractivosWhatsapp({ embebido = false }) {
+export default function InteractivosWhatsapp({ embebido = false, agenteId = null }) {
   const [lista, setLista] = useState([])
   const [cargando, setCargando] = useState(true)
   const [sel, setSel] = useState(null)          // el que se está editando
@@ -100,11 +100,11 @@ export default function InteractivosWhatsapp({ embebido = false }) {
 
   const refrescar = useCallback(async () => {
     try {
-      const r = await cargarInteractivos()
+      const r = await cargarInteractivos(agenteId)
       setLista(r.interactivos || [])
       setError(null)
     } catch (e) { setError(e.message) } finally { setCargando(false) }
-  }, [])
+  }, [agenteId])
 
   useEffect(() => { refrescar() }, [refrescar])
 
@@ -115,7 +115,7 @@ export default function InteractivosWhatsapp({ embebido = false }) {
   async function guardar() {
     setGuardando(true); setError(null)
     try {
-      await guardarInteractivo(sel)
+      await guardarInteractivo(sel, agenteId)
       setOk(true); setTimeout(() => setOk(false), 2500)
       await refrescar()
       setSel(null)

@@ -51,11 +51,14 @@ export async function catalogoDeMateriales(agenteId = null) {
  * ⚠️ NUNCA se selecciona `archivo`: son megas en base64 dentro de un JSON de
  * lista. El archivo se pide de uno en uno por su propia ruta.
  */
-export async function listarMateriales() {
+export async function listarMateriales(agenteId = null) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, descripcion, mime, nombre_archivo, pie, bytes,
-            usa_agente, activo, orden, creado_en, actualizado_en
-       FROM public.whatsapp_materiales ORDER BY orden, id`
+            usa_agente, activo, orden, creado_en, actualizado_en, agente_id
+       FROM public.whatsapp_materiales
+      WHERE ($1::integer IS NULL OR agente_id = $1)
+      ORDER BY orden, id`,
+    [agenteId]
   )
   return { status: 200, body: { ok: true, materiales: rows } }
 }
@@ -75,14 +78,16 @@ export async function leerMaterial(id) {
  * Recibe `enviarSobre` en vez de importarlo, igual que los interactivos: el lazo
  * con whatsapp-cloud cerraría un ciclo de módulos.
  */
-export async function enviarMaterial({ contacto, linea = null, clave, personalId = null, enviarSobre }) {
+export async function enviarMaterial({ contacto, linea = null, clave, agenteId = null, personalId = null, enviarSobre }) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
   const { rows: [m] } = await pool.query(
     `SELECT archivo, mime, nombre_archivo, pie FROM public.whatsapp_materiales
-      WHERE clave = $1 AND activo`,
-    [clave]
+      WHERE clave = $1 AND activo
+        AND ($2::integer IS NULL OR agente_id IS NULL OR agente_id = $2)
+      ORDER BY (agente_id = $2) DESC NULLS LAST LIMIT 1`,
+    [clave, agenteId]
   )
   if (!m) return { status: 404, body: { ok: false, error: `No existe el material "${clave}" o está desactivado` } }
 
@@ -140,6 +145,7 @@ function validar({ mime, buf, nombreArchivo }) {
 }
 
 export async function guardarMaterial({ id, datos = {} }) {
+  const agenteId = datos.agente_id == null ? null : Number(datos.agente_id)
   const clave = String(datos.clave || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
   if (!clave) return { status: 400, body: { ok: false, error: 'Falta la clave' } }
 
@@ -171,9 +177,9 @@ export async function guardarMaterial({ id, datos = {} }) {
           `UPDATE public.whatsapp_materiales
               SET clave=$1, nombre=$2, descripcion=$3, nombre_archivo=$4, pie=$5,
                   usa_agente=$6, activo=$7, orden=$8,
-                  archivo=$9, mime=$10, bytes=$11, actualizado_en=now()
-            WHERE id=$12 RETURNING id, clave`,
-          [...campos, buf, String(datos.mime), buf.length, Number(id)]
+                  archivo=$9, mime=$10, bytes=$11, agente_id=COALESCE($12,agente_id), actualizado_en=now()
+            WHERE id=$13 RETURNING id, clave`,
+          [...campos, buf, String(datos.mime), buf.length, agenteId, Number(id)]
         )
         if (!rows.length) return { status: 404, body: { ok: false, error: 'Ese material ya no existe' } }
         log(MOD, `${rows[0].clave} actualizado con archivo nuevo`)
@@ -183,9 +189,10 @@ export async function guardarMaterial({ id, datos = {} }) {
       const { rows } = await pool.query(
         `UPDATE public.whatsapp_materiales
             SET clave=$1, nombre=$2, descripcion=$3, nombre_archivo=$4, pie=$5,
-                usa_agente=$6, activo=$7, orden=$8, actualizado_en=now()
-          WHERE id=$9 RETURNING id, clave`,
-        [...campos, Number(id)]
+                usa_agente=$6, activo=$7, orden=$8,
+                agente_id=COALESCE($9,agente_id), actualizado_en=now()
+          WHERE id=$10 RETURNING id, clave`,
+        [...campos, agenteId, Number(id)]
       )
       if (!rows.length) return { status: 404, body: { ok: false, error: 'Ese material ya no existe' } }
       log(MOD, `${rows[0].clave} actualizado`)
@@ -199,10 +206,10 @@ export async function guardarMaterial({ id, datos = {} }) {
     const { rows } = await pool.query(
       `INSERT INTO public.whatsapp_materiales
          (clave, nombre, descripcion, nombre_archivo, pie, usa_agente, activo, orden,
-          archivo, mime, bytes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          archivo, mime, bytes, agente_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id, clave`,
-      [...campos, buf, String(datos.mime), buf.length]
+      [...campos, buf, String(datos.mime), buf.length, agenteId]
     )
     log(MOD, `${rows[0].clave} creado (${(buf.length / 1024).toFixed(0)} kB)`)
     return { status: 200, body: { ok: true, id: rows[0].id } }

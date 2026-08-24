@@ -44,6 +44,11 @@ import {
   valorarRespuesta, listarValoraciones, aplicarValoracion, descartarValoracion,
   listarReglas, crearRegla, guardarRegla, borrarRegla,
 } from './agente-config.js'
+import {
+  listarMotores, guardarMotor, borrarMotor, herramientasDeAgente,
+  guardarHerramientasDeAgente, crearAgente, borrarAgente,
+  exportarAgente, importarAgente,
+} from './agente-marco.js'
 import { probar as probarAgente, arrancarSeguimientos, arrancarCacheCaliente } from './agente-wa.js'
 import {
   resumen as resumenCostos, listaPrecios, guardarPrecio,
@@ -71,6 +76,9 @@ app.use('/webhook/whatsapp', express.raw({ type: '*/*', limit: '1mb' }))
 // subida fallaría con un 413 sin mensaje útil. Va ANTES del json global, igual
 // que el webhook: el primer parser que coincide gana y el global lo salta.
 app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
+// Una definición portable puede incluir las imágenes de conocimiento en
+// base64. El límite se aplica solo al importador, nunca al resto de la API.
+app.use('/agente/marco/importar', express.json({ limit: '60mb' }))
 
 // Las imágenes que se envían viajan en base64 (≈ +33 %) y no caben en el
 // límite por defecto. Ruta PLANA con el contacto en el cuerpo a propósito: con
@@ -502,7 +510,7 @@ app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandeja, async (req, res) 
 
 app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await listarInteractivos()
+    const r = await listarInteractivos(req.query.agenteId ? Number(req.query.agenteId) : null)
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/interactivos', e) }
 })
@@ -552,9 +560,9 @@ app.post('/whatsapp/conversaciones/:contacto/interactivo', requireAuth, rolBande
 // El catálogo lo edita David y el agente manda de él. Salió de una vet pidiendo
 // el brochure, que hubo que mandarle a mano por la otra línea.
 
-app.get('/whatsapp/materiales', requireAuth, rolBandeja, async (_req, res) => {
+app.get('/whatsapp/materiales', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await listarMateriales()
+    const r = await listarMateriales(req.query.agenteId ? Number(req.query.agenteId) : null)
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/materiales', e) }
 })
@@ -601,6 +609,76 @@ app.post('/whatsapp/conversaciones/:contacto/material', requireAuth, rolBandeja,
 // Las tablas del agente NO están expuestas por PostgREST: esta es la única
 // puerta. Mismo rol que la bandeja — quien atiende la línea es quien la ajusta.
 const rolAgente = requireRol('COORDINADOR', 'ADMIN')
+
+// Marco configurable y portable. Todas estas rutas tienen dos o más segmentos
+// para no chocar con `/agente/:clave`.
+app.get('/agente/marco/motores', requireAuth, rolAgente, async (_req, res) => {
+  try {
+    const r = await listarMotores()
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/motores', e) }
+})
+
+app.post('/agente/marco/motores', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await guardarMotor({ id: req.body?.id || null, datos: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/motor-guardar', e) }
+})
+
+app.delete('/agente/marco/motores/:id', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await borrarMotor(req.params.id)
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/motor-borrar', e) }
+})
+
+app.get('/agente/marco/herramientas/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await herramientasDeAgente(Number(req.params.agenteId))
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/herramientas', e) }
+})
+
+app.put('/agente/marco/herramientas/:agenteId', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await guardarHerramientasDeAgente({
+      agenteId: Number(req.params.agenteId), herramientas: req.body?.herramientas || [],
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/herramientas-guardar', e) }
+})
+
+app.post('/agente/marco/crear', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await crearAgente({ datos: req.body || {}, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/crear', e) }
+})
+
+app.delete('/agente/marco/:clave', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await borrarAgente({ clave: req.params.clave, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/borrar', e) }
+})
+
+app.get('/agente/marco/exportar/:clave', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await exportarAgente(req.params.clave)
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/exportar', e) }
+})
+
+app.post('/agente/marco/importar', requireAuth, rolAgente, async (req, res) => {
+  try {
+    const r = await importarAgente({
+      definicion: req.body?.definicion, clave: req.body?.clave || null,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'agente/importar', e) }
+})
 
 app.get('/agente/:clave', requireAuth, rolAgente, async (req, res) => {
   try {

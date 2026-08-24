@@ -41,10 +41,11 @@ export const VARIABLES = [
   { clave: '{{enlace_registro}}', ayuda: 'El enlace del portal de ESA clínica. Lo resuelve el servidor por su número.' },
 ]
 
-export const cargarInteractivos = () => orbitApi('/whatsapp/interactivos')
+export const cargarInteractivos = (agenteId = null) =>
+  orbitApi(`/whatsapp/interactivos${agenteId ? `?agenteId=${agenteId}` : ''}`)
 
-export const guardarInteractivo = (datos) =>
-  orbitApi('/whatsapp/interactivos', { method: 'POST', body: datos })
+export const guardarInteractivo = (datos, agenteId = null) =>
+  orbitApi('/whatsapp/interactivos', { method: 'POST', body: { ...datos, agente_id: agenteId ?? datos.agente_id ?? null } })
 
 export const borrarInteractivo = (id) =>
   orbitApi(`/whatsapp/interactivos/${id}`, { method: 'DELETE' })

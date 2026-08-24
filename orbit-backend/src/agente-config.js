@@ -7,11 +7,13 @@
 //
 // Este módulo NO ejecuta el agente — solo lo configura. El motor va aparte.
 import { pool, log } from './db.js'
+import { estadoDeProveedores } from './motores/index.js'
 
 const MOD = '[agente-config]'
 
 const TIPOS  = ['TEXTO', 'TABLA', 'IMAGEN', 'DOCUMENTO']
 const EFFORT = ['low', 'medium', 'high', 'xhigh', 'max']
+const CATEGORIAS = ['GENERAL', 'VENTAS', 'SOPORTE', 'GESTION', 'COBRANZAS', 'ADMINISTRATIVO', 'OPERATIVO']
 
 // Tope de la columna `bytes` en la migración. Se valida aquí además de en la DB
 // para poder devolver un mensaje legible en vez de un error de constraint.
@@ -39,7 +41,8 @@ const CAMPOS_KB = `id, agente_id, tipo, titulo, texto, mime, bytes, orden, activ
  */
 export async function listarAgentes() {
   const { rows } = await pool.query(
-    `SELECT a.id, a.clave, a.nombre, a.activo, a.modelo, a.effort,
+    `SELECT a.id, a.clave, a.nombre, a.etiqueta_menu, a.activo, a.categoria,
+            a.objetivo, a.proveedor, a.modelo, a.effort,
             a.phone_number_ids, a.voz_activa, a.voz_id, a.actualizado_en,
             (SELECT count(*)::int FROM public.agente_wa_conocimiento k
               WHERE k.agente_id = a.id AND k.activo)                        AS piezas,
@@ -56,7 +59,8 @@ export async function listarAgentes() {
 
 export async function obtenerAgente({ clave = 'VETERINARIAS' } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, clave, nombre, activo, instrucciones, modelo, effort, max_turnos,
+    `SELECT id, clave, nombre, etiqueta_menu, activo, categoria, objetivo, idioma,
+            instrucciones, proveedor, modelo, effort, max_turnos, memoria_mensajes,
             phone_number_ids, espera_ms, espera_max_ms,
             seguimiento_enlace_minutos, seguimiento_enlace_texto, creado_en, actualizado_en
        FROM public.agente_wa WHERE clave = $1`,
@@ -141,6 +145,10 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
   const campos = []
   const vals   = []
   const set    = (col, val) => { vals.push(val); campos.push(`${col} = $${vals.length}`) }
+  const { rows: [actual] } = await pool.query(
+    `SELECT proveedor, modelo, phone_number_ids FROM public.agente_wa WHERE clave = $1`, [clave]
+  )
+  if (!actual) return { status: 404, body: { ok: false, error: `No existe el agente ${clave}` } }
 
   if (datos.instrucciones !== undefined) {
     if (typeof datos.instrucciones !== 'string') {
@@ -148,7 +156,40 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
     }
     set('instrucciones', datos.instrucciones)
   }
+  if (datos.nombre !== undefined) {
+    const nombre = String(datos.nombre || '').trim()
+    if (!nombre) return { status: 400, body: { ok: false, error: 'nombre no puede ir vacío' } }
+    set('nombre', nombre.slice(0, 120))
+  }
+  if (datos.etiqueta_menu !== undefined) {
+    const etiqueta = String(datos.etiqueta_menu || '').trim()
+    set('etiqueta_menu', etiqueta.slice(0, 40) || null)
+  }
+  if (datos.categoria !== undefined) {
+    const categoria = String(datos.categoria || '').toUpperCase()
+    if (!CATEGORIAS.includes(categoria)) {
+      return { status: 400, body: { ok: false, error: `categoría debe ser una de: ${CATEGORIAS.join(', ')}` } }
+    }
+    set('categoria', categoria)
+  }
+  if (datos.objetivo !== undefined) {
+    const objetivo = String(datos.objetivo || '').trim()
+    if (objetivo.length > 1200) return { status: 400, body: { ok: false, error: 'El objetivo es demasiado largo' } }
+    set('objetivo', objetivo || null)
+  }
+  if (datos.idioma !== undefined) {
+    const idioma = String(datos.idioma || '').trim()
+    if (!/^[a-z]{2}(-[A-Z]{2})?$/.test(idioma)) {
+      return { status: 400, body: { ok: false, error: 'idioma debe verse como es o es-CO' } }
+    }
+    set('idioma', idioma)
+  }
   if (datos.activo !== undefined) set('activo', !!datos.activo)
+  if (datos.proveedor !== undefined) {
+    const proveedor = String(datos.proveedor || '').trim().toUpperCase()
+    if (!proveedor) return { status: 400, body: { ok: false, error: 'proveedor no puede ir vacío' } }
+    set('proveedor', proveedor)
+  }
   if (datos.modelo !== undefined) {
     if (!datos.modelo) return { status: 400, body: { ok: false, error: 'modelo no puede ir vacío' } }
     set('modelo', datos.modelo)
@@ -166,10 +207,27 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
     }
     set('max_turnos', n)
   }
+  if (datos.memoria_mensajes !== undefined) {
+    const n = Number(datos.memoria_mensajes)
+    if (!Number.isInteger(n) || n < 2 || n > 100) {
+      return { status: 400, body: { ok: false, error: 'memoria_mensajes debe ser un entero entre 2 y 100' } }
+    }
+    set('memoria_mensajes', n)
+  }
   if (datos.phone_number_ids !== undefined) {
     const ids = Array.isArray(datos.phone_number_ids) ? datos.phone_number_ids : []
     if (ids.some(v => typeof v !== 'string' || !/^\d{5,25}$/.test(v))) {
       return { status: 400, body: { ok: false, error: 'phone_number_ids: solo identificadores numéricos de Meta' } }
+    }
+    if (ids.length) {
+      const { rows: [ocupado] } = await pool.query(
+        `SELECT clave FROM public.agente_wa
+          WHERE clave <> $2 AND phone_number_ids && $1::text[] LIMIT 1`,
+        [ids, clave]
+      )
+      if (ocupado) {
+        return { status: 409, body: { ok: false, error: `Una de esas líneas ya pertenece al agente ${ocupado.clave}` } }
+      }
     }
     set('phone_number_ids', ids)
   }
@@ -207,6 +265,30 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
     set('seguimiento_enlace_texto', t || null)
   }
 
+  const proveedorFinal = String(datos.proveedor ?? actual.proveedor ?? 'ANTHROPIC').toUpperCase()
+  const modeloFinal = String(datos.modelo ?? actual.modelo ?? '')
+  if (datos.proveedor !== undefined || datos.modelo !== undefined) {
+    const { rows: [motor] } = await pool.query(
+      `SELECT 1 FROM public.ia_motores
+        WHERE proveedor = $1 AND modelo = $2 AND activo`,
+      [proveedorFinal, modeloFinal]
+    )
+    if (!motor) {
+      return { status: 400, body: { ok: false, error: `El modelo ${modeloFinal} no está activo para ${proveedorFinal}` } }
+    }
+  }
+
+  if (datos.activo === true) {
+    const lineasFinales = datos.phone_number_ids ?? actual.phone_number_ids ?? []
+    if (!lineasFinales.length) {
+      return { status: 400, body: { ok: false, error: 'No se puede encender un agente sin una línea asignada' } }
+    }
+    const estado = (await estadoDeProveedores()).find(p => p.proveedor === proveedorFinal)
+    if (!estado?.listo) {
+      return { status: 409, body: { ok: false, error: estado?.motivo || `El proveedor ${proveedorFinal} no está listo en este servidor` } }
+    }
+  }
+
   if (!campos.length) return { status: 400, body: { ok: false, error: 'Nada que guardar' } }
 
   set('actualizado_por', personalId || null)
@@ -215,7 +297,8 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
   const { rows } = await pool.query(
     `UPDATE public.agente_wa SET ${campos.join(', ')}
       WHERE clave = $${vals.length}
-      RETURNING id, clave, nombre, activo, instrucciones, modelo, effort, max_turnos,
+      RETURNING id, clave, nombre, etiqueta_menu, activo, categoria, objetivo, idioma,
+                instrucciones, proveedor, modelo, effort, max_turnos, memoria_mensajes,
                 phone_number_ids, espera_ms, espera_max_ms,
                 seguimiento_enlace_minutos, seguimiento_enlace_texto, actualizado_en`,
     vals
