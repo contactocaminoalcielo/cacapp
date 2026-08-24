@@ -152,7 +152,11 @@ export const FORMATOS = [
 
 /** Qué puede llevar el título de una plantilla. */
 export const CABECERAS = [
-  { valor: '',         label: 'Sin título' },
+  {
+    valor: '', label: 'Sin nada',
+    ayuda: 'El mensaje sale sin nada arriba. Para mandar un archivo CON la plantilla —el brochure, '
+      + 'el tarifario, una foto— elige Imagen, Video o Documento.',
+  },
   { valor: 'TEXT',     label: 'Texto',     ayuda: 'Una línea en negrita arriba. Admite como mucho una variable.' },
   { valor: 'IMAGE',    label: 'Imagen',    ayuda: 'JPG o PNG. Hay que subirla aquí: Meta no acepta una URL al crear la plantilla.' },
   { valor: 'VIDEO',    label: 'Video',     ayuda: 'MP4. Se sube igual que la imagen.' },

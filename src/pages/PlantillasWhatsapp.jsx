@@ -39,7 +39,7 @@ import CampanasWa from '@/pages/whatsapp/CampanasWa'
 import {
   Plus, Loader2, RefreshCw, Trash2, Send, X, AlertTriangle, MessageSquare,
   Link2, Reply, Search, Database, Check, Pencil, Phone, Copy, Image as ImageIcon,
-  FileText, Film, MapPin, Upload, Megaphone, Bot, Layers3,
+  FileText, Film, MapPin, Upload, Megaphone, Bot, Type, Ban, Layers3,
 } from 'lucide-react'
 
 /**
@@ -816,11 +816,26 @@ function Constructor({ original, agenteId, onCerrar, onGuardada }) {
             </p>
           </Campo>
 
-          <Campo etiqueta="Título (opcional)">
-            <select value={f.cabTipo} onChange={e => set('cabTipo', e.target.value)}
-                    className="w-full h-9 px-2.5 rounded-lg border border-gray-200 text-[13px] mb-2">
-              {CABECERAS.map(c => <option key={c.valor} value={c.valor}>{c.label}</option>)}
-            </select>
+          {/* 🩸 Esto era un desplegable llamado "Título (opcional)" que arrancaba
+              en "Sin título". La única forma de mandar una imagen o un PDF con la
+              plantilla estaba ahí dentro, y en todo el formulario no aparecía la
+              palabra "imagen" hasta abrirlo: quien buscaba dónde cargar un archivo
+              concluía, con razón, que no se podía. Las opciones van a la vista. */}
+          <Campo etiqueta="Encabezado (opcional) — texto, imagen, video o PDF">
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {CABECERAS.map(c => {
+                const Icono = ICONO_CAB[c.valor] || (c.valor === 'TEXT' ? Type : Ban)
+                const puesto = f.cabTipo === c.valor
+                return (
+                  <button key={c.valor} type="button" onClick={() => set('cabTipo', c.valor)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-semibold transition
+                            ${puesto ? 'border-[#1A5CD8] bg-blue-50/70 text-[#1A5CD8]'
+                                     : 'border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'}`}>
+                    <Icono className="w-3.5 h-3.5" /> {c.label}
+                  </button>
+                )
+              })}
+            </div>
             {f.cabTipo === 'TEXT' && (
               <Input value={f.cabTexto} onChange={e => set('cabTexto', e.target.value)}
                      placeholder={named ? 'Los recordatorios de {{mascota}} ya están listos'
