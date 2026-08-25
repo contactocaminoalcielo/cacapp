@@ -131,6 +131,37 @@ const PAUSA_TRAS_PLANTILLA_MIN = 10
  */
 const ESCRIBIENDO_MS = 20000
 
+/**
+ * Tipos de mensaje entrante que TRAEN TEXTO: son conversación, no un adjunto.
+ *
+ * Meta no manda como `text` la respuesta a un botón. Un botón de plantilla
+ * —incluidas las tarjetas de un carrusel— llega como `type: 'button'` con
+ * `button.text`, y los botones y menús interactivos como `type: 'interactive'`
+ * con `button_reply` / `list_reply`. En los tres casos hay una frase escrita
+ * por la clínica y el webhook ya la guarda en `texto`.
+ *
+ * 🩸 Sin esta lista, la regla de abajo era "todo lo que no sea `text` es un
+ * archivo ilegible". El 24-ago una veterinaria tocó "Me interesa" en una
+ * tarjeta del carrusel de planes y el agente le respondió *"Recibí un archivo.
+ * Por aquí no puedo abrir archivos"* — y ahí se calló. Es el peor sitio posible
+ * para fallar: el mensaje que decía que sí. Los botones los mandamos NOSOTROS;
+ * disculparse por la respuesta a nuestro propio botón no puede volver a pasar.
+ */
+const TIPOS_CON_TEXTO = new Set(['text', 'button', 'interactive'])
+
+/**
+ * Lo que no es conversación NI es un archivo: no se contesta y no se disculpa.
+ *
+ * Una reacción (un 👍 sobre un mensaje) o un evento de sistema no piden
+ * respuesta. Tratarlos como adjunto dispararía la disculpa y una etiqueta para
+ * coordinación por un emoji — ruido en la bandeja y un turno de agente pagado.
+ *
+ * `unsupported` NO entra aquí a propósito: es lo que manda Meta cuando ni
+ * WhatsApp sabe reenviar lo que la clínica envió. Ahí sí hay alguien esperando,
+ * así que se le contesta y se pasa a una persona.
+ */
+const TIPOS_MUDOS = new Set(['reaction', 'system', 'request_welcome'])
+
 // El razonamiento y el cliente de Anthropic se mudaron a `motores/anthropic.js`
 // (migración 112): son detalles de UN motor, no del agente.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1319,7 +1350,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // modelo y hay que tratarla como lo que es, algo que no puede ver. Dar por
   // hecho que está sería la peor versión de esto: contestar sobre una imagen
   // imaginaria.
-  let noTexto = [...tipos].filter(t => t && t !== 'text')
+  let noTexto = [...tipos].filter(t => t && !TIPOS_CON_TEXTO.has(t) && !TIPOS_MUDOS.has(t))
   let veLaFoto = false
   if (noTexto.includes('image')) {
     const { visibles, fallidas } = await revisarImagenes(mensajeIds).catch(() => ({ visibles: 0, fallidas: 1 }))
@@ -1361,7 +1392,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // persona que abra la conversación. Una foto que el modelo SÍ ve, o una nota
   // de voz transcrita, no cuentan como eso — ahí hay conversación que seguir
   // aunque no venga una sola letra escrita.
-  if (!tipos.has('text') && !veLaFoto && !oyeLaVoz) return
+  if (![...tipos].some(t => TIPOS_CON_TEXTO.has(t)) && !veLaFoto && !oyeLaVoz) return
 
   // ── Tope de turnos, dentro de la ventana ──
   const { rows: [{ n }] } = await pool.query(

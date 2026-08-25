@@ -329,6 +329,26 @@ const componente = (p, tipo) => (p?.components || []).find(c => c.type === tipo)
 /** Las tarjetas del carrusel, tal como las devuelve Meta. */
 const tarjetasDePlantilla = p => componente(p, 'CAROUSEL')?.cards || []
 
+/**
+ * Cómo se firma la respuesta rápida de UNA tarjeta del carrusel.
+ *
+ * Sale por el `payload` del botón, que la clínica no ve: en su teléfono el
+ * botón sigue diciendo lo que diga. Vuelve tal cual en el webhook y es lo
+ * único que distingue la tarjeta 1 de la 2 cuando ambas dicen "Me interesa".
+ *
+ * Se usa la primera línea del cuerpo de la tarjeta porque es su título de
+ * hecho, y se le quitan los huecos `{{...}}` — la firma tiene que ser la misma
+ * en todos los envíos, no cambiar con el nombre de cada veterinaria. Meta corta
+ * el payload en 128 caracteres.
+ */
+function firmaDeTarjeta(cardIndex, cuerpo) {
+  const linea = String(cuerpo || '')
+    .replace(/\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g, '')
+    .split(/\r?\n/).map(l => l.trim()).find(Boolean) || ''
+  const etiqueta = `tarjeta ${cardIndex + 1}`
+  return (linea ? `${etiqueta}: ${linea}` : etiqueta).slice(0, 120)
+}
+
 /** Los huecos de un texto, en orden de aparición y sin repetir. */
 function huecosDe(texto) {
   const vistos = []
@@ -1495,6 +1515,20 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
       if (cuerpoTarjeta.length) cardComponents.push({ type: 'body', parameters: cuerpoTarjeta })
 
       buttons.forEach((b, buttonIndex) => {
+        // ── Respuesta rápida: hay que firmarla con la tarjeta ──
+        // Meta no dice qué tarjeta tocó la clínica. Si no mandamos `payload`,
+        // usa el RÓTULO del botón, y en un carrusel las tarjetas repiten
+        // rótulo: dos "Me interesa" indistinguibles. Así llegó el primero de
+        // verdad (24-ago) y ni el agente ni el coordinador podían saber de qué
+        // plan hablaba. La firma viaja escondida —la vet sigue viendo solo
+        // "Me interesa"— y vuelve en el webhook.
+        if (b.type === 'QUICK_REPLY') {
+          cardComponents.push({
+            type: 'button', sub_type: 'quick_reply', index: String(buttonIndex),
+            parameters: [{ type: 'payload', payload: firmaDeTarjeta(cardIndex, body?.text) }],
+          })
+          return
+        }
         if (b.type !== 'URL' || !huecosDe(b.url).length) return
         const destino = `CARD:${cardIndex}:BUTTON:${buttonIndex}`
         const params = recogerTexto(destino, b.url)

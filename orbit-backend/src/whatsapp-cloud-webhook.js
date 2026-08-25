@@ -499,6 +499,23 @@ export async function listarEventos({ limite = 50, numero = null } = {}) {
 }
 
 /**
+ * Una respuesta de botón, escrita para que se entienda sola en la bandeja y
+ * delante del modelo.
+ *
+ * El `payload` (o el `id`, en los interactivos) viaja escondido y a veces es lo
+ * ÚNICO que distingue una opción de otra: en un carrusel las tres tarjetas
+ * llevan el mismo rótulo "Me interesa" y sin el payload nadie —ni el
+ * coordinador ni el agente— sabe de qué plan hablaba la clínica. Se añade solo
+ * cuando dice algo nuevo: repetir el mismo texto entre paréntesis sería ruido.
+ */
+function conEtiqueta(clase, titulo, dato) {
+  const t = String(titulo || '').trim()
+  const d = String(dato || '').trim()
+  const util = d && d.toLowerCase() !== t.toLowerCase()
+  return `[${clase}] ${t}${util ? ` (${d})` : ''}`
+}
+
+/**
  * Texto legible de UN mensaje, para que la bandeja se entienda de un vistazo.
  * Cubre texto suelto, respuestas de botón y de lista, y adjuntos con pie de foto.
  * Los Flows (nfm_reply) todavía no se interpretan: se marcan y el JSON queda
@@ -507,9 +524,15 @@ export async function listarEventos({ limite = 50, numero = null } = {}) {
 export function textoDeMensaje(m) {
   if (!m) return null
   if (m.text?.body) return m.text.body
-  if (m.button?.text) return `[botón] ${m.button.text}`
-  if (m.interactive?.button_reply?.title) return `[botón] ${m.interactive.button_reply.title}`
-  if (m.interactive?.list_reply?.title) return `[lista] ${m.interactive.list_reply.title}`
+  if (m.button?.text) return conEtiqueta('botón', m.button.text, m.button.payload)
+  if (m.interactive?.button_reply) {
+    const b = m.interactive.button_reply
+    return conEtiqueta('botón', b.title, b.id)
+  }
+  if (m.interactive?.list_reply) {
+    const l = m.interactive.list_reply
+    return conEtiqueta('lista', l.title, l.id)
+  }
   if (m.interactive?.nfm_reply) return '[respuesta de Flow]'
   // Adjuntos: el archivo todavía no se descarga (necesita el media endpoint de
   // Meta), pero el pie de foto sí llega y suele ser lo que importa.
