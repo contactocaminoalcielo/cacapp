@@ -1,7 +1,7 @@
-// Bandeja de WhatsApp — línea de VETERINARIAS (Cloud API directo).
+// Bandejas de WhatsApp separadas por línea (Cloud API directo).
 //
-// Lo que ya opera en Zolutium NO pasa por aquí: esta pantalla solo ve los
-// números migrados a nuestra app de Meta (WHATSAPP_ALLOWED_PHONE_IDS).
+// Esta pantalla solo ve los números habilitados en nuestra app de Meta
+// (WHATSAPP_ALLOWED_PHONE_IDS), incluidos los historiales que ya migramos.
 //
 // Los datos NO vienen de Supabase: las tablas `whatsapp_*` no están expuestas
 // por PostgREST. Todo entra por orbit-backend con JWT + rol. Ver lib/whatsappInbox.js.
@@ -47,10 +47,10 @@ export default function Whatsapp() {
   const [errorEnvio, setErrorEnvio] = useState(null)
   const [errorCarga, setErrorCarga] = useState(null)
   const [catalogo, setCatalogo]   = useState([])
-  // Qué lista se está mirando: null = todas · 'NO_LEIDAS' · un grupo · una etiqueta.
+  // Qué lista se está mirando dentro de la línea: null = todos · 'NO_LEIDAS' · un grupo · una etiqueta.
   const [vista, setVista]         = useState(null)
 
-  // ── Líneas (migración 109) ──
+  // ── Líneas ──
   // Una conversación es (línea, número): la misma clínica puede hablar por dos
   // líneas y son DOS conversaciones. `lineaActiva` es la de la que está abierta,
   // y viaja en cada llamada para que la respuesta salga por donde llegó.
@@ -425,7 +425,7 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap gap-1">
-        <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todas</Pastilla>
+        <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todos en esta línea</Pastilla>
         <Pastilla activa={vista === 'NO_LEIDAS'} onClick={() => setVista('NO_LEIDAS')}
                   n={conteos.NO_LEIDAS} color="#1A5CD8">Sin leer</Pastilla>
         {GRUPOS.map(g => (
