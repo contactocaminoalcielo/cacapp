@@ -420,7 +420,7 @@ export default function Kanban() {
 
   // ── Solicitudes de clientes ───────────────────────────────────────────────
   const [solicitudes,    setSolicitudes]    = useState([])
-  // Veterinarias que se auto-registraron por el enlace de afiliacion y esperan
+  // Veterinarias que se auto-registraron por el enlace de afiliación y esperan
   // aprobacion. Viven en `aliados`, NO en `solicitudes_servicio`: no son un
   // servicio y no se convierten en uno. Comparten columna porque es donde mira
   // coordinacion, pero la tarjeta tiene que gritar que es otra cosa.
@@ -619,8 +619,8 @@ export default function Kanban() {
   // Aprobar = activarla y generarle su enlace de acceso. Es el MISMO endpoint
   // que usa Configuracion; no hay una segunda implementacion que se quede atras.
   async function aprobarAfiliacion(a) {
-    if (!await confirm(`Se activara "${a.nombre}" y se generara su enlace de acceso para solicitar servicios.`, {
-      title: 'Aprobar veterinaria?', confirmLabel: 'Aprobar', variant: 'success',
+    if (!await confirm(`Se activará "${a.nombre}" y se generará su enlace de acceso para solicitar servicios.`, {
+      title: '¿Aprobar veterinaria?', confirmLabel: 'Aprobar', variant: 'success',
     })) return
     setAprobandoAli(a.id_aliado)
     try {
@@ -628,7 +628,7 @@ export default function Kanban() {
       await Promise.all([cargarAfiliaciones(), cargar()])
       setAliadoAprobado({ aliado: a, enlace: r.enlace })
     } catch (e) {
-      await showAlert(e.message || 'No se pudo aprobar. Verifica tu sesion e intenta de nuevo.', { title: 'Error al aprobar' })
+      await showAlert(e.message || 'No se pudo aprobar. Verifica tu sesión e intenta de nuevo.', { title: 'Error al aprobar' })
     } finally {
       setAprobandoAli(null)
     }
@@ -2589,7 +2589,7 @@ export default function Kanban() {
                                 </span>
                                 <div className="flex-1 min-w-0">
                                   <div className="text-[9px] font-black tracking-wide uppercase" style={{ color: '#5C8443' }}>
-                                    Solicitud de afiliacion
+                                    Solicitud de afiliación
                                   </div>
                                   <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{a.nombre}</div>
                                 </div>
@@ -2620,7 +2620,7 @@ export default function Kanban() {
                                   disabled={aprobandoAli === a.id_aliado}
                                   className="flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all hover:opacity-90 disabled:opacity-60"
                                   style={{ background: '#5C8443', color: '#fff' }}>
-                                  {aprobandoAli === a.id_aliado ? 'Aprobando...' : 'Aprobar y dar acceso'}
+                                  {aprobandoAli === a.id_aliado ? 'Aprobando…' : 'Aprobar y dar acceso'}
                                 </button>
                               </div>
                             </div>
@@ -4587,7 +4587,7 @@ export default function Kanban() {
         <div className="space-y-4">
           <p className="text-[12px] text-gray-500 leading-relaxed">
             <span className="font-semibold text-gray-700">{aliadoAprobado?.aliado?.nombre}</span> ya
-            esta activa. Este es su enlace personal: con el registra servicios a su nombre, asi que
+            está activa. Este es su enlace personal: con él registra servicios a su nombre, así que
             va solo a ella.
           </p>
           {aliadoAprobado?.enlace ? (
@@ -4597,7 +4597,7 @@ export default function Kanban() {
           ) : (
             <div className="rounded-xl p-3 bg-amber-50 border border-amber-200">
               <p className="text-[11px] text-amber-800 leading-relaxed">
-                Quedo activa, pero no se recibio el enlace. Generalo desde Configuracion &rsaquo; Aliados.
+                Quedó activa, pero no se recibió el enlace. Genéralo desde Configuración &rsaquo; Aliados.
               </p>
             </div>
           )}
