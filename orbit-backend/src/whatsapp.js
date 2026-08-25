@@ -1,4 +1,5 @@
-// Envío de WhatsApp vía GoHighLevel / Zolutium — versión backend.
+// Transporte operativo de WhatsApp. Durante la transición puede enviar por
+// GoHighLevel/Zolutium o directamente por Meta Cloud API.
 // Puerto de supabase/functions/send-whatsapp/index.ts para que el envío de
 // reportes grupales y el registro de evidencia ocurran en UNA sola operación
 // transaccional del backend (cierra la ventana de inconsistencia del flujo viejo).
@@ -7,6 +8,9 @@
 //   GHL_TOKEN=...           (el mismo de la Edge Function)
 //   GHL_LOCATION_ID=...
 import { LINEA_WA_ID } from './linea-wa.js'
+import { pool } from './db.js'
+import { enviarPlantilla as enviarPlantillaMeta } from './whatsapp-plantillas.js'
+import { enviarSobre } from './whatsapp-cloud.js'
 
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 
@@ -26,6 +30,64 @@ function normalizarTelefono(tel) {
   if (solo.length === 10) return `+57${solo}`
   if (solo.length >= 7)   return `+57${solo}`
   return null
+}
+
+/**
+ * Interruptor de corte. GHL sigue siendo el valor por defecto para que un
+ * despliegue nunca cambie el canal de producción por accidente.
+ */
+export function transporteWhatsAppOperativo() {
+  const valor = String(process.env.WHATSAPP_OPERATIONAL_TRANSPORT || 'GHL').trim().toUpperCase()
+  if (!['GHL', 'META'].includes(valor)) {
+    throw new Error(`WHATSAPP_OPERATIONAL_TRANSPORT inválido: ${valor}. Usa GHL o META.`)
+  }
+  return valor
+}
+
+async function agenteIdDeLinea(phoneNumberId) {
+  const { rows } = await pool.query(
+    `SELECT id, nombre, waba_id
+       FROM public.agente_wa
+      WHERE $1 = ANY(phone_number_ids)
+      ORDER BY id`,
+    [String(phoneNumberId || '')]
+  )
+  if (!rows.length) {
+    throw new Error(`La línea ${phoneNumberId} no está asignada a ningún agente de Orbit.`)
+  }
+  if (rows.length > 1) {
+    throw new Error(`La línea ${phoneNumberId} está asignada a más de un agente; no se puede elegir emisor con seguridad.`)
+  }
+  if (!rows[0].waba_id) {
+    throw new Error(`El agente "${rows[0].nombre}" no tiene WABA configurada.`)
+  }
+  return rows[0].id
+}
+
+async function enviarPlantillaMetaDirecta({
+  telefono, plantillaNombre, idioma = 'es_MX', bodyParams = [], headerParams = [],
+  cabecera = null, fromNumberId = LINEA_WA_ID, personalId = null,
+}) {
+  const agenteId = await agenteIdDeLinea(fromNumberId)
+  const r = await enviarPlantillaMeta({
+    contacto: telefono,
+    nombre: plantillaNombre,
+    idioma,
+    variables: bodyParams,
+    variablesCabecera: headerParams,
+    cabecera,
+    personalId,
+    agenteId,
+  })
+  if (!r?.body?.ok) {
+    throw new Error(`Meta ${r?.status || 502}: ${r?.body?.error || 'No se pudo enviar la plantilla'}`)
+  }
+  return {
+    messageId: r.body.wa_message_id || null,
+    contactId: null,
+    proveedor: 'META',
+    estado: 'sent',
+  }
 }
 
 /**
@@ -87,7 +149,7 @@ export async function enviarWhatsAppGHL({ telefono, nombre = '', mensaje, pdfUrl
   const dataEnvio = await envio.json()
   if (!envio.ok) throw new Error(dataEnvio.message || `Error enviando mensaje: ${envio.status}`)
 
-  return { messageId: dataEnvio.messageId, contactId }
+  return { messageId: dataEnvio.messageId, contactId, proveedor: 'GHL' }
 }
 
 /**
@@ -153,7 +215,7 @@ export async function enviarPlantillaGHL({
     // Persistir la respuesta completa de GHL/Twilio para diagnóstico fino
     throw new Error(`GHL ${envio.status}: ${dataEnvio.message || ''} :: ${JSON.stringify(dataEnvio)}`)
   }
-  return { messageId: dataEnvio.messageId, contactId }
+  return { messageId: dataEnvio.messageId, contactId, proveedor: 'GHL' }
 }
 
 /**
@@ -173,7 +235,15 @@ export async function enviarPlantillaGHL({
 export async function enviarPlantillaGenerica({
   telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
   mensaje, bodyParams = [], headerParams = [], fromNumberId = LINEA_WA_ID,
+  personalId = null,
 }) {
+  if (transporteWhatsAppOperativo() === 'META') {
+    return enviarPlantillaMetaDirecta({
+      telefono, plantillaNombre, idioma, bodyParams, headerParams,
+      fromNumberId, personalId,
+    })
+  }
+
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID
   if (!GHL_TOKEN || !GHL_LOCATION) throw new Error('GHL no configurado en el backend (GHL_TOKEN/GHL_LOCATION_ID)')
@@ -230,7 +300,7 @@ export async function enviarPlantillaGenerica({
   })
   const dataEnvio = await envio.json()
   if (!envio.ok) throw new Error(`GHL ${envio.status}: ${dataEnvio.message || ''} :: ${JSON.stringify(dataEnvio)}`)
-  return { messageId: dataEnvio.messageId, contactId }
+  return { messageId: dataEnvio.messageId, contactId, proveedor: 'GHL' }
 }
 
 /**
@@ -248,6 +318,71 @@ export async function consultarEstadoMensajeGHL(messageId) {
   const data = await r.json()
   if (!r.ok) throw new Error(data.message || `Error consultando mensaje: ${r.status}`)
   return { status: data.message?.status || null, error: data.message?.error || null }
+}
+
+/**
+ * Estado inmediato del transporte. Meta devuelve el wamid solo cuando aceptó el
+ * sobre; delivered/read/failed llegan después por webhook. GHL, en cambio,
+ * necesita la consulta diferida porque puede responder 201 antes del rechazo.
+ */
+export async function consultarEstadoMensajeOperativo(envio) {
+  if (!envio?.messageId) return null
+  if (envio.proveedor === 'META') return { status: envio.estado || 'sent', error: null }
+  return consultarEstadoMensajeGHL(envio.messageId)
+}
+
+/** Plantilla de certificado con PDF dinámico, seleccionando GHL o Meta. */
+export async function enviarPlantillaOperativa({
+  telefono, propietario = '', petName = '', plantillaNombre, idioma = 'es_MX',
+  category = 'UTILITY', pdfUrl, pdfFilename, fromNumberId = LINEA_WA_ID,
+  personalId = null,
+}) {
+  if (transporteWhatsAppOperativo() === 'GHL') {
+    return enviarPlantillaGHL({
+      telefono, propietario, petName, plantillaNombre, idioma, category,
+      pdfUrl, pdfFilename, fromNumberId,
+    })
+  }
+  return enviarPlantillaMetaDirecta({
+    telefono,
+    plantillaNombre,
+    idioma,
+    bodyParams: [propietario, petName],
+    cabecera: pdfUrl ? { link: pdfUrl, filename: pdfFilename || 'certificado.pdf' } : null,
+    fromNumberId,
+    personalId,
+  })
+}
+
+/** Texto/documento dentro de la ventana de 24 h, seleccionando transporte. */
+export async function enviarWhatsAppOperativo({
+  telefono, nombre = '', mensaje, pdfUrl, pdfFilename = 'documento.pdf',
+  fromNumberId = LINEA_WA_ID, personalId = null,
+}) {
+  if (transporteWhatsAppOperativo() === 'GHL') {
+    return enviarWhatsAppGHL({ telefono, nombre, mensaje, pdfUrl, fromNumberId })
+  }
+
+  const payload = pdfUrl
+    ? { type: 'document', document: { link: pdfUrl, filename: pdfFilename, ...(mensaje ? { caption: mensaje } : {}) } }
+    : { type: 'text', text: { body: mensaje || '', preview_url: false } }
+  const r = await enviarSobre({
+    contacto: telefono,
+    linea: fromNumberId,
+    payload,
+    texto: mensaje || (pdfUrl ? `[documento ${pdfFilename}]` : ''),
+    tipo: pdfUrl ? 'document' : 'text',
+    personalId,
+  })
+  if (!r?.body?.ok) {
+    throw new Error(`Meta ${r?.status || 502}: ${r?.body?.error || 'No se pudo enviar el mensaje'}`)
+  }
+  return {
+    messageId: r.body.wa_message_id || null,
+    contactId: null,
+    proveedor: 'META',
+    estado: 'sent',
+  }
 }
 
 // Payload EXACTO que usa el UI de Zolutium contra /conversations/messages

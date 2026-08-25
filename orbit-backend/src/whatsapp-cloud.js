@@ -1,11 +1,11 @@
-// WhatsApp Cloud API — bandeja de conversaciones y envío (línea de VETERINARIAS).
+// WhatsApp Cloud API — bandejas y envíos aislados por línea.
 //
 // Complementa a `whatsapp-cloud-webhook.js` (que recibe). Aquí vive lo que
 // consume la pantalla de Orbit: listar conversaciones, abrir un hilo, marcar
 // leído y responder.
 //
-// ⚠️ No confundir con `whatsapp.js` — ese es el emisor de Zolutium/GHL y sigue
-// operando para grupales, imágenes y digitales. Este habla con Meta directo.
+// `whatsapp.js` selecciona el transporte de los procesos operativos y reutiliza
+// este módulo para texto/documentos directos dentro de la ventana de 24 horas.
 //
 // Variables en /opt/orbit-backend/.env:
 //   WHATSAPP_ACCESS_TOKEN      — token permanente de la app de Meta

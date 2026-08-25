@@ -71,7 +71,7 @@ function normalizarTel(tel) {
   return d.length >= 10 ? d : null
 }
 
-// ¿Ya hubo un envío exitoso? Los intentos fallidos de Zolutium (estado ERROR)
+// ¿Ya hubo un envío automático exitoso? Los intentos fallidos (estado ERROR)
 // no cuentan como enviado — el servicio sigue en "Para enviar".
 const fueEnviado = (s) => s.envios.some(e => (e.estado || 'ENVIADO') === 'ENVIADO')
 const envioExitoso = (s) => s.envios.find(e => (e.estado || 'ENVIADO') === 'ENVIADO')
@@ -82,7 +82,7 @@ const ultimoError = (s) => (s.envios[0]?.estado === 'ERROR' ? s.envios[0] : null
 // texto en vez del enlace.
 const tiposDelPlan = (s) => TIPOS.filter(t => tiposDe(s).includes(t) || (s.declinadas || []).includes(t))
 
-// Plantilla Zolutium aplicable según lo que lleva el plan:
+// Plantilla de WhatsApp aplicable según lo que lleva el plan:
 // 3 digitales → plantilla completa · solo memorial → plantilla de memorial ·
 // cualquier otra combinación → sin plantilla (envío manual).
 function plantillaAplicable(s, zolutium) {
@@ -249,7 +249,8 @@ export default function Digitales() {
       `${TIPO_LABEL[tipo]} registrado.`)
   }
 
-  // Envío automático por Zolutium: el backend manda la plantilla aprobada y
+  // Envío automático: el backend manda la plantilla aprobada por el transporte
+  // configurado (GHL durante la transición o Meta directo después del corte) y
   // registra la evidencia (message_id) + marca ENTREGADO, todo en una operación.
   const enviarAuto = async (s) => {
     const tel = tels[s.servicio_id] ?? (s.telefono || '')
@@ -265,7 +266,7 @@ export default function Digitales() {
     )
     if (!ok) return
     accion(`envio:${s.servicio_id}`, () =>
-      orbitApi(`/digitales/${s.servicio_id}/enviar-zolutium`, { method: 'POST', body: { telefono: tel } }),
+      orbitApi(`/digitales/${s.servicio_id}/enviar-whatsapp`, { method: 'POST', body: { telefono: tel } }),
       'Enviado por WhatsApp — los digitales quedaron como entregados.')
   }
 
@@ -916,7 +917,7 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
                 {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} Enviar
               </Button>
               <span className="text-[12px] text-gray-400">
-                Automático por Zolutium · plantilla «{plantillaZol}»
+                Automático por WhatsApp · {zolutium.transporte === 'META' ? 'Meta directo' : 'transición GHL'} · plantilla «{plantillaZol}»
               </span>
             </div>
             {noPedidas.length > 0 && (
@@ -997,7 +998,7 @@ function EnviadosList({ enviados, q, fallidos = 0 }) {
                 {new Date(e.enviado_en).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </div>
               <div className="text-[11px] text-gray-400">
-                {e.enviado_por_nombre || ''} · {e.canal === 'ZOLUTIUM' ? `Automático${e.plantilla ? ` («${e.plantilla}»)` : ''}` : 'WhatsApp'}
+                {e.enviado_por_nombre || ''} · {['ZOLUTIUM', 'WHATSAPP_META'].includes(e.canal) ? `Automático${e.canal === 'WHATSAPP_META' ? ' · Meta' : ' · GHL'}${e.plantilla ? ` («${e.plantilla}»)` : ''}` : 'WhatsApp'}
               </div>
             </div>
           </CardContent>

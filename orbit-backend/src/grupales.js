@@ -3,7 +3,9 @@
 // cerrando la ventana de inconsistencia del flujo anterior.
 import { pool, log } from './db.js'
 import { cargarConfigGrupales, validarItem, mensajeReporte, etiquetaProceso } from './reglas-grupales.js'
-import { enviarWhatsAppGHL, enviarPlantillaGHL } from './whatsapp.js'
+import {
+  enviarWhatsAppOperativo, enviarPlantillaOperativa, transporteWhatsAppOperativo,
+} from './whatsapp.js'
 
 const ITEM_ACTIVOS = ['PENDIENTE', 'VALIDADO', 'ENVIADO', 'REENVIADO', 'VENCIDO', 'ERROR']
 
@@ -421,6 +423,8 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
 
   const config = await cargarConfigGrupales(pool0)
   const usarPlantilla = config.usar_plantilla === true || config.usar_plantilla === 'true'
+  const canalOperativo = transporteWhatsAppOperativo() === 'META'
+    ? 'WHATSAPP_META' : 'WHATSAPP_ZOLUTIUM'
 
   // ítems objetivo
   const filtro = body.items?.length ? `AND id = ANY($2)` : ``
@@ -444,7 +448,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
     try {
       if (usarPlantilla && config.plantilla_nombre) {
         // Fuera de la ventana de 24h: plantilla aprobada (HSM) con PDF de cabecera
-        envioOk = await enviarPlantillaGHL({
+        envioOk = await enviarPlantillaOperativa({
           telefono: item.canal_destino,
           propietario: item.propietario_nombre,
           petName: item.mascota_nombre,                 // {{contact.name_pets}} = solo mascota
@@ -452,14 +456,16 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
           idioma: config.plantilla_idioma || 'es_MX',
           pdfUrl,
           pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
+          personalId: actorId,
         })
       } else {
-        // Sin `fromNumber`: GHL lo ignora. La línea la fija `enviarWhatsAppGHL` con
-        // `whatsapp.fromNumberId` (ver linea-wa.js). El `body.fromNumber` que aún manda
-        // el frontend se descarta a propósito: la línea no es elegible por el usuario.
-        envioOk = await enviarWhatsAppGHL({
+        // La línea operativa es fija; `body.fromNumber` se descarta a propósito
+        // para que la pantalla no pueda sacar un certificado por otra empresa.
+        envioOk = await enviarWhatsAppOperativo({
           telefono: item.canal_destino, nombre: item.propietario_nombre,
           mensaje, pdfUrl,
+          pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
+          personalId: actorId,
         })
       }
     } catch (e) { envioErr = e.message }
@@ -472,9 +478,10 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
           `INSERT INTO public.reportes_grupales_envios
              (item_id, reporte_id, servicio_id, canal, destino, pdf_url, message_id, contact_id,
               estado, es_reenvio, motivo_reenvio, enviado_por)
-           VALUES ($1,$2,$3,'WHATSAPP_ZOLUTIUM',$4,$5,$6,$7,'ENVIADO',$8,$9,$10)`,
+           VALUES ($1,$2,$3,$11,$4,$5,$6,$7,'ENVIADO',$8,$9,$10)`,
           [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl,
-           envioOk.messageId, envioOk.contactId, !!body.reenvio, body.reenvio ? body.motivo.trim() : null, actorId]
+           envioOk.messageId, envioOk.contactId, !!body.reenvio, body.reenvio ? body.motivo.trim() : null, actorId,
+           canalOperativo]
         )
         await client.query(
           `UPDATE public.reportes_grupales_items SET estado=$2, enviado_en=now() WHERE id=$1`,
@@ -501,9 +508,10 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
         await client.query(
           `INSERT INTO public.reportes_grupales_envios
              (item_id, reporte_id, servicio_id, canal, destino, pdf_url, estado, error, es_reenvio, motivo_reenvio, enviado_por)
-           VALUES ($1,$2,$3,'WHATSAPP_ZOLUTIUM',$4,$5,'ERROR',$6,$7,$8,$9)`,
+           VALUES ($1,$2,$3,$10,$4,$5,'ERROR',$6,$7,$8,$9)`,
           [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl, envioErr,
-           !!body.reenvio, body.reenvio ? body.motivo?.trim() : null, actorId]
+           !!body.reenvio, body.reenvio ? body.motivo?.trim() : null, actorId,
+           canalOperativo]
         )
         await client.query(`UPDATE public.reportes_grupales_items SET estado='ERROR' WHERE id=$1`, [item.id])
         await evento(client, { reporteId, itemId: item.id, servicioId: item.servicio_id,

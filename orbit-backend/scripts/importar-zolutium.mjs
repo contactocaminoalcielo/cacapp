@@ -7,6 +7,9 @@
 //   plantillas — guarda todas las plantillas WhatsApp de la ubicación.
 //   estado     — muestra únicamente conteos y progreso.
 //   publicar   — pasa la captura a la bandeja cuando ya existe phone_number_id de Meta.
+//
+// Una captura ya terminada se puede alargar sin repetir todo con:
+//   capturar --extender --hasta 2026-08-25T15:00:00Z
 
 import crypto from 'node:crypto'
 import { pool } from '../src/db.js'
@@ -30,6 +33,7 @@ const DIAS = Math.max(1, Math.min(7, Number(argumento('dias', '1')) || 1))
 const MAX_VENTANAS = Math.max(0, Number(argumento('max-ventanas', '0')) || 0)
 const MAX_ITEMS = Math.max(0, Number(argumento('max-items', '0')) || 0)
 const MAX_ARCHIVO = 64 * 1024 * 1024
+const EXTENDER = process.argv.includes('--extender')
 
 function obligatorio() {
   if (!TOKEN || !LOCATION) throw new Error('Faltan ZOLUTIUM_IMPORT_TOKEN/ZOLUTIUM_IMPORT_LOCATION_ID')
@@ -114,12 +118,26 @@ async function crearVentanas(importacion) {
   // ejecución usara un `hasta=now()` nuevo, crearía ventanas solapadas y el
   // progreso dejaría de significar algo.
   const yaTieneRango = importacion.desde && importacion.hasta
-  const desde = yaTieneRango
-    ? new Date(importacion.desde)
-    : fecha(argumento('desde'), await borde('asc'))
-  const hasta = yaTieneRango
-    ? new Date(importacion.hasta)
-    : fecha(argumento('hasta'), new Date())
+  const inicioGuardado = yaTieneRango ? new Date(importacion.desde) : null
+  const finGuardado = yaTieneRango ? new Date(importacion.hasta) : null
+  if (EXTENDER && !yaTieneRango) {
+    throw new Error('--extender solo aplica después de una captura inicial')
+  }
+
+  // Extender arranca exactamente donde terminó el rango guardado. No se acepta
+  // un `--desde` nuevo porque podría abrir un hueco o solapar días sin que el
+  // operador lo note. Los mensajes se deduplican además por external_id.
+  const desdeVentanas = EXTENDER
+    ? finGuardado
+    : yaTieneRango ? inicioGuardado : fecha(argumento('desde'), await borde('asc'))
+  const desdeImportacion = yaTieneRango ? inicioGuardado : desdeVentanas
+  const hasta = EXTENDER
+    ? fecha(argumento('hasta'), new Date())
+    : yaTieneRango ? finGuardado : fecha(argumento('hasta'), new Date())
+  if (EXTENDER && argumento('desde')) {
+    throw new Error('Con --extender no uses --desde; Orbit continúa desde el último límite guardado')
+  }
+  const desde = desdeVentanas
   if (!desde || hasta <= desde) throw new Error('El rango de captura está vacío')
   const paso = DIAS * 86_400_000
   for (let t = desde.getTime(); t < hasta.getTime(); t += paso) {
@@ -133,7 +151,7 @@ async function crearVentanas(importacion) {
   await pool.query(
     `UPDATE public.whatsapp_importaciones
         SET desde=$2, hasta=$3, estado='CAPTURANDO', error=NULL, actualizado_en=now()
-      WHERE id=$1`, [importacion.id, desde, hasta]
+      WHERE id=$1`, [importacion.id, desdeImportacion, hasta]
   )
 }
 

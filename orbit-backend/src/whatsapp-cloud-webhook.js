@@ -1,13 +1,7 @@
-// WhatsApp Cloud API — receptor de webhooks (línea de VETERINARIAS).
+// WhatsApp Cloud API — receptor de webhooks para varias líneas.
 //
-// Primer paso de la migración desde Zolutium/GHL hacia Cloud API directo.
-// Alcance deliberadamente mínimo: RECIBE, VALIDA, FILTRA y GUARDA. No responde
-// mensajes, no toca ningún módulo de Orbit, no hay lógica de agente.
-//
-// OJO — no confundir con `whatsapp.js`: ese es el EMISOR de Zolutium/GHL y sigue
-// operando normal para todo lo demás (grupales, imágenes, digitales). Este
-// archivo es la plataforma nueva y solo atiende los números listados en
-// WHATSAPP_ALLOWED_PHONE_IDS.
+// RECIBE, VALIDA, FILTRA y GUARDA; la respuesta y las automatizaciones viven en
+// otros módulos. Solo atiende números listados en WHATSAPP_ALLOWED_PHONE_IDS.
 //
 // URL a registrar en Meta: https://orbit.orbitacac.com/api/webhook/whatsapp
 //

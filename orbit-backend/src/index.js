@@ -18,7 +18,7 @@ import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimi
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
-  publicarManual, registrarEnlace, registrarEnvio, enviarZolutium, descartarPieza, servirArchivo,
+  publicarManual, registrarEnlace, registrarEnvio, enviarAutomatico, descartarPieza, servirArchivo,
   recuperarRendersHuerfanos,
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
@@ -1332,13 +1332,14 @@ app.post('/digitales/:servicioId/envio', requireAuth, rolDigitales, async (req, 
   }
 })
 
-// Envío automático por Zolutium (plantilla HSM aprobada): red + evidencia en el backend.
-app.post('/digitales/:servicioId/enviar-zolutium', requireAuth, rolDigitales, async (req, res) => {
+// Envío automático con plantilla aprobada. La ruta antigua queda como alias
+// durante la transición para no romper un frontend que aún esté en caché.
+app.post(['/digitales/:servicioId/enviar-whatsapp', '/digitales/:servicioId/enviar-zolutium'], requireAuth, rolDigitales, async (req, res) => {
   try {
-    const r = await enviarZolutium({ servicioId: req.params.servicioId, personalId: req.personal.id, telefono: req.body.telefono })
+    const r = await enviarAutomatico({ servicioId: req.params.servicioId, personalId: req.personal.id, telefono: req.body.telefono })
     res.status(r.status).json(r.body)
   } catch (e) {
-    log('[digitales/enviar-zolutium] ERROR', e.message)
+    log('[digitales/enviar-whatsapp] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

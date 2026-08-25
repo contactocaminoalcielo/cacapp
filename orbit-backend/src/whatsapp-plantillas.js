@@ -1388,7 +1388,12 @@ async function mediaDeCabecera(buf, mime, nombre, phoneNumberId, token) {
  *
  * `dados` es un diccionario por hueco: `{ 'BODY:1': 'Toby', 'HEADER:mascota': 'Toby' }`.
  */
-export async function mandarPlantilla({ plantilla, contacto, dados = {}, personalId = null, agenteId = null }) {
+export async function mandarPlantilla({
+  plantilla, contacto, dados = {}, personalId = null, agenteId = null,
+  // Cabecera distinta por envío (p. ej. el PDF de un certificado). Si no se
+  // pasa, se conserva la cabecera fija configurada en Plantillas → Datos.
+  cabecera = null,
+}) {
   const { token, linea, agente, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
 
@@ -1440,7 +1445,7 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
   } else if (cab && cab.format !== 'LOCATION') {
     // Meta NO reutiliza el archivo con el que se aprobó la plantilla: hay que
     // mandarlo en cada envío. De ahí `whatsapp_plantilla_cabecera`.
-    const conf = await cabeceraDe(nombre, idioma, agenteId)
+    const conf = cabecera || await cabeceraDe(nombre, idioma, agenteId)
     const clase = cab.format.toLowerCase()   // image | video | document
     if (!conf) {
       return {
@@ -1455,8 +1460,25 @@ export async function mandarPlantilla({ plantilla, contacto, dados = {}, persona
         type: 'header',
         parameters: [{ type: clase, [clase]: { id: sub.id, ...(clase === 'document' ? { filename: conf.nombre_archivo } : {}) } }],
       })
+    } else if (conf.id) {
+      componentes.push({
+        type: 'header',
+        parameters: [{ type: clase, [clase]: { id: conf.id, ...(clase === 'document' && conf.filename ? { filename: conf.filename } : {}) } }],
+      })
+    } else if (conf.link || conf.url) {
+      componentes.push({
+        type: 'header',
+        parameters: [{
+          type: clase,
+          [clase]: {
+            link: conf.link || conf.url,
+            ...(clase === 'document' && (conf.filename || conf.nombre_archivo)
+              ? { filename: conf.filename || conf.nombre_archivo } : {}),
+          },
+        }],
+      })
     } else {
-      componentes.push({ type: 'header', parameters: [{ type: clase, [clase]: { link: conf.url } }] })
+      return { status: 422, body: { ok: false, error: `La cabecera ${cab.format} no tiene archivo, id ni enlace.` } }
     }
   }
 
@@ -1624,7 +1646,8 @@ export async function enviarPlantilla({
   contacto, nombre, idioma = 'es_MX', valores = {}, servicioId = null, personalId = null,
   agenteId = null,
   // Compatibilidad con la forma vieja (arrays posicionales).
-  variables = null, variablesBoton = null,
+  variables = null, variablesCabecera = null, variablesBoton = null,
+  cabecera = null,
 }) {
   const { token, cuenta, error } = await contexto(agenteId)
   if (error) return { status: 500, body: { ok: false, error } }
@@ -1637,6 +1660,7 @@ export async function enviarPlantilla({
 
   const dados = { ...valores }
   if (Array.isArray(variables)) variables.forEach((v, i) => { dados[`BODY:${i + 1}`] ??= v })
+  if (Array.isArray(variablesCabecera)) variablesCabecera.forEach((v, i) => { dados[`HEADER:${i + 1}`] ??= v })
   if (Array.isArray(variablesBoton)) variablesBoton.forEach((v, i) => { dados[`BUTTON:${i + 1}`] ??= v })
 
   let num = aInternacional(contacto)
@@ -1650,5 +1674,5 @@ export async function enviarPlantilla({
     if (num.length < 10 && r.body.contacto) num = r.body.contacto
   }
 
-  return mandarPlantilla({ plantilla, contacto: num, dados, personalId, agenteId })
+  return mandarPlantilla({ plantilla, contacto: num, dados, personalId, agenteId, cabecera })
 }

@@ -18,7 +18,7 @@ import {
   ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
   registrarVistasOfertas,
 } from './ofertas.js'
-import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
+import { enviarPlantillaGenerica, consultarEstadoMensajeOperativo } from './whatsapp.js'
 import { LINEA_WA_NUMERO } from './linea-wa.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
@@ -66,7 +66,7 @@ async function lockClave(client, clave) {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [clave])
 }
 
-// ─── Enviar (o reintentar) la solicitud por WhatsApp Zolutium ───────────────
+// ─── Enviar (o reintentar) la solicitud por el transporte operativo ─────────
 // Idempotente: si ya está ENVIADO no reenvía; si está RECIBIDO/CANCELADO rechaza.
 // El envío real solo ocurre con plantilla aprobada (config usar_plantilla=true);
 // mientras no exista, deja la solicitud intacta en POR_VALIDAR — NO simula éxito.
@@ -135,7 +135,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       )
       await client.query('COMMIT')
       return { status: 409, body: { ok: false, sin_plantilla: true, codigo, enlace,
-        error: 'La plantilla de WhatsApp aún no está aprobada en Meta/Zolutium. Cuando lo esté, activa config_operativa SOLICITUDES_IMAGENES.usar_plantilla=true. La solicitud queda lista para validar; aún no se envió.' } }
+        error: 'La plantilla de WhatsApp aún no está configurada. Cuando esté aprobada en Meta, activa config_operativa SOLICITUDES_IMAGENES.usar_plantilla=true. La solicitud queda lista para validar; aún no se envió.' } }
     }
 
     const mensaje = mensajeSolicitud({ nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace })
@@ -153,6 +153,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         // Plantilla aprobada `solicitud_imagenes_cliente`: 2 variables → {{1}} mascota, {{2}} enlace.
         // El enlace lleva el código embebido (/#/fotos/CODIGO); el cliente entra sin teclear código.
         bodyParams: [sol.mascota || '', enlace],
+        personalId: actorId,
         // La línea emisora la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`
         // (phone_number_id de Meta). Sin eso, GHL rutea por la línea del último entrante
         // del contacto y el mensaje puede salir por la de veterinarias o la de HoyFarma.
@@ -160,15 +161,14 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       })
     } catch (e) { envioErr = e.message }
 
-    // GHL acepta el mensaje (201 + messageId) aunque Meta lo rechace segundos
-    // después (#132005). Verificarlo importa doble aquí: este envío es el ANCLA
-    // de la cadencia (2º y 3er contacto se calculan desde su fecha) — darlo por
-    // bueno sin confirmar sería perseguir al cliente desde una fecha fantasma.
+    // En GHL la aceptación ocurre antes de conocer el rechazo final y se consulta
+    // unos segundos después. Meta directo entrega el wamid al aceptar y los
+    // estados posteriores llegan por nuestro webhook.
     let estadoMeta = null
     if (envioOk) {
       try {
-        await new Promise(r => setTimeout(r, 5000))
-        const est = await consultarEstadoMensajeGHL(envioOk.messageId)
+        if (envioOk.proveedor === 'GHL') await new Promise(r => setTimeout(r, 5000))
+        const est = await consultarEstadoMensajeOperativo(envioOk)
         estadoMeta = est?.status || null
         if (est?.status === 'failed') {
           envioErr = `Meta rechazó el envío: ${est.error || 'sin detalle'}`.slice(0, 900)

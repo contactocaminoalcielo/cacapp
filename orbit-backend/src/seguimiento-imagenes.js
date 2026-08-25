@@ -25,7 +25,7 @@ import {
   cargarConfigImagenes, construirEnlace, plantillaContacto, resolverBodyParams,
   mensajeRecordatorio, LIMITE_META_CHARS,
 } from './reglas-imagenes.js'
-import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
+import { enviarPlantillaGenerica, consultarEstadoMensajeOperativo } from './whatsapp.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
@@ -163,7 +163,7 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
   }
   client.release()
 
-  // ── Fase 2 (red): enviar por Zolutium y verificar contra Meta ──────────────
+  // ── Fase 2 (red): enviar por el transporte configurado ────────────────────
   // Guardia #132005: plantilla + parámetros > 1024 chars → Meta rechaza async.
   const largo = reserva.mensaje.length + reserva.bodyParams.join('').length + reserva.headerParams.join('').length
   if (largo > LIMITE_META_CHARS) {
@@ -185,20 +185,21 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
       mensaje:  reserva.mensaje,
       bodyParams:   reserva.bodyParams,
       headerParams: reserva.headerParams,
+      personalId: actorId,
       // La línea la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`; sin eso
       // GHL rutea por la línea del último entrante del contacto. Ver linea-wa.js.
     })
   } catch (e) {
-    envioErr = (e.message || 'Error enviando por Zolutium').slice(0, 900)
+    envioErr = (e.message || 'Error enviando por WhatsApp').slice(0, 900)
   }
 
-  // GHL acepta el mensaje (201 + messageId) aunque Meta lo rechace segundos
-  // después. Sin esta verificación, un rechazo quedaría registrado como enviado.
+  // GHL necesita consulta diferida; Meta directo confirma la aceptación con el
+  // wamid y entrega los estados posteriores por webhook.
   let estadoMeta = null
   if (envioOk) {
     try {
-      await new Promise(r => setTimeout(r, 5000))
-      const est = await consultarEstadoMensajeGHL(envioOk.messageId)
+      if (envioOk.proveedor === 'GHL') await new Promise(r => setTimeout(r, 5000))
+      const est = await consultarEstadoMensajeOperativo(envioOk)
       estadoMeta = est?.status || null
       if (est?.status === 'failed') {
         envioErr = `Meta rechazó el envío: ${est.error || 'sin detalle'}`.slice(0, 900)
@@ -371,7 +372,7 @@ export async function forzarContacto({ solicitudId, numero, personalId }) {
   const r = await enviarContacto({ solicitudId, numero, automatico: false, personalId })
   if (r.enviado) return { status: 200, body: { ok: true, enviado: true } }
   const map = {
-    sin_plantilla:      'La plantilla de este contacto no está configurada en Zolutium (config_operativa → plantilla_contacto_N).',
+    sin_plantilla:      'La plantilla de este contacto no está configurada (config_operativa → plantilla_contacto_N).',
     ya_contactado:      'Este contacto ya se envió (o está en curso).',
     ya_recibido:        'El cliente ya envió sus imágenes.',
     fuera_de_ventana:   'El servicio ya no admite carga de imágenes.',

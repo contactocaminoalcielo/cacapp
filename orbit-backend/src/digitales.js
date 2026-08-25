@@ -10,7 +10,9 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { pool, log } from './db.js'
-import { enviarPlantillaGenerica, consultarEstadoMensajeGHL } from './whatsapp.js'
+import {
+  enviarPlantillaGenerica, consultarEstadoMensajeOperativo, transporteWhatsAppOperativo,
+} from './whatsapp.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RENDER_ENTRY = path.join(__dirname, '..', 'memorial', 'render.mjs')
@@ -337,7 +339,9 @@ export async function listarServicios() {
         mensaje_cliente: typeof cfg.mensaje_cliente === 'string' ? cfg.mensaje_cliente : '',
         caption_instagram: typeof cfg.caption_instagram === 'string' ? cfg.caption_instagram : '',
       },
-      zolutium: infoZolutium(cfg),
+      // Nombre conservado en la respuesta para clientes antiguos; ahora incluye
+      // el transporte real (`GHL` o `META`).
+      zolutium: infoEnvioAutomatico(cfg),
     }
   } finally { client.release() }
 }
@@ -603,7 +607,7 @@ export async function descartarPieza({ id }) {
   return { status: 200, body: { ok: true } }
 }
 
-// ── Envío automático por Zolutium (plantillas HSM aprobadas) ─────────────────
+// ── Envío automático por el transporte operativo (plantillas aprobadas) ─────
 // Dos plantillas según lo que el PLAN del servicio lleva (mismo criterio que la UI):
 //   plantilla_completos → los 3 digitales: {{1}} video, {{2}} short, {{3}} memorial
 //   plantilla_memorial  → solo memorial:   {{1}} memorial
@@ -653,12 +657,17 @@ function resolverTextoPlantilla(texto, bodyParams) {
   )
 }
 
-function infoZolutium(cfg) {
+function infoEnvioAutomatico(cfg) {
   const usar = cfg.usar_plantilla === true || cfg.usar_plantilla === 'true'
   const completos = plantillaCfg(cfg.plantilla_completos)
   const memorial = plantillaCfg(cfg.plantilla_memorial)
+  const transporte = transporteWhatsAppOperativo()
+  const credencial = transporte === 'META'
+    ? !!process.env.WHATSAPP_ACCESS_TOKEN
+    : !!process.env.GHL_TOKEN
   return {
-    activo: usar && !!(completos || memorial) && !!process.env.GHL_TOKEN,
+    activo: usar && !!(completos || memorial) && credencial,
+    transporte,
     plantilla_completos: completos?.nombre || null,
     plantilla_memorial: memorial?.nombre || null,
   }
@@ -683,14 +692,14 @@ async function marcarDigitalesEntregados(client, servicioId, tiposEnviados, recI
   )
 }
 
-export async function enviarZolutium({ servicioId, personalId, telefono }) {
+export async function enviarAutomatico({ servicioId, personalId, telefono }) {
   const actor = uuidOrNull(personalId)
   if (!uuidOrNull(servicioId)) return { status: 422, body: { error: 'Servicio inválido' } }
 
   // 1) Lecturas y validaciones (sin transacción: el envío es una llamada de red)
   const cfg = await cargarConfigDigitales(pool)
-  const zol = infoZolutium(cfg)
-  if (!zol.activo) return { status: 409, body: { error: 'El envío automático por Zolutium no está configurado (usar_plantilla / GHL_TOKEN).' } }
+  const envioAuto = infoEnvioAutomatico(cfg)
+  if (!envioAuto.activo) return { status: 409, body: { error: 'El envío automático de WhatsApp no está configurado (plantilla / credencial del transporte).' } }
   const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
 
   const { rows: svcRows } = await pool.query(
@@ -715,7 +724,7 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
   // esto cierra la ventana del doble clic / doble pestaña).
   const { rows: previos } = await pool.query(
     `SELECT 1 FROM public.digitales_envios
-     WHERE servicio_id = $1 AND canal = 'ZOLUTIUM' AND estado = 'ENVIADO' LIMIT 1`,
+     WHERE servicio_id = $1 AND canal IN ('ZOLUTIUM','WHATSAPP_META') AND estado = 'ENVIADO' LIMIT 1`,
     [servicioId]
   )
   if (previos.length) return { status: 409, body: { error: 'Este servicio ya tiene un envío automático registrado.' } }
@@ -799,24 +808,24 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
       category: plantilla.categoria,
       mensaje,
       bodyParams,
-      // La línea la fija `enviarPlantillaGenerica` con `whatsapp.fromNumberId`; sin eso
-      // GHL rutea por la línea del último entrante del contacto. Ver linea-wa.js.
+      personalId: actor,
+      // GHL rutea por la línea del último entrante del contacto. En Meta directo
+      // se usa explícitamente la línea configurada para este proceso.
     })
   } catch (e) {
-    envioErr = (e.message || 'Error enviando por Zolutium').slice(0, 900)
-    log('[digitales] enviarZolutium ERROR', servicioId, envioErr)
+    envioErr = (e.message || 'Error enviando por WhatsApp').slice(0, 900)
+    log('[digitales] enviarAutomatico ERROR', servicioId, envioErr)
   }
 
-  // GHL acepta el mensaje (201 + messageId) aunque Meta lo rechace segundos
-  // después (p. ej. #132005 plantilla demasiado larga) — verificar el estado
-  // real antes de dar por ENVIADO y marcar los digitales como entregados.
+  // GHL requiere consulta diferida. Meta directo devuelve el wamid al aceptar y
+  // actualiza delivered/read/failed por webhook.
   if (envioOk) {
     try {
-      await new Promise(r => setTimeout(r, 5000))
-      const est = await consultarEstadoMensajeGHL(envioOk.messageId)
+      if (envioOk.proveedor === 'GHL') await new Promise(r => setTimeout(r, 5000))
+      const est = await consultarEstadoMensajeOperativo(envioOk)
       if (est?.status === 'failed') {
         envioErr = `Meta rechazó el envío: ${est.error || 'sin detalle'}`.slice(0, 900)
-        log('[digitales] enviarZolutium META RECHAZO', servicioId, envioErr)
+        log('[digitales] enviarAutomatico META RECHAZO', servicioId, envioErr)
       }
     } catch (e) {
       // Si la verificación falla no bloquea: se conserva el envío como exitoso.
@@ -831,11 +840,12 @@ export async function enviarZolutium({ servicioId, personalId, telefono }) {
     const { rows: env } = await client.query(
       `INSERT INTO public.digitales_envios
          (servicio_id, canal, telefono, enlaces, mensaje, enviado_por, estado, error, plantilla, message_id, contact_id)
-       VALUES ($1, 'ZOLUTIUM', $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $11, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, enviado_en, estado`,
       [servicioId, destino, JSON.stringify(enlaces), mensaje, actor,
        exito ? 'ENVIADO' : 'ERROR', envioErr, plantilla.nombre,
-       envioOk?.messageId || null, envioOk?.contactId || null]
+       envioOk?.messageId || null, envioOk?.contactId || null,
+       envioAuto.transporte === 'META' ? 'WHATSAPP_META' : 'ZOLUTIUM']
     )
     if (exito) await marcarDigitalesEntregados(client, servicioId, tipos, plantilla.cubre)
     await client.query('COMMIT')

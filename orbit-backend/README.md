@@ -21,8 +21,9 @@ las capas de Supabase. Conecta **directo a PostgreSQL** (red `supabase_default`)
     `POST /grupales/reportes/:id/generar`, `POST /grupales/reportes/:id/enviar`,
     `POST /grupales/desvincular`; IA (JWT): `POST /grupales/ia/resumen`,
     `POST /grupales/ia/redactar`.
-  - Requiere en `.env`: `GHL_TOKEN`, `GHL_LOCATION_ID` (Zolutium) y `CLAUDE_KEY` (IA).
-- **Webhook de WhatsApp Cloud API** (línea de veterinarias, migración 086):
+  - El transporte operativo se elige con `WHATSAPP_OPERATIONAL_TRANSPORT=GHL|META`.
+    GHL es el valor seguro por defecto; Meta usa la línea y WABA asignadas al agente.
+- **Webhook de WhatsApp Cloud API** (varias líneas, aisladas por phone_number_id):
   - `GET  /webhook/whatsapp` — verificación de Meta (devuelve `hub.challenge`).
   - `POST /webhook/whatsapp` — eventos entrantes. Valida la firma HMAC del cuerpo
     crudo, responde 200 de inmediato y guarda en background. **Solo recibe: no
@@ -31,12 +32,8 @@ las capas de Supabase. Conecta **directo a PostgreSQL** (red `supabase_default`)
     para diagnosticar sin abrir la base de datos.
   - Requiere en `.env`: `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`,
     `WHATSAPP_ALLOWED_PHONE_IDS`. Sin el tercero se descarta todo (fail-closed).
-  - ⚠️ Lo que ya opera en **Zolutium sigue en Zolutium**: el filtro por
-    `phone_number_id` descarta en silencio los números no listados. Pero un
-    número de WhatsApp solo puede estar en UNA app de Meta a la vez — al migrar
-    el de vets, deja de funcionar en Zolutium (no hay convivencia).
-  - ⚠️ `src/whatsapp.js` (emisor Zolutium/GHL) y `src/whatsapp-cloud-webhook.js`
-    (receptor Cloud API) son plataformas distintas. No mezclarlos.
+  - `src/whatsapp.js` conserva GHL para reversa y ofrece Meta directo mediante
+    un único interruptor. Nunca se habilitan ambos como emisores a la vez.
 - **Bandeja de conversaciones** (`src/whatsapp-cloud.js`, migración 087) — lo que
   consume la pantalla `/whatsapp` de Orbit. Todo con JWT + rol COORDINADOR/ADMIN:
   - `GET  /whatsapp/conversaciones` — lista con nombre resuelto contra
@@ -49,8 +46,8 @@ las capas de Supabase. Conecta **directo a PostgreSQL** (red `supabase_default`)
   - Dos capas: `whatsapp_webhook_events` (crudo, append-only) alimenta
     `whatsapp_mensajes` + `whatsapp_contactos` (normalizado, es lo que se pinta).
     Si la capa 2 fallara, el crudo ya quedó y se puede reconstruir.
-  - ⚠️ **Fuera de la ventana de 24h solo se puede escribir con plantilla aprobada**
-    — todavía NO implementado. La UI bloquea la caja de texto y lo explica.
+  - Fuera de la ventana de 24h se envían plantillas aprobadas directamente por
+    Meta; el contexto del agente fija WABA y línea para impedir cruces.
 
 ## Seguridad
 - Jobs: header `x-job-token` (token en `.env`, solo conocido por el cron local).
@@ -83,6 +80,19 @@ npm run zolutium:importar -- adjuntos --linea 573159891247
 npm run zolutium:importar -- plantillas --linea 573159891247
 npm run zolutium:importar -- estado --linea 573159891247
 ```
+
+Antes del corte final se captura únicamente lo ocurrido desde el último límite
+guardado (sin volver a recorrer el historial):
+
+```bash
+npm run zolutium:importar -- capturar --linea 573159891247 --extender
+npm run zolutium:importar -- contactos --linea 573159891247
+npm run zolutium:importar -- adjuntos --linea 573159891247
+npm run zolutium:importar -- publicar --linea 573159891247 --phone-number-id ID_DE_META
+```
+
+`--extender` empieza exactamente en el `hasta` de la captura anterior. También
+acepta `--hasta FECHA_ISO` para congelar un instante de corte verificable.
 
 Después de migrar el número a Meta y conocer su `phone_number_id`, se publica:
 
