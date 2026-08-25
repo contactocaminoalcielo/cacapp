@@ -39,7 +39,10 @@ export default function NotificacionesAliados() {
           if (!row || row.estado !== 'pendiente_validacion') return
           mostrarNotif('Veterinaria pendiente de validación', {
             body: row.nombre || 'Una veterinaria nueva pidió afiliación',
-            tag: `aliado-pend-${row.id_aliado}`, url: '/configuracion',
+            // Al tablero, no a Configuración: ahí es donde ahora se ve la
+            // tarjeta verde y se aprueba de un clic. El aviso tiene que dejar
+            // a la persona en el sitio donde puede resolverlo.
+            tag: `aliado-pend-${row.id_aliado}`, url: '/kanban',
           })
         })
       .subscribe()

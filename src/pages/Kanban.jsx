@@ -390,6 +390,16 @@ export default function Kanban() {
       `${LINK_ALIADO}\n\nCualquier duda, con gusto te ayudamos 💚`
   }
 
+  // El mensaje con el que se le entrega el enlace una vez aprobada. Sale por
+  // wa.me — lo "dice" el coordinador, no la línea del agente.
+  function mensajeAliadoAprobado(ap) {
+    const nombre = String(ap?.aliado?.nombre || '').trim()
+    const saludo = nombre ? `Hola ${nombre} 🌿` : 'Hola 🌿'
+    return `${saludo} ¡Bienvenidos a *Camino al Cielo*! Ya quedaron registrados como ` +
+      `veterinaria aliada.\n\nEste es su enlace para solicitar recolecciones directamente:\n\n` +
+      `${ap?.enlace || ''}\n\nGuárdenlo, es de uso exclusivo de su clínica 💚`
+  }
+
   async function enviarEnlaceAliado() {
     if (!validarTelefonoEnlace(aliadoTelefono)) {
       await showAlert('Ingresa un celular colombiano de 10 dígitos (3XX...) o internacional con +.', { title: 'Número inválido' })
@@ -410,6 +420,13 @@ export default function Kanban() {
 
   // ── Solicitudes de clientes ───────────────────────────────────────────────
   const [solicitudes,    setSolicitudes]    = useState([])
+  // Veterinarias que se auto-registraron por el enlace de afiliacion y esperan
+  // aprobacion. Viven en `aliados`, NO en `solicitudes_servicio`: no son un
+  // servicio y no se convierten en uno. Comparten columna porque es donde mira
+  // coordinacion, pero la tarjeta tiene que gritar que es otra cosa.
+  const [afiliaciones,   setAfiliaciones]   = useState([])
+  const [aprobandoAli,   setAprobandoAli]   = useState(null)
+  const [aliadoAprobado, setAliadoAprobado] = useState(null)  // { aliado, enlace } tras aprobar
   const [selSolicitud,   setSelSolicitud]   = useState(null)
   // Transporte de la conversión. Hasta ahora el flujo público guardaba SIEMPRE
   // valor_transporte = 0, lo que abría dos huecos: no se le cobraba al cliente la
@@ -589,6 +606,32 @@ export default function Kanban() {
     const { data } = await db.from('solicitudes_servicio')
       .select('*').eq('estado', 'PENDIENTE').order('created_at', { ascending: true })
     setSolicitudes(data || [])
+  }
+
+  async function cargarAfiliaciones() {
+    const { data } = await db.from('aliados')
+      .select('id_aliado, nombre, identificacion_nit, contacto_nombre, whatsapp, telefono, email, ciudad, localidad, barrio, direccion, notas, created_at')
+      .eq('estado', 'pendiente_validacion')
+      .order('created_at', { ascending: true })
+    setAfiliaciones(data || [])
+  }
+
+  // Aprobar = activarla y generarle su enlace de acceso. Es el MISMO endpoint
+  // que usa Configuracion; no hay una segunda implementacion que se quede atras.
+  async function aprobarAfiliacion(a) {
+    if (!await confirm(`Se activara "${a.nombre}" y se generara su enlace de acceso para solicitar servicios.`, {
+      title: 'Aprobar veterinaria?', confirmLabel: 'Aprobar', variant: 'success',
+    })) return
+    setAprobandoAli(a.id_aliado)
+    try {
+      const r = await orbitApi(`/aliados/${a.id_aliado}/aprobar`, { method: 'POST' })
+      await Promise.all([cargarAfiliaciones(), cargar()])
+      setAliadoAprobado({ aliado: a, enlace: r.enlace })
+    } catch (e) {
+      await showAlert(e.message || 'No se pudo aprobar. Verifica tu sesion e intenta de nuevo.', { title: 'Error al aprobar' })
+    } finally {
+      setAprobandoAli(null)
+    }
   }
 
   function planPorId(planId) {
@@ -967,6 +1010,7 @@ export default function Kanban() {
   useEffect(() => {
     cargar()
     cargarSolicitudes()
+    cargarAfiliaciones()
     Promise.all([
       db.from('planes').select('id,nombre,codigo,tipo_proceso,dias_entrega_prometidos').order('nombre'),
       db.from('especies').select('id,nombre').order('nombre'),
@@ -992,14 +1036,18 @@ export default function Kanban() {
 
     const refrescar    = agruparRefresco(() => cargar())
     const refrescarSol = agruparRefresco(() => cargarSolicitudes())
+    const refrescarAfi = agruparRefresco(() => cargarAfiliaciones())
     const canal = db
       .channel('kanban-servicios-cambios')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'servicios' }, refrescar)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'solicitudes_servicio' }, refrescarSol)
+      // '*' y no solo INSERT: al aprobarla desde otra pestana es un UPDATE, y sin
+      // esto la tarjeta se quedaria en el tablero como si nadie la hubiera visto.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'aliados' }, refrescarAfi)
       .subscribe()
 
     return () => {
-      refrescar.cancelar(); refrescarSol.cancelar()
+      refrescar.cancelar(); refrescarSol.cancelar(); refrescarAfi.cancelar()
       db.removeChannel(canal)
     }
   }, [])
@@ -2484,7 +2532,7 @@ export default function Kanban() {
               {COLUMNAS.map(col => {
                 const esSolicitudes = col === 'SOLICITUDES'
                 const items  = esSolicitudes ? [] : filtrados.filter(s => s.estado === col)
-                const count  = esSolicitudes ? solicitudes.length : items.length
+                const count  = esSolicitudes ? solicitudes.length + afiliaciones.length : items.length
                 const cs     = COL_STYLE[col]
                 const isOver = dragOverCol === col
 
@@ -2523,7 +2571,62 @@ export default function Kanban() {
                               <Stethoscope size={12} /> Invitar veterinaria
                             </button>
                           </div>
-                          {solicitudes.length === 0 ? (
+                          {/* ── Afiliaciones de veterinarias ──
+                              NO son un servicio y no se convierten en uno: son una
+                              clinica pidiendo entrar. Van primero y en VERDE (el
+                              color que ya significa "aliado" en esta pantalla)
+                              contra el dorado de las solicitudes, porque el
+                              problema real no era que no llegaran sino que
+                              llegaban y nadie las distinguia. */}
+                          {afiliaciones.map(a => (
+                            <div key={a.id_aliado}
+                              className="rounded-xl p-3.5 shadow-sm border-2"
+                              style={{ borderColor: '#9CC18B', background: '#F6FBF2' }}>
+                              <div className="flex items-start gap-2 mb-2">
+                                <span className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                                  style={{ background: '#EAF3E2' }}>
+                                  <Stethoscope size={14} style={{ color: '#3D5A27' }} />
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[9px] font-black tracking-wide uppercase" style={{ color: '#5C8443' }}>
+                                    Solicitud de afiliacion
+                                  </div>
+                                  <div className="text-[13px] font-bold text-gray-900 truncate leading-tight">{a.nombre}</div>
+                                </div>
+                              </div>
+                              <div className="text-[11px] text-gray-500 truncate mb-0.5">
+                                {[a.contacto_nombre, a.ciudad].filter(Boolean).join(' · ') || 'Sin datos de contacto'}
+                              </div>
+                              <div className="flex items-center justify-between gap-2 mb-2.5">
+                                <span className="text-[10px] text-gray-400 truncate">
+                                  {a.identificacion_nit ? `NIT ${a.identificacion_nit}` : 'Sin NIT'}
+                                </span>
+                                <span className="text-[10px] text-gray-300 shrink-0">
+                                  {new Date(a.created_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                {a.whatsapp && (
+                                  <a href={waLink(a.whatsapp)} target="_blank" rel="noreferrer"
+                                    onClick={e => e.stopPropagation()}
+                                    title={`Escribir a ${a.whatsapp}`}
+                                    className="w-8 h-[30px] flex items-center justify-center rounded-lg border transition-colors hover:opacity-80"
+                                    style={{ borderColor: '#9CC18B', color: '#3D5A27', background: '#fff' }}>
+                                    <MessageCircle size={13} />
+                                  </a>
+                                )}
+                                <button
+                                  onClick={() => aprobarAfiliacion(a)}
+                                  disabled={aprobandoAli === a.id_aliado}
+                                  className="flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all hover:opacity-90 disabled:opacity-60"
+                                  style={{ background: '#5C8443', color: '#fff' }}>
+                                  {aprobandoAli === a.id_aliado ? 'Aprobando...' : 'Aprobar y dar acceso'}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {solicitudes.length === 0 && afiliaciones.length === 0 ? (
                             <div className="text-center py-8 text-[12px] text-gray-400">Sin solicitudes pendientes</div>
                           ) : solicitudes.map(s => {
                             const planNombre    = planPorId(s.plan_id)?.nombre || '—'
@@ -4426,9 +4529,9 @@ export default function Kanban() {
         <div className="space-y-4">
           <p className="text-[12px] text-gray-500 leading-relaxed">
             Se abrirá WhatsApp con el mensaje listo. La veterinaria llena sus datos en el
-            formulario y queda <span className="font-semibold">pendiente de validación</span>:
-            la apruebas desde <span className="font-semibold">Configuración › Aliados</span> y ahí
-            se genera su enlace personal para solicitar servicios.
+            formulario y aparece <span className="font-semibold">en verde aquí mismo</span>, en
+            la columna de Solicitudes. Al aprobarla se genera su enlace personal para
+            solicitar servicios.
           </p>
 
           <div>
@@ -4455,6 +4558,56 @@ export default function Kanban() {
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
             {aliadoCopiado ? <><Check size={12} className="text-green-600" /> Enlace copiado</> : <><Copy size={12} /> Copiar solo el enlace</>}
           </button>
+        </div>
+      </Modal>
+
+      {/* ── Modal: veterinaria aprobada, con su enlace ──────────────────────
+          Aprobar sin entregar el enlace deja el trabajo a medias: la clinica
+          queda activa pero sin forma de pedir un servicio. Por eso el enlace
+          se muestra aqui y con el boton de WhatsApp al lado. */}
+      <Modal open={!!aliadoAprobado} onClose={() => setAliadoAprobado(null)}
+        title="Veterinaria aprobada"
+        maxWidth="max-w-md"
+        footer={
+          <div className="flex items-center justify-end w-full gap-2">
+            <button onClick={() => setAliadoAprobado(null)}
+              className="px-4 py-2 rounded-xl text-[12px] font-bold text-gray-600 border border-gray-200 hover:bg-gray-50 transition-all">
+              Cerrar
+            </button>
+            {aliadoAprobado?.aliado?.whatsapp && (
+              <a href={waLink(aliadoAprobado.aliado.whatsapp, mensajeAliadoAprobado(aliadoAprobado))}
+                target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+                style={{ background: 'linear-gradient(135deg,#25D366,#128C7E)' }}>
+                <MessageCircle size={13} /> Enviarle el enlace
+              </a>
+            )}
+          </div>
+        }>
+        <div className="space-y-4">
+          <p className="text-[12px] text-gray-500 leading-relaxed">
+            <span className="font-semibold text-gray-700">{aliadoAprobado?.aliado?.nombre}</span> ya
+            esta activa. Este es su enlace personal: con el registra servicios a su nombre, asi que
+            va solo a ella.
+          </p>
+          {aliadoAprobado?.enlace ? (
+            <div className="rounded-xl p-3" style={{ background: '#F0F7EB', border: '1px solid #D9E8CC' }}>
+              <p className="text-[11px] text-gray-700 break-all leading-relaxed">{aliadoAprobado.enlace}</p>
+            </div>
+          ) : (
+            <div className="rounded-xl p-3 bg-amber-50 border border-amber-200">
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                Quedo activa, pero no se recibio el enlace. Generalo desde Configuracion &rsaquo; Aliados.
+              </p>
+            </div>
+          )}
+          {aliadoAprobado?.enlace && (
+            <button type="button"
+              onClick={() => navigator.clipboard?.writeText(aliadoAprobado.enlace)}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold border border-gray-200 text-gray-500 hover:bg-gray-50 transition-all">
+              <Copy size={12} /> Copiar el enlace
+            </button>
+          )}
         </div>
       </Modal>
     </div>
