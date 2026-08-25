@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { fmt, petEmoji } from '@/lib/utils'
 import { EMPRESA, buildReciboData, generarReciboPDF } from '@/lib/reciboPdf'
@@ -212,8 +212,11 @@ export default function Recibos() {
   async function cargar() {
     setLoading(true); setError(null)
     try {
-      const [{ data: svcs, error: e1 }, { data: per }] = await Promise.all([
-        db.from('servicios').select(`
+      // Paginado: el servidor recorta en 1000 filas sin avisar, así que el
+      // `.limit(3000)` de antes no traía 3000 — traía 1000 y callaba. En una
+      // pantalla de recibos eso son servicios que parecen no existir.
+      const [svcs, { data: per }] = await Promise.all([
+        dbTodo(() => db.from('servicios').select(`
           id, valor_total, valor_pagado, estado_pago, metodo_pago,
           descuento_adicional, descuento_adicional_motivo,
           fecha_ingreso, direccion_recogida, ciudad_recogida,
@@ -225,11 +228,11 @@ export default function Recibos() {
           planes:plan_id(nombre, codigo),
           aliados:aliado_origen_id(nombre),
           tecnico:tecnico_id(id, nombre, apellido)
-        `).gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false }).limit(3000),
+        `).gte('fecha_ingreso', FECHA_CORTE)
+          .order('fecha_ingreso', { ascending: false }).order('id', { ascending: false })),
         db.from('personal').select('id, nombre, apellido').eq('activo', true).order('nombre'),
       ])
-      if (e1) throw e1
-      setServicios(svcs || [])
+      setServicios(svcs)
       setPersonal(per || [])
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }

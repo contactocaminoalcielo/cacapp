@@ -10,7 +10,7 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor } from '@/components/ui/horario-editor'
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parsearErrorDB, today } from '@/lib/utils'
@@ -408,8 +408,9 @@ function TabClientes({ isAdmin }) {
   // en segundo plano para no vaciar la tabla bajo los pies del usuario.
   async function cargar() {
     if (primeraCarga.current) setLoading(true)
-    const { data: d } = await db.from('clientes').select('*').order('nombre')
-    setData(d || [])
+    // Paginado: son mas de 1000 y el servidor corta ahi en silencio (ver dbTodo).
+    const d = await dbTodo(() => db.from('clientes').select('*').order('nombre').order('id_cliente'))
+    setData(d)
     primeraCarga.current = false
     setLoading(false)
   }
@@ -537,11 +538,16 @@ function TabMascotas({ isAdmin, canEdit }) {
   }, [])
   async function cargar() {
     if (primeraCarga.current) setLoading(true)
-    const [{ data: d }, { data: esp }] = await Promise.all([
-      db.from('mascotas').select('*, especies(nombre), clientes(nombre,apellido)').order('nombre'),
+    // 🩸 Paginado. Con 1.216 mascotas, el corte mudo del servidor en 1000 dejaba
+    // fuera todo lo que empieza por T o mas: THONAS EMILIO existia, salia en
+    // Historial y no habia forma de abrirlo aqui para corregirle el nombre.
+    const [d, { data: esp }] = await Promise.all([
+      dbTodo(() => db.from('mascotas')
+        .select('*, especies(nombre), clientes(nombre,apellido)')
+        .order('nombre').order('id_mascota')),
       db.from('especies').select('*').order('nombre'),
     ])
-    setData(d || [])
+    setData(d)
     setEspecies(esp || [])
     primeraCarga.current = false
     setLoading(false)
@@ -1521,18 +1527,31 @@ function TabHistorialServicios({ canEdit }) {
   async function cargar(offsetInicial = 0) {
     setLoading(true)
     const buscando = busqueda.trim().length > 0
-    let q = buildQuery(
+    // El desempate por `id` NO es decorativo: `fecha_ingreso` empata a diario y
+    // sin él dos páginas de "Cargar más" pueden repetir un servicio y saltarse
+    // otro, porque el orden de las filas empatadas no está garantizado.
+    const construir = () => buildQuery(
       db.from('servicios')
         .select(SELECT_HISTORIAL, { count: 'exact' })
         .order('fecha_ingreso', { ascending: false })
+        .order('id', { ascending: false })
     )
-    // Con búsqueda cargamos TODO el histórico filtrado (hasta 5000) para que el
-    // filtro por cliente/mascota/plan cubra junio y no solo la página visible.
+    // Con búsqueda cargamos TODO el histórico filtrado —el filtro por
+    // cliente/mascota/plan es en el navegador y debe cubrir junio, no solo la
+    // página visible— y para eso hay que PAGINAR: el `.limit(5000)` de antes
+    // pedía de más pero el servidor lo recortaba a 1000 igual (ver `dbTodo`).
     // Sin búsqueda, paginamos de a PAGE_SIZE con "Cargar más".
-    q = buscando ? q.limit(5000) : q.range(offsetInicial, offsetInicial + PAGE_SIZE - 1)
-    const { data: d, count } = await q
-    setData(prev => (buscando || offsetInicial === 0) ? (d || []) : [...prev, ...(d || [])])
-    setTotal(count || 0)
+    let d, count
+    if (buscando) {
+      d = await dbTodo(construir)
+      count = d.length
+    } else {
+      const r = await construir().range(offsetInicial, offsetInicial + PAGE_SIZE - 1)
+      d = r.data || []
+      count = r.count || 0
+    }
+    setData(prev => (buscando || offsetInicial === 0) ? d : [...prev, ...d])
+    setTotal(count)
     setLoading(false)
     // Etiquetas de recategorización (plan/peso) — best-effort, acumula por página.
     try {
@@ -1551,11 +1570,14 @@ function TabHistorialServicios({ canEdit }) {
 
   async function exportarCSV() {
     setExporting(true)
-    const q = buildQuery(
-      db.from('servicios').select(SELECT_HISTORIAL).order('fecha_ingreso', { ascending: false }).limit(5000)
-    )
-    const { data: d } = await q
-    const filas = d || []
+    // Paginado, no `.limit(5000)`: el servidor recorta en 1000 sin avisar y el
+    // CSV salía mocho — el peor sitio para un corte mudo, porque nadie cuenta
+    // las filas de un export antes de cuadrar con él.
+    const filas = await dbTodo(() => buildQuery(
+      db.from('servicios').select(SELECT_HISTORIAL)
+        .order('fecha_ingreso', { ascending: false })
+        .order('id', { ascending: false })
+    ))
     const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Técnico','Registró','Estado','Estado pago','Valor total','Valor pagado']
     const rows = filas.map(s => {
       const cli = s.mascotas?.clientes || {}
