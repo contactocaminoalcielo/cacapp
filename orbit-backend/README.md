@@ -71,6 +71,29 @@ anterior y los cambios de variables se ignoran en silencio. Tras editar `.env` s
 `docker exec orbit-backend printenv NOMBRE_VARIABLE`.
 Crontab: ver `deploy/crontab.txt`.
 
+### Importar una línea desde Zolutium
+
+La importación histórica nunca escribe directamente en la bandeja. Primero
+captura en las tablas privadas de la migración 118 y puede reanudarse por días:
+
+```bash
+npm run zolutium:importar -- capturar --linea 573159891247 --dias 1
+npm run zolutium:importar -- contactos --linea 573159891247
+npm run zolutium:importar -- adjuntos --linea 573159891247
+npm run zolutium:importar -- plantillas --linea 573159891247
+npm run zolutium:importar -- estado --linea 573159891247
+```
+
+Después de migrar el número a Meta y conocer su `phone_number_id`, se publica:
+
+```bash
+npm run zolutium:importar -- publicar --linea 573159891247 --phone-number-id ID_DE_META
+```
+
+Los mensajes de otras líneas solo se leen transitoriamente para aplicar el
+filtro `from/to`; nunca se guardan. La publicación es deduplicable y marca el
+historial importado como leído sin afectar mensajes nuevos.
+
 **Nginx — cómo se publica de verdad (verificado 2026-08-05):** el backend sale por
 `https://orbit.orbitacac.com/api/…`, servido por el `location /api/` de
 `/etc/nginx/sites-enabled/orbit` (`proxy_pass http://127.0.0.1:8787/` con barra final,

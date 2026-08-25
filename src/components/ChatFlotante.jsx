@@ -11,6 +11,7 @@ import { useChatWa } from '@/contexts/ChatWaContext'
 import {
   abrirHilo, enviarMensaje, marcarLeido,
   formatearNumero, haceCuanto, horaMensaje, restanteVentana,
+  identidadLinea, claveConversacion,
 } from '@/lib/whatsappInbox'
 import ValorarRespuesta from '@/components/ValorarRespuesta'
 
@@ -29,7 +30,7 @@ function Aviso({ aviso, onAbrir, onCerrar }) {
     >
       <button
         type="button"
-        onClick={() => onAbrir(aviso.contacto)}
+        onClick={() => onAbrir(aviso.contacto, aviso.linea)}
         className="w-full text-left p-3 pr-9 hover:bg-gray-50 transition-colors"
       >
         <div className="flex items-center gap-2">
@@ -39,10 +40,13 @@ function Aviso({ aviso, onAbrir, onCerrar }) {
         <p className="mt-1 text-[12px] text-gray-500 line-clamp-2 leading-snug">
           {aviso.texto || 'Te escribió por WhatsApp'}
         </p>
+        <p className="mt-1 text-[10px] font-semibold text-gray-400">
+          {identidadLinea(aviso.linea).nombre}
+        </p>
       </button>
       <button
         type="button"
-        onClick={() => onCerrar(aviso.contacto)}
+        onClick={() => onCerrar(aviso.contacto, aviso.linea)}
         aria-label="Descartar aviso"
         className="absolute top-2 right-2 p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
       >
@@ -64,9 +68,9 @@ function Lista({ conversaciones, onAbrir }) {
     <div className="flex-1 overflow-y-auto">
       {conversaciones.map(c => (
         <button
-          key={c.contacto}
+          key={claveConversacion(c.contacto, c.phone_number_id)}
           type="button"
-          onClick={() => onAbrir(c.contacto)}
+          onClick={() => onAbrir(c.contacto, c.phone_number_id)}
           className="w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 transition-colors"
         >
           <div className="flex items-baseline justify-between gap-2">
@@ -94,7 +98,7 @@ function Lista({ conversaciones, onAbrir }) {
   )
 }
 
-function Hilo({ contacto, onVolver }) {
+function Hilo({ contacto, linea, onVolver }) {
   const { marcarVistaLocal } = useChatWa()
   const [hilo, setHilo] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -106,7 +110,7 @@ function Hilo({ contacto, onVolver }) {
   const cargar = useCallback(async ({ silencioso = false } = {}) => {
     if (!silencioso) setCargando(true)
     try {
-      const r = await abrirHilo(contacto)
+      const r = await abrirHilo(contacto, linea)
       setHilo(r)
       setError(null)
     } catch (e) {
@@ -114,18 +118,18 @@ function Hilo({ contacto, onVolver }) {
     } finally {
       if (!silencioso) setCargando(false)
     }
-  }, [contacto])
+  }, [contacto, linea])
 
   useEffect(() => {
     cargar()
-    marcarLeido(contacto).then(() => marcarVistaLocal(contacto)).catch(() => {})
+    marcarLeido(contacto, linea).then(() => marcarVistaLocal(contacto, linea)).catch(() => {})
     // Refresco silencioso: NUNCA toca `cargando`, o la ventana parpadearía
     // cada cinco segundos mientras alguien escribe.
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') cargar({ silencioso: true })
     }, 5000)
     return () => clearInterval(id)
-  }, [contacto, cargar])
+  }, [contacto, linea, cargar, marcarVistaLocal])
 
   useEffect(() => { finRef.current?.scrollIntoView({ block: 'end' }) }, [hilo?.mensajes?.length])
 
@@ -139,7 +143,7 @@ function Hilo({ contacto, onVolver }) {
     setEnviando(true)
     setError(null)
     try {
-      await enviarMensaje(contacto, t)
+      await enviarMensaje(contacto, t, linea)
       setTexto('')
       await cargar({ silencioso: true })
     } catch (e) {
@@ -235,6 +239,7 @@ export default function ChatFlotante() {
 
   const {
     conversaciones, sinLeer, avisos, abierto, contactoActivo,
+    lineas, lineaSeleccionada, lineaActiva, seleccionarLinea,
     conSonido, alternarSonido, abrirChat, cerrarChat, descartarAviso,
   } = chat
 
@@ -244,7 +249,7 @@ export default function ChatFlotante() {
           delante, una tarjeta encima es ruido sobre lo mismo. */}
       <AnimatePresence>
         {!abierto && avisos.map(a => (
-          <div key={a.contacto} className="relative">
+          <div key={claveConversacion(a.contacto, a.linea)} className="relative">
             <Aviso aviso={a} onAbrir={abrirChat} onCerrar={descartarAviso} />
           </div>
         ))}
@@ -259,24 +264,42 @@ export default function ChatFlotante() {
             transition={{ type: 'spring', stiffness: 400, damping: 32 }}
             className="w-[330px] h-[460px] max-h-[75vh] rounded-2xl bg-white shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
           >
-            <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ backgroundColor: VERDE }}>
-              <MessageCircle size={15} />
-              <span className="text-[13px] font-bold flex-1">WhatsApp</span>
-              <button
-                type="button"
-                onClick={alternarSonido}
-                title={conSonido ? 'Silenciar el aviso' : 'Activar el sonido'}
-                className="p-1 rounded-lg hover:bg-white/15"
-              >
-                {conSonido ? <Volume2 size={15} /> : <VolumeX size={15} />}
-              </button>
-              <button type="button" onClick={cerrarChat} className="p-1 rounded-lg hover:bg-white/15" aria-label="Cerrar">
-                <X size={15} />
-              </button>
+            <div className="px-3 py-2 text-white" style={{ backgroundColor: VERDE }}>
+              <div className="flex items-center gap-2">
+                <MessageCircle size={15} />
+                <span className="text-[13px] font-bold flex-1">WhatsApp</span>
+                <button
+                  type="button"
+                  onClick={alternarSonido}
+                  title={conSonido ? 'Silenciar el aviso' : 'Activar el sonido'}
+                  className="min-w-11 min-h-11 grid place-items-center rounded-lg hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  {conSonido ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                </button>
+                <button type="button" onClick={cerrarChat}
+                        className="min-w-11 min-h-11 grid place-items-center rounded-lg hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                        aria-label="Cerrar">
+                  <X size={15} />
+                </button>
+              </div>
+              {lineas.length > 0 && (
+                <label className="block mt-1">
+                  <span className="sr-only">Bandeja de WhatsApp</span>
+                  <select value={lineaSeleccionada || ''}
+                          onChange={e => seleccionarLinea(e.target.value)}
+                          className="w-full min-h-11 rounded-xl border border-white/25 bg-white/15 px-3 text-[12px] font-semibold text-white outline-none focus:ring-2 focus:ring-white cursor-pointer">
+                    {lineas.map(id => {
+                      const l = identidadLinea(id)
+                      return <option key={id} value={id} className="text-gray-900">{l.nombre} · {l.numero}</option>
+                    })}
+                  </select>
+                </label>
+              )}
             </div>
 
             {contactoActivo
-              ? <Hilo contacto={contactoActivo} onVolver={() => abrirChat(null)} />
+              ? <Hilo contacto={contactoActivo} linea={lineaActiva || lineaSeleccionada}
+                      onVolver={() => abrirChat(null)} />
               : <Lista conversaciones={conversaciones} onAbrir={abrirChat} />}
           </motion.div>
         )}

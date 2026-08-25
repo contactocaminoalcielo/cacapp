@@ -21,6 +21,7 @@ import {
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
   sePuedeGrabar, formatoGrabacion, duracionAudio,
   bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
+  identidadLinea, claveConversacion,
 } from '@/lib/whatsappInbox'
 import { listarAgentes } from '@/lib/agenteApi'
 import {
@@ -53,7 +54,9 @@ export default function Whatsapp() {
   // Una conversación es (línea, número): la misma clínica puede hablar por dos
   // líneas y son DOS conversaciones. `lineaActiva` es la de la que está abierta,
   // y viaja en cada llamada para que la respuesta salga por donde llegó.
-  const [filtroLinea, setFiltroLinea] = useState(null)
+  const [filtroLinea, setFiltroLinea] = useState(
+    () => localStorage.getItem('orbit.wa.bandeja') || null
+  )
   const [lineaActiva, setLineaActiva] = useState(null)
   const [nombreLinea, setNombreLinea] = useState({})
 
@@ -123,12 +126,14 @@ export default function Whatsapp() {
   // Optimista: la lista se repinta al instante y el polling la confirma. Si el
   // backend falla, el siguiente refresco devuelve la verdad.
   async function alternarEtiqueta(contacto, clave, puesta) {
-    setConvs(cs => cs.map(c => c.contacto !== contacto ? c : {
+    setConvs(cs => cs.map(c =>
+      c.contacto !== contacto || c.phone_number_id !== lineaRef.current ? c : {
       ...c,
       etiquetas: puesta
         ? (c.etiquetas || []).filter(e => e.clave !== clave)
         : [...(c.etiquetas || []), { ...catalogo.find(e => e.clave === clave), origen: 'MANUAL' }],
-    }))
+      }
+    ))
     try {
       if (puesta) await quitarEtiqueta(contacto, clave, lineaRef.current)
       else await ponerEtiqueta(contacto, clave, lineaRef.current)
@@ -206,7 +211,7 @@ export default function Whatsapp() {
   // Todo lo que se pinta parte de aquí: si hay una línea elegida, las demás no
   // existen para esta pantalla — ni en la lista, ni en los contadores.
   const convs = useMemo(
-    () => (filtroLinea ? todas.filter(c => c.phone_number_id === filtroLinea) : todas),
+    () => (filtroLinea ? todas.filter(c => c.phone_number_id === filtroLinea) : []),
     [todas, filtroLinea]
   )
 
@@ -216,8 +221,35 @@ export default function Whatsapp() {
     for (const c of todas) {
       if (c.phone_number_id && !vistas.includes(c.phone_number_id)) vistas.push(c.phone_number_id)
     }
-    return vistas.sort()
+    const prioridad = ['1093403420518278', '967346343135405']
+    return vistas.sort((a, b) => {
+      const ia = prioridad.indexOf(a); const ib = prioridad.indexOf(b)
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)
+      return a.localeCompare(b)
+    })
   }, [todas])
+
+  // Nunca existe una bandeja combinada. Al llegar la lista se restaura la
+  // última línea elegida si todavía existe; de lo contrario se abre la primera.
+  useEffect(() => {
+    if (!lineas.length) return
+    if (!filtroLinea || !lineas.includes(filtroLinea)) {
+      setFiltroLinea(lineas[0])
+      localStorage.setItem('orbit.wa.bandeja', lineas[0])
+    }
+  }, [lineas, filtroLinea])
+
+  function elegirLinea(id) {
+    if (id === filtroLinea) return
+    setFiltroLinea(id)
+    localStorage.setItem('orbit.wa.bandeja', id)
+    setActivo(null)
+    setLineaActiva(null)
+    lineaRef.current = null
+    setHilo(null)
+    setVista(null)
+    setErrorEnvio(null)
+  }
 
   const sinLeerTotal = useMemo(
     () => convs.reduce((a, c) => a + (c.sin_leer || 0), 0), [convs]
@@ -280,18 +312,15 @@ export default function Whatsapp() {
                        value={q} onChange={e => setQ(e.target.value)} />
               </div>
 
-              {/* 🩸 Solo aparece cuando HAY varias líneas: con una sola sería un
-                  control que no decide nada, y ruido en la pantalla más usada
-                  del día. Con dos o más, es lo primero que hay que elegir. */}
-              {lineas.length > 1 && (
-                <div className="flex flex-wrap gap-1">
-                  <BotonLinea activa={!filtroLinea} onClick={() => setFiltroLinea(null)}>
-                    Todas
-                  </BotonLinea>
+              {/* Cada pestaña es una bandeja independiente. No existe “Todas”:
+                  mezclar empresas o líneas vuelve ambiguos el hilo y la salida. */}
+              {lineas.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-1.5"
+                     role="tablist" aria-label="Bandejas por línea de WhatsApp">
                   {lineas.map(id => (
-                    <BotonLinea key={id} activa={filtroLinea === id} onClick={() => setFiltroLinea(id)}>
-                      {etiquetaLinea(id, nombreLinea)}
-                    </BotonLinea>
+                    <BotonLinea key={id} activa={filtroLinea === id}
+                                onClick={() => elegirLinea(id)}
+                                linea={identidadLinea(id, nombreLinea)} />
                   ))}
                 </div>
               )}
@@ -317,8 +346,8 @@ export default function Whatsapp() {
                 <VacioLista hayFiltro={!!q.trim()} hayVista={!!vista} />
               ) : (
                 visibles.map(c => (
-                  <ItemConversacion key={c.contacto} c={c}
-                                    activo={c.contacto === activo}
+                  <ItemConversacion key={claveConversacion(c.contacto, c.phone_number_id)} c={c}
+                                    activo={c.contacto === activo && c.phone_number_id === lineaActiva}
                                     onClick={() => abrir(c.contacto, c.phone_number_id)} />
                 ))
               )}
@@ -442,22 +471,25 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
  * imposible saber cuál es cuál, que es justo lo contrario de lo que hace falta.
  * Cuando el nombre se repite, se desempata con los últimos cuatro dígitos.
  */
-function etiquetaLinea(id, nombres) {
-  const nombre = nombres[id]
-  if (!nombre) return `línea …${String(id).slice(-4)}`
-  const repetido = Object.entries(nombres).filter(([, n]) => n === nombre).length > 1
-  return repetido ? `${nombre} …${String(id).slice(-4)}` : nombre
-}
-
 /** Elegir la línea. Sin esto, dos líneas se leen como una sola conversación. */
-function BotonLinea({ activa, onClick, children }) {
+function BotonLinea({ activa, onClick, linea }) {
   return (
     <button
+      type="button"
+      role="tab"
+      aria-selected={activa}
       onClick={onClick}
-      className={`px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer transition ${
-        activa ? 'bg-[#0B1D4F] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      className={`min-h-11 px-3 py-2 rounded-xl text-left cursor-pointer transition-colors duration-200 border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8] ${
+        activa
+          ? 'bg-[#0B1D4F] border-[#0B1D4F] text-white shadow-sm'
+          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
       }`}
-    >{children}</button>
+    >
+      <span className="block text-[11px] font-bold leading-tight">{linea.nombre}</span>
+      <span className={`block mt-0.5 text-[10px] font-mono ${activa ? 'text-white/70' : 'text-gray-500'}`}>
+        {linea.numero}
+      </span>
+    </button>
   )
 }
 

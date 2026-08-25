@@ -6,9 +6,9 @@
 //
 // Vive aquí y no en la página `/whatsapp` a propósito: el aviso tiene que
 // funcionar estando en Kanban, en Producción o en Finanzas.
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
-import { listarConversaciones } from '@/lib/whatsappInbox'
+import { listarConversaciones, claveConversacion } from '@/lib/whatsappInbox'
 
 const POLL_MS = 10000
 // Se lee del documento en vez de escribirlo a mano: puesto a pelo ("Orbit")
@@ -55,10 +55,13 @@ export function ChatWaProvider({ children }) {
   const vigila = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
 
   const [conversaciones, setConversaciones] = useState([])
-  const [sinLeer, setSinLeer] = useState(0)
   const [avisos, setAvisos] = useState([])
   const [abierto, setAbierto] = useState(false)
   const [contactoActivo, setContactoActivo] = useState(null)
+  const [lineaActiva, setLineaActiva] = useState(null)
+  const [lineaSeleccionada, setLineaSeleccionada] = useState(
+    () => localStorage.getItem('orbit.wa.bandeja') || null
+  )
   const [conSonido, setConSonido] = useState(
     () => localStorage.getItem('orbit.chat.sonido') !== 'no'
   )
@@ -77,29 +80,73 @@ export function ChatWaProvider({ children }) {
     })
   }, [])
 
-  const descartarAviso = useCallback(contacto => {
-    setAvisos(a => a.filter(x => x.contacto !== contacto))
+  const lineas = useMemo(() => {
+    const unicas = [...new Set(conversaciones.map(c => c.phone_number_id).filter(Boolean))]
+    const prioridad = ['1093403420518278', '967346343135405']
+    return unicas.sort((a, b) => {
+      const ia = prioridad.indexOf(a); const ib = prioridad.indexOf(b)
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)
+      return a.localeCompare(b)
+    })
+  }, [conversaciones])
+
+  useEffect(() => {
+    if (!lineas.length) return
+    if (!lineaSeleccionada || !lineas.includes(lineaSeleccionada)) {
+      setLineaSeleccionada(lineas[0])
+      localStorage.setItem('orbit.wa.bandeja', lineas[0])
+    }
+  }, [lineas, lineaSeleccionada])
+
+  const conversacionesLinea = useMemo(
+    () => lineaSeleccionada
+      ? conversaciones.filter(c => c.phone_number_id === lineaSeleccionada)
+      : [],
+    [conversaciones, lineaSeleccionada]
+  )
+  const sinLeer = useMemo(
+    () => conversacionesLinea.reduce((n, c) => n + Number(c.sin_leer || 0), 0),
+    [conversacionesLinea]
+  )
+
+  const descartarAviso = useCallback((contacto, linea) => {
+    const clave = claveConversacion(contacto, linea)
+    setAvisos(a => a.filter(x => claveConversacion(x.contacto, x.linea) !== clave))
   }, [])
 
-  const abrirChat = useCallback(contacto => {
+  const abrirChat = useCallback((contacto, linea = null) => {
     setAbierto(true)
     setContactoActivo(contacto || null)
-    if (contacto) descartarAviso(contacto)
+    if (linea) {
+      setLineaSeleccionada(linea)
+      setLineaActiva(linea)
+      localStorage.setItem('orbit.wa.bandeja', linea)
+    } else if (!contacto) {
+      setLineaActiva(null)
+    }
+    if (contacto) descartarAviso(contacto, linea)
   }, [descartarAviso])
+
+  const seleccionarLinea = useCallback(linea => {
+    setLineaSeleccionada(linea)
+    localStorage.setItem('orbit.wa.bandeja', linea)
+    setContactoActivo(null)
+    setLineaActiva(null)
+  }, [])
 
   const cerrarChat = useCallback(() => {
     setAbierto(false)
     setContactoActivo(null)
+    setLineaActiva(null)
   }, [])
 
   /** Marca en memoria que esta conversación queda leída, sin esperar al reloj. */
-  const marcarVistaLocal = useCallback(contacto => {
-    setConversaciones(cs => cs.map(c => c.contacto === contacto ? { ...c, sin_leer: 0 } : c))
-    setSinLeer(n => {
-      const c = conversaciones.find(x => x.contacto === contacto)
-      return Math.max(0, n - (c?.sin_leer || 0))
-    })
-  }, [conversaciones])
+  const marcarVistaLocal = useCallback((contacto, linea) => {
+    setConversaciones(cs => cs.map(c =>
+      c.contacto === contacto && c.phone_number_id === linea
+        ? { ...c, sin_leer: 0 } : c
+    ))
+  }, [])
 
   useEffect(() => {
     if (!vigila) return
@@ -111,7 +158,6 @@ export function ChatWaProvider({ children }) {
         if (!vivo) return
         const lista = r.conversaciones || []
         setConversaciones(lista)
-        setSinLeer(r.sin_leer_total || 0)
 
         // ── ¿Qué es nuevo? ──
         // Se compara contra lo que vimos la vuelta anterior. En la PRIMERA
@@ -119,8 +165,9 @@ export function ChatWaProvider({ children }) {
         // por cada conversación sin leer que llevara días ahí.
         const nuevos = []
         for (const c of lista) {
-          const antes = visto.current.get(c.contacto)
-          visto.current.set(c.contacto, c.ultimo_mensaje_en)
+          const clave = claveConversacion(c.contacto, c.phone_number_id)
+          const antes = visto.current.get(clave)
+          visto.current.set(clave, c.ultimo_mensaje_en)
           if (primeraVuelta.current) continue
           // Solo lo ENTRANTE: nuestras propias respuestas y las del agente
           // también mueven `ultimo_mensaje_en`, y avisar de lo que acabamos de
@@ -134,9 +181,13 @@ export function ChatWaProvider({ children }) {
 
         if (nuevos.length) {
           setAvisos(prev => {
-            const otros = prev.filter(p => !nuevos.some(n => n.contacto === p.contacto))
+            const otros = prev.filter(p => !nuevos.some(n =>
+              claveConversacion(n.contacto, n.phone_number_id)
+                === claveConversacion(p.contacto, p.linea)
+            ))
             const frescos = nuevos.map(c => ({
               contacto: c.contacto,
+              linea: c.phone_number_id,
               nombre: c.nombre || c.contacto,
               texto: c.ultimo_texto || '',
               en: Date.now(),
@@ -170,7 +221,8 @@ export function ChatWaProvider({ children }) {
 
   return (
     <ChatWaContext.Provider value={{
-      vigila, conversaciones, sinLeer, avisos, abierto, contactoActivo,
+      vigila, conversaciones: conversacionesLinea, sinLeer, avisos, abierto, contactoActivo,
+      lineas, lineaSeleccionada, lineaActiva, seleccionarLinea,
       conSonido, alternarSonido, abrirChat, cerrarChat, descartarAviso,
       marcarVistaLocal,
     }}>

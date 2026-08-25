@@ -6,6 +6,27 @@
 // Ver migraciones 086/087 y orbit-backend/src/whatsapp-cloud.js.
 import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
+// Identidad visible de las líneas conocidas. La llave operativa SIEMPRE sigue
+// siendo el phone_number_id; el número y el nombre son solo presentación.
+export const LINEAS_WHATSAPP_INBOX = {
+  '1093403420518278': { nombre: 'Veterinarias', numero: '+57 318 096 7711' },
+  '967346343135405':  { nombre: 'Camino Al Cielo', numero: '+57 315 989 1247' },
+  '934074529797267':  { nombre: 'HoyFarma', numero: '+57 318 105 7685' },
+  '894547387070615':  { nombre: 'Línea 318', numero: '+57 318 986 4595' },
+}
+
+export function identidadLinea(id, nombresAgente = {}) {
+  const conocida = LINEAS_WHATSAPP_INBOX[id]
+  return {
+    nombre: nombresAgente[id] || conocida?.nombre || `Línea …${String(id || '').slice(-4)}`,
+    numero: conocida?.numero || `ID …${String(id || '').slice(-6)}`,
+  }
+}
+
+export function claveConversacion(contacto, linea) {
+  return `${linea || 'sin-linea'}:${contacto || ''}`
+}
+
 
 // ── La LÍNEA viaja en todo (migración 109) ───────────────────────────────────
 //
