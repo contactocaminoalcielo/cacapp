@@ -1397,7 +1397,7 @@ function textoDe(contenido) {
 async function agenteParaLinea(phoneNumberId) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, categoria, objetivo, idioma, activo, instrucciones,
-            proveedor, modelo, effort, max_turnos,
+            proveedor, modelo, effort, max_turnos, agente_desde,
             memoria_mensajes, phone_number_ids, seguimiento_enlace_minutos, espera_ms, espera_max_ms
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)
@@ -1432,7 +1432,7 @@ const claveConversacion = (phoneNumberId, contacto) => `${phoneNumberId || '?'}:
  * No responde aquí: acusa recibo y programa. Lo que responde es `atender()`,
  * cuando la veterinaria lleva `ESPERA_MS` sin escribir.
  */
-export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessageId, mensajeId }) {
+export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessageId, mensajeId, ocurridoEn = null }) {
   try {
     const num = String(contacto || '').replace(/\D/g, '')
     if (!num) return
@@ -1444,6 +1444,17 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // contestar.
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return
+
+    // ── La línea de corte (migración 130) ──
+    // Un agente recién encendido contesta lo que llegue DESDE ese momento, no lo
+    // que ya estaba ahí. Sin esto, prender el agente en una línea de alto flujo
+    // le suelta encima el último día entero de conversaciones — gente que ya
+    // atendió una persona, o a la que se le pasó el momento. Ni siquiera se
+    // acusa recibo: un doble check azul en un mensaje de ayer es peor que nada.
+    if (agente.agente_desde && ocurridoEn && new Date(ocurridoEn) < new Date(agente.agente_desde)) {
+      log(MOD, `${num}: mensaje anterior a que se encendiera ${agente.clave} — se deja para una persona`)
+      return
+    }
 
     const laLleva = await laLlevaUnHumano(num, phoneNumberId)
     if (laLleva) {
@@ -1686,7 +1697,23 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   }
 
   if (r.texto) {
-    await enviarTexto({ contacto: num, linea: phoneNumberId, texto: r.texto, personalId: null })
+    // 🩸 EL RESULTADO DEL ENVÍO SE IGNORABA, y ese descuido costó una tarde
+    // entera. El 26-ago el agente de familias respondió 12 veces y las 12
+    // fallaron con "(#200) You do not have the necessary permissions to send
+    // messages on behalf of this WhatsApp Business Account" — el número seguía
+    // en la cuenta de Meta de Zolutium. El error quedaba guardado en la fila
+    // del mensaje, pero como nadie lo miraba, la bandeja mostraba la respuesta
+    // y estuvimos horas puliendo el tono de mensajes que jamás salieron.
+    //
+    // Que el agente crea que habló y no haya hablado es el peor final posible:
+    // la familia se queda esperando y del lado de acá parece atendida.
+    const env = await enviarTexto({ contacto: num, linea: phoneNumberId, texto: r.texto, personalId: null })
+      .catch(e => ({ body: { ok: false, error: e.message } }))
+    if (!env?.body?.ok) {
+      const porQue = env?.body?.error || 'Meta rechazó el envío'
+      log(MOD, `🚨 ${num}: el agente respondió pero el mensaje NO SALIÓ — ${porQue}`)
+      await avisarQueQuedoSinRespuesta(num, `Respuesta generada pero NO entregada: ${porQue}`, phoneNumberId)
+    }
     return r.hastaId || null
   }
 
@@ -1972,7 +1999,7 @@ const intentados = new Map()
 
 async function barrerPendientes() {
   const { rows } = await pool.query(
-    `SELECT u.contacto, u.id AS mensaje_id, u.wa_message_id, u.tipo, u.phone_number_id
+    `SELECT u.contacto, u.id AS mensaje_id, u.wa_message_id, u.tipo, u.phone_number_id, u.ocurrido_en
        FROM (
          SELECT DISTINCT ON (m.phone_number_id, m.contacto)
                 m.contacto, m.id, m.wa_message_id, m.tipo, m.phone_number_id,
@@ -1981,8 +2008,14 @@ async function barrerPendientes() {
           WHERE m.ocurrido_en > now() - interval '24 hours'
           ORDER BY m.phone_number_id, m.contacto, m.ocurrido_en DESC, m.id DESC
        ) u
+       -- El JOIN hace dos cosas: respeta la línea de corte del agente
+       -- (migración 130) y deja de barrer líneas que no tienen agente encendido,
+       -- que antes se recorrían enteras para descartarlas una por una después.
+       JOIN public.agente_wa a
+         ON a.activo AND u.phone_number_id = ANY(a.phone_number_ids)
       WHERE u.direccion = 'IN'
         AND u.ocurrido_en < now() - interval '2 minutes'
+        AND (a.agente_desde IS NULL OR u.ocurrido_en >= a.agente_desde)
       ORDER BY u.ocurrido_en
       LIMIT $1`,
     [TOPE_PENDIENTES_POR_BARRIDO]
@@ -2007,6 +2040,7 @@ async function barrerPendientes() {
     await responderSiAplica({
       phoneNumberId: p.phone_number_id, contacto: p.contacto,
       tipo: p.tipo, waMessageId: p.wa_message_id, mensajeId: p.mensaje_id,
+      ocurridoEn: p.ocurrido_en,
     })
   }
 }

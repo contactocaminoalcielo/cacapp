@@ -417,7 +417,7 @@ async function normalizar(ev) {
       // "escribiendo…" — sin él la vet no ve señal de vida mientras se piensa.
       responderSiAplica({
         phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo,
-        waMessageId: ev.waMessageId, mensajeId: fila?.id,
+        waMessageId: ev.waMessageId, mensajeId: fila?.id, ocurridoEn: ev.ocurridoEn,
       })
       return
     }
