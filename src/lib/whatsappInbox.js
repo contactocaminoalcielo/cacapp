@@ -8,8 +8,14 @@ import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
 // Identidad visible de las líneas conocidas. La llave operativa SIEMPRE sigue
 // siendo el phone_number_id; el número y el nombre son solo presentación.
+//
+// 🩸 El id de veterinarias estaba equivocado (`1093403420518278`, que no existe
+// en ninguna parte) y por eso su pestaña salía como "ID …540238" en vez de su
+// número. Comprobado contra producción: los tres ids vivos son los de abajo.
+// Un phone_number_id inventado en un mapa de constantes es justo lo que después
+// alguien copia a una decisión de enrutado — y ahí ya no es cosmético.
 export const LINEAS_WHATSAPP_INBOX = {
-  '1093403420518278': { nombre: 'Veterinarias', numero: '+57 318 096 7711' },
+  '1313164878540238': { nombre: 'Veterinarias', numero: '+57 318 096 7711' },
   '967346343135405':  { nombre: 'Camino Al Cielo', numero: '+57 315 989 1247' },
   '934074529797267':  { nombre: 'HoyFarma', numero: '+57 318 105 7685' },
   '894547387070615':  { nombre: 'Línea 318', numero: '+57 318 986 4595' },

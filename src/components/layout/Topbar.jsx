@@ -19,7 +19,7 @@ const PAGE_META = {
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/ofertas':      { title: 'Ofertas',                sub: 'Anuncios que ve el cliente en el portal de fotos' },
-  '/whatsapp':     { title: 'Bandeja de WhatsApp',    sub: 'Conversaciones con las clínicas — lo que dijo el agente y lo que respondes tú' },
+  '/whatsapp':     { title: 'Bandeja de WhatsApp',    sub: 'Una bandeja por línea — lo que dijo el agente y lo que respondes tú' },
   '/agentes':      { title: 'Agentes IA',             sub: 'Una línea, un agente: su contexto, sus reglas y su voz' },
   '/costos-ia':    { title: 'Costos de la IA',        sub: 'Lo que se ha gastado de verdad, por proveedor y por canal' },
   '/plantillas-whatsapp': { title: 'Plantillas de WhatsApp', sub: 'Mensajes aprobados por Meta — los únicos que salen fuera de las 24 horas' },
