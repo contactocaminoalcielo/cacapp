@@ -21,19 +21,19 @@ function Correccion({ v, onAplicar, onDescartar }) {
   const [ocupado, setOcupado] = useState(false)
 
   return (
-    <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
+    <div className="rounded-xl border border-gray-200 p-3 space-y-2">
       <div className="flex items-start gap-2">
         <span className={`mt-0.5 flex-shrink-0 ${v.buena ? 'text-emerald-600' : 'text-red-500'}`}>
           {v.buena ? <ThumbsUp size={14} /> : <ThumbsDown size={14} />}
         </span>
         <div className="min-w-0 flex-1">
           {v.pregunto && (
-            <p className="text-[11px] text-neutral-400 truncate">La vet: {v.pregunto}</p>
+            <p className="text-[11px] text-gray-400 truncate">La vet: {v.pregunto}</p>
           )}
-          <p className="text-[12px] text-neutral-700 line-clamp-3 whitespace-pre-wrap">
+          <p className="text-[12px] text-gray-700 line-clamp-3 whitespace-pre-wrap">
             {v.respuesta || '(sin texto)'}
           </p>
-          <p className="text-[10px] text-neutral-400 mt-1">
+          <p className="text-[10px] text-gray-400 mt-1">
             {v.quien || 'alguien'} · {new Date(v.creado_en).toLocaleString('es-CO')}
           </p>
         </div>
@@ -44,7 +44,7 @@ function Correccion({ v, onAplicar, onDescartar }) {
         value={texto}
         onChange={e => setTexto(e.target.value)}
         placeholder="Qué debe hacer el agente la próxima vez…"
-        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y"
+        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-y"
       />
 
       <div className="flex items-center gap-2">
@@ -105,7 +105,7 @@ export default function ReglasYCorrecciones({ agenteId, onCambio }) {
       )}
 
       <div>
-        <h4 className="text-[13px] font-semibold text-neutral-800 mb-2">
+        <h4 className="text-[13px] font-semibold text-gray-800 mb-2">
           Correcciones sin revisar
           {valoraciones.length > 0 && (
             <span className="ml-2 text-[11px] font-bold text-white bg-amber-500 rounded-full px-2 py-0.5">
@@ -114,7 +114,7 @@ export default function ReglasYCorrecciones({ agenteId, onCambio }) {
           )}
         </h4>
         {!valoraciones.length ? (
-          <p className="text-[12px] text-neutral-400">
+          <p className="text-[12px] text-gray-400">
             Nada pendiente. Marca una respuesta con 👍 o 👎 en el chat y aparecerá aquí.
           </p>
         ) : (
@@ -127,10 +127,10 @@ export default function ReglasYCorrecciones({ agenteId, onCambio }) {
       </div>
 
       <div>
-        <h4 className="text-[13px] font-semibold text-neutral-800 mb-1 flex items-center gap-1.5">
+        <h4 className="text-[13px] font-semibold text-gray-800 mb-1 flex items-center gap-1.5">
           <Scale size={14} /> Reglas activas
         </h4>
-        <p className="text-[11px] text-neutral-400 mb-2">
+        <p className="text-[11px] text-gray-400 mb-2">
           Van al final del contexto y pesan por encima de él: si una regla contradice al
           contexto, manda la regla.
         </p>
@@ -138,31 +138,31 @@ export default function ReglasYCorrecciones({ agenteId, onCambio }) {
         <div className="space-y-1.5">
           {reglas.map(r => (
             <div key={r.id} className={`flex items-start gap-2 rounded-lg border px-3 py-2 ${
-              r.activo ? 'border-neutral-200' : 'border-neutral-100 bg-neutral-50'
+              r.activo ? 'border-gray-200' : 'border-gray-100 bg-gray-50'
             }`}>
               <button
                 type="button"
                 onClick={() => alternar(r)}
                 title={r.activo ? 'Desactivar' : 'Activar'}
                 className={`mt-0.5 w-4 h-4 rounded border flex-shrink-0 grid place-items-center ${
-                  r.activo ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-neutral-300'
+                  r.activo ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-gray-300'
                 }`}
               >
                 {r.activo && <Check size={11} />}
               </button>
-              <p className={`flex-1 text-[12px] whitespace-pre-wrap ${r.activo ? 'text-neutral-700' : 'text-neutral-400 line-through'}`}>
+              <p className={`flex-1 text-[12px] whitespace-pre-wrap ${r.activo ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
                 {r.texto}
               </p>
               <button
                 type="button" onClick={() => eliminar(r.id)} title="Eliminar"
-                className="text-neutral-300 hover:text-red-500 flex-shrink-0"
+                className="text-gray-300 hover:text-red-500 flex-shrink-0"
               >
                 <Trash2 size={13} />
               </button>
             </div>
           ))}
           {!reglas.length && (
-            <p className="text-[12px] text-neutral-400">Todavía no hay reglas.</p>
+            <p className="text-[12px] text-gray-400">Todavía no hay reglas.</p>
           )}
         </div>
 

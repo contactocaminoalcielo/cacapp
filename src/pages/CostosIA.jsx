@@ -15,13 +15,13 @@ export default function CostosIA() {
     <>
       <Topbar />
       <div className="p-4 md:p-6 space-y-5 max-w-5xl mx-auto">
-        <p className="text-[13px] text-neutral-500 leading-snug max-w-2xl">
+        <p className="text-[13px] text-gray-500 leading-snug max-w-2xl">
           Lo que se ha gastado de verdad, con las cantidades que reporta cada proveedor:
           los tokens de Claude, los caracteres de la voz y lo que factura Meta por los
           mensajes. Sumado de todas las líneas.
         </p>
 
-        <section className="rounded-2xl border bg-white p-5 shadow-sm">
+        <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
           <PanelCostos />
         </section>
       </div>

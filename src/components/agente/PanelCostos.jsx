@@ -151,41 +151,41 @@ export default function PanelCostos({ agenteId }) {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
           <div>
-            <p className="text-xs uppercase tracking-wide text-neutral-500">
+            <p className="text-xs uppercase tracking-wide text-gray-500">
               {periodo === 'hoy' ? 'Gasto de hoy' : 'Gasto del periodo'}
             </p>
-            <p className="text-3xl font-semibold text-neutral-900 tabular-nums">{usd(total)}</p>
-            <p className="text-sm text-neutral-500 tabular-nums">≈ {cop(total, trm)}</p>
+            <p className="text-3xl font-semibold text-gray-900 tabular-nums">{usd(total)}</p>
+            <p className="text-sm text-gray-500 tabular-nums">≈ {cop(total, trm)}</p>
           </div>
 
           {/* Hoy va SIEMPRE, mires el periodo que mires: "¿cómo vamos hoy?" no
               debería costar un clic ni hacerte perder de vista el mes. */}
           {periodo !== 'hoy' && (
-            <div className="pl-8 border-l border-neutral-200">
-              <p className="text-xs uppercase tracking-wide text-neutral-500">Hoy</p>
-              <p className="text-xl font-semibold text-neutral-900 tabular-nums">{usd(hoy.usd)}</p>
-              <p className="text-[12px] text-neutral-500 tabular-nums">
+            <div className="pl-8 border-l border-gray-200">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Hoy</p>
+              <p className="text-xl font-semibold text-gray-900 tabular-nums">{usd(hoy.usd)}</p>
+              <p className="text-[12px] text-gray-500 tabular-nums">
                 {hoy.eventos ? `${miles(hoy.eventos)} consumos · ${cop(hoy.usd, trm)}` : 'sin consumo todavía'}
               </p>
             </div>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border border-neutral-200 p-0.5">
+          <div className="flex rounded-lg border border-gray-200 p-0.5">
             {PERIODOS.map(p => (
               <button
                 key={p.clave} type="button" onClick={() => setPeriodo(p.clave)}
                 className={`px-3 py-1.5 text-sm rounded-md transition cursor-pointer ${
                   periodo === p.clave
-                    ? 'bg-neutral-900 text-white'
-                    : 'text-neutral-600 hover:bg-neutral-100'
+                    ? 'bg-gray-900 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >{p.label}</button>
             ))}
           </div>
           <button
             onClick={cargar} title="Actualizar"
-            className="p-2 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+            className="p-2 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 cursor-pointer"
           >
             <RefreshCw className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`} />
           </button>
@@ -206,15 +206,15 @@ export default function PanelCostos({ agenteId }) {
         {['ANTHROPIC', 'ELEVENLABS', 'META'].map(k => {
           const p = (datos?.porProveedor || []).find(x => x.proveedor === k)
           return (
-            <div key={k} className="rounded-xl border border-neutral-200 p-3.5">
+            <div key={k} className="rounded-xl border border-gray-200 p-3.5">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: COLOR[k] }} />
-                <span className="text-[13px] font-medium text-neutral-700">{NOMBRE[k]}</span>
+                <span className="text-[13px] font-medium text-gray-700">{NOMBRE[k]}</span>
               </div>
-              <p className="text-xl font-semibold text-neutral-900 mt-1.5 tabular-nums">
+              <p className="text-xl font-semibold text-gray-900 mt-1.5 tabular-nums">
                 {usd(p?.usd)}
               </p>
-              <p className="text-[11px] text-neutral-500 tabular-nums">
+              <p className="text-[11px] text-gray-500 tabular-nums">
                 {k === 'ANTHROPIC'  && `${miles(p?.tokens)} tokens · ${miles(p?.eventos)} respuestas`}
                 {k === 'ELEVENLABS' && `${miles(p?.caracteres)} caracteres dichos`}
                 {k === 'META'       && `${miles(p?.unidades)} mensajes facturados`}
@@ -225,14 +225,14 @@ export default function PanelCostos({ agenteId }) {
       </div>
 
       {/* ── Día a día ── */}
-      <div className="rounded-xl border border-neutral-200 p-4">
+      <div className="rounded-xl border border-gray-200 p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
-          <h4 className="text-sm font-semibold text-neutral-900">
+          <h4 className="text-sm font-semibold text-gray-900">
             {periodo === 'hoy' ? 'Hora a hora' : 'Día a día'}
           </h4>
           <div className="flex items-center gap-3">
             {['ANTHROPIC', 'ELEVENLABS', 'META'].map(k => (
-              <span key={k} className="flex items-center gap-1.5 text-[11px] text-neutral-600">
+              <span key={k} className="flex items-center gap-1.5 text-[11px] text-gray-600">
                 <span className="w-2.5 h-2.5 rounded-sm" style={{ background: COLOR[k] }} />
                 {k === 'ANTHROPIC' ? 'Claude' : k === 'ELEVENLABS' ? 'Voz' : 'WhatsApp'}
               </span>
@@ -241,7 +241,7 @@ export default function PanelCostos({ agenteId }) {
         </div>
 
         {!serie.length ? (
-          <p className="text-sm text-neutral-500 py-8 text-center">
+          <p className="text-sm text-gray-500 py-8 text-center">
             {periodo === 'hoy'
               ? 'Hoy todavía no se ha gastado nada.'
               : 'Sin consumo registrado en este periodo.'}
@@ -272,10 +272,10 @@ export default function PanelCostos({ agenteId }) {
 
       {/* ── En qué se va ── */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-neutral-200 p-4">
-          <h4 className="text-sm font-semibold text-neutral-900 mb-3">En qué se va</h4>
+        <div className="rounded-xl border border-gray-200 p-4">
+          <h4 className="text-sm font-semibold text-gray-900 mb-3">En qué se va</h4>
           {!(datos?.porCanal || []).length ? (
-            <p className="text-sm text-neutral-500 py-4">Nada todavía.</p>
+            <p className="text-sm text-gray-500 py-4">Nada todavía.</p>
           ) : (
             <ul className="space-y-2">
               {Object.entries(
@@ -288,15 +288,15 @@ export default function PanelCostos({ agenteId }) {
                 const pct = total > 0 ? (v / total) * 100 : 0
                 return (
                   <li key={canal} className="flex items-center gap-3">
-                    <Icono className="w-4 h-4 text-neutral-400 shrink-0" />
-                    <span className="text-sm text-neutral-700 flex-1 min-w-0 truncate">
+                    <Icono className="w-4 h-4 text-gray-400 shrink-0" />
+                    <span className="text-sm text-gray-700 flex-1 min-w-0 truncate">
                       {NOMBRE_CANAL[canal] || canal}
                     </span>
-                    <span className="h-1.5 w-24 rounded-full bg-neutral-100 overflow-hidden shrink-0">
-                      <span className="block h-full rounded-full bg-neutral-800"
+                    <span className="h-1.5 w-24 rounded-full bg-gray-100 overflow-hidden shrink-0">
+                      <span className="block h-full rounded-full bg-gray-800"
                         style={{ width: `${Math.max(pct, 1)}%` }} />
                     </span>
-                    <span className="text-sm text-neutral-900 tabular-nums w-20 text-right shrink-0">
+                    <span className="text-sm text-gray-900 tabular-nums w-20 text-right shrink-0">
                       {usd(v)}
                     </span>
                   </li>
@@ -306,21 +306,21 @@ export default function PanelCostos({ agenteId }) {
           )}
         </div>
 
-        <div className="rounded-xl border border-neutral-200 p-4">
-          <h4 className="text-sm font-semibold text-neutral-900 mb-3">Lo que más costó</h4>
+        <div className="rounded-xl border border-gray-200 p-4">
+          <h4 className="text-sm font-semibold text-gray-900 mb-3">Lo que más costó</h4>
           {!(datos?.caras || []).length ? (
-            <p className="text-sm text-neutral-500 py-4">Nada todavía.</p>
+            <p className="text-sm text-gray-500 py-4">Nada todavía.</p>
           ) : (
             <ul className="space-y-1.5">
               {datos.caras.map((c, i) => (
                 <li key={i} className="flex items-center gap-3 text-sm">
-                  <span className="text-neutral-700 flex-1 min-w-0 truncate font-mono text-[12px]">
+                  <span className="text-gray-700 flex-1 min-w-0 truncate font-mono text-[12px]">
                     {c.referencia}
                   </span>
-                  <span className="text-[11px] text-neutral-400 shrink-0">
+                  <span className="text-[11px] text-gray-400 shrink-0">
                     {NOMBRE_CANAL[c.canal] || c.canal}
                   </span>
-                  <span className="text-neutral-900 tabular-nums w-20 text-right shrink-0">
+                  <span className="text-gray-900 tabular-nums w-20 text-right shrink-0">
                     {usd(c.usd)}
                   </span>
                 </li>
@@ -351,23 +351,23 @@ export default function PanelCostos({ agenteId }) {
           </div>
         </div>
 
-        <div className="rounded-xl border border-neutral-200 p-4">
+        <div className="rounded-xl border border-gray-200 p-4">
           <div className="flex items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold text-neutral-900">Cuota de ElevenLabs</h4>
+            <h4 className="text-sm font-semibold text-gray-900">Cuota de ElevenLabs</h4>
             {eleven.plan && (
-              <span className="px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 text-[10px] font-semibold uppercase">
+              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold uppercase">
                 plan {eleven.plan}
               </span>
             )}
           </div>
           {eleven.error ? (
-            <p className="text-sm text-neutral-500 mt-2">No se pudo consultar: {eleven.error}</p>
+            <p className="text-sm text-gray-500 mt-2">No se pudo consultar: {eleven.error}</p>
           ) : (
             <>
-              <p className="text-sm text-neutral-700 mt-2 tabular-nums">
+              <p className="text-sm text-gray-700 mt-2 tabular-nums">
                 {miles(eleven.usados)} de {miles(eleven.limite)} caracteres
               </p>
-              <span className="mt-2 block h-1.5 w-full rounded-full bg-neutral-100 overflow-hidden">
+              <span className="mt-2 block h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
                 <span className="block h-full rounded-full"
                   style={{
                     width: `${Math.min(100, ((eleven.usados || 0) / (eleven.limite || 1)) * 100)}%`,
@@ -375,7 +375,7 @@ export default function PanelCostos({ agenteId }) {
                   }} />
               </span>
               {eleven.reinicia && (
-                <p className="text-[11px] text-neutral-400 mt-1.5">
+                <p className="text-[11px] text-gray-400 mt-1.5">
                   Se reinicia el {new Date(eleven.reinicia).toLocaleDateString('es-CO')}
                 </p>
               )}
@@ -385,22 +385,22 @@ export default function PanelCostos({ agenteId }) {
       </div>
 
       {/* ── Precios ── */}
-      <div className="rounded-xl border border-neutral-200">
+      <div className="rounded-xl border border-gray-200">
         <button
           onClick={() => setVerPrecios(v => !v)}
           className="w-full flex items-center justify-between gap-3 p-4 cursor-pointer"
         >
-          <span className="text-sm font-semibold text-neutral-900">Precios y tasa de cambio</span>
-          <span className="flex items-center gap-2 text-[12px] text-neutral-500">
+          <span className="text-sm font-semibold text-gray-900">Precios y tasa de cambio</span>
+          <span className="flex items-center gap-2 text-[12px] text-gray-500">
             1 USD = {miles(trm)} COP
             <ChevronDown className={`w-4 h-4 transition ${verPrecios ? 'rotate-180' : ''}`} />
           </span>
         </button>
         {verPrecios && (
-          <div className="border-t border-neutral-200 p-4">
+          <div className="border-t border-gray-200 p-4">
             <ListaPrecios onCambio={cargar} />
-            <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between gap-3">
-              <p className="text-[12px] text-neutral-500">
+            <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between gap-3">
+              <p className="text-[12px] text-gray-500">
                 Lo de Meta lo trae su propia API, ya facturado y en pesos.
               </p>
               <Button variant="secondary" onClick={sincronizarMeta} disabled={sincro}>
@@ -421,16 +421,16 @@ function Globo({ active, payload, label, trm }) {
   if (!active || !payload?.length) return null
   const total = payload.reduce((a, p) => a + (p.value || 0), 0)
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 shadow-lg">
-      <p className="text-[11px] text-neutral-500 mb-1">{label}</p>
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-lg">
+      <p className="text-[11px] text-gray-500 mb-1">{label}</p>
       {payload.filter(p => p.value > 0).map(p => (
-        <p key={p.dataKey} className="text-[12px] text-neutral-700 flex items-center gap-2">
+        <p key={p.dataKey} className="text-[12px] text-gray-700 flex items-center gap-2">
           <span className="w-2 h-2 rounded-sm" style={{ background: p.color }} />
           {NOMBRE[p.dataKey]}
-          <span className="ml-auto tabular-nums text-neutral-900">{usd(p.value)}</span>
+          <span className="ml-auto tabular-nums text-gray-900">{usd(p.value)}</span>
         </p>
       ))}
-      <p className="text-[12px] font-semibold text-neutral-900 mt-1 pt-1 border-t border-neutral-100 flex justify-between gap-4">
+      <p className="text-[12px] font-semibold text-gray-900 mt-1 pt-1 border-t border-gray-100 flex justify-between gap-4">
         <span>Total</span>
         <span className="tabular-nums">{usd(total)} · {cop(total, trm)}</span>
       </p>
@@ -491,23 +491,23 @@ function ListaPrecios({ onCambio }) {
     <div className="space-y-1.5">
       {vigentes.map(p => (
         <div key={p.id} className="flex items-center gap-3 text-sm">
-          <span className="text-neutral-500 text-[11px] w-24 shrink-0 truncate">{p.proveedor}</span>
-          <span className="text-neutral-700 flex-1 min-w-0 truncate">
-            {p.clave} · <span className="text-neutral-500">{NOMBRE_CONCEPTO[p.concepto] || p.concepto}</span>
+          <span className="text-gray-500 text-[11px] w-24 shrink-0 truncate">{p.proveedor}</span>
+          <span className="text-gray-700 flex-1 min-w-0 truncate">
+            {p.clave} · <span className="text-gray-500">{NOMBRE_CONCEPTO[p.concepto] || p.concepto}</span>
           </span>
-          <span className="text-[11px] text-neutral-400 shrink-0">
+          <span className="text-[11px] text-gray-400 shrink-0">
             {p.por === 'MILLON' ? 'US$ / millón' : 'por unidad'}
           </span>
           <input
             type="number" step="0.000001" min="0" value={p.usd}
             onChange={e => editar(p.id, e.target.value)}
-            className="w-28 rounded-md border border-neutral-200 px-2 py-1 text-right tabular-nums
-                       focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+            className="w-28 rounded-md border border-gray-200 px-2 py-1 text-right tabular-nums
+                       focus:outline-none focus:ring-2 focus:ring-gray-900/10"
           />
           <button
             onClick={() => guardar(p)} disabled={!p.sucio || guardandoId === p.id}
             className={`p-1.5 rounded-md shrink-0 ${
-              p.sucio ? 'text-neutral-700 hover:bg-neutral-100 cursor-pointer' : 'text-neutral-300'
+              p.sucio ? 'text-gray-700 hover:bg-gray-100 cursor-pointer' : 'text-gray-300'
             }`}
             title="Guardar"
           >
@@ -518,7 +518,7 @@ function ListaPrecios({ onCambio }) {
         </div>
       ))}
       {futuros > 0 && (
-        <p className="text-[11px] text-neutral-400 pt-2">
+        <p className="text-[11px] text-gray-400 pt-2">
           Hay {futuros} precio(s) con fecha futura ya cargados: entran solos el día que toque.
           Lo que ya se gastó se sigue valorando con el precio de su día.
         </p>

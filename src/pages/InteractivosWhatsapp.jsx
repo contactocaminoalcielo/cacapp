@@ -69,15 +69,15 @@ function Campo({ label, ayuda, tope, valor, children }) {
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
-        <label className="text-[12px] font-semibold text-neutral-700">{label}</label>
+        <label className="text-[12px] font-semibold text-gray-700">{label}</label>
         {tope && (
-          <span className={`text-[10px] ${pasado ? 'text-red-600 font-bold' : 'text-neutral-400'}`}>
+          <span className={`text-[10px] ${pasado ? 'text-red-600 font-bold' : 'text-gray-400'}`}>
             {largo}/{tope}
           </span>
         )}
       </div>
       <div className="mt-1">{children}</div>
-      {ayuda && <p className="text-[11px] text-neutral-400 mt-1 leading-snug">{ayuda}</p>}
+      {ayuda && <p className="text-[11px] text-gray-400 mt-1 leading-snug">{ayuda}</p>}
     </div>
   )
 }
@@ -132,7 +132,7 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
   const setOpciones = ops => set('opciones', ops)
 
   if (cargando) {
-    return <div className="p-8 grid place-items-center text-neutral-400"><Loader2 className="animate-spin" /></div>
+    return <div className="p-8 grid place-items-center text-gray-400"><Loader2 className="animate-spin" /></div>
   }
 
   return (
@@ -154,11 +154,11 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
 
         <div className="grid lg:grid-cols-[300px_1fr] gap-4 items-start">
           {/* ── Lista ── */}
-          <section className="rounded-2xl border bg-white p-3 shadow-sm space-y-2">
+          <section className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm space-y-2">
             <div className="flex items-center gap-2 px-1">
-              <MessageSquare size={15} className="text-neutral-400" />
-              <h2 className="text-[13px] font-semibold text-neutral-800 flex-1">Catálogo</h2>
-              <span className="text-[11px] text-neutral-400">{lista.length}</span>
+              <MessageSquare size={15} className="text-gray-400" />
+              <h2 className="text-[13px] font-semibold text-gray-800 flex-1">Catálogo</h2>
+              <span className="text-[11px] text-gray-400">{lista.length}</span>
             </div>
 
             <div className="space-y-1">
@@ -168,21 +168,21 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                   <button
                     key={m.id} type="button" onClick={() => editar(m)}
                     className={`w-full text-left rounded-xl px-3 py-2 border transition-colors ${
-                      sel?.id === m.id ? 'border-[#3D5A27] bg-[#F0F7EB]' : 'border-transparent hover:bg-neutral-50'
+                      sel?.id === m.id ? 'border-[#3D5A27] bg-[#F0F7EB]' : 'border-transparent hover:bg-gray-50'
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <Ico size={13} className="text-neutral-400 shrink-0" />
-                      <span className={`text-[12.5px] font-semibold truncate flex-1 ${m.activo ? 'text-neutral-800' : 'text-neutral-400 line-through'}`}>
+                      <Ico size={13} className="text-gray-400 shrink-0" />
+                      <span className={`text-[12.5px] font-semibold truncate flex-1 ${m.activo ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
                         {m.nombre}
                       </span>
                       {m.usa_agente && <Bot size={12} className="text-emerald-600 shrink-0" title="El agente puede usarlo" />}
                     </div>
-                    <p className="text-[10.5px] text-neutral-400 truncate mt-0.5">{m.clave}</p>
+                    <p className="text-[10.5px] text-gray-400 truncate mt-0.5">{m.clave}</p>
                   </button>
                 )
               })}
-              {!lista.length && <p className="text-[12px] text-neutral-400 px-2 py-3">Todavía no hay ninguno.</p>}
+              {!lista.length && <p className="text-[12px] text-gray-400 px-2 py-3">Todavía no hay ninguno.</p>}
             </div>
 
             <div className="border-t pt-2 space-y-1">
@@ -191,7 +191,7 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                 return (
                   <button
                     key={tipo} type="button" onClick={() => crear(tipo)}
-                    className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-neutral-600 hover:bg-neutral-50"
+                    className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-gray-600 hover:bg-gray-50"
                   >
                     <Plus size={12} /> <Ico size={13} /> Nuevo: {t.label}
                   </button>
@@ -204,26 +204,26 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
           <AnimatePresence mode="wait">
             {!sel ? (
               <motion.section key="vacio" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                className="rounded-2xl border bg-white p-8 shadow-sm text-center">
-                <MessageSquare size={26} className="mx-auto text-neutral-300" />
-                <p className="text-[13px] text-neutral-500 mt-3">
+                className="rounded-xl border border-gray-100 bg-white p-8 shadow-sm text-center">
+                <MessageSquare size={26} className="mx-auto text-gray-300" />
+                <p className="text-[13px] text-gray-500 mt-3">
                   Elige uno del catálogo para editarlo, o crea uno nuevo.
                 </p>
                 <div className="mt-4 grid sm:grid-cols-3 gap-2 text-left">
                   {Object.entries(TIPOS).map(([tipo, t]) => (
-                    <div key={tipo} className="rounded-xl border border-neutral-100 bg-neutral-50 p-3">
-                      <p className="text-[12px] font-semibold text-neutral-700">{t.label}</p>
-                      <p className="text-[11px] text-neutral-500 mt-1 leading-snug">{t.cuando}</p>
+                    <div key={tipo} className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+                      <p className="text-[12px] font-semibold text-gray-700">{t.label}</p>
+                      <p className="text-[11px] text-gray-500 mt-1 leading-snug">{t.cuando}</p>
                     </div>
                   ))}
                 </div>
               </motion.section>
             ) : (
               <motion.section key={sel.id || 'nuevo'} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+                className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
 
                 <div className="flex items-center gap-2">
-                  <h2 className="text-[14px] font-semibold text-neutral-900 flex-1">
+                  <h2 className="text-[14px] font-semibold text-gray-900 flex-1">
                     {sel.id ? 'Editar' : 'Nuevo'} · {TIPOS[sel.tipo].label}
                   </h2>
                   {sel.id && (
@@ -239,7 +239,7 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                   </Button>
                 </div>
 
-                <p className="text-[11.5px] text-neutral-500 bg-neutral-50 rounded-xl px-3 py-2 leading-snug">
+                <p className="text-[11.5px] text-gray-500 bg-gray-50 rounded-xl px-3 py-2 leading-snug">
                   {TIPOS[sel.tipo].ayuda}
                 </p>
 
@@ -259,7 +259,7 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                   <textarea rows={2} value={sel.descripcion || ''}
                     onChange={e => set('descripcion', e.target.value)}
                     placeholder="Úsalo cuando estés tomando los datos de una recogida y falte saber dónde se recoge."
-                    className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-y" />
                 </Campo>
 
                 <div className="grid lg:grid-cols-2 gap-4">
@@ -271,7 +271,7 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                     <Campo label="Mensaje" tope={TOPES.cuerpo} valor={sel.cuerpo}>
                       <textarea rows={3} value={sel.cuerpo}
                         onChange={e => set('cuerpo', e.target.value)}
-                        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
+                        className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-y" />
                     </Campo>
 
                     <Campo label="Pie (opcional)" tope={TOPES.pie} valor={sel.pie}>
@@ -296,17 +296,17 @@ export default function InteractivosWhatsapp({ embebido = false, agenteId = null
                   </div>
 
                   <div className="space-y-3">
-                    <div className="flex items-center gap-1.5 text-[12px] font-semibold text-neutral-700">
+                    <div className="flex items-center gap-1.5 text-[12px] font-semibold text-gray-700">
                       <Eye size={13} /> Así lo verá la clínica
                     </div>
                     <Vista m={sel} />
 
-                    <label className="flex items-center gap-2 text-[12px] text-neutral-700">
+                    <label className="flex items-center gap-2 text-[12px] text-gray-700">
                       <input type="checkbox" checked={sel.usa_agente !== false}
                         onChange={e => set('usa_agente', e.target.checked)} />
                       El agente puede mandarlo solo
                     </label>
-                    <label className="flex items-center gap-2 text-[12px] text-neutral-700">
+                    <label className="flex items-center gap-2 text-[12px] text-gray-700">
                       <input type="checkbox" checked={sel.activo !== false}
                         onChange={e => set('activo', e.target.checked)} />
                       Activo
@@ -342,7 +342,7 @@ function Opciones({ titulo, filas, tope, topeTexto, onChange }) {
   const set = (i, k, v) => onChange(filas.map((f, j) => j === i ? { ...f, [k]: v } : f))
   return (
     <div className="space-y-2">
-      <p className="text-[12px] font-semibold text-neutral-700">{titulo}</p>
+      <p className="text-[12px] font-semibold text-gray-700">{titulo}</p>
       {filas.map((f, i) => (
         <div key={i} className="flex items-center gap-2">
           <Input value={f.titulo || ''} onChange={e => set(i, 'titulo', e.target.value)}
@@ -350,7 +350,7 @@ function Opciones({ titulo, filas, tope, topeTexto, onChange }) {
           <Input value={f.id || ''} onChange={e => set(i, 'id', e.target.value)}
             placeholder="id (opcional)" className="max-w-[140px]" />
           <button type="button" onClick={() => onChange(filas.filter((_, j) => j !== i))}
-            className="text-neutral-300 hover:text-red-500"><Trash2 size={14} /></button>
+            className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
         </div>
       ))}
       {filas.length < tope && (
@@ -372,19 +372,19 @@ function Menu({ opciones, onChange }) {
   return (
     <div className="space-y-3">
       <div className="flex items-baseline gap-2">
-        <p className="text-[12px] font-semibold text-neutral-700">Opciones del menú</p>
-        <span className={`text-[10.5px] ${lleno ? 'text-red-600 font-bold' : 'text-neutral-400'}`}>
+        <p className="text-[12px] font-semibold text-gray-700">Opciones del menú</p>
+        <span className={`text-[10.5px] ${lleno ? 'text-red-600 font-bold' : 'text-gray-400'}`}>
           {total}/{TOPES.filas} en total
         </span>
       </div>
 
       {opciones.map((sec, i) => (
-        <div key={i} className="rounded-xl border border-neutral-200 p-3 space-y-2">
+        <div key={i} className="rounded-xl border border-gray-200 p-3 space-y-2">
           <div className="flex items-center gap-2">
             <Input value={sec.titulo || ''} onChange={e => setSec(i, { ...sec, titulo: e.target.value })}
               placeholder="Título de la sección" />
             <button type="button" onClick={() => onChange(opciones.filter((_, j) => j !== i))}
-              className="text-neutral-300 hover:text-red-500"><Trash2 size={14} /></button>
+              className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
           </div>
 
           {(sec.filas || []).map((f, k) => (
@@ -397,7 +397,7 @@ function Menu({ opciones, onChange }) {
                 placeholder={`Detalle, opcional (máx. ${TOPES.desc})`} />
               <button type="button"
                 onClick={() => setSec(i, { ...sec, filas: sec.filas.filter((_, y) => y !== k) })}
-                className="text-neutral-300 hover:text-red-500"><Trash2 size={13} /></button>
+                className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
             </div>
           ))}
 

@@ -114,7 +114,7 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
             <li key={nombre} className={`rounded-lg border px-2 py-2 text-center text-[11px] font-semibold ${
               i === paso ? 'border-[#1A5CD8] bg-[#EEF3FF] text-[#0B1D4F]'
                 : i < paso ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-neutral-200 text-neutral-500'
+                  : 'border-gray-200 text-gray-500'
             }`} aria-current={i === paso ? 'step' : undefined}>
               {i < paso ? <Check size={13} className="inline mr-1" /> : null}{nombre}
             </li>
@@ -128,7 +128,7 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
         )}
 
         {cargando ? (
-          <div className="min-h-48 grid place-items-center text-neutral-500"><Loader2 className="animate-spin" /></div>
+          <div className="min-h-48 grid place-items-center text-gray-500"><Loader2 className="animate-spin" /></div>
         ) : paso === 0 ? (
           <div className="space-y-4">
             <PasoTitulo icono={Bot} titulo="Identidad y objetivo" texto="Describe el trabajo, no el canal donde se usará." />
@@ -141,12 +141,12 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
                   onChange={e => set('clave', e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))} placeholder="VENTAS_B2B" />
               </Campo>
               <Campo id="agente-categoria" label="Tipo de agente">
-                <select id="agente-categoria" value={datos.categoria} onChange={e => set('categoria', e.target.value)} className="w-full h-10 rounded-lg border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30">
+                <select id="agente-categoria" value={datos.categoria} onChange={e => set('categoria', e.target.value)} className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30">
                   {CATEGORIAS_AGENTE.map(c => <option key={c.valor} value={c.valor}>{c.label}</option>)}
                 </select>
               </Campo>
               <Campo id="agente-idioma" label="Idioma">
-                <select id="agente-idioma" value={datos.idioma} onChange={e => set('idioma', e.target.value)} className="w-full h-10 rounded-lg border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30">
+                <select id="agente-idioma" value={datos.idioma} onChange={e => set('idioma', e.target.value)} className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30">
                   <option value="es">Español</option><option value="es-CO">Español de Colombia</option><option value="en">Inglés</option>
                 </select>
               </Campo>
@@ -161,7 +161,7 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
             <PasoTitulo icono={Brain} titulo="Inteligencia y memoria" texto="El proveedor se conecta con credenciales locales; nunca viajan con el agente." />
             <div className="grid gap-4 sm:grid-cols-2">
               <Campo id="agente-proveedor" label="Proveedor de IA">
-                <select id="agente-proveedor" className="w-full h-10 rounded-lg border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.proveedor} onChange={e => {
+                <select id="agente-proveedor" className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.proveedor} onChange={e => {
                   const proveedor = e.target.value
                   const primero = motores.find(m => m.proveedor === proveedor)
                   setDatos(d => ({ ...d, proveedor, modelo: primero?.modelo || '' })); setError(null)
@@ -170,12 +170,12 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
                 </select>
               </Campo>
               <Campo id="agente-modelo" label="Modelo">
-                <select id="agente-modelo" className="w-full h-10 rounded-lg border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.modelo} onChange={e => set('modelo', e.target.value)}>
+                <select id="agente-modelo" className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.modelo} onChange={e => set('modelo', e.target.value)}>
                   {modelos.map(m => <option key={m.modelo} value={m.modelo}>{m.etiqueta}</option>)}
                 </select>
               </Campo>
               <Campo id="agente-esfuerzo" label="Razonamiento">
-                <select id="agente-esfuerzo" className="w-full h-10 rounded-lg border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.effort} onChange={e => set('effort', e.target.value)}>
+                <select id="agente-esfuerzo" className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30" value={datos.effort} onChange={e => set('effort', e.target.value)}>
                   {EFFORT_OPCIONES.map(o => <option key={o.valor} value={o.valor}>{o.label}</option>)}
                 </select>
               </Campo>
@@ -194,7 +194,7 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
         ) : (
           <div className="space-y-4">
             <PasoTitulo icono={ShieldCheck} titulo="Revisión segura" texto="Se creará aislado. Nada se conecta ni se activa automáticamente." />
-            <dl className="grid gap-3 sm:grid-cols-2 rounded-2xl border bg-neutral-50 p-4 text-sm">
+            <dl className="grid gap-3 sm:grid-cols-2 rounded-2xl border bg-gray-50 p-4 text-sm">
               <Dato label="Agente" valor={`${datos.nombre} (${datos.clave})`} />
               <Dato label="Tipo" valor={CATEGORIAS_AGENTE.find(c => c.valor === datos.categoria)?.label} />
               <Dato label="Inteligencia" valor={`${datos.proveedor} · ${datos.modelo}`} />
@@ -211,13 +211,13 @@ export default function CrearAgenteModal({ open, onClose, onCreated }) {
 }
 
 function PasoTitulo({ icono: Icono, titulo, texto }) {
-  return <div className="flex gap-3"><span className="rounded-xl bg-[#EEF3FF] p-2 text-[#1A5CD8]"><Icono size={20} /></span><div><h3 className="font-semibold text-neutral-900">{titulo}</h3><p className="text-sm text-neutral-600">{texto}</p></div></div>
+  return <div className="flex gap-3"><span className="rounded-xl bg-[#EEF3FF] p-2 text-[#1A5CD8]"><Icono size={20} /></span><div><h3 className="font-semibold text-gray-900">{titulo}</h3><p className="text-sm text-gray-600">{texto}</p></div></div>
 }
 
 function Campo({ id, label, ayuda, className = '', children }) {
-  return <div className={className}><label htmlFor={id} className="block text-xs font-semibold text-neutral-700 mb-1.5">{label}</label>{children}{ayuda && <p className="mt-1.5 text-xs leading-relaxed text-neutral-500">{ayuda}</p>}</div>
+  return <div className={className}><label htmlFor={id} className="block text-xs font-semibold text-gray-700 mb-1.5">{label}</label>{children}{ayuda && <p className="mt-1.5 text-xs leading-relaxed text-gray-500">{ayuda}</p>}</div>
 }
 
 function Dato({ label, valor }) {
-  return <div><dt className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{label}</dt><dd className="mt-1 text-neutral-900 break-words">{valor || '—'}</dd></div>
+  return <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</dt><dd className="mt-1 text-gray-900 break-words">{valor || '—'}</dd></div>
 }

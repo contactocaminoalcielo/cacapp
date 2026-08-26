@@ -115,7 +115,7 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
   }
 
   if (cargando) {
-    return <div className="p-8 grid place-items-center text-neutral-400"><Loader2 className="animate-spin" /></div>
+    return <div className="p-8 grid place-items-center text-gray-400"><Loader2 className="animate-spin" /></div>
   }
 
   const llega = sel?.mime ? comoLlega(sel.mime) : null
@@ -140,11 +140,11 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
 
         <div className="grid lg:grid-cols-[300px_1fr] gap-4 items-start">
           {/* ── Catálogo ── */}
-          <section className="rounded-2xl border bg-white p-3 shadow-sm space-y-2">
+          <section className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm space-y-2">
             <div className="flex items-center gap-2 px-1">
-              <FileText size={15} className="text-neutral-400" />
-              <h2 className="text-[13px] font-semibold text-neutral-800 flex-1">Catálogo</h2>
-              <span className="text-[11px] text-neutral-400">{lista.length}</span>
+              <FileText size={15} className="text-gray-400" />
+              <h2 className="text-[13px] font-semibold text-gray-800 flex-1">Catálogo</h2>
+              <span className="text-[11px] text-gray-400">{lista.length}</span>
             </div>
 
             <div className="space-y-1">
@@ -154,24 +154,24 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
                   <button
                     key={m.id} type="button" onClick={() => editar(m)}
                     className={`w-full text-left rounded-xl px-3 py-2 border transition-colors ${
-                      sel?.id === m.id ? 'border-[#3D5A27] bg-[#F0F7EB]' : 'border-transparent hover:bg-neutral-50'
+                      sel?.id === m.id ? 'border-[#3D5A27] bg-[#F0F7EB]' : 'border-transparent hover:bg-gray-50'
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <Ico size={13} className="text-neutral-400 shrink-0" />
-                      <span className={`text-[12.5px] font-semibold truncate flex-1 ${m.activo ? 'text-neutral-800' : 'text-neutral-400 line-through'}`}>
+                      <Ico size={13} className="text-gray-400 shrink-0" />
+                      <span className={`text-[12.5px] font-semibold truncate flex-1 ${m.activo ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
                         {m.nombre}
                       </span>
                       {m.usa_agente && <Bot size={12} className="text-emerald-600 shrink-0" title="El agente puede mandarlo" />}
                     </div>
-                    <p className="text-[10.5px] text-neutral-400 truncate mt-0.5">
+                    <p className="text-[10.5px] text-gray-400 truncate mt-0.5">
                       {m.clave} · {pesoLegible(m.bytes)}
                     </p>
                   </button>
                 )
               })}
               {!lista.length && (
-                <p className="text-[12px] text-neutral-400 px-2 py-3 leading-snug">
+                <p className="text-[12px] text-gray-400 px-2 py-3 leading-snug">
                   Todavía no hay ninguno. Mientras esté vacío, el agente no ofrece mandar archivos.
                 </p>
               )}
@@ -179,7 +179,7 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
 
             <div className="border-t pt-2">
               <button type="button" onClick={crear}
-                className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-neutral-600 hover:bg-neutral-50">
+                className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-gray-600 hover:bg-gray-50">
                 <Plus size={12} /> Nuevo material
               </button>
             </div>
@@ -189,25 +189,25 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
           <AnimatePresence mode="wait">
             {!sel ? (
               <motion.section key="vacio" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                className="rounded-2xl border bg-white p-8 shadow-sm text-center">
-                <FileText size={26} className="mx-auto text-neutral-300" />
-                <p className="text-[13px] text-neutral-500 mt-3 max-w-md mx-auto leading-snug">
+                className="rounded-xl border border-gray-100 bg-white p-8 shadow-sm text-center">
+                <FileText size={26} className="mx-auto text-gray-300" />
+                <p className="text-[13px] text-gray-500 mt-3 max-w-md mx-auto leading-snug">
                   Sube aquí el brochure, el tarifario o cualquier archivo que las clínicas pidan.
                   El agente lo manda él mismo cuando se lo piden, en vez de escalarlo.
                 </p>
               </motion.section>
             ) : (
               <motion.section key={sel.id || 'nuevo'} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+                className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
 
                 <div className="flex items-center gap-2">
-                  <h2 className="text-[14px] font-semibold text-neutral-900 flex-1">
+                  <h2 className="text-[14px] font-semibold text-gray-900 flex-1">
                     {sel.id ? 'Editar material' : 'Nuevo material'}
                   </h2>
                   {sel.id && (
                     <>
                       <Button variant="ghost" size="sm" onClick={() => ver(sel)} title="Ver el archivo">
-                        <Eye size={14} className="text-neutral-500" />
+                        <Eye size={14} className="text-gray-500" />
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => eliminar(sel)}>
                         <Trash2 size={14} className="text-red-500" />
@@ -223,12 +223,12 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
                 </div>
 
                 {/* ── El archivo ── */}
-                <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 flex items-center gap-3">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-[12.5px] font-semibold text-neutral-800 truncate">
-                      {sel.nombre_archivo || <span className="text-neutral-400">Ningún archivo elegido</span>}
+                    <p className="text-[12.5px] font-semibold text-gray-800 truncate">
+                      {sel.nombre_archivo || <span className="text-gray-400">Ningún archivo elegido</span>}
                     </p>
-                    <p className="text-[11px] text-neutral-500 mt-0.5">
+                    <p className="text-[11px] text-gray-500 mt-0.5">
                       {sel.bytes ? pesoLegible(sel.bytes) : '—'}
                       {llega && <> · llega como <strong>{llega.clase}</strong></>}
                       {sel.base64 && <span className="text-amber-700"> · sin guardar</span>}
@@ -248,58 +248,58 @@ export default function MaterialesWhatsapp({ embebido = false, agenteId = null }
 
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[12px] font-semibold text-neutral-700">Nombre</label>
+                    <label className="text-[12px] font-semibold text-gray-700">Nombre</label>
                     <Input className="mt-1" value={sel.nombre} onChange={e => set('nombre', e.target.value)}
                       placeholder="Brochure de planes" />
-                    <p className="text-[11px] text-neutral-400 mt-1">Solo para ti, en esta lista.</p>
+                    <p className="text-[11px] text-gray-400 mt-1">Solo para ti, en esta lista.</p>
                   </div>
                   <div>
-                    <label className="text-[12px] font-semibold text-neutral-700">Clave</label>
+                    <label className="text-[12px] font-semibold text-gray-700">Clave</label>
                     <Input className="mt-1" value={sel.clave} onChange={e => set('clave', e.target.value.toUpperCase())}
                       placeholder="BROCHURE" disabled={!!sel.id} />
-                    <p className="text-[11px] text-neutral-400 mt-1">Identificador interno, sin espacios.</p>
+                    <p className="text-[11px] text-gray-400 mt-1">Identificador interno, sin espacios.</p>
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-[12px] font-semibold text-neutral-700">Cuándo debe mandarlo el agente</label>
+                  <label className="text-[12px] font-semibold text-gray-700">Cuándo debe mandarlo el agente</label>
                   <textarea rows={2} value={sel.descripcion || ''}
                     onChange={e => set('descripcion', e.target.value)}
                     placeholder="El folleto con los planes y qué incluye cada uno. Mándalo cuando la clínica pida el brochure o material para enseñárselo a una familia."
-                    className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
-                  <p className="text-[11px] text-neutral-400 mt-1 leading-snug">
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-y" />
+                  <p className="text-[11px] text-gray-400 mt-1 leading-snug">
                     ⚠️ Esto no es una nota para ti: es lo que el agente lee para decidir. Sé concreto.
                   </p>
                 </div>
 
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[12px] font-semibold text-neutral-700">Nombre del archivo</label>
+                    <label className="text-[12px] font-semibold text-gray-700">Nombre del archivo</label>
                     <Input className="mt-1" value={sel.nombre_archivo || ''}
                       onChange={e => set('nombre_archivo', e.target.value)}
                       placeholder="Brochure Camino al Cielo.pdf" />
-                    <p className="text-[11px] text-neutral-400 mt-1">Es el título que ve la clínica en WhatsApp.</p>
+                    <p className="text-[11px] text-gray-400 mt-1">Es el título que ve la clínica en WhatsApp.</p>
                   </div>
                   <div>
-                    <label className="text-[12px] font-semibold text-neutral-700">Pie (opcional)</label>
+                    <label className="text-[12px] font-semibold text-gray-700">Pie (opcional)</label>
                     <Input className="mt-1" value={sel.pie || ''} onChange={e => set('pie', e.target.value)}
                       placeholder="Aquí tienes el brochure con todos los planes." />
-                    <p className="text-[11px] text-neutral-400 mt-1">El texto que acompaña al archivo, siempre el mismo.</p>
+                    <p className="text-[11px] text-gray-400 mt-1">El texto que acompaña al archivo, siempre el mismo.</p>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 pt-1 border-t">
-                  <label className="flex items-center gap-2 text-[12px] text-neutral-700 pt-3">
+                  <label className="flex items-center gap-2 text-[12px] text-gray-700 pt-3">
                     <input type="checkbox" checked={sel.usa_agente !== false}
                       onChange={e => set('usa_agente', e.target.checked)} />
                     El agente puede mandarlo solo
                   </label>
-                  <label className="flex items-center gap-2 text-[12px] text-neutral-700 pt-3">
+                  <label className="flex items-center gap-2 text-[12px] text-gray-700 pt-3">
                     <input type="checkbox" checked={sel.activo !== false}
                       onChange={e => set('activo', e.target.checked)} />
                     Activo
                   </label>
-                  <div className="flex items-center gap-2 text-[12px] text-neutral-700 pt-3">
+                  <div className="flex items-center gap-2 text-[12px] text-gray-700 pt-3">
                     Orden
                     <Input type="number" className="w-20" value={sel.orden ?? 0}
                       onChange={e => set('orden', Number(e.target.value))} />
