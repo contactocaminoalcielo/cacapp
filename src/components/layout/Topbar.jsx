@@ -28,6 +28,8 @@ const PAGE_META = {
   '/configuracion':  { title: 'Configuración',        sub: 'Planes, recordatorios y catálogos' },
   '/lotes-grupales': { title: 'Lotes Grupales',       sub: 'Cremación y compostaje grupal' },
   '/finanzas':       { title: 'Finanzas',             sub: 'Cartera, comisiones y pagos' },
+  '/recibos':        { title: 'Recibos',              sub: 'Lo que cobró cada técnico en la calle' },
+  '/certificados':   { title: 'Certificados',         sub: 'Cremación, compostaje y su envío' },
 }
 
 const TIPO_ICON = {
@@ -40,10 +42,28 @@ const TIPO_ICON = {
   COMPOSTAJE_LISTO:      '🌿',
 }
 
+/**
+ * El título de la pantalla en la que estás.
+ *
+ * 🩸 Antes era `PAGE_META[pathname] ?? PAGE_META['/']`, así que CUALQUIER ruta
+ * que no estuviera en el mapa anunciaba "Dashboard · Resumen operacional".
+ * Pasaba en las tres que faltaban y, sobre todo, en todas las dinámicas:
+ * configurando el agente de veterinarias la cabecera decía Dashboard.
+ * Se busca el prefijo más largo que coincida, para que `/agentes/VETERINARIAS`
+ * herede el de `/agentes` sin tener que enumerar cada agente.
+ */
+function metaDeRuta(pathname) {
+  if (PAGE_META[pathname]) return PAGE_META[pathname]
+  const prefijo = Object.keys(PAGE_META)
+    .filter(k => k !== '/' && pathname.startsWith(k + '/'))
+    .sort((a, b) => b.length - a.length)[0]
+  return prefijo ? PAGE_META[prefijo] : PAGE_META['/']
+}
+
 export default function Topbar({ actions }) {
   const { pathname } = useLocation()
   const { personalData } = useAuth()
-  const { title, sub } = PAGE_META[pathname] ?? PAGE_META['/']
+  const { title, sub } = metaDeRuta(pathname)
 
   const [notifs, setNotifs]     = useState([])
   const [abierto, setAbierto]   = useState(false)
