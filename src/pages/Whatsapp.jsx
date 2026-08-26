@@ -252,9 +252,19 @@ export default function Whatsapp() {
     setErrorEnvio(null)
   }
 
-  const sinLeerTotal = useMemo(
-    () => convs.reduce((a, c) => a + (c.sin_leer || 0), 0), [convs]
-  )
+  // Sin leer por LÍNEA, sobre `todas`. Se cuentan CONVERSACIONES, no mensajes:
+  // es lo mismo que cuenta la pastilla "Sin leer", y tener las dos cifras a 40 px
+  // una de otra, distintas, se leía como un error. Lo que sí faltaba es saber qué
+  // espera en las OTRAS líneas sin tener que entrar a mirarlas una por una.
+  const sinLeerPorLinea = useMemo(() => {
+    const n = {}
+    for (const c of todas) {
+      if ((c.sin_leer || 0) > 0 && c.phone_number_id) {
+        n[c.phone_number_id] = (n[c.phone_number_id] || 0) + 1
+      }
+    }
+    return n
+  }, [todas])
 
   // Las listas se cuentan sobre TODAS las conversaciones, no sobre la lista ya
   // filtrada: si no, al entrar en "Novedades" las demás pestañas marcarían 0.
@@ -301,7 +311,7 @@ export default function Whatsapp() {
                 {/* Cada línea es una bandeja independiente. No existe “Todas”:
                     mezclar empresas o líneas vuelve ambiguos el hilo y la salida. */}
                 <SelectorLinea lineas={lineas} activa={filtroLinea} onElegir={elegirLinea}
-                               nombreLinea={nombreLinea} sinLeer={sinLeerTotal} />
+                               nombreLinea={nombreLinea} sinLeerPorLinea={sinLeerPorLinea} />
                 <button onClick={() => cargarLista({ silencioso: true })}
                         aria-label="Actualizar la lista de conversaciones"
                         className="p-2 rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-gray-100 cursor-pointer
@@ -433,8 +443,12 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
     <div className="space-y-1.5">
       {/* Una sola fila que se desplaza, no dos que se parten. Con seis filtros el
           `flex-wrap` se comía otros 28 px de alto y dejaba una pastilla huérfana
-          en la segunda fila, que además se leía como si fuera de otro grupo. */}
-      <div className="flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          en la segunda fila, que además se leía como si fuera de otro grupo.
+          El degradado del borde derecho NO es adorno: sin él la última pastilla
+          queda cortada a hueso contra el borde y se lee como algo roto, no como
+          algo que sigue. Sobre blanco desaparece solo cuando no hay desborde. */}
+      <div className="relative">
+        <div className="flex gap-1 overflow-x-auto pb-0.5 pr-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todos</Pastilla>
         <Pastilla activa={vista === 'NO_LEIDAS'} onClick={() => setVista('NO_LEIDAS')}
                   n={conteos.NO_LEIDAS} color="#1A5CD8">Sin leer</Pastilla>
@@ -452,6 +466,9 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
             <Tag size={10} /> Etiquetas
           </button>
         )}
+        </div>
+        <div aria-hidden
+             className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white to-transparent" />
       </div>
 
       <AnimatePresence>
@@ -491,7 +508,7 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
  * sigue siempre visible —es el dato que no se puede perder de vista, porque
  * determina por dónde sale lo que escribas— y las demás están a un clic.
  */
-function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeer }) {
+function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeerPorLinea = {} }) {
   const [abierto, setAbierto] = useState(false)
   const caja = useRef(null)
 
@@ -513,6 +530,7 @@ function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeer }) {
 
   const yo = identidadLinea(activa, nombreLinea)
   const sola = lineas.length === 1
+  const otras = lineas.reduce((a, id) => id === activa ? a : a + (sinLeerPorLinea[id] || 0), 0)
 
   return (
     <div ref={caja} className="relative flex-1 min-w-0">
@@ -531,10 +549,10 @@ function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeer }) {
           <span className="block text-[11.5px] font-bold leading-tight truncate">{yo.nombre}</span>
           <span className="block text-[10px] font-mono text-white/75 truncate">{yo.numero}</span>
         </span>
-        {sinLeer > 0 && (
+        {otras > 0 && (
           <span className="px-1.5 py-0.5 rounded-full bg-[#F5C842] text-[#0B1D4F] text-[10px] font-bold flex-shrink-0"
-                title={`${sinLeer} mensajes sin leer en esta línea`}>
-            {sinLeer}
+                title={`${otras} conversación(es) sin leer en otras líneas`}>
+            +{otras}
           </span>
         )}
         {!sola && <ChevronDown size={14} className={`flex-shrink-0 text-white/70 transition-transform ${abierto ? 'rotate-180' : ''}`} />}
@@ -558,6 +576,11 @@ function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeer }) {
                   </span>
                   <span className="block text-[10px] font-mono text-gray-500 truncate">{l.numero}</span>
                 </span>
+                {(sinLeerPorLinea[id] || 0) > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#1A5CD8] text-white text-[10px] font-bold flex-shrink-0">
+                    {sinLeerPorLinea[id]}
+                  </span>
+                )}
                 {esta && <Check size={14} className="text-[#1A5CD8] flex-shrink-0" />}
               </button>
             )
