@@ -1244,17 +1244,27 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
     [num]
   )
 
+  // 🩸 Estas notas describen lo que el servidor SABE, no una tarea que haya que
+  // ejecutar en este turno. La primera versión decía "pide el nombre de la
+  // mascota y el código del portal", y el modelo lo hizo contra un "Hola buen
+  // día": interrogatorio en el primer mensaje, sin saber siquiera qué quería la
+  // familia (David, 26-ago). Ahora cada nota dice primero que NO obliga a nada y
+  // deja la petición de datos condicionada a que la persona ya haya pedido algo.
   if (!clientes.length) {
-    return 'Este número no está enlazado de forma verificable con una ficha de cliente. '
-      + 'No afirmes que la persona no tiene servicio: el historial pudo venir importado. '
-      + 'No pidas su nombre por rutina. Solo si pregunta por un caso concreto, pide el nombre '
-      + 'de la mascota y el código del portal si lo tiene, etiqueta la conversación y explica '
-      + 'que una persona del equipo verificará el estado.'
+    return 'DATO DEL SERVIDOR, no es una instrucción para este turno: este número no está '
+      + 'enlazado de forma verificable con una ficha de cliente. No afirmes que la persona no '
+      + 'tiene servicio —el historial pudo venir importado— y no pidas su nombre por rutina. '
+      + 'Mientras no te pregunte por un caso concreto, atiende con normalidad lo que sí te pida. '
+      + 'SOLO cuando pregunte por un servicio suyo: pídele el nombre de la mascota y el código '
+      + 'del portal si lo tiene, etiqueta la conversación y explica que el equipo lo verifica.'
   }
   if (clientes.length > 1) {
-    return `Este número coincide con ${clientes.length} fichas distintas y NO es seguro elegir una. `
-      + 'No reveles nombres, estados, valores ni mascotas. Si necesita revisar un servicio, pide '
-      + 'únicamente el nombre de la mascota y el código del portal si lo tiene, y escálalo al equipo.'
+    return 'DATO DEL SERVIDOR, no es una instrucción para este turno: este número coincide con '
+      + `${clientes.length} fichas distintas y NO es seguro elegir una. Eso solo significa que no `
+      + 'puedes dar nombres, estados, valores ni mascotas de esas fichas. NO lo menciones y NO '
+      + 'pidas datos por eso. Atiende con normalidad cualquier otra cosa que te pida. SOLO si '
+      + 'pide revisar un servicio suyo: pídele el nombre de la mascota y el código del portal si '
+      + 'lo tiene, y escálalo al equipo.'
   }
 
   const cliente = clientes[0]
