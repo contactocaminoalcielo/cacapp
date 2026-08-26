@@ -2424,8 +2424,13 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     // Lo que el servidor sabe de este número. Va pegado al último turno del
     // usuario, marcado como sistema para que el modelo no lo confunda con algo
     // que dijo la clínica.
-    if (!mensajePrueba && agente.clave === 'VETERINARIAS') {
-      const nota = await contextoDeLaConversacion(contacto, phoneNumberId).catch(() => null)
+    // `contextoDe` también aquí, por la misma razón que en FAMILIAS: sin él, un
+    // ensayo compara modelos a ciegas. Comparé Sonnet y Haiku con "me ayuda
+    // registrando el servicio" y saqué la conclusión equivocada — Sonnet
+    // verificaba y Haiku no, pero es que NINGUNO sabía si el número era de una
+    // clínica registrada, que es justo lo que decide si hay que verificar.
+    if ((!mensajePrueba || contextoDe) && agente.clave === 'VETERINARIAS') {
+      const nota = await contextoDeLaConversacion(contextoDe || contacto, phoneNumberId).catch(() => null)
       if (nota) {
         const ultimo = messages[messages.length - 1]
         ultimo.content = [
