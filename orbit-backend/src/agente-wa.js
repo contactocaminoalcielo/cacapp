@@ -1384,6 +1384,66 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
     + 'registrada no es una promesa nueva.\nServicios recientes:\n' + detalle + avisoVarios
 }
 
+const URL_PORTAL_FAMILIA = /https:\/\/orbit\.orbitacac\.com\/#\/fotos\/[A-Za-z0-9_-]+/g
+
+function normalizarIntencion(texto) {
+  return String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+/**
+ * Una petición explícita de atención humana no se deja a criterio del modelo.
+ * Evita el caso real en que la persona escribió "Asesor" y el bot continuó
+ * interrogándola aunque sí hubiera puesto la etiqueta internamente.
+ */
+export function pideAsesorDirecto(texto) {
+  const s = normalizarIntencion(texto).replace(/\s+/g, ' ').trim()
+  if (/^(asesor(?:a)?|humano|persona)(?: por favor| gracias)?[.!?]*$/.test(s)) return true
+  return /\b(?:quiero|necesito|solicito|prefiero|deseo|puedo|podria|quisiera|hablar|comunicarme|contactar|pasame|comuniqueme|atiendame)\b.{0,70}\b(?:asesor(?:a)?|persona|humano)\b/.test(s)
+    || /\b(?:hablar|comunicarme|contactar)\s+con\s+(?:un|una)\s+(?:asesor(?:a)?|persona|humano)\b/.test(s)
+}
+
+/**
+ * Última barrera para afirmaciones operativas que no se pueden dejar solo en
+ * el prompt. Si promete un portal, el enlace debe viajar en ESE mensaje. Y el
+ * portal de familias acepta fotos, no videos ni documentos.
+ */
+export function protegerSalidaFamilias(texto, contextoFamilia) {
+  let salida = String(texto || '').trim()
+  let corregida = false
+  let escalar = false
+
+  const hablaDeCarga = /\b(?:portal|carg|subir|sube|subas)\w*/i.test(salida)
+  if (hablaDeCarga && /\b(?:fotos|im[aá]genes)\s+y\s+videos\b/i.test(salida)) {
+    salida = salida.replace(/\b(fotos|im[aá]genes)\s+y\s+videos\b/gi, '$1')
+    corregida = true
+  }
+  if (hablaDeCarga && /\b(?:cualquier formato|el formato que tengas|no hay restricci[oó]n)\b/i.test(salida)) {
+    salida = salida
+      .replace(/\s*(?:—|-|,)\s*(?:en\s+)?cualquier formato(?:,?\s*no hay restricci[oó]n)?/gi, '')
+      .replace(/\s*en el formato que tengas/gi, '')
+      .replace(/\s*no hay restricci[oó]n/gi, '')
+    corregida = true
+  }
+  if (corregida) {
+    salida = `${salida.replace(/\s+/g, ' ').trim()}\n\nEl portal acepta fotos JPG, PNG, WEBP, HEIC o HEIF.`
+  }
+
+  const afirmaEnlace = /(?:acabo de|ya|te|lo)?\s*(?:compart|envi|mand)\w*.{0,80}\benlace\b|\benlace\b.{0,80}(?:compart|envi|mand)\w*|aqu[ií]\s+(?:est[aá]|tienes)\s+(?:el\s+)?enlace/i.test(salida)
+  const llevaPortal = /https:\/\/orbit\.orbitacac\.com\/#\/fotos\//i.test(salida)
+  if (afirmaEnlace && !llevaPortal) {
+    const portales = [...new Set(String(contextoFamilia || '').match(URL_PORTAL_FAMILIA) || [])]
+    if (portales.length === 1) {
+      salida = `${salida}\n\nPortal: ${portales[0]}`
+    } else {
+      salida = 'No quiero enviarte un enlace equivocado. Dejo tu conversación al equipo para que te compartan el portal correcto. Si prefieres atención inmediata, puedes llamar al *310 780 2868*.'
+      escalar = true
+    }
+    corregida = true
+  }
+
+  return { texto: salida || null, corregida, escalar }
+}
+
 /** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
 function aBloques(contenido) {
   if (Array.isArray(contenido)) return contenido
@@ -2319,6 +2379,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
   // entrada normal, la escritura de cache y la lectura de cache tienen tres
   // precios distintos, y entre el mas caro y el mas barato hay 20 veces.
   let entradaFresca = 0
+  let contextoFamilia = null
 
   try {
     const [system, herramientas] = await Promise.all([
@@ -2344,6 +2405,22 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     // guardar lo que escribió la veterinaria, no lo que le susurramos al modelo.
     if (!entrada) entrada = textoDe(messages[messages.length - 1]?.content)
 
+    // Una solicitud humana explícita termina aquí: se etiqueta y se entrega el
+    // teléfono correcto de Familias sin gastar una llamada al modelo ni correr
+    // el riesgo de que haga más preguntas.
+    if (agente.clave === 'FAMILIAS' && pideAsesorDirecto(entrada)) {
+      if (!mensajePrueba) {
+        const r = await clasificarConversacion({
+          entrada: { etiqueta: 'FAM_ASESOR', motivo: 'Solicitó atención de una persona' },
+          contacto, phoneNumberId, agenteId: agente.id,
+        })
+        usadas.push('clasificar_conversacion')
+        if (r.ok) etiquetas.push({ clave: 'FAM_ASESOR', motivo: 'Solicitó atención de una persona' })
+      }
+      salida = 'Claro. Dejo tu conversación al equipo para que un asesor continúe contigo. Si prefieres atención inmediata, puedes llamar al *310 780 2868*.'
+      return { texto: salida, tokensEntrada: 0, tokensSalida: 0, herramientas: usadas, cache, hastaId }
+    }
+
     // Lo que el servidor sabe de este número. Va pegado al último turno del
     // usuario, marcado como sistema para que el modelo no lo confunda con algo
     // que dijo la clínica.
@@ -2368,6 +2445,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
         return null
       })
       if (nota) {
+        contextoFamilia = nota
         const ultimo = messages[messages.length - 1]
         ultimo.content = [
           ...aBloques(ultimo.content),
@@ -2538,6 +2616,19 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     }
 
     salida = textos.join('\n\n').trim() || null
+    if (agente.clave === 'FAMILIAS' && salida) {
+      const protegida = protegerSalidaFamilias(salida, contextoFamilia)
+      salida = protegida.texto
+      if (protegida.corregida) log(MOD, `${contacto}: salida de Familias corregida por barrera operativa`)
+      if (protegida.escalar && !mensajePrueba) {
+        const r = await clasificarConversacion({
+          entrada: { etiqueta: 'FAM_ASESOR', motivo: 'El agente no pudo determinar un portal único y seguro' },
+          contacto, phoneNumberId, agenteId: agente.id,
+        }).catch(() => null)
+        if (!usadas.includes('clasificar_conversacion')) usadas.push('clasificar_conversacion')
+        if (r?.ok) etiquetas.push({ clave: 'FAM_ASESOR', motivo: 'Portal ambiguo o no verificable' })
+      }
+    }
 
     return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId }
   } catch (e) {
@@ -2551,7 +2642,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
           herramientas, tokens_entrada, tokens_salida, error)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
       [
-        agente.id, contacto, null, origen,
+        agente.id, contacto, phoneNumberId, origen,
         entrada ? String(entrada).slice(0, 4000) : null,
         salida  ? String(salida).slice(0, 4000)  : null,
         JSON.stringify({ usadas, etiquetas, ms: Date.now() - inicio, cache }),

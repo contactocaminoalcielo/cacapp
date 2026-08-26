@@ -14,6 +14,10 @@ export function requireJob(req, res, next) {
 /** Usuarios: valida el JWT emitido por el auth actual (mismo JWT_SECRET).
  *  Cuando se reemplace el login, solo cambia el emisor del token. */
 export async function requireAuth(req, res, next) {
+  // Algunos endpoints con archivos autentican ANTES de leer el JSON grande y
+  // vuelven a declarar `requireAuth` en la ruta final. No repitas la consulta a
+  // Postgres: si esta misma petición ya quedó autenticada, continúa.
+  if (req.personal?.id) return next()
   try {
     const token = (req.headers.authorization || '').replace(/^Bearer /, '')
     if (!token) return res.status(401).json({ error: 'Sin token' })

@@ -720,14 +720,15 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
   const destino = (telefono || '').trim() || svc.telefono
   if (!destino) return { status: 422, body: { error: 'El cliente no tiene un teléfono de WhatsApp registrado.' } }
 
-  // Un solo envío automático exitoso por servicio (el botón desaparece al enviar;
-  // esto cierra la ventana del doble clic / doble pestaña).
+  // Un solo envío exitoso por servicio, sin importar si fue automático o si
+  // una persona usó antes el fallback manual. Contar solo META/Zolutium deja
+  // una carrera: el operador copia los enlaces y el cron los vuelve a mandar.
   const { rows: previos } = await pool.query(
     `SELECT 1 FROM public.digitales_envios
-     WHERE servicio_id = $1 AND canal IN ('ZOLUTIUM','WHATSAPP_META') AND estado = 'ENVIADO' LIMIT 1`,
+     WHERE servicio_id = $1 AND estado = 'ENVIADO' LIMIT 1`,
     [servicioId]
   )
-  if (previos.length) return { status: 409, body: { error: 'Este servicio ya tiene un envío automático registrado.' } }
+  if (previos.length) return { status: 409, body: { error: 'Este servicio ya tiene un envío exitoso registrado.' } }
 
   // 2) Piezas del servicio: qué lleva (esperadas + creadas) y qué está publicado
   const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
@@ -855,6 +856,91 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
+}
+
+/**
+ * Envía únicamente servicios que quedaron COMPLETAMENTE listos después de la
+ * fecha de activación. El corte evita que al encender el job se disparen los
+ * históricos que llevan semanas publicados y requieren revisión humana.
+ *
+ * La selección es conservadora: si hubo cualquier envío exitoso (incluso
+ * manual), si falta una URL, si la combinación no tiene plantilla o si no hay
+ * teléfono, el servicio no se toca.
+ */
+export async function jobEnviosDigitales({ dryRun = false } = {}) {
+  const cfg = await cargarConfigDigitales(pool)
+  if (cfg.envio_automatico_activo !== true) {
+    return { ok: true, activo: false, candidatos: 0, enviados: 0, errores: [] }
+  }
+
+  const desde = new Date(String(cfg.envio_automatico_desde || ''))
+  if (!Number.isFinite(desde.getTime())) {
+    throw new Error('DIGITALES.envio_automatico_desde no es una fecha válida')
+  }
+  const limite = Math.max(1, Math.min(20, parseInt(cfg.envio_automatico_max_por_corrida, 10) || 5))
+
+  const lock = await pool.connect()
+  let adquirido = false
+  try {
+    const { rows: [r] } = await lock.query(
+      `SELECT pg_try_advisory_lock(hashtext('orbit:digitales:envio-automatico')) AS ok`
+    )
+    adquirido = !!r?.ok
+    if (!adquirido) return { ok: true, activo: true, omitido: 'Ya hay otra corrida activa', candidatos: 0, enviados: 0, errores: [] }
+
+    const { servicios } = await listarServicios()
+    const candidatos = servicios.filter(s => {
+      if (!s.telefono || s.envios.some(e => e.estado === 'ENVIADO')) return false
+
+      const piezasVivas = s.piezas.filter(p => p.estado !== 'DESCARTADO')
+      const tiposVivos = [...new Set([...(s.esperadas || []), ...piezasVivas.map(p => p.tipo)])]
+      const tiposPlan = [...new Set([...tiposVivos, ...(s.declinadas || [])])]
+      const combinacionValida = tiposPlan.length === 3
+        || (tiposPlan.length === 1 && tiposPlan[0] === 'MEMORIAL')
+      if (!tiposVivos.length || !combinacionValida) return false
+
+      const publicadas = piezasVivas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
+      if (tiposVivos.some(t => !publicadas.some(p => p.tipo === t))) return false
+
+      const listoEn = Math.max(...publicadas
+        .filter(p => tiposVivos.includes(p.tipo))
+        .map(p => new Date(p.publicado_en || p.updated_at || 0).getTime()))
+      return Number.isFinite(listoEn) && listoEn >= desde.getTime()
+    }).slice(0, limite)
+
+    if (dryRun) {
+      return {
+        ok: true, activo: true, dry_run: true, desde: desde.toISOString(),
+        candidatos: candidatos.length, enviados: 0, errores: [],
+        servicios: candidatos.map(s => s.servicio_id),
+      }
+    }
+
+    const enviados = []
+    const errores = []
+    for (const s of candidatos) {
+      try {
+        const r = await enviarAutomatico({ servicioId: s.servicio_id, personalId: null, telefono: s.telefono })
+        if (r.status === 200 && r.body?.ok) enviados.push(s.servicio_id)
+        else errores.push({ servicio_id: s.servicio_id, error: r.body?.error || `HTTP ${r.status}` })
+      } catch (e) {
+        errores.push({ servicio_id: s.servicio_id, error: String(e.message || e).slice(0, 500) })
+      }
+    }
+    return {
+      ok: errores.length === 0,
+      activo: true,
+      desde: desde.toISOString(),
+      candidatos: candidatos.length,
+      enviados: enviados.length,
+      errores,
+    }
+  } finally {
+    if (adquirido) {
+      await lock.query(`SELECT pg_advisory_unlock(hashtext('orbit:digitales:envio-automatico'))`).catch(() => {})
+    }
+    lock.release()
+  }
 }
 
 // Texto legible que queda en la evidencia y en la conversación de GHL

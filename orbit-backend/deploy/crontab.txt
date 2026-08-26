@@ -30,8 +30,8 @@
 45 6 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/grupales >> /var/log/orbit-backend-cron.log 2>&1
 
 # Solicitud de imagenes — prepara los contactos del dia (NO envia; una persona valida).
-# Recupera vencidos no procesados.
-0 10 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+# 07:00: la bandeja queda lista al comenzar la jornada. Recupera vencidos no procesados.
+0 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/contactos-imagenes >> /var/log/orbit-backend-cron.log 2>&1
 
 # Seguimiento de imagenes — 2o contacto (+3 dias habiles) y 3er contacto (+15) desde
 # el envio del 1o; cierra SIN_RESPUESTA + alerta tras el 3o. SOLO dias habiles (L-V):
@@ -39,6 +39,11 @@
 # que en festivo simplemente no escribe a nadie.
 # Idempotente: el indice unico (solicitud_id, numero) impide duplicar un contacto.
 30 10 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/seguimiento-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+
+# Digitales — revisa cada 10 minutos, solo en horario diurno. El job aplica un
+# corte de activacion y nunca toma los servicios historicos anteriores a este.
+# Maximo 5 por corrida y bloqueo global para impedir dos ejecuciones simultaneas.
+*/10 7-20 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/digitales >> /var/log/orbit-backend-cron.log 2>&1
 
 # Afiliaciones pre-exequiales — marca VENCIDA (vencio el contrato vigente) y
 # CANCELADA (paso la gracia). Idempotente. Instalado en prod 2026-07-16.

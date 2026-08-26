@@ -19,7 +19,7 @@ import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarA
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
   publicarManual, registrarEnlace, registrarEnvio, enviarAutomatico, descartarPieza, servirArchivo,
-  recuperarRendersHuerfanos,
+  recuperarRendersHuerfanos, jobEnviosDigitales,
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
@@ -69,6 +69,18 @@ import {
 
 const app = express()
 
+// Las cargas grandes deben comprobar identidad y rol ANTES de que Express lea
+// decenas de MB en memoria. Si se autentica solo en el handler final, cualquier
+// visitante anónimo puede obligar al proceso a parsear el cuerpo completo.
+// OPTIONS se deja pasar para que el middleware CORS de abajo responda el
+// preflight; no lleva cuerpo ni ejecuta el handler protegido.
+const protegerCarga = (rol) => (req, res, next) => {
+  if (req.method === 'OPTIONS') return next()
+  requireAuth(req, res, () => rol(req, res, next))
+}
+const cargaBandeja = protegerCarga(requireRol('COORDINADOR', 'ADMIN'))
+const cargaAgente  = protegerCarga(requireRol('COORDINADOR', 'ADMIN'))
+
 // ⚠️ ORDEN CRÍTICO — va ANTES del express.json() global.
 // El webhook de WhatsApp Cloud API firma el cuerpo CRUDO de la petición; si
 // express.json() lo parsea primero, el buffer original se pierde y la firma solo
@@ -81,10 +93,10 @@ app.use('/webhook/whatsapp', express.raw({ type: '*/*', limit: '1mb' }))
 // en base64 (≈ +33 %). Con el límite por defecto de express.json() (100 kB) la
 // subida fallaría con un 413 sin mensaje útil. Va ANTES del json global, igual
 // que el webhook: el primer parser que coincide gana y el global lo salta.
-app.use('/agente/conocimiento', express.json({ limit: '12mb' }))
+app.use('/agente/conocimiento', cargaAgente, express.json({ limit: '12mb' }))
 // Una definición portable puede incluir las imágenes de conocimiento en
 // base64. El límite se aplica solo al importador, nunca al resto de la API.
-app.use('/agente/marco/importar', express.json({ limit: '60mb' }))
+app.use('/agente/marco/importar', cargaAgente, express.json({ limit: '60mb' }))
 
 // Las imágenes que se envían viajan en base64 (≈ +33 %) y no caben en el
 // límite por defecto. Ruta PLANA con el contacto en el cuerpo a propósito: con
@@ -92,16 +104,16 @@ app.use('/agente/marco/importar', express.json({ limit: '60mb' }))
 // aplicándose a todo /whatsapp/conversaciones.
 // 90 MB porque el tope de un documento son 64 MB y en base64 pesa un tercio
 // más: con 30 MB, un PDF de 25 MB se caía con un 413 que no dice nada.
-app.use('/whatsapp/imagen',  express.json({ limit: '90mb' }))
-app.use('/whatsapp/archivo', express.json({ limit: '90mb' }))
+app.use('/whatsapp/imagen',  cargaBandeja, express.json({ limit: '90mb' }))
+app.use('/whatsapp/archivo', cargaBandeja, express.json({ limit: '90mb' }))
 // Los materiales del catálogo (101) se suben por aquí, también en base64.
-app.use('/whatsapp/materiales', express.json({ limit: '90mb' }))
+app.use('/whatsapp/materiales', cargaBandeja, express.json({ limit: '90mb' }))
 // La imagen/PDF de la cabecera de una plantilla se sube a Meta antes de crearla
 // (Resumable Upload API) y viaja en base64, igual que lo anterior. 90 MB por lo
 // mismo que los materiales: con 30 MB, un PDF de 25 MB se caía con un 413 que
 // no dice nada — y desde que la cabecera se guarda además como material, es
 // exactamente el mismo archivo por el mismo camino.
-app.use('/whatsapp/plantillas-cabecera', express.json({ limit: '90mb' }))
+app.use('/whatsapp/plantillas-cabecera', cargaBandeja, express.json({ limit: '90mb' }))
 
 app.use(express.json())
 
@@ -1043,6 +1055,17 @@ app.post('/jobs/seguimiento-imagenes', requireJob, async (req, res) => {
     res.json(await jobSeguimientoImagenes({ dryRun: req.query.dry === '1' }))
   } catch (e) {
     log('[seguimiento-imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Digitales nuevos: la fecha de activación en config_operativa deja por fuera
+// todo lo publicado antes del corte. `dry=1` permite comprobar sin enviar.
+app.post('/jobs/digitales', requireJob, async (req, res) => {
+  try {
+    res.json(await jobEnviosDigitales({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[digitales/job] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
