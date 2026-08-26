@@ -1333,9 +1333,15 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
       s.fecha_imagenes_recibidas
         ? `imágenes recibidas: sí (${s.fecha_imagenes_recibidas}) — NO se las vuelvas a pedir`
         : portal
+          // La instrucción tiene que ir en los DOS sentidos. Con solo la
+          // prohibición ("no lo entregues si no nombró a X"), el modelo se
+          // quedaba mudo incluso cuando la familia SÍ había dicho el nombre y
+          // pedido el enlace: contestaba "entiendo, es sobre el portal de
+          // Sasha" y no mandaba nada. Prudente de más también es fallar.
           ? (variosPortales
-              ? `portal de ${s.mascota || 'esta mascota'} (NO lo entregues si la familia no nombró a `
-                + `${s.mascota || 'esta mascota'}): ${portal}`
+              ? `portal de ${s.mascota || 'esta mascota'} — entrégalo SOLO si la familia ya dijo `
+                + `"${s.mascota || 'esta mascota'}"; si ya lo dijo, mándaselo sin volver a `
+                + `preguntar: ${portal}`
               : `portal para imágenes/datos de ${s.mascota || 'la mascota'}: ${portal}`)
           : null,
       s.recordatorios_total
@@ -1349,8 +1355,9 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
   }).join('\n')
 
   const avisoVarios = variosPortales
-    ? `\n⚠️ Esta familia tiene ${conPortal.length} servicios con portal abierto. NO entregues `
-      + 'ningún enlace mientras no te diga de cuál mascota habla, y entonces entrega SOLO el de esa.'
+    ? `\n⚠️ Esta familia tiene ${conPortal.length} servicios con portal abierto. Mientras no te `
+      + 'diga de cuál mascota habla, pregúntaselo y no entregues ningún enlace. En cuanto lo diga, '
+      + 'entrégale el de ESA mascota y solo ese — no la hagas confirmar dos veces.'
     : ''
 
   return `Identidad verificada por el número: ${nombre}. No le preguntes otra vez su nombre. `
@@ -2186,7 +2193,7 @@ async function avisarQueQuedoSinRespuesta(contacto, motivo, phoneNumberId = null
  * si las pide y devuelve el texto final. Deja rastro en la bitácora pase lo
  * que pase — sin eso no hay forma de ajustar el contexto con evidencia.
  */
-export async function ejecutar({ agente, contacto, phoneNumberId = null, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null }) {
+export async function ejecutar({ agente, contacto, phoneNumberId = null, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null, contextoDe = null }) {
   const inicio = Date.now()
   const usadas = []
   const etiquetas = []
@@ -2238,8 +2245,13 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
         ]
       }
     }
-    if (!mensajePrueba && agente.clave === 'FAMILIAS') {
-      const nota = await contextoDeLaFamilia(contacto, phoneNumberId).catch(e => {
+    // `contextoDe` permite ENSAYAR con el contexto real de un número sin tocar
+    // su conversación: las herramientas siguen corriendo contra `contacto`
+    // ('PRUEBA'), así que no se etiqueta ni se le escribe a nadie. Es la única
+    // forma de ver cómo responde ante una familia con dos portales abiertos sin
+    // usar de conejillo de indias a una familia de verdad.
+    if ((!mensajePrueba || contextoDe) && agente.clave === 'FAMILIAS') {
+      const nota = await contextoDeLaFamilia(contextoDe || contacto, phoneNumberId).catch(e => {
         log(MOD, `no se pudo construir contexto familiar de ${contacto} —`, e.message)
         return null
       })
@@ -2454,7 +2466,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
 }
 
 /** Prueba desde la pantalla: no envía nada por WhatsApp. */
-export async function probar({ clave = 'VETERINARIAS', mensaje }) {
+export async function probar({ clave = 'VETERINARIAS', mensaje, contextoDe = null, linea = null }) {
   if (!mensaje?.trim()) return { status: 400, body: { ok: false, error: 'Escribe un mensaje de prueba' } }
 
   const { rows } = await pool.query(
@@ -2468,6 +2480,7 @@ export async function probar({ clave = 'VETERINARIAS', mensaje }) {
   // de encenderlo.
   const r = await ejecutar({
     agente: rows[0], contacto: 'PRUEBA', origen: 'PRUEBA', mensajePrueba: mensaje,
+    contextoDe, phoneNumberId: linea,
   })
   if (r.error) return { status: 502, body: { ok: false, error: r.error } }
   return { status: 200, body: { ok: true, respuesta: r.texto, ...r } }
