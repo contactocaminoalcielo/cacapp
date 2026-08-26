@@ -13,6 +13,7 @@ const PAGE_META = {
   '/cuarto-frio':  { title: 'Cuarto frío',            sub: 'Control de ingreso y ubicación' },
   '/tenjo':        { title: 'Planta Tenjo',           sub: 'Traslados y procesos individuales' },
   '/produccion':   { title: 'Producción',             sub: 'Cola de recordatorios' },
+  '/inventario':   { title: 'Inventario',           sub: 'Insumos, kardex y costo de cada material' },
   '/imagenes':     { title: 'Imágenes',               sub: 'Solicitudes y recepción de fotos' },
   '/gestion':      { title: 'Gestión',                sub: 'Clientes, mascotas, aliados y personal' },
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },

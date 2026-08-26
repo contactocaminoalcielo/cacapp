@@ -12,6 +12,7 @@ const ACCESO_TOTAL = {
     '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
     '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
+    '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',
   ]),
 }
@@ -33,7 +34,9 @@ export const ROLE_CONFIG = {
     isTecnico:  false,
     redirectTo: '/',
     // En Tenjo el PRODUCTOR solo ve Jornada y Operación (gating de pestañas en Tenjo.jsx)
-    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales']),
+    // El PRODUCTOR entra a Inventario para mirar existencias y reportar merma:
+    // es quien tiene el material en la mano. El backend le cierra el resto.
+    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales', '/inventario']),
   },
   OPERARIO: {
     isTecnico:  false,

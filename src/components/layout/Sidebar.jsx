@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
-  MessageCircle, Bot, FileText } from 'lucide-react'
+  MessageCircle, Bot, FileText, Boxes } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { filterNavGroups } from '@/lib/roles'
@@ -30,6 +30,7 @@ const ALL_NAV_GROUPS = [
       { path: '/tenjo',          label: 'Planta Tenjo',    icon: Leaf },
       { path: '/certificados',   label: 'Certificados',    icon: Award },
       { path: '/produccion',     label: 'Producción',     icon: Layers,  badge: 'produccion' },
+      { path: '/inventario',     label: 'Inventario',      icon: Boxes },
       { path: '/imagenes',       label: 'Imágenes',       icon: Camera,  badge: 'imagenes' },
     ],
   },

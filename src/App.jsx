@@ -33,6 +33,7 @@ const Configuracion      = lazy(() => import('@/pages/Configuracion'))
 const LotesGrupales      = lazy(() => import('@/pages/LotesGrupales'))
 const Recibos            = lazy(() => import('@/pages/Recibos'))
 const Finanzas           = lazy(() => import('@/pages/Finanzas'))
+const Inventario         = lazy(() => import('@/pages/Inventario'))
 const Certificados       = lazy(() => import('@/pages/Certificados'))
 const Eutanasias         = lazy(() => import('@/pages/Eutanasias'))
 const Digitales          = lazy(() => import('@/pages/Digitales'))
@@ -96,6 +97,7 @@ function AppRoutes({ rol }) {
             {routes.has('/lotes-grupales') && <Route path="/lotes-grupales" element={<LotesGrupales />} />}
             {routes.has('/recibos')        && <Route path="/recibos"        element={<Recibos />} />}
             {routes.has('/finanzas')       && <Route path="/finanzas"       element={<Finanzas />} />}
+            {routes.has('/inventario')     && <Route path="/inventario"     element={<Inventario />} />}
             {routes.has('/certificados')   && <Route path="/certificados"   element={<Certificados />} />}
             {routes.has('/eutanasias')     && <Route path="/eutanasias"     element={<Eutanasias />} />}
             {routes.has('/digitales')      && <Route path="/digitales"      element={<Digitales />} />}

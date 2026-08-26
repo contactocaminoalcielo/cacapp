@@ -62,6 +62,10 @@ import {
   detalleCampana, accionCampana, borrarCampana, arrancarCampanas,
 } from './whatsapp-campanas.js'
 import { enviarDocumentoOperativo, transporteWhatsAppOperativo } from './whatsapp.js'
+import {
+  listarStock, listarMovimientos, verificarSaldos,
+  registrarMovimiento, revertirMovimiento, importarCatalogo,
+} from './inventario.js'
 
 const app = express()
 
@@ -133,6 +137,22 @@ app.get('/health', async (_req, res) => {
     res.status(500).json({ ok: false, error: e.message })
   }
 })
+
+// ── Inventario (migración 120) ──
+// El CATÁLOGO lo edita la pantalla por PostgREST; todo MOVIMIENTO pasa por aquí,
+// porque cambia el saldo y el costo promedio y de ahí salen los números de
+// Finanzas. El PRODUCTOR puede mirar y reportar merma: es quien tiene el
+// material en la mano y ve cuando algo se rompe.
+const rolInventario  = requireRol('COORDINADOR', 'ADMIN')
+const rolInventarioL = requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR')
+
+app.get('/inventario/stock',        requireAuth, rolInventarioL, listarStock)
+app.get('/inventario/movimientos',  requireAuth, rolInventarioL, listarMovimientos)
+app.get('/inventario/verificar',    requireAuth, rolInventario,  verificarSaldos)
+// El propio handler decide qué tipos admite cada rol: el PRODUCTOR solo merma.
+app.post('/inventario/movimientos', requireAuth, rolInventarioL, registrarMovimiento)
+app.post('/inventario/movimientos/:id/revertir', requireAuth, rolInventario, revertirMovimiento)
+app.post('/inventario/importar',    requireAuth, rolInventario,  importarCatalogo)
 
 // ── WhatsApp Cloud API — receptor de webhooks (línea de veterinarias) ──
 // Público a propósito: lo llama Meta, no un usuario. La autenticación es la
