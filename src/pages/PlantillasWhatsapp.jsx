@@ -73,6 +73,7 @@ export default function PlantillasWhatsapp() {
   const [mapeando, setMapeando] = useState(null)
   const [campos, setCampos] = useState([])
   const [pestana, setPestana] = useState('plantillas')
+  const [soloAgente, setSoloAgente] = useState(false)
   // Entrar al envío masivo YA con la plantilla puesta: llegar a esta pantalla
   // con una plantilla en la cabeza y tener que volver a elegirla es fricción
   // gratis.
@@ -128,12 +129,24 @@ export default function PlantillasWhatsapp() {
 
   const filtradas = useMemo(() => {
     const q = busqueda.trim().toLowerCase()
-    if (!q) return plantillas
-    return plantillas.filter(p =>
-      p.name?.toLowerCase().includes(q)
-      || componente(p, 'BODY')?.text?.toLowerCase().includes(q)
-      || tarjetasDe(p).some(card => card.components?.find(c => c.type === 'BODY')?.text?.toLowerCase().includes(q)))
-  }, [plantillas, busqueda])
+    const visibles = plantillas.filter(p => {
+      if (soloAgente && !p.orbit?.activa) return false
+      if (!q) return true
+      return p.name?.toLowerCase().includes(q)
+        || componente(p, 'BODY')?.text?.toLowerCase().includes(q)
+        || tarjetasDe(p).some(card => card.components?.find(c => c.type === 'BODY')?.text?.toLowerCase().includes(q))
+    })
+    // Las plantillas que realmente puede usar el agente no deben quedar
+    // enterradas entre cientos de plantillas históricas de la WABA.
+    return visibles.sort((a, b) =>
+      Number(!!b.orbit?.activa) - Number(!!a.orbit?.activa)
+      || (a.name || '').localeCompare(b.name || ''))
+  }, [plantillas, busqueda, soloAgente])
+
+  const principales = useMemo(
+    () => plantillas.filter(p => p.orbit?.activa).length,
+    [plantillas],
+  )
 
   // Las que Meta reclasificó: se cobran distinto de lo que se pidió, y si nadie
   // lo mira el cambio aparece en la factura.
@@ -199,6 +212,12 @@ export default function PlantillasWhatsapp() {
             <Input value={busqueda} onChange={e => setBusqueda(e.target.value)}
                    placeholder="Buscar por nombre o texto" className="pl-9" />
           </div>
+          <Button variant={soloAgente ? 'default' : 'outline'}
+                  onClick={() => setSoloAgente(v => !v)}
+                  aria-pressed={soloAgente}
+                  title="Mostrar únicamente las plantillas autorizadas para este agente">
+            <Bot className="w-4 h-4 mr-1.5" /> Principales ({principales})
+          </Button>
           <Button variant="outline" onClick={() => cargar()} disabled={cargando}>
             <RefreshCw className={`w-4 h-4 mr-1.5 ${cargando ? 'animate-spin' : ''}`} />
             Actualizar
@@ -213,7 +232,7 @@ export default function PlantillasWhatsapp() {
 
         <p className="text-[12px] text-gray-400">
           Una plantilla es la única forma de escribirle a alguien pasadas 24 horas desde su
-          último mensaje. Meta las revisa antes de dejarlas usar.
+          último mensaje. Las {principales} autorizadas para este agente aparecen primero.
         </p>
 
         {reclasificadas.length > 0 && (
@@ -239,7 +258,9 @@ export default function PlantillasWhatsapp() {
           <div className="text-center py-16">
             <MessageSquare className="w-10 h-10 mx-auto text-gray-300 mb-3" />
             <p className="text-[13px] text-gray-500">
-              {plantillas.length ? 'Ninguna coincide con la búsqueda.' : 'Todavía no hay plantillas en esta cuenta.'}
+              {soloAgente
+                ? 'No hay plantillas principales autorizadas para este agente.'
+                : plantillas.length ? 'Ninguna coincide con la búsqueda.' : 'Todavía no hay plantillas en esta cuenta.'}
             </p>
           </div>
         ) : (
