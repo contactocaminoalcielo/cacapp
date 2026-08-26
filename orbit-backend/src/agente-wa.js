@@ -1304,7 +1304,25 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
       + 'de la mascota y escálalo para buscar el registro importado.'
   }
 
+  // 🩸 EL ENLACE DEL PORTAL ES DE UNA MASCOTA CONCRETA, y mandarle a una familia
+  // el de otra es de los errores que no se pueden deshacer: esa familia entra a
+  // cargarle fotos al servicio de un desconocido, y ve su nombre y su mascota.
+  // 27 clientes tienen más de un servicio (uno tiene 26), así que el contexto
+  // puede traer varios enlaces a la vez y el agente elegir mal.
+  //
+  // Por eso el enlace SOLO viaja cuando no hay ambigüedad posible: si el cliente
+  // tiene un único servicio con portal, va suelto; si tiene varios, cada uno
+  // queda atado por escrito al nombre de SU mascota y con la prohibición de
+  // entregar ninguno mientras la familia no haya nombrado esa mascota exacta.
+  const conPortal = servicios.filter(
+    s => s.codigo_fotos && !s.fecha_imagenes_recibidas && !['ENTREGADO', 'CANCELADO'].includes(s.estado)
+  )
+  const variosPortales = conPortal.length > 1
+
   const detalle = servicios.map((s, i) => {
+    const portal = s.codigo_fotos && !['ENTREGADO', 'CANCELADO'].includes(s.estado)
+      ? construirEnlace(s.codigo_fotos)
+      : null
     const partes = [
       `${i + 1}. Mascota: ${s.mascota || 'sin nombre'}${s.especie ? ` (${s.especie})` : ''}`,
       `plan: ${s.plan || 'sin plan registrado'}`,
@@ -1313,9 +1331,12 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
       s.fecha_limite_entrega ? `fecha límite registrada: ${s.fecha_limite_entrega}` : null,
       s.fecha_entrega_real ? `entrega registrada: ${s.fecha_entrega_real}` : null,
       s.fecha_imagenes_recibidas
-        ? `imágenes recibidas: sí (${s.fecha_imagenes_recibidas})`
-        : s.codigo_fotos && !['ENTREGADO', 'CANCELADO'].includes(s.estado)
-          ? `portal para imágenes/datos: ${construirEnlace(s.codigo_fotos)}`
+        ? `imágenes recibidas: sí (${s.fecha_imagenes_recibidas}) — NO se las vuelvas a pedir`
+        : portal
+          ? (variosPortales
+              ? `portal de ${s.mascota || 'esta mascota'} (NO lo entregues si la familia no nombró a `
+                + `${s.mascota || 'esta mascota'}): ${portal}`
+              : `portal para imágenes/datos de ${s.mascota || 'la mascota'}: ${portal}`)
           : null,
       s.recordatorios_total
         ? `recordatorios: ${s.recordatorios_entregados}/${s.recordatorios_total} marcados como entregados`
@@ -1327,10 +1348,15 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
     return partes.join('; ')
   }).join('\n')
 
+  const avisoVarios = variosPortales
+    ? `\n⚠️ Esta familia tiene ${conPortal.length} servicios con portal abierto. NO entregues `
+      + 'ningún enlace mientras no te diga de cuál mascota habla, y entonces entrega SOLO el de esa.'
+    : ''
+
   return `Identidad verificada por el número: ${nombre}. No le preguntes otra vez su nombre. `
     + 'Usa estos datos solo para responder lo que pregunte; no los enumeres sin necesidad y no '
     + 'digas que consultaste Orbit. Un estado exacto sí se puede comunicar, pero una fecha límite '
-    + 'registrada no es una promesa nueva.\nServicios recientes:\n' + detalle
+    + 'registrada no es una promesa nueva.\nServicios recientes:\n' + detalle + avisoVarios
 }
 
 /** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
