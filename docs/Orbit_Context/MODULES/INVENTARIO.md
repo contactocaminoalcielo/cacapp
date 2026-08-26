@@ -3,9 +3,26 @@
 Estado: **fase 1 en producción** desde el 2026-08-26 (migración y backend aplicados y verificados;
 el frontend queda pendiente de `git push`). Fases 2-5 en diseño.
 
+### El módulo viejo (retirado el 2026-08-26, migración 122)
+Antes de esto ya existía un primer intento: tabla `inventario` (20 filas de semilla),
+`movimientos_inventario` (0 filas), `recordatorio_materiales` (0 filas, era su tabla de recetas),
+vista `v_stock_bajo` y una pestaña dentro de **Gestión**. Nunca se adoptó, y sus dos defectos
+explican por qué — son exactamente los que este diseño corrige:
+
+1. `Gestion.jsx` insertaba el movimiento y actualizaba `stock_actual` en **dos escrituras sueltas
+   sin transacción**. Si la segunda fallaba, saldo y libro divergían en silencio.
+2. **Bloqueaba cuando el stock iba a quedar negativo**, frenando a producción por una cifra de
+   bodega.
+
+Respaldo de las 20 filas en `respaldos/inventario_viejo_2026-08-26.sql` (fuera de git, la carpeta
+está en `.gitignore`).
+
+⚠️ **Lección**: al explorar, `grep` de `inventario` SÍ devolvía `Gestion.jsx` y se pasó por alto.
+Antes de dar una tabla por huérfana, revisar FKs, vistas y `from('<tabla>')` en el código — no
+solo si el nombre aparece.
+
 ⚠️ **La migración 121 la tomó el agente de Familias** (`121_agente_familias_configuracion.sql`,
-de una sesión paralela). La fase 2 del inventario es la **122**, y de ahí en adelante todo corre
-un número. Antes de escribir una migración nueva, mirar `ls migrations/` — el repo se trabaja
+de una sesión paralela). La **122** se usó para retirar el módulo viejo. La fase 2 del inventario es la **123**. Antes de escribir una migración nueva, mirar `ls migrations/` — el repo se trabaja
 desde más de una sesión a la vez.
 
 | Pieza | Archivo |
@@ -22,7 +39,7 @@ desde más de una sesión a la vez.
    `supabase-rest` para que PostgREST vea las tablas nuevas.
 2. ✅ **Backend** desplegado por `scp` + `docker compose up -d --build`. `/health` OK y
    `/inventario/stock` responde 401 sin token — la ruta existe.
-3. ⏳ **Frontend** — falta `git push` (Actions, ~3 min).
+3. ✅ **Frontend** desplegado (`35b9058`), más el retiro del módulo viejo (`eeba375`).
 
 El orden importa: al revés, la pantalla aparece antes que sus tablas. Está previsto
 —`/inventario/stock` devuelve un 503 que dice «falta aplicar la migración 120» en vez de un 500
@@ -437,10 +454,10 @@ Cada fase deja algo usable en producción. Ninguna depende de que la siguiente e
 | Fase | Migr. | Qué entra | Qué se gana |
 |---|---|---|---|
 | **1** ✅ | 120 | Catálogo (insumos, proveedores, presentaciones), kardex, saldo, entradas y salidas manuales, costo promedio, importación por CSV, verificación de saldos. Pantalla `/inventario` | Ya se sabe qué hay y qué vale. Cero automatización, cero riesgo |
-| **2** | 122 | Recetas + trigger de consumo + reversa + cobertura de recetas | **El pedido literal**: marcar un altar LISTO descuenta solo |
-| **3** | 123 | Consumo diario, cobertura, comprometido, job de alertas, badge | Avisa cuándo pedir, antes de que falte |
-| **4** | 124 | Órdenes de compra, recepción parcial, PDF, sugerencia automática | Se cierra el ciclo de compra |
-| **5** | 125 | Tenjo (`por_kg`), recogida, entrega, conteos físicos, costo por servicio en Reportes/Finanzas | El costo real, completo |
+| **2** | 123 | Recetas + trigger de consumo + reversa + cobertura de recetas | **El pedido literal**: marcar un altar LISTO descuenta solo |
+| **3** | 124 | Consumo diario, cobertura, comprometido, job de alertas, badge | Avisa cuándo pedir, antes de que falte |
+| **4** | 125 | Órdenes de compra, recepción parcial, PDF, sugerencia automática | Se cierra el ciclo de compra |
+| **5** | 126 | Tenjo (`por_kg`), recogida, entrega, conteos físicos, costo por servicio en Reportes/Finanzas | El costo real, completo |
 
 **Empezar por la fase 1 aunque el pedido sea la fase 2.** Un trigger que descuenta contra un
 catálogo vacío y unos saldos inventados produce números falsos con apariencia de exactitud, que es
