@@ -67,8 +67,8 @@ export default function AgentesIA() {
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-lg font-semibold text-neutral-900">Agentes configurables</h1>
-            <p className="mt-1 text-[13px] text-neutral-600 leading-relaxed max-w-2xl">
+            <h1 className="text-lg font-semibold text-gray-900">Agentes configurables</h1>
+            <p className="mt-1 text-[13px] text-gray-600 leading-relaxed max-w-2xl">
               Cada agente tiene inteligencia, conocimientos, reglas y capacidades propias. Se crea
               aislado y solo responde cuando le asignas una línea y lo enciendes.
             </p>
@@ -90,11 +90,11 @@ export default function AgentesIA() {
         )}
 
         {cargando ? (
-          <div className="p-12 grid place-items-center text-neutral-400">
+          <div className="p-12 grid place-items-center text-gray-400">
             <Loader2 className="w-5 h-5 animate-spin" />
           </div>
         ) : !agentes.length ? (
-          <p className="text-sm text-neutral-500 py-10 text-center">
+          <p className="text-sm text-gray-500 py-10 text-center">
             Todavía no hay ningún agente configurado.
           </p>
         ) : (
@@ -103,13 +103,15 @@ export default function AgentesIA() {
           </div>
         )}
 
-        <div className="rounded-2xl border border-dashed border-neutral-300 p-5 text-center">
-          <ShieldNotice />
-          <p className="text-[13px] text-neutral-500 mt-2">
+        {/* Esto tranquiliza a quien va a crear su primer agente. Con agentes ya
+            configurados no aporta nada y empuja las tarjetas hacia abajo, así
+            que solo sale cuando la pantalla está vacía o se va a crear uno. */}
+        {!cargando && !agentes.length && (
+          <p className="text-[13px] text-gray-500 text-center max-w-xl mx-auto">
             Crear o importar no conecta nada. Los agentes nuevos nacen apagados, sin líneas y sin
             herramientas; puedes configurarlos y probarlos sin afectar a Veterinarias.
           </p>
-        </div>
+        )}
       </div>
       <CrearAgenteModal open={creando} onClose={() => setCreando(false)} onCreated={a => navigate(`/agentes/${a.clave}`)} />
     </>
@@ -139,36 +141,36 @@ function Ficha({ a, i, onError }) {
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
       transition={{ delay: i * 0.04 }}
     >
-      <div className="group rounded-2xl border bg-white p-5 shadow-sm hover:border-neutral-400 hover:shadow-md transition">
+      <div className="group rounded-xl border border-gray-100 bg-white p-5 shadow-sm hover:border-gray-300 hover:shadow-md transition-all duration-200">
         <div className="flex items-start gap-3">
           <div className={`rounded-xl p-2.5 shrink-0 ${
-            a.activo ? 'bg-emerald-50 text-emerald-600' : 'bg-neutral-100 text-neutral-400'
+            a.activo ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'
           }`}>
             <Bot className="w-5 h-5" />
           </div>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-neutral-900 truncate">{a.nombre}</h3>
+              <h3 className="font-semibold text-gray-900 truncate">{a.nombre}</h3>
               <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${
-                a.activo ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'
+                a.activo ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
               }`}>
                 {a.activo ? 'Encendido' : 'Apagado'}
               </span>
             </div>
 
-            <p className="text-[12px] text-neutral-500 mt-0.5 flex items-center gap-1.5">
+            <p className="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1.5">
               <Phone className="w-3 h-3 shrink-0" />
               {numeros.length
                 ? `${numeros.length} línea${numeros.length > 1 ? 's' : ''} asignada${numeros.length > 1 ? 's' : ''}`
                 : 'sin línea asignada'}
-              <span className="text-neutral-300">·</span>
+              <span className="text-gray-300">·</span>
               {a.voz_activa
                 ? <><Mic className="w-3 h-3" /> con voz</>
                 : <><MicOff className="w-3 h-3" /> sin voz</>}
             </p>
 
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-[11px] text-neutral-500">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-[11px] text-gray-500">
               <span className="flex items-center gap-1"><BookOpen className="w-3 h-3" />{a.piezas} piezas</span>
               <span className="flex items-center gap-1"><Scale className="w-3 h-3" />{a.reglas} reglas</span>
               <span className="flex items-center gap-1">
@@ -176,24 +178,26 @@ function Ficha({ a, i, onError }) {
               </span>
             </div>
 
-            <p className="text-[11px] text-neutral-500 mt-2 font-mono">{a.proveedor} · {a.modelo}</p>
+            <p className="text-[11px] text-gray-500 mt-2 font-mono">{a.proveedor} · {a.modelo}</p>
           </div>
         </div>
-        <div className="mt-4 flex items-center justify-between border-t pt-3">
-          <button type="button" onClick={descargar} disabled={exportando}
-            className="min-h-9 inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-100 focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30 disabled:opacity-50">
+        <div className="-mx-5 mt-4 px-5 pt-3 flex items-center justify-between border-t border-gray-100">
+          {/* Los dos botones estaban a mano, con su propio alto, su propio
+              radio y su propio anillo de foco. El componente `Button` ya trae
+              todo eso y es el que usa el resto de Orbit: dos botones que se
+              parecen pero no son iguales es justo lo que hace que una pantalla
+              se sienta de otra app. */}
+          <Button variant="ghost" size="sm" onClick={descargar} disabled={exportando}>
             {exportando ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Exportar
-          </button>
-          <Link to={`/agentes/${a.clave}`}
-            className="min-h-9 inline-flex items-center gap-1 rounded-lg px-3 text-xs font-semibold text-[#1A5CD8] hover:bg-[#EEF3FF] focus:outline-none focus:ring-2 focus:ring-[#1A5CD8]/30 no-underline">
-            Configurar <ChevronRight size={14} />
-          </Link>
+          </Button>
+          <Button asChild variant="secondary" size="sm">
+            <Link to={`/agentes/${a.clave}`} className="no-underline">
+              Configurar <ChevronRight size={14} />
+            </Link>
+          </Button>
         </div>
       </div>
     </motion.div>
   )
 }
 
-function ShieldNotice() {
-  return <Bot className="w-5 h-5 text-neutral-400 mx-auto" aria-hidden="true" />
-}

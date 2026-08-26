@@ -250,7 +250,7 @@ export default function AgenteWhatsapp() {
     return (
       <>
         <Topbar titulo="Agente de WhatsApp" />
-        <div className="flex items-center justify-center py-24 text-neutral-400">
+        <div className="flex items-center justify-center py-24 text-gray-400">
           <Loader2 className="w-6 h-6 animate-spin" />
         </div>
       </>
@@ -279,7 +279,7 @@ export default function AgenteWhatsapp() {
 
         <Link
           to="/agentes"
-          className="inline-flex items-center gap-1.5 text-[13px] text-neutral-500 hover:text-neutral-900 no-underline"
+          className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 no-underline"
         >
           <ArrowLeft className="w-3.5 h-3.5" /> Todos los agentes
         </Link>
@@ -287,16 +287,16 @@ export default function AgenteWhatsapp() {
         {/* ── Estado ── */}
         <motion.section
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-          className="rounded-2xl border bg-white p-5 shadow-sm"
+          className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"
         >
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-start gap-3">
-              <div className={`rounded-xl p-2.5 ${agente.activo ? 'bg-emerald-50 text-emerald-600' : 'bg-neutral-100 text-neutral-400'}`}>
+              <div className={`rounded-xl p-2.5 ${agente.activo ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'}`}>
                 <Bot className="w-6 h-6" />
               </div>
               <div>
-                <h2 className="font-semibold text-neutral-900">{agente.nombre}</h2>
-                <p className="text-sm text-neutral-500">
+                <h2 className="font-semibold text-gray-900">{agente.nombre}</h2>
+                <p className="text-sm text-gray-500">
                   {agente.activo
                     ? 'Encendido: responde en las líneas asignadas.'
                     : 'Apagado: puedes configurarlo y probarlo sin que responda a nadie.'}
@@ -306,7 +306,7 @@ export default function AgenteWhatsapp() {
             <Button
               onClick={alternarEncendido}
               className={agente.activo
-                ? 'bg-neutral-900 hover:bg-neutral-800'
+                ? 'bg-gray-900 hover:bg-gray-800'
                 : 'bg-emerald-600 hover:bg-emerald-700'}
             >
               <Power className="w-4 h-4 mr-2" />
@@ -357,7 +357,7 @@ export default function AgenteWhatsapp() {
 
           <TabsContent value="cerebro" className="space-y-6 mt-0">
           {/* ── Contexto ── */}
-          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-3">
+          <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-3">
             <Cabecera icono={BookOpen} titulo="Contexto"
               sub="Quién es, cómo habla y qué puede o no puede decir. Es lo primero que lee en cada conversación." />
             <Textarea
@@ -367,7 +367,7 @@ export default function AgenteWhatsapp() {
               className="font-mono text-sm leading-relaxed"
               placeholder="Define quién es, cómo responde, qué debe evitar y cuándo debe escalar…"
             />
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-gray-500">
               {instrucciones.length.toLocaleString('es-CO')} caracteres. Sé concreto: el agente sigue
               estas instrucciones al pie de la letra y no sabe nada que no esté aquí o en la base de
               conocimiento.
@@ -375,7 +375,7 @@ export default function AgenteWhatsapp() {
           </section>
 
           {/* ── Base de conocimiento ── */}
-          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
             <Cabecera icono={BookOpen} titulo="Base de conocimiento"
               sub="Lo que puede consultar para responder. Si no está aquí, no lo sabe." />
 
@@ -397,11 +397,11 @@ export default function AgenteWhatsapp() {
                   exit={{ opacity: 0, height: 0 }}
                   className="overflow-hidden"
                 >
-                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                    <p className="text-sm font-medium text-neutral-800">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                    <p className="text-sm font-medium text-gray-800">
                       Nueva pieza — {TIPOS_KB[nueva.tipo].label}
                     </p>
-                    <p className="text-xs text-neutral-500">{TIPOS_KB[nueva.tipo].ayuda}</p>
+                    <p className="text-xs text-gray-500">{TIPOS_KB[nueva.tipo].ayuda}</p>
 
                     <Input
                       value={nueva.titulo}
@@ -462,7 +462,7 @@ export default function AgenteWhatsapp() {
             </AnimatePresence>
 
             {!kb.length ? (
-              <p className="text-sm text-neutral-500 py-6 text-center">
+              <p className="text-sm text-gray-500 py-6 text-center">
                 Todavía no hay nada cargado. El agente solo sabrá lo que digas en el contexto.
               </p>
             ) : (
@@ -470,14 +470,14 @@ export default function AgenteWhatsapp() {
                 {kb.map(p => {
                   const Icono = ICONO_TIPO[p.tipo]
                   return (
-                    <li key={p.id} className={`p-3 ${p.activo ? '' : 'bg-neutral-50'}`}>
+                    <li key={p.id} className={`p-3 ${p.activo ? '' : 'bg-gray-50'}`}>
                       <div className="flex items-start gap-3">
-                        <Icono className={`w-4 h-4 mt-1 shrink-0 ${p.activo ? 'text-neutral-500' : 'text-neutral-300'}`} />
+                        <Icono className={`w-4 h-4 mt-1 shrink-0 ${p.activo ? 'text-gray-500' : 'text-gray-300'}`} />
                         <div className="min-w-0 flex-1">
-                          <p className={`text-sm font-medium truncate ${p.activo ? 'text-neutral-900' : 'text-neutral-400'}`}>
+                          <p className={`text-sm font-medium truncate ${p.activo ? 'text-gray-900' : 'text-gray-400'}`}>
                             {p.titulo}
                           </p>
-                          <p className="text-xs text-neutral-500">
+                          <p className="text-xs text-gray-500">
                             {TIPOS_KB[p.tipo].label}
                             {p.tipo === 'IMAGEN'
                               ? ` · ${(p.bytes / 1024).toFixed(0)} kB`
@@ -510,7 +510,7 @@ export default function AgenteWhatsapp() {
             )}
 
             {resumen && (
-              <p className="text-xs text-neutral-500">
+              <p className="text-xs text-gray-500">
                 Contexto activo: <strong>{resumen.piezas_activas}</strong> piezas ·{' '}
                 <strong>{resumen.caracteres_texto.toLocaleString('es-CO')}</strong> caracteres ·{' '}
                 <strong>{resumen.imagenes}</strong> imágenes · ≈{' '}
@@ -523,7 +523,7 @@ export default function AgenteWhatsapp() {
 
           <TabsContent value="ajustes" className="space-y-6 mt-0">
           {/* ── Ajustes ── */}
-          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
             <Cabecera icono={Settings2} titulo="Ajustes" sub="Cómo y dónde trabaja." />
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -533,7 +533,7 @@ export default function AgenteWhatsapp() {
 
               <Campo label="Tipo de agente">
                 <select value={ajustes.categoria} onChange={e => setAjustes(a => ({ ...a, categoria: e.target.value }))}
-                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                   {CATEGORIAS_AGENTE.map(c => <option key={c.valor} value={c.valor}>{c.label}</option>)}
                 </select>
               </Campo>
@@ -547,14 +547,14 @@ export default function AgenteWhatsapp() {
                   const proveedor = e.target.value
                   const primero = motores.find(m => m.proveedor === proveedor)
                   setAjustes(a => ({ ...a, proveedor, modelo: primero?.modelo || '' }))
-                }} className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                }} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                   {proveedores.map(p => <option key={p.proveedor} value={p.proveedor} disabled={!p.listo}>{p.proveedor}{p.listo ? '' : ' · no configurado'}</option>)}
                 </select>
               </Campo>
 
               <Campo label="Modelo" ayuda={motores.find(m => m.modelo === ajustes.modelo && m.proveedor === ajustes.proveedor)?.ayuda}>
                 <select value={ajustes.modelo} onChange={e => setAjustes(a => ({ ...a, modelo: e.target.value }))}
-                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                   {modelosDisponibles.map(m => <option key={m.modelo} value={m.modelo}>{m.etiqueta}</option>)}
                 </select>
               </Campo>
@@ -564,7 +564,7 @@ export default function AgenteWhatsapp() {
                 <select
                   value={ajustes.effort}
                   onChange={e => setAjustes(a => ({ ...a, effort: e.target.value }))}
-                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                 >
                   {EFFORT_OPCIONES.map(o => <option key={o.valor} value={o.valor}>{o.label}</option>)}
                 </select>
@@ -584,7 +584,7 @@ export default function AgenteWhatsapp() {
 
               <Campo label="Idioma">
                 <select value={ajustes.idioma} onChange={e => setAjustes(a => ({ ...a, idioma: e.target.value }))}
-                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                   <option value="es">Español</option><option value="es-CO">Español de Colombia</option><option value="en">Inglés</option>
                 </select>
               </Campo>
@@ -611,7 +611,7 @@ export default function AgenteWhatsapp() {
                 ayuda="El mensaje exacto del recordatorio. Ofrecer tomar los datos por chat es lo que recupera el registro.">
                 <textarea rows={2} value={ajustes.seg_texto}
                   onChange={e => setAjustes(a => ({ ...a, seg_texto: e.target.value }))}
-                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm resize-y" />
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-y" />
               </Campo>
 
               <Campo label="Líneas donde responde" className="sm:col-span-2"
@@ -637,7 +637,7 @@ export default function AgenteWhatsapp() {
 
           <TabsContent value="reglas" className="space-y-6 mt-0">
           {/* ── Correcciones y reglas (migración 099) ── */}
-          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
             <Cabecera icono={Scale} titulo="Correcciones y reglas"
               sub="Lo que marcas en el chat llega aquí. Tú decides qué se convierte en norma para el agente." />
             <ReglasYCorrecciones agenteId={agente.id} onCambio={refrescar} />
@@ -659,14 +659,14 @@ export default function AgenteWhatsapp() {
 
           <TabsContent value="bitacora" className="space-y-6 mt-0">
           {/* ── Bitácora ── */}
-          <section className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+          <section className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-4">
             <div className="flex items-start justify-between gap-4">
               <Cabecera icono={History} titulo="Lo que ha respondido"
                 sub="Cada conversación que atendió, con lo que le preguntaron y lo que contestó. Es donde se ve si está haciendo bien el trabajo." />
               <div className="flex items-center gap-2 shrink-0">
                 {verBitacora && (
                   <button onClick={cargarBitacora} title="Actualizar"
-                    className="p-1.5 rounded-md text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 cursor-pointer">
+                    className="p-1.5 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 cursor-pointer">
                     <RefreshCw className={`w-4 h-4 ${cargandoBit ? 'animate-spin' : ''}`} />
                   </button>
                 )}
@@ -678,38 +678,38 @@ export default function AgenteWhatsapp() {
             </div>
 
             {verBitacora && (cargandoBit && !ejecuciones.length ? (
-              <p className="text-sm text-neutral-400 flex items-center gap-2 py-4">
+              <p className="text-sm text-gray-400 flex items-center gap-2 py-4">
                 <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
               </p>
             ) : !ejecuciones.length ? (
-              <p className="text-sm text-neutral-500 py-4">
+              <p className="text-sm text-gray-500 py-4">
                 Todavía no ha respondido nada. Aparecerá aquí en cuanto atienda su primera conversación.
               </p>
             ) : (
               <>
                 {/* Lo que no supo: es la razón de ser de esta pantalla */}
-                <div className={`rounded-xl border p-4 ${vacios.length ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-neutral-50'}`}>
+                <div className={`rounded-xl border p-4 ${vacios.length ? 'border-orange-200 bg-orange-50' : 'border-gray-200 bg-gray-50'}`}>
                   <div className="flex items-start gap-2.5">
-                    <HelpCircle className={`w-5 h-5 shrink-0 mt-0.5 ${vacios.length ? 'text-orange-600' : 'text-neutral-400'}`} />
+                    <HelpCircle className={`w-5 h-5 shrink-0 mt-0.5 ${vacios.length ? 'text-orange-600' : 'text-gray-400'}`} />
                     <div className="min-w-0 flex-1">
-                      <h4 className="font-semibold text-neutral-900 text-sm">
+                      <h4 className="font-semibold text-gray-900 text-sm">
                         Lo que no supo responder{vacios.length > 0 && ` · ${vacios.length}`}
                       </h4>
                       {vacios.length === 0 ? (
-                        <p className="text-sm text-neutral-500 mt-1">
+                        <p className="text-sm text-gray-500 mt-1">
                           Nada pendiente: respondió todo con lo que tiene cargado.
                         </p>
                       ) : (
                         <>
-                          <p className="text-[13px] text-neutral-600 mt-1 mb-3">
+                          <p className="text-[13px] text-gray-600 mt-1 mb-3">
                             Preguntas reales que tuvo que pasar a una persona. Escribe la respuesta
                             arriba, en la base de conocimiento, y deja de escalarlas.
                           </p>
                           <ul className="space-y-2">
                             {vacios.map(v => (
                               <li key={v.id} className="rounded-lg bg-white border border-orange-200 px-3 py-2">
-                                <p className="text-sm text-neutral-900">{v.pregunta}</p>
-                                <p className="text-[11px] text-neutral-400 mt-0.5">
+                                <p className="text-sm text-gray-900">{v.pregunta}</p>
+                                <p className="text-[11px] text-gray-400 mt-0.5">
                                   {v.contacto} · {new Date(v.cuando).toLocaleString('es-CO')}
                                 </p>
                               </li>
@@ -739,7 +739,7 @@ export default function AgenteWhatsapp() {
                 initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
               >
                 <Button onClick={guardar} disabled={guardando || !sucio}
-                  className="shadow-lg bg-neutral-900 hover:bg-neutral-800">
+                  className="shadow-lg bg-gray-900 hover:bg-gray-800">
                   {guardando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     : guardado ? <Check className="w-4 h-4 mr-2" />
                     : <Save className="w-4 h-4 mr-2" />}
@@ -759,20 +759,20 @@ function Ejecucion({ e }) {
   const etiquetas = e.herramientas?.etiquetas || []
   const fallo = !!e.error
   return (
-    <div className={`rounded-xl border p-3.5 ${fallo ? 'border-red-200 bg-red-50' : 'border-neutral-200'}`}>
+    <div className={`rounded-xl border p-3.5 ${fallo ? 'border-red-200 bg-red-50' : 'border-gray-200'}`}>
       <div className="flex items-center justify-between gap-3 mb-2">
-        <span className="text-[11px] text-neutral-400 flex items-center gap-1.5">
+        <span className="text-[11px] text-gray-400 flex items-center gap-1.5">
           <User className="w-3 h-3" />
           {e.origen === 'PRUEBA' ? 'Prueba desde esta pantalla' : e.contacto}
           {' · '}{new Date(e.creado_en).toLocaleString('es-CO')}
         </span>
-        <span className="text-[11px] text-neutral-400 shrink-0">
+        <span className="text-[11px] text-gray-400 shrink-0">
           {(e.tokens_entrada || 0).toLocaleString('es-CO')} tokens
         </span>
       </div>
 
       {e.entrada && (
-        <p className="text-sm text-neutral-600 mb-2 pl-3 border-l-2 border-neutral-200 whitespace-pre-wrap">
+        <p className="text-sm text-gray-600 mb-2 pl-3 border-l-2 border-gray-200 whitespace-pre-wrap">
           {e.entrada}
         </p>
       )}
@@ -783,13 +783,13 @@ function Ejecucion({ e }) {
           <span>No pudo responder: {e.error}</span>
         </p>
       ) : (
-        <p className="text-sm text-neutral-900 whitespace-pre-wrap">{e.salida || '—'}</p>
+        <p className="text-sm text-gray-900 whitespace-pre-wrap">{e.salida || '—'}</p>
       )}
 
       {(etiquetas.length > 0 || (e.herramientas?.usadas || []).length > 0) && (
         <div className="flex flex-wrap gap-1.5 mt-2.5">
           {etiquetas.map((x, i) => (
-            <span key={i} className="px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-600 text-[10px] font-semibold">
+            <span key={i} className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold">
               {x.clave}
             </span>
           ))}
@@ -809,10 +809,10 @@ function Ejecucion({ e }) {
 function Cabecera({ icono: Icono, titulo, sub }) {
   return (
     <div className="flex items-start gap-2.5">
-      <Icono className="w-5 h-5 text-neutral-400 mt-0.5 shrink-0" />
+      <Icono className="w-5 h-5 text-gray-400 mt-0.5 shrink-0" />
       <div>
-        <h3 className="font-semibold text-neutral-900">{titulo}</h3>
-        <p className="text-sm text-neutral-500">{sub}</p>
+        <h3 className="font-semibold text-gray-900">{titulo}</h3>
+        <p className="text-sm text-gray-500">{sub}</p>
       </div>
     </div>
   )
@@ -821,9 +821,9 @@ function Cabecera({ icono: Icono, titulo, sub }) {
 function Campo({ label, ayuda, children, className = '' }) {
   return (
     <div className={className}>
-      <label className="block text-sm font-medium text-neutral-700 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
       {children}
-      {ayuda && <p className="mt-1 text-xs text-neutral-500">{ayuda}</p>}
+      {ayuda && <p className="mt-1 text-xs text-gray-500">{ayuda}</p>}
     </div>
   )
 }
