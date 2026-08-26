@@ -354,6 +354,52 @@ export async function enviarPlantillaOperativa({
   })
 }
 
+/**
+ * Documentos operativos que antes salían por la Edge Function de GHL.
+ *
+ * En Meta no se puede adjuntar un documento con texto libre fuera de la
+ * ventana de 24 horas. Certificados y recibos usan por eso plantillas
+ * aprobadas; GHL conserva el comportamiento anterior durante la transición.
+ */
+export async function enviarDocumentoOperativo({
+  telefono, nombre = '', mensaje = '', pdfUrl, pdfFilename = 'documento.pdf',
+  tipoDocumento = 'DOCUMENTO', referencia = '', mascota = '',
+  fromNumberId = LINEA_WA_ID, personalId = null,
+}) {
+  if (transporteWhatsAppOperativo() === 'GHL') {
+    return enviarWhatsAppGHL({ telefono, nombre, mensaje, pdfUrl, fromNumberId })
+  }
+
+  if (!pdfUrl) throw new Error('El documento necesita una URL pública para enviarse por Meta')
+
+  const tipo = String(tipoDocumento || '').trim().toUpperCase()
+  if (tipo === 'CERTIFICADO') {
+    return enviarPlantillaMetaDirecta({
+      telefono,
+      plantillaNombre: 'certificado_proceso',
+      idioma: 'es_MX',
+      bodyParams: [nombre || 'Familia', mascota || 'su mascota'],
+      cabecera: { link: pdfUrl, filename: pdfFilename || 'certificado.pdf' },
+      fromNumberId,
+      personalId,
+    })
+  }
+  if (tipo === 'RECIBO') {
+    return enviarPlantillaMetaDirecta({
+      telefono,
+      plantillaNombre: 'envio_recibo_servicio',
+      idioma: 'es_MX',
+      bodyParams: [nombre || 'Cliente', referencia || 'recibo', mascota || 'su mascota', pdfUrl],
+      fromNumberId,
+      personalId,
+    })
+  }
+
+  return enviarWhatsAppOperativo({
+    telefono, nombre, mensaje, pdfUrl, pdfFilename, fromNumberId, personalId,
+  })
+}
+
 /** Texto/documento dentro de la ventana de 24 h, seleccionando transporte. */
 export async function enviarWhatsAppOperativo({
   telefono, nombre = '', mensaje, pdfUrl, pdfFilename = 'documento.pdf',

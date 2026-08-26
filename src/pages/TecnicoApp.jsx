@@ -5764,13 +5764,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         } catch (_) { /* si falla el upload, enviamos solo el texto */ }
       }
 
-      // 3. Enviar por GHL/Zolutium con PDF adjunto
+      // 3. Enviar por el transporte operativo de Orbit.
       await enviarWhatsApp({
         telefono:    waDestino,
         nombre:      nombreDestino,
         mensaje:     msg,
         pdfUrl,
-        fromNumber:  LINEAS_WHATSAPP[0]?.numero,
+        pdfFilename: `Recibo ${form.numero_recibo}${tipoRecibo === 'VETERINARIA' ? '-VET' : ''}.pdf`,
+        tipoDocumento: 'RECIBO',
+        referencia: `${form.numero_recibo}${tipoRecibo === 'VETERINARIA' ? '-VET' : ''}`,
+        mascota: form.mascota_nombre,
       })
       alert(`Recibo enviado por WhatsApp${pdfUrl ? ' con PDF adjunto' : ''} a ${waDestino} desde la línea oficial.`)
     } catch (e) {

@@ -1,13 +1,20 @@
-// Envío de WhatsApp vía GoHighLevel — el token vive en la Edge Function
-// `send-whatsapp` (server-side). El token NUNCA viaja al navegador.
-import { callEdgeFunction } from '@/lib/supabase'
+// Envío de documentos por el transporte operativo de Orbit. El backend decide
+// entre GHL (transición) y Meta directo; ninguna credencial viaja al navegador.
+import { orbitApi } from '@/lib/orbitApi'
 
 // ─── Enviar mensaje WhatsApp con adjunto (URL pública al PDF) ────────────────
 // La línea emisora ya NO se manda desde el cliente: la fija el servidor. Se acepta y se
 // ignora `fromNumber` para no romper a los llamadores viejos.
-export async function enviarWhatsApp({ telefono, nombre, mensaje, pdfUrl }) {
-  const { messageId } = await callEdgeFunction('send-whatsapp', {
-    telefono, nombre, mensaje, pdfUrl,
+export async function enviarWhatsApp({
+  telefono, nombre, mensaje, pdfUrl, pdfFilename,
+  tipoDocumento = 'DOCUMENTO', referencia = '', mascota = '',
+}) {
+  const { messageId } = await orbitApi('/whatsapp/operativo/documento', {
+    method: 'POST',
+    body: {
+      telefono, nombre, mensaje, pdfUrl, pdfFilename,
+      tipoDocumento, referencia, mascota,
+    },
   })
   return messageId
 }

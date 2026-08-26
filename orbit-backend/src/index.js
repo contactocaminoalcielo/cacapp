@@ -61,6 +61,7 @@ import {
   listarAudiencias, previsualizar, crearCampana, listarCampanas,
   detalleCampana, accionCampana, borrarCampana, arrancarCampanas,
 } from './whatsapp-campanas.js'
+import { enviarDocumentoOperativo, transporteWhatsAppOperativo } from './whatsapp.js'
 
 const app = express()
 
@@ -199,6 +200,33 @@ app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, a
   } catch (e) {
     log('[wa-bandeja/enviar] ERROR', e.message)
     res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Recibos y certificados individuales. Reemplaza la Edge Function histórica
+// de GHL y usa el mismo interruptor seguro que el resto de automatizaciones.
+// `requireAuth` sin limitar a coordinación: el técnico también envía recibos.
+app.post('/whatsapp/operativo/documento', requireAuth, async (req, res) => {
+  try {
+    const tipoDocumento = String(req.body?.tipoDocumento || 'DOCUMENTO').toUpperCase()
+    if (!['RECIBO', 'CERTIFICADO', 'DOCUMENTO'].includes(tipoDocumento)) {
+      return res.status(400).json({ ok: false, error: 'Tipo de documento inválido' })
+    }
+    const envio = await enviarDocumentoOperativo({
+      telefono: req.body?.telefono,
+      nombre: req.body?.nombre,
+      mensaje: req.body?.mensaje,
+      pdfUrl: req.body?.pdfUrl,
+      pdfFilename: req.body?.pdfFilename,
+      tipoDocumento,
+      referencia: req.body?.referencia,
+      mascota: req.body?.mascota,
+      personalId: req.personal.id,
+    })
+    res.json({ ok: true, transporte: transporteWhatsAppOperativo(), ...envio })
+  } catch (e) {
+    log('[whatsapp/documento] ERROR', e.message)
+    res.status(502).json({ ok: false, error: e.message })
   }
 })
 

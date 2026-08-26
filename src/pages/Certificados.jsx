@@ -358,7 +358,15 @@ export default function Certificados() {
       const cfg = TIPO_CFG[item.tipo] || {}
       const pdfUrl = await generarYSubirPDF(html, `cert_individual_${item.mascota}`)
       const mensaje = `Hola ${item.cliente.split(' ')[0]}, le compartimos el certificado de ${cfg.label?.toLowerCase() || 'proceso individual'} de *${item.mascota}*. — Camino al Cielo 🕊️`
-      await enviarWhatsApp({ telefono: item.whatsapp, nombre: item.cliente, mensaje, pdfUrl, fromNumber: lineaOrigen })
+      await enviarWhatsApp({
+        telefono: item.whatsapp,
+        nombre: item.cliente,
+        mensaje,
+        pdfUrl,
+        pdfFilename: `Certificado ${item.mascota}.pdf`,
+        tipoDocumento: 'CERTIFICADO',
+        mascota: item.mascota,
+      })
       let certId = item.cert?.id
       if (!certId) certId = await registrarCertificado({ servicioId: item.servicio_id, tipo: item.tipo, generadoPor: personalData?.id || null })
       if (certId) await marcarEnviadoWA(certId)
@@ -402,7 +410,7 @@ export default function Certificados() {
               {lineaOrigen === l.numero && <CheckCircle2 size={12} />}{l.label}
             </button>
           ))}
-          <span className="text-[11px] text-green-700 ml-auto">Los mensajes salen por Zolutium desde la línea seleccionada.</span>
+          <span className="text-[11px] text-green-700 ml-auto">Los mensajes salen por Orbit desde la línea oficial.</span>
         </div>
 
         {/* Tabs */}
