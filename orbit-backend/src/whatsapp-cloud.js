@@ -116,7 +116,7 @@ export async function listarEtiquetas() {
  * Pone una etiqueta en una conversación. Idempotente: repetirla no duplica ni
  * falla — el agente puede insistir con la misma sin ensuciar nada.
  */
-export async function etiquetar({ contacto, linea = null, clave, origen = 'MANUAL', motivo = null, personalId = null }) {
+export async function etiquetar({ contacto, linea = null, agenteId = null, clave, origen = 'MANUAL', motivo = null, personalId = null }) {
   const num = soloDigitos(contacto)
   if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
 
@@ -125,8 +125,17 @@ export async function etiquetar({ contacto, linea = null, clave, origen = 'MANUA
   const { linea: desde, error } = await lineaDe(num, linea)
   if (error) return { status: 404, body: { ok: false, error } }
 
+  // Las claves son únicas DENTRO de un agente, no en toda la tabla. Cuando la
+  // llamada viene del agente se limita a su catálogo (más las etiquetas
+  // globales del sistema); así dos empresas pueden tener una etiqueta
+  // `RECLAMO` sin que una conversación termine en el tablero de la otra.
   const { rows: [etq] } = await pool.query(
-    `SELECT id FROM public.whatsapp_etiquetas WHERE clave = $1 AND activo`, [clave]
+    `SELECT id FROM public.whatsapp_etiquetas
+      WHERE clave = $1 AND activo
+        AND ($2::integer IS NULL OR agente_id IS NULL OR agente_id = $2)
+      ORDER BY (agente_id = $2) DESC NULLS LAST, id
+      LIMIT 1`,
+    [clave, Number(agenteId) || null]
   )
   if (!etq) return { status: 404, body: { ok: false, error: `No existe la etiqueta ${clave}` } }
 

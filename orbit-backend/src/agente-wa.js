@@ -32,6 +32,7 @@ import {
 } from './whatsapp-plantillas.js'
 import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
+import { construirEnlace } from './reglas-imagenes.js'
 
 const MOD = '[agente-wa]'
 
@@ -239,6 +240,21 @@ const HERRAMIENTAS = [{
       'murio_de_cancer',
     ]
   },
+}, {
+  name: 'consultar_tarifas',
+  description:
+    'Consulta el tarifario VIGENTE de planes para una familia. Úsala siempre que pidan ' +
+    'precios, comparen planes o quieran una recomendación con valor: los precios escritos ' +
+    'en conversaciones viejas pueden estar vencidos. Necesita especie y peso aproximado; ' +
+    'si falta uno, pregúntalo antes. Devuelve datos de solo lectura y no crea ni modifica nada.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      especie: { type: 'string', description: 'Especie de la mascota, tal como la dijo la familia.' },
+      peso_kg: { type: 'number', description: 'Peso aproximado en kilogramos.' },
+    },
+    required: ['especie', 'peso_kg'],
+  },
 }]
 
 // Catálogo que usa la pantalla para decidir qué capacidades puede concederle
@@ -286,6 +302,13 @@ export const HERRAMIENTAS_DISPONIBLES = [
     resumen: 'Envía una plantilla aprobada de la lista autorizada para este agente.',
     propia_del_negocio: false,
     orden: 6,
+  },
+  {
+    clave: 'consultar_tarifas',
+    nombre: 'Consultar tarifas vigentes',
+    resumen: 'Lee los precios actuales por especie y peso, sin modificar la operación.',
+    propia_del_negocio: true,
+    orden: 7,
   },
 ]
 
@@ -461,11 +484,13 @@ export async function construirHerramientas(agente = null) {
  * escribe en el chat, cualquiera podría pedir el de otra clínica — y ese enlace
  * es su credencial: con él se registran servicios a su nombre y su comisión.
  */
-async function enviarEnlaceRegistro({ contacto }) {
+async function enviarEnlaceRegistro({ contacto, phoneNumberId = null }) {
   const num = String(contacto || '').replace(/\D/g, '')
   const { rows: [conv] } = num
     ? await pool.query(
-        `SELECT aliado_id FROM public.v_whatsapp_conversaciones WHERE contacto = $1`, [num]
+        `SELECT aliado_id FROM public.v_whatsapp_conversaciones
+          WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2)`,
+        [num, phoneNumberId]
       )
     : { rows: [] }
 
@@ -489,13 +514,13 @@ async function enviarEnlaceRegistro({ contacto }) {
   return { ok: true, tipo: 'PERSONAL', veterinaria: datos.nombre, enlace: datos.enlace }
 }
 
-async function clasificarConversacion({ entrada, contacto }) {
+async function clasificarConversacion({ entrada, contacto, phoneNumberId = null, agenteId = null }) {
   // En el panel de prueba no hay conversación real que etiquetar.
   if (!/^\d+$/.test(String(contacto || ''))) {
     return { ok: true, mensaje: `(prueba) se habría etiquetado como ${entrada.etiqueta}` }
   }
   const r = await etiquetar({
-    contacto, clave: entrada.etiqueta, origen: 'AGENTE',
+    contacto, linea: phoneNumberId, agenteId, clave: entrada.etiqueta, origen: 'AGENTE',
     motivo: entrada.motivo ? String(entrada.motivo).slice(0, 300) : null,
   })
   if (!r.body?.ok) return { ok: false, error: r.body?.error || 'No se pudo etiquetar' }
@@ -518,11 +543,11 @@ async function resolverEspecie(dicho) {
   const q = sinTildes(dicho)
   if (!q) return { falta: true }
 
-  const { rows } = await pool.query(`SELECT id, nombre FROM public.especies`)
+  const { rows } = await pool.query(`SELECT id, nombre, tarifa_peso FROM public.especies`)
   const norm = rows.map(r => ({ ...r, n: sinTildes(r.nombre) }))
 
   const exacta = norm.find(r => r.n === q)
-  if (exacta) return { id: exacta.id, nombre: exacta.nombre }
+  if (exacta) return { id: exacta.id, nombre: exacta.nombre, tarifa_peso: exacta.tarifa_peso }
 
   // "gata", "gatico", "perrita", "canino"… Se compara por la raíz porque la
   // gente escribe la especie en femenino y en diminutivo casi siempre.
@@ -534,9 +559,76 @@ async function resolverEspecie(dicho) {
   }
   for (const r of norm) {
     const raices = SINONIMOS[r.n] || [r.n.slice(0, 4)]
-    if (raices.some(raiz => q.startsWith(raiz))) return { id: r.id, nombre: r.nombre }
+    if (raices.some(raiz => q.startsWith(raiz))) {
+      return { id: r.id, nombre: r.nombre, tarifa_peso: r.tarifa_peso }
+    }
   }
   return { desconocida: true, opciones: rows.map(r => r.nombre) }
+}
+
+/**
+ * Tarifas actuales para una familia, resueltas por especie y peso.
+ *
+ * Es deliberadamente de SOLO LECTURA. El agente nunca recibe una tabla de
+ * precios congelada en el prompt: cada cotización sale de la vista que también
+ * usa Orbit. Así un cambio de catálogo no deja al bot ofreciendo el valor de
+ * ayer durante semanas.
+ */
+async function consultarTarifas({ entrada = {} }) {
+  const especie = await resolverEspecie(entrada.especie)
+  if (especie.falta) return { ok: false, falta: ['especie'], mensaje: 'Pregunta qué especie es.' }
+  if (especie.desconocida) {
+    return { ok: false, falta: ['especie_valida'], opciones: especie.opciones,
+      mensaje: 'No adivines la especie: pide que elijan una de las opciones.' }
+  }
+
+  const peso = Number(entrada.peso_kg)
+  if (!Number.isFinite(peso) || peso <= 0 || peso > 200) {
+    return { ok: false, falta: ['peso_kg'], mensaje: 'Pregunta el peso aproximado en kilogramos.' }
+  }
+
+  const gramos = Math.round(Math.min(peso, 60) * 1000)
+  const rango = gramos < 1000
+    ? 'PETIT'
+    : especie.tarifa_peso === 'FELINO'
+      ? 'FELINO'
+      : null
+
+  const { rows } = await pool.query(
+    `SELECT plan_codigo, plan_nombre, rango_nombre, precio
+       FROM public.v_precios_por_peso
+      WHERE ($1::text IS NOT NULL AND rango_nombre = $1)
+         OR ($1::text IS NULL AND rango_nombre <> 'FELINO'
+             AND peso_min_gr <= $2
+             AND (peso_max_gr IS NULL OR peso_max_gr >= $2))
+      ORDER BY precio, plan_nombre`,
+    [rango, gramos]
+  )
+
+  if (!rows.length) {
+    return { ok: false, mensaje: 'El catálogo no devolvió una tarifa para esos datos. Escálalo al equipo sin inventar un valor.' }
+  }
+
+  // Catálogo confirmado: por encima de 60 kg se usa la franja 36–60 y se
+  // suman $10.000 por cada kilo adicional. Un peso fraccionario se redondea
+  // hacia arriba para no subcotizar; el resultado lo marcamos como cálculo.
+  const kilosAdicionales = peso > 60 ? Math.ceil(peso - 60) : 0
+  const recargo = kilosAdicionales * 10000
+  return {
+    ok: true,
+    especie: especie.nombre,
+    peso_kg: peso,
+    rango: rango || rows[0].rango_nombre,
+    calculo_mas_60kg: kilosAdicionales
+      ? { kilos_adicionales: kilosAdicionales, recargo }
+      : null,
+    tarifas: rows.map(r => ({
+      codigo: r.plan_codigo,
+      plan: r.plan_nombre,
+      precio: Number(r.precio) + recargo,
+    })),
+    nota: 'Estos son los valores vigentes devueltos por Orbit. No agregues descuentos, transporte ni condiciones que no estén autorizadas.',
+  }
 }
 
 /**
@@ -570,7 +662,7 @@ export async function resolverPlan(dicho) {
   return { desconocido: true, opciones: rows.map(r => r.nombre) }
 }
 
-async function registrarSolicitud({ entrada, agente, contacto }) {
+async function registrarSolicitud({ entrada, agente, contacto, phoneNumberId = null }) {
   // El aliado NO se lo preguntamos al agente ni se lo dejamos elegir: se deriva
   // del número desde el que escriben, que la bandeja ya cruza contra `aliados`.
   // Así el agente sigue aislado (no consulta la operación) y la solicitud llega
@@ -581,8 +673,9 @@ async function registrarSolicitud({ entrada, agente, contacto }) {
   // Va lo PRIMERO porque la validación de abajo lo necesita: con recogida en la
   // clínica, la ciudad la aporta el aliado y no hay que pedirla.
   const { rows: [conv] } = await pool.query(
-    `SELECT aliado_id, aliado_nombre FROM public.v_whatsapp_conversaciones WHERE contacto = $1`,
-    [String(contacto || '').replace(/\D/g, '')]
+    `SELECT aliado_id, aliado_nombre FROM public.v_whatsapp_conversaciones
+      WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2)`,
+    [String(contacto || '').replace(/\D/g, ''), phoneNumberId]
   )
 
   // El plan se resuelve ANTES que nada porque decide qué es obligatorio: en un
@@ -1090,7 +1183,7 @@ async function construirHistorial(contacto, phoneNumberId, pendientesDesde = nul
  * prefijo está cacheado y es idéntico para todas las conversaciones; meter aquí
  * algo que cambia por contacto lo invalidaría entero, en cada mensaje.
  */
-async function contextoDeLaConversacion(contacto) {
+async function contextoDeLaConversacion(contacto, phoneNumberId = null) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return null
 
@@ -1098,8 +1191,8 @@ async function contextoDeLaConversacion(contacto) {
     `SELECT v.aliado_id, a.nombre, a.activo, a.estado
        FROM public.v_whatsapp_conversaciones v
        LEFT JOIN public.aliados a ON a.id_aliado = v.aliado_id
-      WHERE v.contacto = $1`,
-    [num]
+      WHERE v.contacto = $1 AND ($2::text IS NULL OR v.phone_number_id = $2)`,
+    [num, phoneNumberId]
   )
   if (!c) return null
 
@@ -1117,6 +1210,117 @@ async function contextoDeLaConversacion(contacto) {
     + 'En cuanto se hable de una recogida, lo PRIMERO que haces es usar '
     + '`enviar_enlace_registro` para pasarle SU enlace, con el que registra el servicio ella '
     + 'misma eligiendo el plan con los precios a la vista.'
+}
+
+const ESTADOS_SERVICIO_FAMILIA = {
+  INGRESADO: 'ingresado',
+  EN_CUARTO_FRIO: 'en conservación',
+  EN_PROCESO: 'en proceso',
+  EN_PRODUCCION: 'en producción de recordatorios',
+  LISTO: 'listo para entrega',
+  EN_ENTREGA: 'en ruta de entrega',
+  ENTREGADO: 'entregado',
+  CANCELADO: 'cancelado',
+}
+
+/**
+ * Contexto verificado de la FAMILIA que escribe.
+ *
+ * Se cruza por número y línea y es de solo lectura. Si un número casa con más
+ * de una ficha no elegimos "la primera": 54 contactos importados están así y
+ * una elección arbitraria puede contarle a alguien datos de otra familia. En
+ * ese caso el agente pide una referencia mínima y escala.
+ */
+async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  if (!num || !phoneNumberId) return null
+
+  const { rows: clientes } = await pool.query(
+    `SELECT DISTINCT c.id_cliente, TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS nombre
+       FROM public.clientes c
+      WHERE public.wa_tel10(c.whatsapp::text) = public.wa_tel10($1)
+         OR public.wa_tel10(c.telefono::text) = public.wa_tel10($1)
+      ORDER BY c.id_cliente`,
+    [num]
+  )
+
+  if (!clientes.length) {
+    return 'Este número no está enlazado de forma verificable con una ficha de cliente. '
+      + 'No afirmes que la persona no tiene servicio: el historial pudo venir importado. '
+      + 'No pidas su nombre por rutina. Solo si pregunta por un caso concreto, pide el nombre '
+      + 'de la mascota y el código del portal si lo tiene, etiqueta la conversación y explica '
+      + 'que una persona del equipo verificará el estado.'
+  }
+  if (clientes.length > 1) {
+    return `Este número coincide con ${clientes.length} fichas distintas y NO es seguro elegir una. `
+      + 'No reveles nombres, estados, valores ni mascotas. Si necesita revisar un servicio, pide '
+      + 'únicamente el nombre de la mascota y el código del portal si lo tiene, y escálalo al equipo.'
+  }
+
+  const cliente = clientes[0]
+  const { rows: servicios } = await pool.query(
+    `SELECT m.nombre AS mascota, e.nombre AS especie, p.nombre AS plan,
+            s.estado, s.fecha_ingreso::text, s.fecha_limite_entrega::text,
+            s.fecha_entrega_real::text, s.fecha_imagenes_recibidas::text,
+            s.codigo_fotos,
+            COALESCE(rec.total, 0)::int AS recordatorios_total,
+            COALESCE(rec.entregados, 0)::int AS recordatorios_entregados,
+            rec.pendientes AS recordatorios_pendientes
+       FROM public.servicios s
+       JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.especies e ON e.id = m.especie_id
+       LEFT JOIN public.planes p ON p.id = s.plan_id
+       LEFT JOIN LATERAL (
+         SELECT count(*) FILTER (WHERE COALESCE(sr.origen, '') <> 'REMOVIDO' AND sr.estado <> 'NA') AS total,
+                count(*) FILTER (WHERE COALESCE(sr.origen, '') <> 'REMOVIDO' AND sr.estado = 'ENTREGADO') AS entregados,
+                string_agg(DISTINCT r.nombre, ', ' ORDER BY r.nombre)
+                  FILTER (WHERE COALESCE(sr.origen, '') <> 'REMOVIDO'
+                                AND sr.estado NOT IN ('ENTREGADO', 'NA')) AS pendientes
+           FROM public.servicio_recordatorios sr
+           JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+          WHERE sr.servicio_id = s.id
+       ) rec ON TRUE
+      WHERE m.cliente_id = $1
+      ORDER BY (s.estado NOT IN ('ENTREGADO', 'CANCELADO')) DESC,
+               s.fecha_ingreso DESC NULLS LAST, s.created_at DESC
+      LIMIT 3`,
+    [cliente.id_cliente]
+  )
+
+  const nombre = String(cliente.nombre || '').trim() || 'cliente identificado'
+  if (!servicios.length) {
+    return `Identidad verificada por el número: ${nombre}. No hay un servicio enlazado a esta `
+      + 'ficha. No vuelvas a preguntarle su nombre; si consulta un caso anterior, pide el nombre '
+      + 'de la mascota y escálalo para buscar el registro importado.'
+  }
+
+  const detalle = servicios.map((s, i) => {
+    const partes = [
+      `${i + 1}. Mascota: ${s.mascota || 'sin nombre'}${s.especie ? ` (${s.especie})` : ''}`,
+      `plan: ${s.plan || 'sin plan registrado'}`,
+      `estado verificado: ${ESTADOS_SERVICIO_FAMILIA[s.estado] || String(s.estado || '').toLowerCase().replace(/_/g, ' ')}`,
+      s.fecha_ingreso ? `ingreso: ${s.fecha_ingreso}` : null,
+      s.fecha_limite_entrega ? `fecha límite registrada: ${s.fecha_limite_entrega}` : null,
+      s.fecha_entrega_real ? `entrega registrada: ${s.fecha_entrega_real}` : null,
+      s.fecha_imagenes_recibidas
+        ? `imágenes recibidas: sí (${s.fecha_imagenes_recibidas})`
+        : s.codigo_fotos && !['ENTREGADO', 'CANCELADO'].includes(s.estado)
+          ? `portal para imágenes/datos: ${construirEnlace(s.codigo_fotos)}`
+          : null,
+      s.recordatorios_total
+        ? `recordatorios: ${s.recordatorios_entregados}/${s.recordatorios_total} marcados como entregados`
+        : null,
+      s.recordatorios_pendientes
+        ? `piezas aún no marcadas como entregadas: ${String(s.recordatorios_pendientes).slice(0, 700)}`
+        : null,
+    ].filter(Boolean)
+    return partes.join('; ')
+  }).join('\n')
+
+  return `Identidad verificada por el número: ${nombre}. No le preguntes otra vez su nombre. `
+    + 'Usa estos datos solo para responder lo que pregunte; no los enumeres sin necesidad y no '
+    + 'digas que consultaste Orbit. Un estado exacto sí se puede comunicar, pero una fecha límite '
+    + 'registrada no es una promesa nueva.\nServicios recientes:\n' + detalle
 }
 
 /** Un turno puede ser texto suelto o una lista de bloques; aquí siempre lista. */
@@ -1175,6 +1379,7 @@ async function agenteParaLinea(phoneNumberId) {
  *     suposición.
  */
 const enEspera = new Map()
+const claveConversacion = (phoneNumberId, contacto) => `${phoneNumberId || '?'}:${contacto}`
 
 /**
  * Punto de entrada desde el webhook. NUNCA lanza: si algo falla, la bandeja
@@ -1207,7 +1412,10 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // convierte la espera en atención. Es cosmético — si falla, da igual.
     acusarLectura({ phoneNumberId, contacto: num, waMessageId }).catch(() => {})
 
-    const p = enEspera.get(num) || { tipos: new Set(), ids: [], ejecutando: false, timer: null }
+    const clave = claveConversacion(phoneNumberId, num)
+    const p = enEspera.get(clave) || {
+      contacto: num, clave, tipos: new Set(), ids: [], ejecutando: false, timer: null,
+    }
     p.phoneNumberId = phoneNumberId
     if (waMessageId) p.waMessageId = waMessageId
     if (!p.desde) p.desde = Date.now()
@@ -1216,7 +1424,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // cuáles se pudieron bajar, en vez de preguntar "¿hay alguna foto reciente?"
     // y acertar por casualidad.
     if (mensajeId) p.ids.push(mensajeId)
-    enEspera.set(num, p)
+    enEspera.set(clave, p)
 
     // Si ya está respondiendo, no se programa nada: lo que llegue ahora se
     // atiende en cuanto termine (ver el `finally` de `atender`). Sin esto se
@@ -1232,7 +1440,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // El silencio de siempre, pero sin pasarse del techo desde el primer
     // mensaje: quien escribe sin pausas también merece respuesta.
     const espera = Math.max(0, Math.min(p.esperaMs, p.desde + p.esperaMaxMs - Date.now()))
-    p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
+    p.timer = setTimeout(() => { atender(clave).catch(() => {}) }, espera)
     // Que un temporizador pendiente no impida al proceso apagarse limpio.
     p.timer.unref?.()
   } catch (e) {
@@ -1281,9 +1489,10 @@ export async function mantenerEscribiendo({ phoneNumberId, contacto, waMessageId
  * Atiende todo lo acumulado de un número. Nunca corre dos veces a la vez para
  * el mismo contacto, y lo que llegue mientras responde se atiende después.
  */
-async function atender(num) {
-  const p = enEspera.get(num)
+async function atender(clave) {
+  const p = enEspera.get(clave)
   if (!p || p.ejecutando) return
+  const num = p.contacto
 
   p.timer = null
   p.ejecutando = true
@@ -1305,7 +1514,7 @@ async function atender(num) {
     if (hastaId) p.hastaId = hastaId
   } catch (e) {
     log(MOD, 'ERROR atendiendo', num, '—', e.message)
-    await avisarQueQuedoSinRespuesta(num, e.message).catch(() => {})
+    await avisarQueQuedoSinRespuesta(num, e.message, p.phoneNumberId).catch(() => {})
   } finally {
     p.ejecutando = false
     if (p.tipos.size) {
@@ -1315,10 +1524,10 @@ async function atender(num) {
       const esperaMs    = p.esperaMs    ?? ESPERA_MS
       const esperaMaxMs = p.esperaMaxMs ?? ESPERA_MAX_MS
       const espera = Math.max(0, Math.min(esperaMs, (p.desde || Date.now()) + esperaMaxMs - Date.now()))
-      p.timer = setTimeout(() => { atender(num).catch(() => {}) }, espera)
+      p.timer = setTimeout(() => { atender(clave).catch(() => {}) }, espera)
       p.timer.unref?.()
     } else {
-      enEspera.delete(num)
+      enEspera.delete(clave)
     }
   }
 }
@@ -1376,12 +1585,13 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
     // cuerpo. Sin mirarlo, una migración sin aplicar dejaría esto sin efecto y
     // sin rastro — el mismo fallo mudo que estamos persiguiendo.
     const et = await etiquetar({
-      contacto: num, clave: 'AUDIO_O_IMAGEN', origen: 'AGENTE',
+      contacto: num, linea: phoneNumberId, agenteId: agente.id,
+      clave: 'AUDIO_O_IMAGEN', origen: 'AGENTE',
       motivo: `Llegó ${nombrarTipos(noTexto)} — el agente no puede leerlo`,
     }).catch(e => ({ body: { ok: false, error: e.message } }))
     if (!et.body?.ok) log(MOD, `NO se pudo marcar el adjunto de ${num} —`, et.body?.error)
 
-    const env = await enviarTexto({ contacto: num, texto: acuseDeAdjunto(noTexto), personalId: null })
+    const env = await enviarTexto({ contacto: num, linea: phoneNumberId, texto: acuseDeAdjunto(noTexto), personalId: null })
       .catch(e => ({ body: { ok: false, error: e.message } }))
     if (!env.body?.ok) log(MOD, `NO se pudo avisar del adjunto a ${num} —`, env.body?.error)
 
@@ -1407,7 +1617,7 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
     // simplemente dejó de contestar. La etiqueta la pone en Novedades.
     log(MOD, `tope de ${agente.max_turnos}/${VENTANA_TOPE_HORAS}h alcanzado en ${num} — queda para un humano`)
     await avisarQueQuedoSinRespuesta(num,
-      `Llegó al tope de ${agente.max_turnos} respuestas en ${VENTANA_TOPE_HORAS} horas`)
+      `Llegó al tope de ${agente.max_turnos} respuestas en ${VENTANA_TOPE_HORAS} horas`, phoneNumberId)
     return
   }
 
@@ -1433,13 +1643,13 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   }
 
   if (r.texto) {
-    await enviarTexto({ contacto: num, texto: r.texto, personalId: null })
+    await enviarTexto({ contacto: num, linea: phoneNumberId, texto: r.texto, personalId: null })
     return r.hastaId || null
   }
 
   // Llegar aquí es el fallo mudo: la vet escribió y no va a recibir nada.
   // ANTES no dejaba rastro fuera de la bitácora, que nadie mira.
-  await avisarQueQuedoSinRespuesta(num, r.error || 'El agente no produjo respuesta')
+  await avisarQueQuedoSinRespuesta(num, r.error || 'El agente no produjo respuesta', phoneNumberId)
   return r.hastaId || null
 }
 
@@ -1673,7 +1883,7 @@ async function barrerSeguimientos() {
       // `enviarTexto` valida la ventana de 24 h antes de llamar a Meta: si se
       // cerró (el backend estuvo caído medio día), devuelve error y aquí se
       // cancela en vez de reventar.
-      const env = await enviarTexto({ contacto: s.contacto, texto, personalId: null })
+      const env = await enviarTexto({ contacto: s.contacto, linea: s.phone_number_id, texto, personalId: null })
         .catch(e => ({ body: { ok: false, error: e.message } }))
       if (!env.body?.ok) {
         await cerrar('CANCELADO', `no se pudo enviar: ${env.body?.error || 'desconocido'}`)
@@ -1721,12 +1931,12 @@ async function barrerPendientes() {
   const { rows } = await pool.query(
     `SELECT u.contacto, u.id AS mensaje_id, u.wa_message_id, u.tipo, u.phone_number_id
        FROM (
-         SELECT DISTINCT ON (m.contacto)
+         SELECT DISTINCT ON (m.phone_number_id, m.contacto)
                 m.contacto, m.id, m.wa_message_id, m.tipo, m.phone_number_id,
                 m.direccion, m.ocurrido_en
            FROM public.whatsapp_mensajes m
           WHERE m.ocurrido_en > now() - interval '24 hours'
-          ORDER BY m.contacto, m.ocurrido_en DESC, m.id DESC
+          ORDER BY m.phone_number_id, m.contacto, m.ocurrido_en DESC, m.id DESC
        ) u
       WHERE u.direccion = 'IN'
         AND u.ocurrido_en < now() - interval '2 minutes'
@@ -1736,8 +1946,9 @@ async function barrerPendientes() {
   )
 
   for (const p of rows) {
-    if (enEspera.has(p.contacto)) continue
-    const ultimo = intentados.get(p.contacto)
+    const clave = claveConversacion(p.phone_number_id, p.contacto)
+    if (enEspera.has(clave)) continue
+    const ultimo = intentados.get(clave)
     if (ultimo && Date.now() - ultimo < REINTENTO_PENDIENTE_MS) continue
 
     // Las mismas compuertas que en el camino normal: si sigue en pausa o el
@@ -1745,7 +1956,7 @@ async function barrerPendientes() {
     const laLleva = await laLlevaUnHumano(p.contacto, p.phone_number_id)
     if (laLleva) continue
 
-    intentados.set(p.contacto, Date.now())
+    intentados.set(clave, Date.now())
     log(MOD, `${p.contacto}: retomando un mensaje que quedó sin contestar`)
     // Se entra por la puerta de siempre: agrupación, "escribiendo…", acuse de
     // lectura y bitácora salen gratis, y no hay una segunda forma de responder
@@ -1794,8 +2005,8 @@ const CALIENTE_LATIDO_MS = 10 * 60_000
 const CALIENTE_DESDE = parseInt(process.env.AGENTE_CALIENTE_DESDE || '7', 10)
 const CALIENTE_HASTA = parseInt(process.env.AGENTE_CALIENTE_HASTA || '22', 10)
 
-/** Cuándo se llamó por última vez a la API — por tráfico real o por un ping. */
-let ultimaLlamadaApi = 0
+/** Cuándo se llamó por última vez a la API — por agente, tráfico real o ping. */
+const ultimaLlamadaApi = new Map()
 
 function horaBogota() {
   return parseInt(new Date().toLocaleString('en-US', {
@@ -1804,16 +2015,17 @@ function horaBogota() {
 }
 
 async function calentarCache() {
-  try {
-    if (Date.now() - ultimaLlamadaApi < CALIENTE_CADA_MS) return
-    const h = horaBogota()
-    if (h < CALIENTE_DESDE || h >= CALIENTE_HASTA) return
+  const h = horaBogota()
+  if (h < CALIENTE_DESDE || h >= CALIENTE_HASTA) return
 
-    const { rows: [agente] } = await pool.query(
+  const { rows: agentes } = await pool.query(
       `SELECT id, clave, nombre, categoria, objetivo, idioma, instrucciones, proveedor, modelo, effort
-         FROM public.agente_wa WHERE activo LIMIT 1`
-    )
-    if (!agente) return
+         FROM public.agente_wa WHERE activo ORDER BY id`
+  )
+
+  for (const agente of agentes) {
+    if (Date.now() - (ultimaLlamadaApi.get(agente.id) || 0) < CALIENTE_CADA_MS) continue
+    try {
 
     const [system, herramientas] = await Promise.all([
       construirSistema(agente), construirHerramientas(agente),
@@ -1832,7 +2044,7 @@ async function calentarCache() {
       agente, system, herramientas, maxTokens: 1,
       messages: [{ role: 'user', content: '.' }],
     })
-    ultimaLlamadaApi = Date.now()
+    ultimaLlamadaApi.set(agente.id, Date.now())
 
     const escrito = r.uso.cacheEscritura
     const leido   = r.uso.cacheLectura
@@ -1843,10 +2055,11 @@ async function calentarCache() {
       referencia: 'cache-caliente',
       tokensEntrada: r.uso.entrada, cacheEscritura: escrito, cacheLectura: leido,
     })
-    log(MOD, `caché ${escrito ? `REESCRITA (${escrito} tok — estaba fría)` : `caliente (${leido} tok leídos)`}`)
-  } catch (e) {
-    // Que falle no puede afectar a nadie: es una optimización, no un servicio.
-    log(MOD, 'no se pudo calentar la caché —', e.message)
+    log(MOD, `caché ${agente.clave} ${escrito ? `REESCRITA (${escrito} tok — estaba fría)` : `caliente (${leido} tok leídos)`}`)
+    } catch (e) {
+      // Que falle no puede afectar a nadie: es una optimización, no un servicio.
+      log(MOD, `no se pudo calentar la caché de ${agente.clave} —`, e.message)
+    }
   }
 }
 
@@ -1913,10 +2126,10 @@ function acuseDeAdjunto(tipos) {
  * esperando y nadie se enteró". Nunca lanza: si hasta esto falla, al menos
  * queda en el log.
  */
-async function avisarQueQuedoSinRespuesta(contacto, motivo) {
+async function avisarQueQuedoSinRespuesta(contacto, motivo, phoneNumberId = null) {
   try {
     const r = await etiquetar({
-      contacto, clave: 'FALLO_AGENTE', origen: 'AGENTE',
+      contacto, linea: phoneNumberId, clave: 'FALLO_AGENTE', origen: 'AGENTE',
       motivo: String(motivo || '').slice(0, 300),
     })
     // `etiquetar` devuelve el error en el cuerpo en vez de lanzarlo: si la
@@ -1980,7 +2193,20 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     // usuario, marcado como sistema para que el modelo no lo confunda con algo
     // que dijo la clínica.
     if (!mensajePrueba && agente.clave === 'VETERINARIAS') {
-      const nota = await contextoDeLaConversacion(contacto).catch(() => null)
+      const nota = await contextoDeLaConversacion(contacto, phoneNumberId).catch(() => null)
+      if (nota) {
+        const ultimo = messages[messages.length - 1]
+        ultimo.content = [
+          ...aBloques(ultimo.content),
+          { type: 'text', text: `<sistema>${nota}</sistema>` },
+        ]
+      }
+    }
+    if (!mensajePrueba && agente.clave === 'FAMILIAS') {
+      const nota = await contextoDeLaFamilia(contacto, phoneNumberId).catch(e => {
+        log(MOD, `no se pudo construir contexto familiar de ${contacto} —`, e.message)
+        return null
+      })
       if (nota) {
         const ultimo = messages[messages.length - 1]
         ultimo.content = [
@@ -2001,7 +2227,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       respuesta = await motor.pensar({ agente, system, messages, herramientas, maxTokens: 2048 })
       // El tráfico real también mantiene viva la caché: si una clínica escribió
       // hace diez minutos, el ping de mantenimiento sobra. Ver `calentarCache`.
-      ultimaLlamadaApi = Date.now()
+      ultimaLlamadaApi.set(agente.id, Date.now())
 
       // El consumo llega ya normalizado, se llame como se llame en cada API.
       const u = respuesta.uso
@@ -2030,9 +2256,12 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
         let out
         try {
           if (bloque.nombre === 'enviar_enlace_registro') {
-            out = await enviarEnlaceRegistro({ contacto })
+            out = await enviarEnlaceRegistro({ contacto, phoneNumberId })
             if (out.tipo === 'ESCALAR') {
-              await clasificarConversacion({ entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' }, contacto }).catch(() => {})
+              await clasificarConversacion({
+                entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' },
+                contacto, phoneNumberId, agenteId: agente.id,
+              }).catch(() => {})
             } else {
               // Mandar el enlace y no volver nunca es donde se pierde el
               // registro: la clínica lo deja para luego y nadie pregunta más.
@@ -2043,10 +2272,14 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
                 .catch(e => log(MOD, 'no se pudo programar el seguimiento —', e.message))
             }
           } else if (bloque.nombre === 'registrar_solicitud') {
-            out = await registrarSolicitud({ entrada: bloque.entrada, agente, contacto })
+            out = await registrarSolicitud({ entrada: bloque.entrada, agente, contacto, phoneNumberId })
             // La solicitud tiene su propia etiqueta: si el agente no la pone, la
             // conversación que MÁS importa quedaría fuera del tablero.
-            if (out.ok) await clasificarConversacion({ entrada: { etiqueta: 'SOLICITUD' }, contacto }).catch(() => {})
+            if (out.ok) await clasificarConversacion({
+              entrada: { etiqueta: 'SOLICITUD' }, contacto, phoneNumberId, agenteId: agente.id,
+            }).catch(() => {})
+          } else if (bloque.nombre === 'consultar_tarifas') {
+            out = await consultarTarifas({ entrada: bloque.entrada })
           } else if (bloque.nombre === 'enviar_interactivo') {
             // OJO: esta herramienta ENVÍA de verdad, no devuelve texto para que
             // el modelo lo incluya. Por eso el resultado se lo dice explícito:
@@ -2096,7 +2329,9 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
                 : { ok: false, error: r.body?.error || 'No se pudo enviar la plantilla.' }
             }
           } else if (bloque.nombre === 'clasificar_conversacion') {
-            out = await clasificarConversacion({ entrada: bloque.entrada, contacto })
+            out = await clasificarConversacion({
+              entrada: bloque.entrada, contacto, phoneNumberId, agenteId: agente.id,
+            })
             // Se guarda en la bitácora, no solo en la conversación: la etiqueta
             // de la conversación es única y se pisa, y lo que hace falta para
             // aprender es el HISTORIAL de lo que no supo responder.

@@ -24,8 +24,9 @@
 //     garantía. Como el 64% de la factura del agente son escrituras de caché
 //     controladas, cambiar de motor NO es solo cambiar de precio por token: es
 //     perder la palanca con la que se bajó la cuenta un 37%.
-//   · El razonamiento se configura distinto según la familia de modelo, así que
-//     el esfuerzo NO se traduce: se ignora y se deja constancia.
+//   · El razonamiento se configura distinto según la familia de modelo. Para
+//     GPT-5 se traduce el esfuerzo del agente; otros modelos no reciben el
+//     parámetro para evitar un 400.
 const API = 'https://api.openai.com/v1/chat/completions'
 
 export function estado() {
@@ -115,6 +116,9 @@ export async function pensar({ agente, system, messages, herramientas, maxTokens
       max_completion_tokens: maxTokens,
       messages: traducirMensajes(system, messages),
       ...(herramientas?.length ? { tools: traducirHerramientas(herramientas) } : {}),
+      ...(String(agente.modelo || '').startsWith('gpt-5')
+        ? { reasoning_effort: agente.effort === 'max' ? 'xhigh' : (agente.effort || 'low') }
+        : {}),
     }),
   })
   const d = await r.json().catch(() => ({}))
