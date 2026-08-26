@@ -26,7 +26,7 @@ import { analizarCuadre } from './cuadres-ia.js'
 import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-cloud-webhook.js'
 import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
-  listarEtiquetas, etiquetar, desetiquetar, cambiarAgente,
+  listarEtiquetas, etiquetar, desetiquetar, cambiarAgente, bloquearConversacion,
 } from './whatsapp-cloud.js'
 import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
@@ -297,6 +297,20 @@ app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, rolBandeja, a
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-bandeja/agente', e) }
+})
+
+// Bloquear o desbloquear UNA conversación (migración 131). Es más fuerte que
+// pausar: el agente no vuelve por su cuenta y ni siquiera acusa recibo. Para un
+// bot al otro lado, un spammer, o un número que nunca debe recibir automáticos.
+app.post('/whatsapp/conversaciones/:contacto/bloqueo', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await bloquearConversacion({
+      contacto: req.params.contacto, linea: req.body?.linea || null,
+      bloqueado: req.body?.bloqueado === true, motivo: req.body?.motivo || null,
+      personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-bandeja/bloqueo', e) }
 })
 
 // ── Banco de pruebas de voz ──

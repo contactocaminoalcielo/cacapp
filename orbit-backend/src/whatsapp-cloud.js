@@ -70,6 +70,7 @@ export async function listarConversaciones({ q = null, linea = null } = {}) {
             -- Se lee de la tabla y no de la vista: añadir una columna a la vista
             -- obliga a recrearla entera, y esta no la necesita nadie más.
             COALESCE(ct.agente_activo, true) AS agente_activo,
+            COALESCE(ct.bloqueado, false) AS bloqueado, ct.bloqueado_motivo,
             COALESCE(e.etiquetas, '[]'::json) AS etiquetas
        FROM public.v_whatsapp_conversaciones v
        LEFT JOIN public.whatsapp_contactos ct
@@ -185,6 +186,7 @@ export async function hilo({ contacto, linea = null, limite = MAX_HILO }) {
       `SELECT v.contacto, v.nombre, v.nombre_perfil, v.tipo_contacto, v.aliado_id, v.cliente_id,
               v.ventana_abierta, v.ventana_hasta, v.ultimo_entrante_en,
               COALESCE(ct.agente_activo, true) AS agente_activo,
+              COALESCE(ct.bloqueado, false) AS bloqueado, ct.bloqueado_motivo,
               ct.agente_cambiado_en,
               TRIM(CONCAT_WS(' ', pe.nombre, pe.apellido)) AS agente_cambiado_por
          FROM public.v_whatsapp_conversaciones v
@@ -309,6 +311,47 @@ export async function cambiarAgente({ contacto, linea = null, activo, personalId
 
   log(MOD, `${num}: agente ${rows[0].agente_activo ? 'ENCENDIDO' : 'APAGADO'}`)
   return { status: 200, body: { ok: true, agente_activo: rows[0].agente_activo } }
+}
+
+/**
+ * Bloquea o desbloquea UNA conversación (migración 131).
+ *
+ * Diferencia con `cambiarAgente`, y no es un matiz: **pausar** es del día a día
+ * —"de esta me encargo yo"— y se enciende y apaga sin ceremonia. **Bloquear**
+ * dice "aquí nunca debe contestar una máquina": el agente ni siquiera acusa
+ * recibo ni muestra "escribiendo…", porque cualquier señal de vida invita a un
+ * bot a seguir escribiendo.
+ *
+ * Lo que NO hace: impedir que los mensajes entren, ni que una persona conteste
+ * a mano. Para callar a Orbit entero está la lista blanca de números del `.env`,
+ * que es otra capa.
+ */
+export async function bloquearConversacion({ contacto, linea = null, bloqueado, motivo = null, personalId = null }) {
+  const num = soloDigitos(contacto)
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+
+  const { linea: desde, error } = await lineaDe(num, linea)
+  if (error) return { status: 404, body: { ok: false, error } }
+
+  const activar = bloqueado === true
+  const { rows } = await pool.query(
+    `UPDATE public.whatsapp_contactos
+        SET bloqueado        = $2,
+            bloqueado_motivo = CASE WHEN $2 THEN $3 ELSE NULL END,
+            bloqueado_en     = CASE WHEN $2 THEN now() ELSE NULL END,
+            bloqueado_por    = CASE WHEN $2 THEN $4::uuid ELSE NULL END,
+            -- Bloquear implica pausar; desbloquear NO reactiva solo, porque el
+            -- agente pudo estar pausado por otra razón antes del bloqueo.
+            agente_activo    = CASE WHEN $2 THEN false ELSE agente_activo END
+      WHERE contacto = $1 AND phone_number_id = $5
+      RETURNING bloqueado, bloqueado_motivo`,
+    [num, activar, String(motivo || '').slice(0, 300) || null, personalId, desde]
+  )
+  if (!rows.length) return { status: 404, body: { ok: false, error: 'Conversación no encontrada' } }
+
+  log(MOD, `${num} @${desde}: conversación ${rows[0].bloqueado ? 'BLOQUEADA' : 'desbloqueada'}`
+    + `${rows[0].bloqueado_motivo ? ` — ${rows[0].bloqueado_motivo}` : ''}`)
+  return { status: 200, body: { ok: true, bloqueado: rows[0].bloqueado, motivo: rows[0].bloqueado_motivo } }
 }
 
 export async function marcarLeido({ contacto, linea = null }) {

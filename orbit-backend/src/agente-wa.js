@@ -61,7 +61,7 @@ const MAX_IMAGENES = 2
  *
  * Subido de 8 a 12 s con tráfico real (David, 12-ago): con 8 el agente contestaba
  * mientras él seguía escribiendo el siguiente mensaje. En esa prueba los huecos
- * dentro de una misma idea fueron de 3, 5, 7 y 11 segundos — 8 partía la ráfaga
+ * dentro de una misma idea fueron de 3, 5, 7 y 11 segundos — 8 partía la rafaga
  * justo en el hueco de 11. Más largo empieza a sentirse abandono.
  */
 const ESPERA_MS = Math.max(0, Number(process.env.AGENTE_WA_ESPERA_MS || 12000))
@@ -162,6 +162,24 @@ const TIPOS_CON_TEXTO = new Set(['text', 'button', 'interactive'])
  * así que se le contesta y se pasa a una persona.
  */
 const TIPOS_MUDOS = new Set(['reaction', 'system', 'request_welcome'])
+
+/**
+ * Cuándo dejamos de creer que al otro lado hay una persona (migración 131).
+ *
+ * Dos agentes conversando entre ellos no se cansan: cada vuelta es una llamada
+ * pagada y ninguno se aburre primero. `max_turnos` (20 por conversación cada
+ * 24 h) frenaba, pero después de veinte llamadas — y otras veinte mañana.
+ *
+ * Seis respuestas del agente en diez minutos no es una familia escribiendo: una
+ * persona pregunta, lee, piensa. Ese ritmo solo lo sostiene una máquina. Al
+ * detectarlo el agente se pausa SOLO y etiqueta la conversación para que una
+ * persona mire — pausar, no bloquear: la decisión de bloquear es de un humano.
+ */
+const BUCLE_RESPUESTAS = 6
+const BUCLE_MINUTOS = 10
+
+/** Y el otro patrón: el mismo texto exacto repetido. Un eco, no una insistencia. */
+const BUCLE_REPETIDOS = 3
 
 // El razonamiento y el cliente de Anthropic se mudaron a `motores/anthropic.js`
 // (migración 112): son detalles de UN motor, no del agente.
@@ -1445,6 +1463,21 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     const agente = await agenteParaLinea(phoneNumberId)
     if (!agente) return
 
+    // ── Bloqueado (migración 131) ──
+    // Va ANTES que todo lo demás, incluido el acuse de lectura: a un número
+    // bloqueado no se le devuelve ni el doble check azul ni el "escribiendo…".
+    // Cualquier señal de vida invita a un bot a seguir escribiendo, y la gracia
+    // de bloquear es dejar de alimentarlo.
+    const { rows: [bloq] } = await pool.query(
+      `SELECT bloqueado, bloqueado_motivo FROM public.whatsapp_contactos
+        WHERE contacto = $1 AND phone_number_id = $2`,
+      [num, phoneNumberId]
+    )
+    if (bloq?.bloqueado) {
+      log(MOD, `${num}: conversación BLOQUEADA${bloq.bloqueado_motivo ? ` (${bloq.bloqueado_motivo})` : ''} — el agente no responde`)
+      return
+    }
+
     // ── La línea de corte (migración 130) ──
     // Un agente recién encendido contesta lo que llegue DESDE ese momento, no lo
     // que ya estaba ahí. Sin esto, prender el agente en una línea de alto flujo
@@ -1657,6 +1690,51 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
   // de voz transcrita, no cuentan como eso — ahí hay conversación que seguir
   // aunque no venga una sola letra escrita.
   if (![...tipos].some(t => TIPOS_CON_TEXTO.has(t)) && !veLaFoto && !oyeLaVoz) return
+
+  // ── ¿Estamos hablando con otra máquina? (migración 131) ──
+  // Va ANTES del tope de turnos y antes de pensar, que es donde se gasta el
+  // dinero. El tope de 20/24h también frena un bucle, pero después de veinte
+  // llamadas pagadas; esto lo corta en seis.
+  //
+  // El conteo es por (agente, línea, número): la misma persona escribiendo a
+  // dos líneas son dos conversaciones y no deben sumarse entre sí.
+  const { rows: [rafaga] } = await pool.query(
+    `SELECT count(*)::int AS n FROM public.agente_wa_ejecuciones
+      WHERE agente_id = $1 AND contacto = $2 AND phone_number_id = $3
+        AND origen = 'WHATSAPP' AND error IS NULL
+        AND creado_en > now() - ($4 || ' minutes')::interval`,
+    [agente.id, num, phoneNumberId, BUCLE_MINUTOS]
+  )
+  // Y el eco: el mismo texto entrante repetido tal cual. Una persona que insiste
+  // reescribe distinto ("¿hola?", "sigue ahí?"); una máquina repite idéntico.
+  const { rows: [eco] } = await pool.query(
+    `SELECT count(*)::int AS n FROM (
+        SELECT texto FROM public.whatsapp_mensajes
+         WHERE contacto = $1 AND phone_number_id = $2 AND direccion = 'IN'
+           AND texto IS NOT NULL AND texto <> ''
+         ORDER BY ocurrido_en DESC LIMIT $3
+     ) t GROUP BY texto HAVING count(*) >= $3`,
+    [num, phoneNumberId, BUCLE_REPETIDOS]
+  )
+
+  if (rafaga.n >= BUCLE_RESPUESTAS || eco) {
+    const motivo = eco
+      ? `El mismo mensaje llegó ${BUCLE_REPETIDOS} veces idéntico`
+      : `${rafaga.n} respuestas del agente en ${BUCLE_MINUTOS} minutos`
+    log(MOD, `🔁 ${num}: posible bucle — ${motivo}. El agente se pausa solo.`)
+    // Pausar, NO bloquear: bloquear es una decisión de una persona. Aquí solo se
+    // corta la sangría y se deja la conversación donde alguien la vea.
+    await pool.query(
+      `UPDATE public.whatsapp_contactos SET agente_activo = false, agente_cambiado_en = now()
+        WHERE contacto = $1 AND phone_number_id = $2`,
+      [num, phoneNumberId]
+    ).catch(e => log(MOD, `no se pudo pausar ${num} —`, e.message))
+    await etiquetar({
+      contacto: num, linea: phoneNumberId, agenteId: agente.id,
+      clave: 'BUCLE', origen: 'AGENTE', motivo,
+    }).catch(e => log(MOD, `no se pudo etiquetar el bucle de ${num} —`, e.message))
+    return
+  }
 
   // ── Tope de turnos, dentro de la ventana ──
   const { rows: [{ n }] } = await pool.query(

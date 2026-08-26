@@ -81,6 +81,21 @@ export function cambiarAgente(contacto, activo, linea = null) {
   })
 }
 
+/**
+ * Bloquea o desbloquea una conversación (migración 131).
+ *
+ * Más fuerte que pausar, y la diferencia importa: pausar es "de esta me encargo
+ * yo" y se quita en un clic; bloquear es "aquí nunca contesta una máquina" — el
+ * agente no vuelve solo y ni siquiera acusa recibo, porque cualquier señal de
+ * vida invita a un bot a seguir escribiendo. Los mensajes siguen entrando y una
+ * persona puede responder igual.
+ */
+export function bloquearConversacion(contacto, bloqueado, motivo = null, linea = null) {
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/bloqueo`, {
+    method: 'POST', body: { bloqueado, motivo, linea },
+  })
+}
+
 // ── Etiquetas (migración 090) ────────────────────────────────────────────────
 // Son las listas de trabajo de la bandeja. Las pone el agente al clasificar y
 // el coordinador a mano; quitarlas es cómo se cierra una novedad.

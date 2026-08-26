@@ -11,12 +11,13 @@
 // (es el mismo bug que ya mordió en la app del técnico).
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useConfirm } from '@/contexts/ConfirmContext'
 import ValorarRespuesta from '@/components/ValorarRespuesta'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
-  listarConversaciones, abrirHilo, marcarLeido, enviarMensaje, cambiarAgente,
+  listarConversaciones, abrirHilo, marcarLeido, enviarMensaje, cambiarAgente, bloquearConversacion,
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
   sePuedeGrabar, formatoGrabacion, duracionAudio,
@@ -27,7 +28,7 @@ import { listarAgentes } from '@/lib/agenteApi'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
-  Bot, BotOff, Square, Trash2,
+  Bot, BotOff, Ban, Square, Trash2,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -376,6 +377,17 @@ export default function Whatsapp() {
                                 // sensación de que no se guardó.
                                 setHilo(h => h ? { ...h, contacto: { ...h.contacto, agente_activo: encender } } : h)
                                 cargarLista({ silencioso: true })
+                              }}
+                              onBloquear={async (bloquear) => {
+                                await bloquearConversacion(activo, bloquear, null, lineaActiva)
+                                // Bloquear implica pausar, así que se repintan
+                                // los dos estados: verlos discrepar da la
+                                // sensación de que no se guardó.
+                                setHilo(h => h ? { ...h, contacto: {
+                                  ...h.contacto, bloqueado: bloquear,
+                                  agente_activo: bloquear ? false : h.contacto?.agente_activo,
+                                } } : h)
+                                cargarLista({ silencioso: true })
                               }} />
 
                 <div ref={scrollRef} onScroll={onScroll}
@@ -605,7 +617,8 @@ function ItemConversacion({ c, activo, onClick }) {
   )
 }
 
-function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar, onAgente }) {
+function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar, onAgente, onBloquear }) {
+  const { confirm } = useConfirm()
   const esAliado = conv?.tipo_contacto === 'ALIADO'
   const [eligiendo, setEligiendo] = useState(false)
   const [cambiando, setCambiando] = useState(false)
@@ -617,6 +630,22 @@ function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], cata
   async function alternarAgente() {
     setCambiando(true)
     try { await onAgente(!agenteOn) } finally { setCambiando(false) }
+  }
+
+  const bloqueado = conv?.bloqueado === true
+  const [bloqueando, setBloqueando] = useState(false)
+
+  async function alternarBloqueo() {
+    // Bloquear se confirma; desbloquear no. Es la asimetría de siempre: lo que
+    // apaga algo a lo bruto se pregunta, lo que lo devuelve a la normalidad no.
+    if (!bloqueado && !await confirm(
+      'El agente no volverá a responder en esta conversación ni acusará recibo. '
+      + 'Los mensajes seguirán entrando y tú sí puedes escribir. Se usa cuando al otro lado '
+      + 'hay otro bot o un número que nunca debe recibir respuestas automáticas.',
+      { title: '¿Bloquear esta conversación?', variant: 'danger', confirmLabel: 'Bloquear' }
+    )) return
+    setBloqueando(true)
+    try { await onBloquear(!bloqueado) } finally { setBloqueando(false) }
   }
 
   return (
@@ -664,6 +693,22 @@ function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], cata
           {cambiando ? <Loader2 size={11} className="animate-spin" />
             : agenteOn ? <Bot size={11} /> : <BotOff size={11} />}
           <span className="hidden sm:inline">{agenteOn ? 'Agente activo' : 'Agente apagado'}</span>
+        </button>
+
+        {/* Bloquear es más fuerte que pausar y por eso va aparte, en rojo: el
+            agente no vuelve por su cuenta y ni siquiera acusa recibo. Es para
+            cuando al otro lado hay otro bot y se ponen a hablar entre ellos. */}
+        <button onClick={alternarBloqueo} disabled={bloqueando}
+                title={bloqueado
+                  ? `Bloqueada${conv?.bloqueado_motivo ? `: ${conv.bloqueado_motivo}` : ''}. Tócalo para desbloquear.`
+                  : 'Bloquear: el agente no responderá nunca aquí, ni acusará recibo. Tú sí puedes escribir.'}
+                className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10.5px] font-bold
+                            border transition flex-shrink-0 cursor-pointer disabled:opacity-50
+                            ${bloqueado
+                              ? 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100'
+                              : 'border-gray-200 bg-white text-gray-400 hover:text-red-600 hover:border-red-300'}`}>
+          {bloqueando ? <Loader2 size={11} className="animate-spin" /> : <Ban size={11} />}
+          <span className="hidden sm:inline">{bloqueado ? 'Bloqueada' : 'Bloquear'}</span>
         </button>
       </div>
 
