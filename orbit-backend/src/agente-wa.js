@@ -1476,7 +1476,8 @@ async function agenteParaLinea(phoneNumberId) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, categoria, objetivo, idioma, activo, instrucciones,
             proveedor, modelo, effort, max_turnos, agente_desde,
-            memoria_mensajes, phone_number_ids, seguimiento_enlace_minutos, espera_ms, espera_max_ms
+            memoria_mensajes, phone_number_ids, seguimiento_enlace_minutos, espera_ms, espera_max_ms,
+            sombra_modelo, sombra_effort
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)
       LIMIT 1`,
@@ -2365,6 +2366,51 @@ async function avisarQueQuedoSinRespuesta(contacto, motivo, phoneNumberId = null
  * si las pide y devuelve el texto final. Deja rastro en la bitácora pase lo
  * que pase — sin eso no hay forma de ajustar el contexto con evidencia.
  */
+/**
+ * Qué habría contestado OTRO modelo en este mismo turno.
+ *
+ * Existe para decidir con evidencia si un agente puede bajar de modelo. La
+ * comparación tiene que hacerse sobre la conversación real, con su contexto
+ * real, en el momento real: probarlo en el banco con mensajes inventados ya dio
+ * dos veces la conclusión equivocada.
+ *
+ * 🩸 NO EJECUTA NADA, y esa es toda su seguridad. Una sola pasada al modelo; se
+ * guarda el texto y QUÉ herramientas pidió, y ahí termina. Si ejecutara,
+ * `enviar_material` y `enviar_plantilla` le mandarían mensajes de verdad a las
+ * clínicas: una prueba que le escribe a los clientes no es una prueba.
+ *
+ * Y para lo que hay que decidir, con la petición basta. La pregunta es si el
+ * candidato pide `registrar_solicitud` sin verificar antes que quien escribe es
+ * una clínica — y eso se ve en que la pida, no en ejecutarla.
+ *
+ * Se paga una llamada extra por turno mientras dure la prueba. En Haiku son
+ * céntimos; se apaga poniendo `sombra_modelo` en NULL.
+ */
+async function compararEnSombra({ agente, contacto, phoneNumberId, entrada, system, herramientas, messages, textoReal, herramientasReal }) {
+  const sombra = { ...agente, modelo: agente.sombra_modelo, effort: agente.sombra_effort || agente.effort }
+  let texto = null, pedidas = [], error = null, tokIn = 0, tokOut = 0
+  try {
+    const motor = await motorDe(sombra)
+    const r = await motor.pensar({ agente: sombra, system, messages, herramientas, maxTokens: 2048 })
+    texto = r.texto || null
+    pedidas = (r.llamadas || []).map(b => b.nombre)
+    tokIn = (r.uso?.entrada || 0) + (r.uso?.cacheEscritura || 0) + (r.uso?.cacheLectura || 0)
+    tokOut = r.uso?.salida || 0
+  } catch (e) {
+    error = e.message
+  }
+  await pool.query(
+    `INSERT INTO public.agente_wa_sombra
+       (agente_id, contacto, phone_number_id, entrada, modelo_real, texto_real, herramientas_real,
+        modelo_sombra, texto_sombra, herramientas_sombra, tokens_entrada, tokens_salida, error)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13)`,
+    [agente.id, contacto, phoneNumberId, entrada, agente.modelo, textoReal,
+     JSON.stringify(herramientasReal || []), sombra.modelo, texto,
+     JSON.stringify(pedidas), tokIn, tokOut, error]
+  )
+  log(MOD, `sombra ${sombra.modelo} en ${contacto}: ${error ? 'ERROR ' + error : (pedidas.join(',') || 'sin herramientas')}`)
+}
+
 export async function ejecutar({ agente, contacto, phoneNumberId = null, origen = 'PRUEBA', mensajePrueba = null, pendientesDesde = null, contextoDe = null }) {
   const inicio = Date.now()
   const usadas = []
@@ -2462,6 +2508,12 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     // Con qué IA piensa este agente. Se resuelve UNA vez por ejecución: dentro
     // del bucle sería cargar el mismo módulo en cada vuelta.
     const motor = await motorDe(agente)
+
+    // Copia del contexto ANTES de que el bucle lo mute con las llamadas a
+    // herramientas. La sombra tiene que ver exactamente lo mismo que vio el
+    // modelo de producción en su primera vuelta — si no, no se están comparando
+    // los modelos, se están comparando dos contextos distintos.
+    const messagesSombra = agente.sombra_modelo ? messages.slice() : null
 
     let respuesta
     for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
@@ -2633,6 +2685,15 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
         if (!usadas.includes('clasificar_conversacion')) usadas.push('clasificar_conversacion')
         if (r?.ok) etiquetas.push({ clave: 'FAM_ASESOR', motivo: 'Portal ambiguo o no verificable' })
       }
+    }
+
+    // La sombra va al final y SIN await: la clínica no espera ni un segundo por
+    // una prueba, y si falla no puede tumbar una respuesta que ya está lista.
+    if (messagesSombra && origen === 'WHATSAPP') {
+      compararEnSombra({
+        agente, contacto, phoneNumberId, entrada, system, herramientas,
+        messages: messagesSombra, textoReal: salida, herramientasReal: usadas,
+      }).catch(e => log(MOD, 'sombra: no se pudo comparar —', e.message))
     }
 
     return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId }
