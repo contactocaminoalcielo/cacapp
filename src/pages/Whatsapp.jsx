@@ -27,8 +27,8 @@ import {
 import { listarAgentes } from '@/lib/agenteApi'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
-  Loader2, Clock, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
-  Bot, BotOff, Ban, Square, Trash2,
+  Loader2, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
+  Bot, BotOff, Ban, Square, Trash2, ChevronDown, Check,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -291,20 +291,23 @@ export default function Whatsapp() {
 
           {/* ── Lista de conversaciones ── */}
           <aside className={`${activo ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 flex-col border-r border-gray-200 flex-shrink-0`}>
+            {/* 🩸 LA CABECERA SE COMÍA LA BANDEJA. Antes: título propio, buscador,
+                las líneas como botones apilados a lo ancho y los filtros en dos
+                filas = ~320 px de cromo sobre 620 de panel, con 2,5 conversaciones
+                a la vista sobre 145. El título sobraba (el Topbar ya dice "Bandeja
+                de WhatsApp") y las líneas no necesitan una tarjeta cada una. */}
             <div className="p-3 border-b border-gray-100 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-[13px] font-bold text-[#0B1D4F]">Conversaciones</h2>
-                  {sinLeerTotal > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-[#1A5CD8] text-white text-[10px] font-bold">
-                      {sinLeerTotal}
-                    </span>
-                  )}
-                </div>
+              <div className="flex items-center gap-2">
+                {/* Cada línea es una bandeja independiente. No existe “Todas”:
+                    mezclar empresas o líneas vuelve ambiguos el hilo y la salida. */}
+                <SelectorLinea lineas={lineas} activa={filtroLinea} onElegir={elegirLinea}
+                               nombreLinea={nombreLinea} sinLeer={sinLeerTotal} />
                 <button onClick={() => cargarLista({ silencioso: true })}
-                        className="p-1 rounded-md text-gray-400 hover:text-[#1A5CD8] hover:bg-gray-100 cursor-pointer"
+                        aria-label="Actualizar la lista de conversaciones"
+                        className="p-2 rounded-lg text-gray-400 hover:text-[#1A5CD8] hover:bg-gray-100 cursor-pointer
+                                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/40 flex-shrink-0"
                         title="Actualizar">
-                  <RefreshCw size={13} />
+                  <RefreshCw size={14} />
                 </button>
               </div>
               <div className="relative">
@@ -312,19 +315,6 @@ export default function Whatsapp() {
                 <Input className="pl-8" placeholder="Buscar por nombre o número..."
                        value={q} onChange={e => setQ(e.target.value)} />
               </div>
-
-              {/* Cada pestaña es una bandeja independiente. No existe “Todas”:
-                  mezclar empresas o líneas vuelve ambiguos el hilo y la salida. */}
-              {lineas.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-1.5"
-                     role="tablist" aria-label="Bandejas por línea de WhatsApp">
-                  {lineas.map(id => (
-                    <BotonLinea key={id} activa={filtroLinea === id}
-                                onClick={() => elegirLinea(id)}
-                                linea={identidadLinea(id, nombreLinea)} />
-                  ))}
-                </div>
-              )}
 
               <Listas vista={vista} setVista={setVista} conteos={conteos}
                       catalogo={catalogo} total={convs.length} />
@@ -358,13 +348,18 @@ export default function Whatsapp() {
           {/* ── Hilo ── */}
           <section className={`${activo ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
             {!activo ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-300 gap-2">
-                <MessageCircle size={40} strokeWidth={1.3} />
-                <p className="text-[13px] font-medium">Elige una conversación</p>
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
+                <MessageCircle size={40} strokeWidth={1.3} className="text-gray-300" />
+                {/* Estaba todo en gray-300: 1.9:1 sobre blanco, por debajo de
+                    cualquier mínimo. El icono puede ser tenue; el texto no. */}
+                <p className="text-[13px] font-semibold text-gray-600">Elige una conversación</p>
+                <p className="text-[12px] text-gray-500 max-w-xs">
+                  Las de la izquierda son solo de esta línea. Para ver otra, cámbiala arriba.
+                </p>
               </div>
             ) : (
               <>
-                <CabeceraHilo conv={conv} contacto={activo} restante={restante}
+                <CabeceraHilo conv={conv} contacto={activo}
                               onVolver={() => { setActivo(null); setHilo(null) }}
                               etiquetas={convs.find(c => c.contacto === activo
                                 && (!lineaActiva || c.phone_number_id === lineaActiva))?.etiquetas || []}
@@ -436,8 +431,11 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
 
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-1">
-        <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todos en esta línea</Pastilla>
+      {/* Una sola fila que se desplaza, no dos que se parten. Con seis filtros el
+          `flex-wrap` se comía otros 28 px de alto y dejaba una pastilla huérfana
+          en la segunda fila, que además se leía como si fuera de otro grupo. */}
+      <div className="flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <Pastilla activa={!vista} onClick={() => setVista(null)} n={total}>Todos</Pastilla>
         <Pastilla activa={vista === 'NO_LEIDAS'} onClick={() => setVista('NO_LEIDAS')}
                   n={conteos.NO_LEIDAS} color="#1A5CD8">Sin leer</Pastilla>
         {GRUPOS.map(g => (
@@ -447,9 +445,10 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
           </Pastilla>
         ))}
         {conUso.length > 0 && (
-          <button onClick={() => setAbierto(v => !v)}
-                  className="px-2 py-0.5 rounded-full border border-gray-200 text-[10.5px] font-semibold
-                             text-gray-500 hover:bg-gray-50 cursor-pointer flex items-center gap-1">
+          <button onClick={() => setAbierto(v => !v)} aria-expanded={abierto}
+                  className="px-2.5 py-1 rounded-full border border-gray-200 text-[10.5px] font-semibold
+                             text-gray-500 hover:bg-gray-50 cursor-pointer flex items-center gap-1
+                             whitespace-nowrap flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/40">
             <Tag size={10} /> Etiquetas
           </button>
         )}
@@ -483,34 +482,100 @@ function Listas({ vista, setVista, conteos, catalogo, total }) {
  * imposible saber cuál es cuál, que es justo lo contrario de lo que hace falta.
  * Cuando el nombre se repite, se desempata con los últimos cuatro dígitos.
  */
-/** Elegir la línea. Sin esto, dos líneas se leen como una sola conversación. */
-function BotonLinea({ activa, onClick, linea }) {
+/**
+ * Elegir la línea. Sin esto, dos líneas se leen como una sola conversación.
+ *
+ * Va en UNA fila con desplegable en vez de un botón apilado por línea. Con tres
+ * líneas aquello ocupaba 156 px permanentes de una bandeja donde lo escaso es el
+ * alto; con seis habría ocupado el panel entero. El nombre de la línea activa
+ * sigue siempre visible —es el dato que no se puede perder de vista, porque
+ * determina por dónde sale lo que escribas— y las demás están a un clic.
+ */
+function SelectorLinea({ lineas, activa, onElegir, nombreLinea, sinLeer }) {
+  const [abierto, setAbierto] = useState(false)
+  const caja = useRef(null)
+
+  // Cerrar al tocar fuera o con Escape: un popover que solo cierra con su propio
+  // botón se queda abierto tapando conversaciones.
+  useEffect(() => {
+    if (!abierto) return
+    const fuera = e => { if (caja.current && !caja.current.contains(e.target)) setAbierto(false) }
+    const esc = e => { if (e.key === 'Escape') setAbierto(false) }
+    document.addEventListener('mousedown', fuera)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', fuera)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [abierto])
+
+  if (!lineas.length) return <div className="flex-1" />
+
+  const yo = identidadLinea(activa, nombreLinea)
+  const sola = lineas.length === 1
+
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activa}
-      onClick={onClick}
-      className={`min-h-11 px-3 py-2 rounded-xl text-left cursor-pointer transition-colors duration-200 border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8] ${
-        activa
-          ? 'bg-[#0B1D4F] border-[#0B1D4F] text-white shadow-sm'
-          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
-      }`}
-    >
-      <span className="block text-[11px] font-bold leading-tight">{linea.nombre}</span>
-      <span className={`block mt-0.5 text-[10px] font-mono ${activa ? 'text-white/70' : 'text-gray-500'}`}>
-        {linea.numero}
-      </span>
-    </button>
+    <div ref={caja} className="relative flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => !sola && setAbierto(v => !v)}
+        aria-haspopup={sola ? undefined : 'listbox'}
+        aria-expanded={sola ? undefined : abierto}
+        disabled={sola}
+        title={sola ? yo.nombre : 'Cambiar de línea'}
+        className={`w-full min-h-11 pl-3 pr-2 py-1.5 rounded-xl border text-left transition-colors duration-200
+                    flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/40
+                    bg-[#0B1D4F] border-[#0B1D4F] text-white ${sola ? '' : 'cursor-pointer hover:bg-[#12275C]'}`}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-[11.5px] font-bold leading-tight truncate">{yo.nombre}</span>
+          <span className="block text-[10px] font-mono text-white/75 truncate">{yo.numero}</span>
+        </span>
+        {sinLeer > 0 && (
+          <span className="px-1.5 py-0.5 rounded-full bg-[#F5C842] text-[#0B1D4F] text-[10px] font-bold flex-shrink-0"
+                title={`${sinLeer} mensajes sin leer en esta línea`}>
+            {sinLeer}
+          </span>
+        )}
+        {!sola && <ChevronDown size={14} className={`flex-shrink-0 text-white/70 transition-transform ${abierto ? 'rotate-180' : ''}`} />}
+      </button>
+
+      {abierto && !sola && (
+        <div role="listbox" aria-label="Bandejas por línea de WhatsApp"
+             className="absolute z-30 mt-1 w-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+          {lineas.map(id => {
+            const l = identidadLinea(id, nombreLinea)
+            const esta = id === activa
+            return (
+              <button key={id} type="button" role="option" aria-selected={esta}
+                      onClick={() => { onElegir(id); setAbierto(false) }}
+                      className={`w-full min-h-11 px-3 py-2 text-left cursor-pointer transition-colors
+                                  flex items-center gap-2 focus-visible:outline-none focus-visible:bg-[#EEF3FF]
+                                  ${esta ? 'bg-[#EEF3FF]' : 'hover:bg-gray-50'}`}>
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-[11.5px] font-bold leading-tight truncate ${esta ? 'text-[#0B1D4F]' : 'text-gray-700'}`}>
+                    {l.nombre}
+                  </span>
+                  <span className="block text-[10px] font-mono text-gray-500 truncate">{l.numero}</span>
+                </span>
+                {esta && <Check size={14} className="text-[#1A5CD8] flex-shrink-0" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
 function Pastilla({ activa, onClick, n, color = '#0B1D4F', children }) {
   return (
-    <button onClick={onClick}
-            className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold border transition-colors cursor-pointer"
+    <button onClick={onClick} aria-pressed={activa}
+            className="px-2.5 py-1 rounded-full text-[10.5px] font-semibold border transition-colors cursor-pointer
+                       whitespace-nowrap flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/40"
             style={activa
               ? { background: color, borderColor: color, color: '#fff' }
+              // #6B7280 sobre blanco da 4.8:1 — el gris más claro que pasa AA.
               : { background: '#fff', borderColor: '#E5E7EB', color: '#6B7280' }}>
       {children}{n ? ` ${n}` : ''}
     </button>
@@ -617,7 +682,7 @@ function ItemConversacion({ c, activo, onClick }) {
   )
 }
 
-function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], catalogo = [], onAlternar, onAgente, onBloquear }) {
+function CabeceraHilo({ conv, contacto, onVolver, etiquetas = [], catalogo = [], onAlternar, onAgente, onBloquear }) {
   const { confirm } = useConfirm()
   const esAliado = conv?.tipo_contacto === 'ALIADO'
   const [eligiendo, setEligiendo] = useState(false)
@@ -671,12 +736,11 @@ function CabeceraHilo({ conv, contacto, restante, onVolver, etiquetas = [], cata
           </p>
         </div>
 
-        {restante && (
-          <span className="hidden sm:flex items-center gap-1 text-[10.5px] text-gray-400 flex-shrink-0"
-                title="Tiempo restante para responder con texto libre">
-            <Clock size={11} /> {restante}
-          </span>
-        )}
+        {/* La ventana de 24 h vivía también aquí, como un «23 h 54 m» suelto sin
+            decir de qué. El mismo dato ya está al pie del cuadro de escribir,
+            donde sí se explica («quedan 23 h 54 m para responder con texto
+            libre») y donde de verdad hace falta: al ir a escribir. Dos veces el
+            mismo número, con dos formas distintas, se lee como dos cosas. */}
 
         {/* El interruptor del agente. Va en la cabecera y no en un menú: si
             está apagado, hay que verlo sin buscarlo — una conversación que
@@ -853,25 +917,51 @@ function Adjunto({ m, mio }) {
   )
 }
 
+/**
+ * Lo que sale por una plantilla se guarda con su nombre de sistema al frente:
+ * `[plantilla alerta_fin_de_contacto_individuales] Angel David · ...`. Eso es un
+ * identificador de la base de datos, no un mensaje, y el coordinador no tiene por
+ * qué leerlo. Se separa para pintarlo como etiqueta y dejar el texto limpio.
+ */
+function partirPlantilla(texto) {
+  const m = /^\[plantilla ([a-z0-9_]+)\]\s*/i.exec(texto || '')
+  if (!m) return { plantilla: null, cuerpo: texto }
+  return { plantilla: m[1].replace(/_/g, ' '), cuerpo: (texto || '').slice(m[0].length) }
+}
+
 function Burbuja({ m }) {
   const mio = m.direccion === 'OUT'
   const est = mio ? ESTADO_ENVIO[m.estado] : null
   const fallo = m.estado === 'failed'
+  const { plantilla, cuerpo } = partirPlantilla(m.texto)
 
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.15 }}
                 className={`flex ${mio ? 'justify-end' : 'justify-start'} mb-1`}>
-      <div className={`max-w-[75%] px-3 py-2 rounded-2xl shadow-sm
+      {/* 🩸 EL AGENTE GRITABA Y EL CLIENTE SUSURRABA. Las dos burbujas tenían el
+          mismo 75 %, pero el agente escribe párrafos y la clínica escribe "Busco":
+          el azul saturado ocupaba tres cuartos del panel y lo que hay que leer
+          rápido —lo que dijo la clínica— quedaba de adorno. Lo que entra ahora
+          tiene más peso (borde y texto más firmes) y lo que sale, menos ancho. */}
+      <div className={`px-3 py-2 rounded-2xl shadow-sm
                        ${mio
-                         ? fallo ? 'bg-red-50 border border-red-200 rounded-br-sm'
-                                 : 'bg-[#1A5CD8] text-white rounded-br-sm'
-                         : 'bg-white border border-gray-100 rounded-bl-sm'}`}>
+                         ? fallo ? 'max-w-[68%] bg-red-50 border border-red-200 rounded-br-sm'
+                                 : 'max-w-[68%] bg-[#1A5CD8] text-white rounded-br-sm'
+                         : 'max-w-[78%] bg-white border border-gray-200 rounded-bl-sm'}`}>
         {(m.tiene_archivo || m.archivo_error) && <Adjunto m={m} mio={mio} />}
 
+        {plantilla && (
+          <span className={`inline-flex items-center gap-1 mb-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wide
+                            ${mio && !fallo ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'}`}
+                title="Enviado con una plantilla aprobada por Meta">
+            <FileText size={9} /> {plantilla}
+          </span>
+        )}
+
         <p className={`text-[13px] whitespace-pre-wrap break-words leading-snug
-                       ${mio && !fallo ? 'text-white' : 'text-gray-800'}`}>
-          {m.texto || <span className="italic opacity-70">[sin texto]</span>}
+                       ${mio && !fallo ? 'text-white' : 'text-gray-900'}`}>
+          {cuerpo || <span className="italic opacity-70">[sin texto]</span>}
         </p>
 
         <div className={`flex items-center gap-1.5 mt-1 justify-end`}>
@@ -882,16 +972,18 @@ function Burbuja({ m }) {
           {mio && !m.enviado_por && !fallo && (
             <ValorarRespuesta mensajeId={m.id} claro />
           )}
+          {/* Blanco al 60-70 % sobre #1A5CD8 no llega a 4.5:1, y justo ahí viven
+              la hora y el nombre de quien respondió. Subido a 85-90 %. */}
           {mio && m.enviado_por_nombre && (
-            <span className={`text-[9.5px] ${fallo ? 'text-gray-400' : 'text-white/60'}`}>
+            <span className={`text-[9.5px] ${fallo ? 'text-gray-500' : 'text-white/85'}`}>
               {m.enviado_por_nombre}
             </span>
           )}
-          <span className={`text-[10px] ${mio && !fallo ? 'text-white/70' : 'text-gray-400'}`}>
+          <span className={`text-[10px] ${mio && !fallo ? 'text-white/90' : 'text-gray-500'}`}>
             {horaMensaje(m.ocurrido_en)}
           </span>
           {est && (
-            <span className={`text-[10px] font-bold ${fallo ? est.clase : mio ? 'text-white/80' : est.clase}`}
+            <span className={`text-[10px] font-bold ${fallo ? est.clase : mio ? 'text-white' : est.clase}`}
                   title={est.label}>
               {est.icono}
             </span>
