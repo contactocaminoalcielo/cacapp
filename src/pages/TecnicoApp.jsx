@@ -4794,6 +4794,11 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Motivo cuando el técnico cobra MÁS que el valor del recibo (obligatorio
   // para guardar en ese caso; la RPC lo exige — migración 041)
   const [sobrepagoMotivo, setSobrepagoMotivo] = useState(reciboExistente?.datos_form?.sobrepago_motivo || '')
+  // Hoja de confirmación previa al guardado: el técnico tiene que leer cuánto y
+  // por qué medio va a registrar el cobro ANTES de que se escriba en DB. Una vez
+  // guardado él no puede corregirlo (solo coordinación), y los errores de monto
+  // y de medio se estaban descubriendo en el cuadre, días después.
+  const [confirmarGuardado, setConfirmarGuardado] = useState(false)
 
   // ── Auto-guardado en localStorage para sobrevivir cambios de pestaña / app ──
   // El draft restaura SOLO lo que escribió el técnico. Los campos que vienen del
@@ -5198,17 +5203,49 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     })()
   }
 
-  async function guardarRecibo() {
+  // Medios con monto en $0 (o vacío) mientras SÍ se está cobrando: casi siempre
+  // es una fila que el técnico agregó y no llenó, y guardarla ensucia el cuadre.
+  const mediosEnCero  = mediosPago.filter(m => !(parseFloat(m.monto) > 0))
+  const mediosCobrados = mediosPago.filter(m => parseFloat(m.monto) > 0)
+  // Dos filas con el mismo método: no se bloquea (a veces es legítimo: dos
+  // transferencias), pero se le avisa en la confirmación porque el error típico
+  // es haber duplicado el monto en vez de repartirlo.
+  const metodosRepetidos = [...new Set(
+    mediosCobrados.map(m => m.metodo).filter((mt, i, arr) => arr.indexOf(mt) !== i)
+  )]
+
+  // Puerta previa al guardado: valida y, si todo cuadra, abre la hoja de
+  // confirmación. El guardado real vive en `ejecutarGuardado`.
+  function guardarRecibo() {
+    const cobraAhora = !esFacturacionMensual && !pagoPendiente
     // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
-    if (!esFacturacionMensual && !pagoPendiente && totalMedios <= 0 && saldoPendiente > 0) {
+    if (cobraAhora && totalMedios <= 0 && saldoPendiente > 0) {
       setErr('Registra al menos un medio de pago con monto.')
       return
+    }
+    if (cobraAhora) {
+      if (mediosPago.some(m => (parseFloat(m.monto) || 0) < 0)) {
+        setErr('Hay un medio de pago con monto negativo. Corrígelo antes de guardar.')
+        return
+      }
+      if (totalMedios > 0 && mediosEnCero.length > 0) {
+        setErr(mediosEnCero.length === 1
+          ? `El medio de pago ${mediosEnCero[0].metodo} está en $0. Escribe el monto o quítalo antes de guardar.`
+          : `Hay ${mediosEnCero.length} medios de pago en $0 (${mediosEnCero.map(m => m.metodo).join(', ')}). Escribe sus montos o quítalos antes de guardar.`)
+        return
+      }
     }
     // Cobrar más que el recibo se permite, pero SIEMPRE explicando la diferencia
     if (haySobrepago && !sobrepagoMotivo.trim()) {
       setErr(`Estás cobrando ${fmt(sobrepagoDiff)} más que el valor del recibo. Indica de qué es esa diferencia antes de guardar.`)
       return
     }
+    setErr('')
+    setConfirmarGuardado(true)
+  }
+
+  async function ejecutarGuardado() {
+    setConfirmarGuardado(false)
     // El comprobante NO bloquea la creación del recibo: si falta, el recibo
     // se guarda igual y queda como "comprobante pendiente" para reintentar
     const sinComprobante = comprobantesPendientes
@@ -5306,7 +5343,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   // ── Respaldo legacy (sin transacción) — solo si la RPC no está desplegada ──
   // Conserva el comportamiento previo para no romper el flujo durante el
-  // despliegue. NO maneja setGuardando (lo hace guardarRecibo).
+  // despliegue. NO maneja setGuardando (lo hace ejecutarGuardado).
   async function guardarReciboLegacy(sinComprobante) {
     // Un servicio cancelado no puede generar recibos nuevos
     const { data: svcActual } = await db.from('servicios')
@@ -6436,6 +6473,157 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           ← Volver a la lista de recibos
         </button>
       </div>
+
+      {/* ── Confirmación del cobro antes de guardar ──────────────────────────
+          Última pantalla donde el técnico puede corregir: apenas guarda, el
+          monto y el medio quedan escritos en el servicio y en su cuadre, y él
+          ya no los puede cambiar (tiene que pedírselo a coordinación). Por eso
+          repite en grande CUÁNTO y POR QUÉ MEDIO, no un "¿seguro?" genérico. */}
+      {confirmarGuardado && (() => {
+        const sinCobroAhora = pagoPendiente || esFacturacionMensual
+        const faltaPorCobrar = !sinCobroAhora && totalMedios > 0 && totalMedios < saldoPendiente
+          ? saldoPendiente - totalMedios : 0
+        return (
+          <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center"
+            style={{ background: 'rgba(11,29,79,0.62)' }}
+            onClick={e => { if (e.target === e.currentTarget) setConfirmarGuardado(false) }}>
+            <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] overflow-y-auto">
+
+              <div className="px-5 pt-5 pb-4 text-center" style={{ background: '#FFFBEB' }}>
+                <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full"
+                  style={{ background: '#FDE68A' }}>
+                  <AlertCircle size={24} style={{ color: '#B45309' }} />
+                </div>
+                <p className="text-[18px] font-extrabold leading-tight" style={{ color: '#92400E' }}>
+                  Verifica antes de guardar
+                </p>
+                <p className="text-[12px] mt-1.5 leading-snug" style={{ color: '#B45309' }}>
+                  Una vez guardes, <b>tú no puedes corregir</b> el monto ni el medio de pago —
+                  tendrías que pedírselo a coordinación.
+                </p>
+              </div>
+
+              <div className="px-5 py-4 space-y-3">
+                <div className="flex items-center justify-between text-[12px]">
+                  <span className="text-gray-500">
+                    {tipoRecibo === 'VETERINARIA' ? '🏥 Recibo veterinaria' : '📄 Recibo cliente'}
+                  </span>
+                  <span className="font-semibold text-gray-700 truncate ml-2">
+                    {form.mascota_nombre} · {tipoRecibo === 'VETERINARIA' ? (aliado?.nombre || 'aliado') : (form.propietario || 'cliente')}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between px-3 py-2 rounded-xl text-[12px]"
+                  style={{ background: '#F9FAFB' }}>
+                  <span className="text-gray-500">Valor del servicio</span>
+                  <span className="font-bold text-gray-700">
+                    {fmt(tipoRecibo === 'VETERINARIA' ? valorVet : Number(form.valor_servicio) || 0)}
+                  </span>
+                </div>
+
+                {sinCobroAhora ? (
+                  <div className="px-4 py-4 rounded-2xl text-center"
+                    style={{ background: '#EEF3FB', border: '1.5px solid #C5D8F5' }}>
+                    <p className="text-[13px] font-extrabold" style={{ color: '#0B1D4F' }}>
+                      NO vas a recibir dinero por este servicio
+                    </p>
+                    <p className="text-[11px] mt-1 leading-snug" style={{ color: '#1A5CD8' }}>
+                      {pagoPendiente
+                        ? 'Queda marcado como pago pendiente: el cliente liquida después. No se registra ningún cobro a tu nombre.'
+                        : `${aliado?.nombre || 'La veterinaria'} paga por facturación mensual. No se registra ningún cobro a tu nombre.`}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="rounded-2xl overflow-hidden" style={{ border: '1.5px solid #86EFAC' }}>
+                      <div className="px-4 py-3 text-center" style={{ background: '#F0FDF4' }}>
+                        <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#15803D' }}>
+                          Vas a registrar que cobraste
+                        </p>
+                        <p className="text-[30px] font-extrabold leading-tight mt-0.5" style={{ color: '#15803D' }}>
+                          {fmt(totalMedios)}
+                        </p>
+                      </div>
+                      <div className="divide-y" style={{ borderColor: '#E5E7EB' }}>
+                        {mediosCobrados.length === 0 ? (
+                          <p className="px-4 py-3 text-[12px] text-gray-500 text-center">
+                            Sin medios de pago — el servicio ya estaba pagado.
+                          </p>
+                        ) : mediosCobrados.map((m, i) => (
+                          <div key={i} className="px-4 py-2.5 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-[13px] font-bold text-gray-800">{m.metodo}</p>
+                              {m.referencia && (
+                                <p className="text-[10px] text-gray-400 truncate">Ref: {m.referencia}</p>
+                              )}
+                              {METODOS_CON_COMPROBANTE.includes(m.metodo) && (
+                                <p className="text-[10px] font-semibold"
+                                  style={{ color: m.comprobanteUrl ? '#15803D' : '#C2410C' }}>
+                                  {m.comprobanteUrl ? '✓ con comprobante' : '⏳ sin comprobante todavía'}
+                                </p>
+                              )}
+                            </div>
+                            <span className="text-[15px] font-extrabold text-gray-900 flex-shrink-0">
+                              {fmt(parseFloat(m.monto) || 0)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {metodosRepetidos.length > 0 && (
+                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
+                        style={{ background: '#FEF3C7', color: '#92400E' }}>
+                        ⚠️ Registraste <b>{metodosRepetidos.join(', ')}</b> más de una vez. Si el
+                        cobro fue uno solo, cancela y déjalo en una sola línea.
+                      </p>
+                    )}
+
+                    {faltaPorCobrar > 0 && (
+                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
+                        style={{ background: '#FEF3C7', color: '#92400E' }}>
+                        ⚠️ Queda un saldo pendiente de <b>{fmt(faltaPorCobrar)}</b>. Guarda así solo
+                        si el cliente pagó una parte.
+                      </p>
+                    )}
+
+                    {haySobrepago && (
+                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
+                        style={{ background: '#FFF7ED', color: '#9A3412' }}>
+                        ⚠️ Estás cobrando <b>{fmt(sobrepagoDiff)} de más</b> sobre el valor del
+                        recibo. Motivo que registraste: “{sobrepagoMotivo.trim()}”.
+                      </p>
+                    )}
+
+                    {comprobantesPendientes.length > 0 && (
+                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
+                        style={{ background: '#FFEDD5', color: '#9A3412' }}>
+                        ⏳ Falta el comprobante de {comprobantesPendientes.map(m => m.metodo).join(', ')}.
+                        El recibo se guarda igual y lo puedes subir después desde Recibos.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="px-5 pb-6 pt-1 space-y-2">
+                <button onClick={ejecutarGuardado} disabled={guardando}
+                  className="w-full py-4 rounded-2xl text-[15px] font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.99] transition-transform"
+                  style={{ background: '#15803D' }}>
+                  <CheckCircle size={18} />
+                  {guardando ? 'Guardando recibo…' : sinCobroAhora ? 'Sí, guardar sin cobro' : `Sí, cobré ${fmt(totalMedios)} — guardar`}
+                </button>
+                <button onClick={() => setConfirmarGuardado(false)} disabled={guardando}
+                  className="w-full py-3.5 rounded-2xl text-[14px] font-bold text-gray-700 border disabled:opacity-60"
+                  style={{ borderColor: '#E5E7EB' }}>
+                  Cancelar y revisar
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

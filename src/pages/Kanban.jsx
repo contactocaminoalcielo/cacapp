@@ -1982,7 +1982,7 @@ export default function Kanban() {
     setNotifTecLoadingId(s.servicio_id)
     try {
       const { data: svc } = await db.from('servicios')
-        .select('direccion_recogida, barrio_recogida, ciudad_recogida, indicaciones_recogida, notas')
+        .select(`direccion_recogida, barrio_recogida, ciudad_recogida, indicaciones_recogida, notas, valor_pagado, metodo_pago, aliado_origen_id, ${COLS_CONSISTENCIA_COMISION}`)
         .eq('id', s.servicio_id).maybeSingle()
       const { data: rec } = await db.from('recogidas')
         .select('notas')
@@ -1994,6 +1994,45 @@ export default function Kanban() {
       const horaMatch = notasRec.match(/Hora aprox\. recogida: ([^.]+)/)
       const horaAprox = horaMatch?.[1]?.trim() || ''
       const indicaciones = svc?.indicaciones_recogida?.replace(/Hora aprox\. recogida:[^.]+\.\s*/i, '').trim() || ''
+
+      // ── Cuánto debe cobrar el técnico ──────────────────────────────────────
+      // El saldo se DERIVA de valor_total − valor_pagado, nunca de estado_pago:
+      // esa columna es una marca guardada que queda vieja si el valor sube
+      // después de cobrar. El monto va en el mensaje porque los técnicos venían
+      // cobrando valores equivocados y después no hay forma de que ellos mismos
+      // lo corrijan (solo coordinación).
+      //
+      // Con comisión YA descontada `valor_total` es el NETO, y quien paga cambia
+      // el monto: la veterinaria paga el neto (la comisión es su descuento) y el
+      // cliente paga el BRUTO (neto + comisión) — es la misma reconstrucción que
+      // hace el recibo del técnico. Se mandan las dos cifras para que el mensaje
+      // no contradiga lo que él ve en la app. Si `comisionInconsistente` avisa que
+      // valor_total ya es el bruto, NO se reconstruye nada (se inflaría el cobro).
+      const valorTotalSvc  = Number(svc?.valor_total) || 0
+      const valorPagadoSvc = Number(svc?.valor_pagado) || 0
+      const comisionSvc    = Number(svc?.comision_aliado) || 0
+      const brutoCliente   = (svc?.comision_descontada === true && comisionSvc > 0 && !comisionInconsistente(svc))
+        ? valorTotalSvc + comisionSvc : valorTotalSvc
+      const porCobrar    = Math.max(0, Math.round(valorTotalSvc - valorPagadoSvc))
+      const porCobrarCli = Math.max(0, Math.round(brutoCliente  - valorPagadoSvc))
+      const dosCifras    = porCobrarCli !== porCobrar
+      const lineasCobro = valorTotalSvc > 0
+        ? [
+            ``,
+            `--- COBRO ---`,
+            ...(valorPagadoSvc > 0 ? [`Ya abonado: ${fmt(valorPagadoSvc)}`] : []),
+            ...(porCobrar <= 0 && porCobrarCli <= 0
+              ? [`NO debe cobrar: el servicio ya esta pagado.`]
+              : dosCifras
+                ? [
+                    `VALOR A COBRAR al cliente: ${fmt(porCobrarCli)}`,
+                    `VALOR A COBRAR a la veterinaria: ${fmt(porCobrar)} (ya con su descuento)`,
+                  ]
+                : [`VALOR A COBRAR: ${fmt(porCobrar)}`]),
+            ...(porCobrarCli > 0 && svc?.metodo_pago ? [`Medio de pago acordado: ${svc.metodo_pago}`] : []),
+            ...(porCobrarCli > 0 ? [`Antes de guardar el recibo verifique en la app el monto y el medio: despues usted no lo puede corregir.`] : []),
+          ]
+        : []
 
       const lineas = [
         `Camino al Cielo - Asignacion de servicio`,
@@ -2009,6 +2048,7 @@ export default function Kanban() {
         `Direccion de recogida: ${direccion || 'Por confirmar'}`,
         horaAprox ? `Hora aproximada: ${horaAprox}` : '',
         indicaciones ? `Indicaciones: ${indicaciones}` : '',
+        ...lineasCobro,
         ``,
         `Por favor ingrese a la aplicacion para confirmar la recogida y ver el detalle completo del servicio.`,
         ``,
