@@ -222,7 +222,7 @@ export default function Whatsapp() {
     for (const c of todas) {
       if (c.phone_number_id && !vistas.includes(c.phone_number_id)) vistas.push(c.phone_number_id)
     }
-    const prioridad = ['1093403420518278', '967346343135405']
+    const prioridad = ['1313164878540238', '1317926468072324']
     return vistas.sort((a, b) => {
       const ia = prioridad.indexOf(a); const ib = prioridad.indexOf(b)
       if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)

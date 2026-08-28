@@ -17,14 +17,13 @@
 // constantes es justo lo que alguien copia luego a una decisión de enrutado, y
 // por rutear a la línea equivocada ya se nos fue el 6,9 % de los envíos una vez.
 const LINEAS = {
-  '967346343135405': '+573159891247',   // Camino al Cielo — la única válida para clientes
+  '1317926468072324': '+573159891247',  // familias — mudada a la WABA "diseño" el 28-ago-2026
   '1313164878540238': '+573180967711',  // veterinarias
-  '934074529797267': '+573181057685',   // HoyFarma (otra empresa)
   '894547387070615': '+573189864595',
 }
 
 // Override por entorno solo para poder corregir sin redesplegar si Meta reasigna el id.
-export const LINEA_WA_ID = process.env.WA_FROM_NUMBER_ID || '967346343135405'
+export const LINEA_WA_ID = process.env.WA_FROM_NUMBER_ID || '1317926468072324'
 
 export const LINEA_WA_NUMERO = LINEAS[LINEA_WA_ID] || '+573159891247'
 

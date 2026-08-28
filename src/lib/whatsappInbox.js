@@ -16,8 +16,7 @@ import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 // alguien copia a una decisión de enrutado — y ahí ya no es cosmético.
 export const LINEAS_WHATSAPP_INBOX = {
   '1313164878540238': { nombre: 'Veterinarias', numero: '+57 318 096 7711' },
-  '967346343135405':  { nombre: 'Camino Al Cielo', numero: '+57 315 989 1247' },
-  '934074529797267':  { nombre: 'HoyFarma', numero: '+57 318 105 7685' },
+  '1317926468072324': { nombre: 'Camino Al Cielo', numero: '+57 315 989 1247' },
   '894547387070615':  { nombre: 'Línea 318', numero: '+57 318 986 4595' },
 }
 
