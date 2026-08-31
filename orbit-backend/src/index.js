@@ -379,7 +379,12 @@ app.post('/voz/turno', express.json({ limit: '25mb' }), async (req, res) => {
 // que es quien manda sobre el estado de aprobación.
 app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
   try {
-    const r = await listarPlantillas({ agenteId: req.query.agenteId || null })
+    // La bandeja pregunta por LÍNEA (que es lo que tiene a mano) y no por
+    // agente: con la línea se sabe la WABA, y con la WABA sus plantillas.
+    const r = await listarPlantillas({
+      agenteId: req.query.agenteId || null,
+      linea: req.query.linea || null,
+    })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/listar', e) }
 })
@@ -540,6 +545,10 @@ app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (
       // Por qué línea sale. Sin esto salía por la primera del `.env`, que con un
       // segundo agente es la línea de la otra empresa (migración 115).
       agenteId: req.body?.agenteId || null,
+      // Y `linea` afina un paso más: la bandeja abre un hilo de una línea
+      // concreta y la respuesta tiene que salir por esa, no por la primera del
+      // agente. Se valida contra las líneas del agente en `contexto`.
+      linea: req.body?.linea || null,
       personalId: req.personal.id,
     })
     res.status(r.status).json(r.body)

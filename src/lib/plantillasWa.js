@@ -15,9 +15,16 @@ import { orbitApi } from '@/lib/orbitApi'
  * Una plantilla vive en una WABA y sale por una línea, y las dos cosas son del
  * AGENTE (migración 115). Sin decir cuál, se usa la del `.env` — que es lo que
  * hubo siempre y acertaba mientras hubo un solo agente.
+ *
+ * `linea` es para la bandeja, que sabe el `phone_number_id` del hilo abierto y
+ * no necesariamente el agente: el backend deduce de ella en qué cuenta buscar.
  */
-export function listarPlantillas(agenteId = null) {
-  return orbitApi(`/whatsapp/plantillas${agenteId ? `?agenteId=${agenteId}` : ''}`)
+export function listarPlantillas(agenteId = null, linea = null) {
+  const p = new URLSearchParams()
+  if (agenteId) p.set('agenteId', agenteId)
+  if (linea) p.set('linea', linea)
+  const qs = p.toString()
+  return orbitApi(`/whatsapp/plantillas${qs ? `?${qs}` : ''}`)
 }
 
 export function crearPlantilla(cuerpo) {

@@ -81,10 +81,18 @@ function credenciales(cuenta = null) {
  *
  * Sin agente se conserva el comportamiento viejo, que es lo que usan los
  * caminos que todavía no lo pasan.
+ *
+ * `lineaPedida` es para quien YA sabe por dónde tiene que salir — la bandeja,
+ * donde una conversación es (línea, número). Un agente puede tener varias
+ * líneas y `phone_number_ids[0]` es solo la primera: responder a un hilo de la
+ * segunda por la primera es mandarle a la clínica un mensaje desde un número
+ * con el que nunca ha hablado, y sin un solo error. Se valida contra las líneas
+ * del agente en vez de confiarse: la línea viaja desde el navegador.
  */
-async function contexto(agenteId = null) {
+async function contexto(agenteId = null, lineaPedida = null) {
   const lineasEnv = (process.env.WHATSAPP_ALLOWED_PHONE_IDS || '')
     .split(',').map(s => s.trim()).filter(Boolean)
+  const pedida = lineaPedida ? String(lineaPedida).trim() : null
 
   let agente = null
   if (agenteId) {
@@ -95,6 +103,16 @@ async function contexto(agenteId = null) {
     )
     if (!a) return { error: `No existe el agente ${agenteId}` }
     agente = a
+  } else if (pedida) {
+    // Sin agente pero con línea, el agente se DEDUCE de ella: es lo que decide
+    // en qué WABA buscar la plantilla. Sin esto, una línea de la segunda cuenta
+    // iría a pedirle su plantilla a la primera, que no la tiene.
+    const { rows: [a] } = await pool.query(
+      `SELECT id, clave, nombre, waba_id, phone_number_ids
+         FROM public.agente_wa WHERE $1 = ANY(phone_number_ids) ORDER BY id LIMIT 1`,
+      [pedida]
+    )
+    if (a) agente = a
   }
 
   const { token, cuenta, error } = credenciales(agente?.waba_id)
@@ -102,9 +120,19 @@ async function contexto(agenteId = null) {
 
   // Con agente, la línea es LA SUYA y punto: caer a la del `.env` sería mandar
   // por la empresa que no es y no enterarse.
-  const linea = agente ? (agente.phone_number_ids || [])[0] || null : lineasEnv[0] || null
+  const lineas = agente ? (agente.phone_number_ids || []) : lineasEnv
+  let linea = lineas[0] || null
+  let errorLinea = null
+  if (pedida) {
+    if (lineas.includes(pedida)) linea = pedida
+    else {
+      errorLinea = agente
+        ? `La línea ${pedida} no es de "${agente.nombre}". Enviar por otra línea llegaría desde un número con el que este contacto nunca ha hablado.`
+        : `La línea ${pedida} no está habilitada en este servidor (WHATSAPP_ALLOWED_PHONE_IDS).`
+    }
+  }
 
-  return { token, cuenta, linea, agente }
+  return { token, cuenta, linea, lineas, agente, errorLinea }
 }
 
 /** Compatibilidad: lo que no trae agente pertenece a Veterinarias. */
@@ -155,9 +183,12 @@ const CAMPOS_META = 'name,status,category,previous_category,language,components,
  * consentimiento. Si no se muestra, el cambio pasa desapercibido hasta la
  * factura.
  */
-export async function listarPlantillas({ agenteId = null } = {}) {
-  const { token, cuenta, agente, linea, error } = await contexto(agenteId)
+export async function listarPlantillas({ agenteId = null, linea: lineaPedida = null } = {}) {
+  // Con `linea` y sin agente —así llama la bandeja— la cuenta se deduce de la
+  // línea: cada WABA tiene sus propias plantillas y son distintas.
+  const { token, cuenta, agente, linea, error, errorLinea } = await contexto(agenteId, lineaPedida)
   if (error) return { status: 500, body: { ok: false, error } }
+  if (errorLinea) return { status: 400, body: { ok: false, error: errorLinea } }
 
   let ruta = `${cuenta}/message_templates?limit=200&fields=${CAMPOS_META}`
   const plantillas = []
@@ -1390,12 +1421,16 @@ async function mediaDeCabecera(buf, mime, nombre, phoneNumberId, token) {
  */
 export async function mandarPlantilla({
   plantilla, contacto, dados = {}, personalId = null, agenteId = null,
+  // Por qué línea sale, cuando quien llama ya lo sabe (la bandeja). Sin esto se
+  // usa la primera del agente, que con dos líneas acierta por casualidad.
+  linea: lineaPedida = null,
   // Cabecera distinta por envío (p. ej. el PDF de un certificado). Si no se
   // pasa, se conserva la cabecera fija configurada en Plantillas → Datos.
   cabecera = null,
 }) {
-  const { token, linea, agente, error } = await contexto(agenteId)
+  const { token, linea, agente, error, errorLinea } = await contexto(agenteId, lineaPedida)
   if (error) return { status: 500, body: { ok: false, error } }
+  if (errorLinea) return { status: 400, body: { ok: false, error: errorLinea } }
 
   const num = aInternacional(contacto)
   if (num.length < 10) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
@@ -1644,13 +1679,14 @@ export async function mandarPlantilla({
  */
 export async function enviarPlantilla({
   contacto, nombre, idioma = 'es_MX', valores = {}, servicioId = null, personalId = null,
-  agenteId = null,
+  agenteId = null, linea = null,
   // Compatibilidad con la forma vieja (arrays posicionales).
   variables = null, variablesCabecera = null, variablesBoton = null,
   cabecera = null,
 }) {
-  const { token, cuenta, error } = await contexto(agenteId)
+  const { token, cuenta, error, errorLinea } = await contexto(agenteId, linea)
   if (error) return { status: 500, body: { ok: false, error } }
+  if (errorLinea) return { status: 400, body: { ok: false, error: errorLinea } }
 
   const { plantilla, error: errPlantilla, status: stPlantilla } = await obtenerPlantilla(nombre, idioma, token, cuenta)
   if (!plantilla) return { status: stPlantilla || 502, body: { ok: false, error: errPlantilla } }
@@ -1674,5 +1710,5 @@ export async function enviarPlantilla({
     if (num.length < 10 && r.body.contacto) num = r.body.contacto
   }
 
-  return mandarPlantilla({ plantilla, contacto: num, dados, personalId, agenteId, cabecera })
+  return mandarPlantilla({ plantilla, contacto: num, dados, personalId, agenteId, linea, cabecera })
 }

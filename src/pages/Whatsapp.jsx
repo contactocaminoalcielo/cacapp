@@ -25,10 +25,11 @@ import {
   identidadLinea, claveConversacion,
 } from '@/lib/whatsappInbox'
 import { listarAgentes } from '@/lib/agenteApi'
+import EnviarPlantilla from '@/components/whatsapp/EnviarPlantilla'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
-  Bot, BotOff, Ban, Square, Trash2, ChevronDown, Check,
+  Bot, BotOff, Ban, Square, Trash2, ChevronDown, Check, LayoutTemplate,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -50,6 +51,8 @@ export default function Whatsapp() {
   const [catalogo, setCatalogo]   = useState([])
   // Qué lista se está mirando dentro de la línea: null = todos · 'NO_LEIDAS' · un grupo · una etiqueta.
   const [vista, setVista]         = useState(null)
+  // El selector de plantillas: el único modo de escribir fuera de las 24 h.
+  const [plantillaAbierta, setPlantillaAbierta] = useState(false)
 
   // ── Líneas ──
   // Una conversación es (línea, número): la misma clínica puede hablar por dos
@@ -165,6 +168,9 @@ export default function Whatsapp() {
     setHilo(null)
     setTexto('')
     setErrorEnvio(null)
+    // El selector de plantillas es de ESTA conversación: dejarlo abierto al
+    // cambiar de hilo mandaría el mensaje al contacto que no es.
+    setPlantillaAbierta(false)
     pegadoAbajo.current = true
     await cargarHilo(contacto)
     try {
@@ -190,7 +196,7 @@ export default function Whatsapp() {
     } catch (e) {
       // El texto NO se borra: el coordinador puede corregir y reintentar.
       setErrorEnvio(e.detalle?.ventana_cerrada
-        ? 'La ventana de 24 horas se cerró. Para retomar esta conversación hace falta una plantilla aprobada (todavía no disponible en Orbit).'
+        ? 'La ventana de 24 horas se cerró mientras escribías. Para retomar esta conversación usa el botón de plantillas.'
         : e.message)
     } finally {
       setEnviando(false)
@@ -250,6 +256,7 @@ export default function Whatsapp() {
     setHilo(null)
     setVista(null)
     setErrorEnvio(null)
+    setPlantillaAbierta(false)
   }
 
   // Sin leer por LÍNEA, sobre `todas`. Se cuentan CONVERSACIONES, no mensajes:
@@ -414,6 +421,12 @@ export default function Whatsapp() {
                   ventanaAbierta={ventanaAbierta} restante={restante}
                   error={errorEnvio}
                   contacto={activo}
+                  // 🩸 La línea se pasa como prop. Antes el envío de adjuntos
+                  // leía `lineaRef` desde aquí dentro, y `lineaRef` vive en el
+                  // componente de arriba: fuera de alcance, así que mandar una
+                  // foto reventaba con un ReferenceError.
+                  linea={lineaActiva}
+                  onPlantilla={() => setPlantillaAbierta(true)}
                   onEnviada={() => { cargarHilo(activo, { silencioso: true }); cargarLista({ silencioso: true }) }}
                 />
               </>
@@ -421,6 +434,24 @@ export default function Whatsapp() {
           </section>
         </div>
       </div>
+
+      {/* Abrir conversación con una plantilla. Vive aquí y no dentro de
+          `Redaccion` porque el modal tapa el hilo entero: colgarlo del área de
+          escritura lo dejaría recortado por su propio contenedor. */}
+      {plantillaAbierta && activo && (
+        <EnviarPlantilla
+          contacto={activo}
+          linea={lineaActiva}
+          nombreLinea={identidadLinea(lineaActiva, nombreLinea).nombre}
+          onCerrar={() => setPlantillaAbierta(false)}
+          onEnviada={() => {
+            setPlantillaAbierta(false)
+            pegadoAbajo.current = true
+            cargarHilo(activo, { silencioso: true })
+            cargarLista({ silencioso: true })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1023,7 +1054,10 @@ function Burbuja({ m }) {
   )
 }
 
-function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restante, error, contacto, onEnviada }) {
+function Redaccion({
+  texto, setTexto, enviando, onEnviar, ventanaAbierta, restante, error,
+  contacto, linea, onPlantilla, onEnviada,
+}) {
   const ref = useRef(null)
   const fileRef = useRef(null)
   const [foto, setFoto] = useState(null)          // el adjunto elegido, ya preparado
@@ -1123,7 +1157,7 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
     if (!foto || subiendo) return
     setSubiendo(true); setErrorFoto(null)
     try {
-      await enviarArchivo({ contacto, linea: lineaRef.current, base64: foto.base64, mime: foto.mime, nombre: foto.nombre,
+      await enviarArchivo({ contacto, linea, base64: foto.base64, mime: foto.mime, nombre: foto.nombre,
                             pie: texto.trim(), notaDeVoz: !!foto.notaDeVoz })
       setFoto(null)
       setTexto('')
@@ -1154,13 +1188,19 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
       <div className="px-4 py-3 border-t border-gray-200 bg-amber-50">
         <div className="flex gap-2 items-start">
           <AlertTriangle size={15} className="text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-[12px] font-semibold text-amber-900">Ventana de 24 horas cerrada</p>
             <p className="text-[11px] text-amber-700 leading-relaxed mt-0.5">
               WhatsApp solo permite escribir libremente durante las 24 horas siguientes
               al último mensaje del contacto. Para retomar hace falta una plantilla
-              aprobada por Meta — todavía no está disponible en Orbit.
+              aprobada por Meta.
             </p>
+            {/* Aquí es donde antes se acababa el camino: decía que hacía falta
+                una plantilla y no había forma de mandarla sin salir de la
+                bandeja, buscarla en otro módulo y teclear el número a mano. */}
+            <Button size="sm" className="mt-2" onClick={onPlantilla}>
+              <LayoutTemplate size={14} className="mr-1.5" /> Enviar una plantilla
+            </Button>
           </div>
         </div>
       </div>
@@ -1245,6 +1285,16 @@ function Redaccion({ texto, setTexto, enviando, onEnviar, ventanaAbierta, restan
             title="Grabar una nota de voz"
             className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
             <Mic size={16} />
+          </button>
+        )}
+        {/* Dentro de la ventana también: hay plantillas que se quieren mandar
+            por lo que traen —el tarifario en la cabecera, un carrusel de
+            planes— y no por no poder escribir. */}
+        {!foto && (
+          <button type="button" onClick={onPlantilla} disabled={enviando || subiendo}
+            title="Enviar una plantilla aprobada"
+            className="h-10 w-10 grid place-items-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40">
+            <LayoutTemplate size={16} />
           </button>
         )}
         <textarea
