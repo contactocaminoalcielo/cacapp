@@ -7,12 +7,20 @@
 export const CONFIG_DEFAULTS_IMAGENES = {
   fecha_base:        'fecha_ingreso',
   planes_excluidos:  ['ANGEL', 'DESAMPARADO'],
-  // Planes "sin recordatorios" que AUN ASÍ entran al primer contacto (David 2026-07-15):
-  //  - foto_cofre: el cofre exclusivo lleva foto → el job adjunta el recordatorio
-  //    "Foto para el cofre" y el portal la pide como cualquier otra imagen.
-  //  - solo_entrega: no lleva foto, pero necesita coordinar la entrega física →
-  //    la solicitud se crea igual y el portal muestra solo los datos de entrega.
-  planes_foto_cofre:  ['EXCLUSIVO_PRESENCIAL_SIN_REC', 'EXCLUSIVO_VIDEOLLAMADA_SIN_REC'],
+  // planes_foto_cofre: planes cuyo cenizario (el cofre) lleva una foto de la
+  // mascota. El job adjunta el recordatorio "Foto para el cofre" (migración 052)
+  // y el portal la pide como cualquier otra imagen. Empezó con los exclusivos
+  // "sin recordatorios" (David 2026-07-15), pero el cenizario lo llevan TODOS los
+  // planes de cremación individual: exclusivos y premium (ver migración 121, y
+  // 140 para el porqué de la ampliación 2026-09-02). Sin esto, el portal nunca
+  // pedía la foto del cofre en los planes con recordatorios: sus otras piezas ya
+  // hacían entrar el servicio y nadie notaba que faltaba ESA foto.
+  //
+  // planes_solo_entrega: no llevan foto, pero necesitan coordinar la entrega
+  // física → la solicitud se crea igual y el portal muestra solo los datos de
+  // entrega.
+  planes_foto_cofre:  ['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA', 'PREMIUM',
+                       'EXCLUSIVO_PRESENCIAL_SIN_REC', 'EXCLUSIVO_VIDEOLLAMADA_SIN_REC'],
   planes_solo_entrega: ['COMPETS_SIN_REC'],
   recordatorio_cofre: 'Foto para el cofre',   // nombre del recordatorio de catálogo (migración 052)
   // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).

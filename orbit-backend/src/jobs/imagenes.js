@@ -11,11 +11,11 @@
 //   - tiene ≥1 recordatorio activo que requiere imagen.
 //   - Planes ANGEL/DESAMPARADO excluidos, salvo que tengan un ADICIONAL que
 //     requiera imagen → entra como solo_adicional.
-//   - Planes "sin recordatorios" que igual entran (David 2026-07-15):
-//       · planes_foto_cofre (EXCLUSIVO_*_SIN_REC): se adjunta el recordatorio
-//         "Foto para el cofre" y entra a pedir esa foto.
-//       · planes_solo_entrega (COMPETS_SIN_REC): entra solo a pedir datos de
-//         entrega (el portal muestra 0 fotos + formulario de entrega).
+//   - planes_foto_cofre (cremación individual: exclusivos y premium): se adjunta
+//     el recordatorio "Foto para el cofre". Si el plan no traía otros
+//     recordatorios con imagen, esto además lo hace entrar al primer contacto.
+//   - planes_solo_entrega (COMPETS_SIN_REC): plan sin recordatorios que igual
+//     entra, solo a pedir datos de entrega (0 fotos + formulario de entrega).
 import { pool, log } from '../db.js'
 import { cargarConfigImagenes, construirEnlace } from '../reglas-imagenes.js'
 
@@ -84,7 +84,9 @@ export async function jobContactosImagenes() {
       // ¿Califica y cómo entra?
       //  · plan_excluido (ANGEL/DESAMPARADO): solo por ADICIONAL con imagen.
       //  · req_img_any: ruta normal (≥1 recordatorio con foto).
-      //  · esCofre (EXCLUSIVO_*_SIN_REC): se adjunta "Foto para el cofre".
+      //  · esCofre (cremación individual): se adjunta "Foto para el cofre".
+      //    Los que tienen recordatorios ya entraron por req_img_any; el adjunto
+      //    de más abajo corre igual, que es lo que hace que se pida esa foto.
       //  · esSoloEntrega (COMPETS_SIN_REC): entra solo por datos de entrega.
       let soloAdicional = false
       if (c.plan_excluido) {

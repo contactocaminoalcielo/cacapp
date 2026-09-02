@@ -38,7 +38,37 @@ jobs:
           key:      ${{ secrets.VPS_SSH_KEY }}
           source:   "dist/*"
           target:   "/var/www/orbit"
-          rm:       true
+          # rm:true borraba /var/www/orbit antes de copiar, así que al desplegar
+          # desaparecían los assets con hash del build anterior y toda pestaña
+          # abierta desde antes moría al pedir un chunk diferido ("Failed to
+          # fetch dynamically imported module: …/assets/jspdf.es.min-XXXX.js" al
+          # descargar un contrato o un PDF). Con el service worker en 'prompt',
+          # esas pestañas pueden llevar días con el build viejo. Dejando los
+          # archivos viejos siguen funcionando hasta que el usuario actualice.
+          # index.html, sw.js y el manifiesto se sobrescriben igual.
+          # A cambio se acumulan builds: los poda el paso siguiente (30 días).
+          rm:       false
+
+      # Contrapeso del `rm: false` de arriba: sin esto /var/www/orbit/dist/assets
+      # crece un build por despliegue y nunca se limpia.
+      - name: Podar assets de builds viejos
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            DIR=/var/www/orbit/dist/assets
+            [ -d "$DIR" ] || exit 0
+            # Corre DESPUÉS de copiar: cada build regenera todo `dist`, así que
+            # los archivos de este despliegue acaban de escribirse y `-mtime +30`
+            # no los alcanza. Solo caen los assets con hash que ningún build de
+            # los últimos 30 días volvió a producir — los que ya no referencia
+            # ningún index.html reciente. El margen de 30 días es el que mantiene
+            # viva una pestaña abierta con un build anterior (ver `rm: false`).
+            find "$DIR" -type f -mtime +30 -delete
+            echo "assets: $(find "$DIR" -type f | wc -l) archivos · $(du -sh "$DIR" | cut -f1)"
 
       - name: Deploy Edge Functions al servidor
         uses: appleboy/scp-action@v0.1.7

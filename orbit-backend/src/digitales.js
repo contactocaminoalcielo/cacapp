@@ -670,6 +670,12 @@ function infoEnvioAutomatico(cfg) {
     transporte,
     plantilla_completos: completos?.nombre || null,
     plantilla_memorial: memorial?.nombre || null,
+    // ¿Está espejado en Orbit el cuerpo aprobado en Meta? Sin él, ni la vista
+    // previa ni la evidencia muestran la plantilla: solo el resumen de enlaces.
+    cuerpo_cargado: {
+      completos: !!completos?.texto,
+      memorial: !!memorial?.texto,
+    },
   }
 }
 
@@ -692,14 +698,24 @@ async function marcarDigitalesEntregados(client, servicioId, tiposEnviados, recI
   )
 }
 
-export async function enviarAutomatico({ servicioId, personalId, telefono }) {
-  const actor = uuidOrNull(personalId)
-  if (!uuidOrNull(servicioId)) return { status: 422, body: { error: 'Servicio inválido' } }
+/**
+ * Fase de preparación del envío automático: todas las lecturas y validaciones,
+ * la elección de plantilla y el armado de `bodyParams` + texto final.
+ *
+ * Está separada del envío para que la vista previa del módulo muestre EXACTAMENTE
+ * lo que va a salir (mismo cuerpo, mismos parámetros resueltos) en vez de un
+ * resumen aparte que puede divergir de la plantilla aprobada en Meta.
+ *
+ * Devuelve `{ error, status }` cuando el servicio no se puede enviar, o el
+ * paquete listo para `enviarPlantillaGenerica`.
+ */
+export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnvioPrevio = false }) {
+  if (!uuidOrNull(servicioId)) return { status: 422, error: 'Servicio inválido' }
 
   // 1) Lecturas y validaciones (sin transacción: el envío es una llamada de red)
   const cfg = await cargarConfigDigitales(pool)
   const envioAuto = infoEnvioAutomatico(cfg)
-  if (!envioAuto.activo) return { status: 409, body: { error: 'El envío automático de WhatsApp no está configurado (plantilla / credencial del transporte).' } }
+  if (!envioAuto.activo) return { status: 409, error: 'El envío automático de WhatsApp no está configurado (plantilla / credencial del transporte).' }
   const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
 
   const { rows: svcRows } = await pool.query(
@@ -714,11 +730,11 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
     [servicioId]
   )
   const svc = svcRows[0]
-  if (!svc) return { status: 404, body: { error: 'Servicio no encontrado' } }
-  if (svc.estado === 'CANCELADO') return { status: 422, body: { error: 'El servicio está cancelado.' } }
+  if (!svc) return { status: 404, error: 'Servicio no encontrado' }
+  if (svc.estado === 'CANCELADO') return { status: 422, error: 'El servicio está cancelado.' }
 
   const destino = (telefono || '').trim() || svc.telefono
-  if (!destino) return { status: 422, body: { error: 'El cliente no tiene un teléfono de WhatsApp registrado.' } }
+  if (!destino) return { status: 422, error: 'El cliente no tiene un teléfono de WhatsApp registrado.' }
 
   // Un solo envío exitoso por servicio, sin importar si fue automático o si
   // una persona usó antes el fallback manual. Contar solo META/Zolutium deja
@@ -728,7 +744,7 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
      WHERE servicio_id = $1 AND estado = 'ENVIADO' LIMIT 1`,
     [servicioId]
   )
-  if (previos.length) return { status: 409, body: { error: 'Este servicio ya tiene un envío exitoso registrado.' } }
+  if (previos.length && !ignorarEnvioPrevio) return { status: 409, error: 'Este servicio ya tiene un envío exitoso registrado.' }
 
   // 2) Piezas del servicio: qué lleva (esperadas + creadas) y qué está publicado
   const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
@@ -766,8 +782,8 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
       .map(p => [p.tipo, limpiarUrlInstagram(p.url_publica)]))
 
   const faltantes = tipos.filter(t => !urls[t])
-  if (!tipos.length) return { status: 422, body: { error: 'Este servicio no lleva piezas digitales.' } }
-  if (faltantes.length) return { status: 422, body: { error: `Faltan piezas por publicar: ${faltantes.join(', ')}.` } }
+  if (!tipos.length) return { status: 422, error: 'Este servicio no lleva piezas digitales.' }
+  if (faltantes.length) return { status: 422, error: `Faltan piezas por publicar: ${faltantes.join(', ')}.` }
 
   // 3) Elegir plantilla según lo que lleva el plan; las declinadas van con texto
   // en vez de enlace (un parámetro vacío hace que Meta rechace el envío).
@@ -782,12 +798,12 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
     bodyParams = [param('MEMORIAL')]
   }
   if (!plantilla) {
-    return { status: 422, body: { error: `La combinación de piezas (${tiposPlan.join(' + ')}) no coincide con ninguna plantilla aprobada — usa el envío manual.` } }
+    return { status: 422, error: `La combinación de piezas (${tiposPlan.join(' + ')}) no coincide con ninguna plantilla aprobada — usa el envío manual.` }
   }
   // Un parámetro vacío hace que Meta rechace el envío de forma asíncrona (queda
   // ENVIADO en GHL y `failed` en Meta): mejor no mandarlo.
   if (bodyParams.some(p => !p)) {
-    return { status: 422, body: { error: 'Faltan enlaces para armar la plantilla — usa el envío manual.' } }
+    return { status: 422, error: 'Faltan enlaces para armar la plantilla — usa el envío manual.' }
   }
 
   const enlaces = tipos.map(t => ({ tipo: t, url: urls[t] }))
@@ -797,6 +813,18 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
     ? resolverTextoPlantilla(plantilla.texto, bodyParams)
     : construirMensajeCliente(cfg, svc.mascota, enlaces,
         declinadas.map(t => ({ tipo: t, texto: sinEnlace })))
+
+  return {
+    ok: true, cfg, envioAuto, svc, destino,
+    plantilla, bodyParams, mensaje, enlaces, tipos, declinadas, tiposPlan,
+  }
+}
+
+export async function enviarAutomatico({ servicioId, personalId, telefono }) {
+  const actor = uuidOrNull(personalId)
+  const prep = await prepararEnvioAutomatico({ servicioId, telefono })
+  if (!prep.ok) return { status: prep.status, body: { error: prep.error } }
+  const { envioAuto, svc, destino, plantilla, bodyParams, mensaje, enlaces, tipos } = prep
 
   // 4) Envío (red) → luego evidencia atómica, mismo patrón que reportes grupales
   let envioOk = null, envioErr = null
@@ -856,6 +884,52 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
+}
+
+// Meta cuenta el cuerpo de la plantilla YA resuelto con los parámetros: pasarse
+// hace que rechace el envío de forma asíncrona (#132005, ver migración 040).
+const LIMITE_META = 1024
+
+/**
+ * Lo que el cliente va a recibir, sin enviar nada. Usa la MISMA preparación que
+ * `enviarAutomatico`, así que el texto de la vista previa es literalmente el que
+ * sale: si aquí se ve un resumen de enlaces en vez de la plantilla, es porque el
+ * espejo del cuerpo (`texto`) no está cargado en config_operativa — y entonces
+ * eso mismo es lo que queda como evidencia del envío.
+ */
+export async function previsualizarEnvio({ servicioId, telefono }) {
+  const prep = await prepararEnvioAutomatico({ servicioId, telefono, ignorarEnvioPrevio: true })
+  if (!prep.ok) return { status: 200, body: { ok: false, motivo: prep.error } }
+
+  const { plantilla, bodyParams, mensaje, destino, tipos, declinadas, tiposPlan } = prep
+  // Orden de los parámetros según la plantilla elegida (mismo que arma el envío).
+  const orden = tiposPlan.length === 3 ? ['VIDEO', 'SHORT', 'MEMORIAL'] : ['MEMORIAL']
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      plantilla: {
+        nombre: plantilla.nombre,
+        idioma: plantilla.idioma,
+        // false → el cuerpo aprobado en Meta no está espejado en Orbit y lo de
+        // abajo es solo el resumen de enlaces, no la plantilla real.
+        cuerpo_cargado: !!plantilla.texto,
+      },
+      telefono: destino,
+      texto: mensaje,
+      caracteres: mensaje.length,
+      limite: LIMITE_META,
+      parametros: orden.map((t, i) => ({
+        n: i + 1,
+        tipo: t,
+        valor: bodyParams[i],
+        declinado: declinadas.includes(t),
+      })),
+      tipos,
+      declinadas,
+    },
+  }
 }
 
 /**

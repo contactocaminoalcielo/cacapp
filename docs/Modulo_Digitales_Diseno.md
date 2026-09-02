@@ -222,6 +222,15 @@ subida automática.
     backend los marca `ENTREGADO` junto al memorial. El memorial NO va aquí: es
     `{{1}}`, variable, y ya se marca por `recordatorios_tipo`.
 
+  **Cuerpo de `envio_digitales_individual` (migración 139, pendiente de Meta):**
+  la 040 la dejó sin `texto`, así que para los servicios con los 3 digitales la
+  evidencia y la vista previa siguen mostrando el resumen de enlaces. La 139
+  trae el cuerpo espejado y su `cubre` (audio, herramientas, tarjeta de
+  oración), y **solo debe aplicarse cuando ese mismo texto esté aprobado en
+  Meta, carácter por carácter**. Presupuesto: 807 chars crudos → 920 resueltos
+  (936 en unidades UTF-16) de los 1024, con los enlaces de Drive sin
+  `?usp=sharing`. Sin backfill: no se sabe qué decía el cuerpo anterior.
+
   ⚠️ **`texto` y `cubre` no se pueden derivar**: la API de GHL no expone el
   cuerpo de la plantilla (401 en `/businesses/templates`). Si se edita la
   plantilla en Meta, hay que editarlos aquí a la par o la evidencia vuelve a
@@ -231,6 +240,26 @@ subida automática.
   Nota: `Día de amor y milagrino` lo llevan ECO_GRUPAL/BASICO/BRONCE pero la
   plantilla no lo menciona → queda fuera de `cubre` y sigue `PENDIENTE` a
   propósito (David 2026-07-16).
+  **Envío automático apagado y vista previa de la plantilla (2026-08-31,
+  migración 138):** la 135 había encendido el job `jobEnviosDigitales`, que
+  barría los servicios con todas sus piezas publicadas y mandaba la plantilla
+  solo: apenas se publicaba la última pieza salía el WhatsApp sin que nadie
+  viera qué se estaba mandando. Se apagó (`envio_automatico_activo = false`);
+  el job queda en el código y respeta la bandera — al reencenderlo hay que
+  mover también `envio_automatico_desde` o se dispara de golpe todo lo
+  acumulado.
+
+  Además, el módulo nunca mostraba la plantilla: el `<textarea>` de "Para
+  enviar" es el mensaje del envío MANUAL (el resumen `• Memorial: <url>`), no
+  el cuerpo aprobado en Meta. Ahora `enviarAutomatico` está partido en
+  `prepararEnvioAutomatico` (lecturas, validaciones, elección de plantilla y
+  `bodyParams`) + el envío, y `GET /digitales/:servicioId/preview-envio` sirve
+  esa misma preparación sin enviar nada: la tarjeta muestra el cuerpo exacto
+  con los enlaces resueltos, qué es cada `{{n}}` y los caracteres contra el
+  límite de 1024. Si la plantilla no tiene `texto` espejado, la vista previa lo
+  dice en vez de hacer pasar el resumen por la plantilla (es el caso de
+  `envio_digitales_individual`).
+
 - El envío manual wa.me sigue disponible como alternativa (y único camino en
   combinaciones mixtas). También se permite envío parcial manual y reenvío
   (queda otro registro en el historial).

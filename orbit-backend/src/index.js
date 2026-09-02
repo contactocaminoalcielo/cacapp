@@ -18,8 +18,8 @@ import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimi
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
-  publicarManual, registrarEnlace, registrarEnvio, enviarAutomatico, descartarPieza, servirArchivo,
-  recuperarRendersHuerfanos, jobEnviosDigitales,
+  publicarManual, registrarEnlace, registrarEnvio, enviarAutomatico, previsualizarEnvio,
+  descartarPieza, servirArchivo, recuperarRendersHuerfanos, jobEnviosDigitales,
 } from './digitales.js'
 import { publicarInstagram } from './digitales-ig.js'
 import { analizarCuadre } from './cuadres-ia.js'
@@ -1422,6 +1422,18 @@ app.post('/digitales/:servicioId/envio', requireAuth, rolDigitales, async (req, 
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[digitales/envio] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Vista previa del envío automático: el cuerpo exacto de la plantilla con los
+// enlaces ya resueltos. No envía ni registra nada.
+app.get('/digitales/:servicioId/preview-envio', requireAuth, rolDigitales, async (req, res) => {
+  try {
+    const r = await previsualizarEnvio({ servicioId: req.params.servicioId, telefono: req.query.telefono })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[digitales/preview-envio] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

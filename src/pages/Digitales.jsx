@@ -875,6 +875,85 @@ function ServicioCard({
   )
 }
 
+// ── Vista previa: el cuerpo exacto de la plantilla que va a salir ───────────
+// Lo calcula el backend con la MISMA preparación del envío (`preview-envio`), así
+// que lo que se lee aquí es literalmente lo que recibe el cliente. Si Orbit no
+// tiene espejado el cuerpo aprobado en Meta (`texto` en config_operativa), lo
+// dice en vez de hacer pasar el resumen de enlaces por la plantilla.
+function PreviewPlantilla({ servicioId }) {
+  const [prev, setPrev] = useState(null)
+  const [abierto, setAbierto] = useState(true)
+
+  useEffect(() => {
+    let vivo = true
+    setPrev(null)
+    orbitApi(`/digitales/${servicioId}/preview-envio`)
+      .then(r => { if (vivo) setPrev(r) })
+      .catch(e => { if (vivo) setPrev({ ok: false, motivo: e.message || 'No se pudo cargar la plantilla.' }) })
+    return () => { vivo = false }
+  }, [servicioId])
+
+  if (!prev) {
+    return (
+      <div className="flex items-center gap-2 text-[12px] text-gray-400 px-1">
+        <Loader2 className="animate-spin" size={13} /> Cargando la plantilla que se va a enviar…
+      </div>
+    )
+  }
+  if (!prev.ok) {
+    return (
+      <div className="flex items-start gap-2 text-amber-700 text-[12px] bg-amber-50 rounded-lg px-3 py-2">
+        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+        No se puede previsualizar el envío automático: {prev.motivo}
+      </div>
+    )
+  }
+
+  const { plantilla, texto, caracteres, limite, parametros } = prev
+  // Margen del rechazo asíncrono #132005: Meta cuenta el cuerpo ya resuelto.
+  const apretado = caracteres > limite - 60
+
+  return (
+    <div className="rounded-xl border border-gray-200 overflow-hidden">
+      <button type="button" onClick={() => setAbierto(v => !v)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors text-left">
+        <span className="text-[12px] text-gray-600 font-medium flex items-center gap-1.5 min-w-0">
+          <MessageCircle size={13} className="text-gray-400 shrink-0" />
+          <span className="truncate">Esto recibe el cliente · plantilla «{plantilla.nombre}» ({plantilla.idioma})</span>
+        </span>
+        <span className="text-[11px] text-gray-400 shrink-0">{abierto ? 'Ocultar' : 'Ver'}</span>
+      </button>
+
+      {abierto && (
+        <div className="px-3 py-2.5 space-y-2 bg-white">
+          {!plantilla.cuerpo_cargado && (
+            <div className="flex items-start gap-2 text-amber-700 text-[11px] bg-amber-50 rounded-lg px-2.5 py-2">
+              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+              El cuerpo aprobado de esta plantilla no está cargado en Orbit, así que abajo
+              solo se ve el resumen de enlaces — no el texto real que le llega al cliente
+              (ni el que queda como evidencia del envío). Falta espejarlo en
+              config_operativa · DIGITALES.
+            </div>
+          )}
+          <div className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-gray-700 max-h-72 overflow-y-auto">
+            {texto}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400 border-t border-gray-100 pt-2">
+            {parametros.map(p => (
+              <span key={p.n}>
+                {`{{${p.n}}}`} = {TIPO_CORTO[p.tipo] || p.tipo}{p.declinado ? ' (no lo pidió)' : ''}
+              </span>
+            ))}
+            <span className={apretado ? 'text-amber-600 font-medium' : ''}>
+              {caracteres}/{limite} caracteres{apretado ? ' — al límite de Meta' : ''}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Tarjeta de envío al cliente ─────────────────────────────────────────────
 function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, zolutium, onEnviarAuto, onEnviar, onMarcar, onCopiar }) {
   const texto = mensajes[s.servicio_id] ?? buildMensaje(plantilla, s)
@@ -911,7 +990,11 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
         </div>
 
         {plantillaZol ? (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
+            {/* Lo que de verdad le llega al cliente. Antes solo se veía el resumen
+                de 3 enlaces de abajo (que es el mensaje del envío MANUAL), así que
+                nadie sabía qué texto salía por la plantilla aprobada. */}
+            <PreviewPlantilla servicioId={s.servicio_id} />
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={onEnviarAuto} disabled={busy[k]}>
                 {busy[k] ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />} Enviar
@@ -935,17 +1018,19 @@ function EnvioCard({ s, busy, tels, setTels, mensajes, setMensajes, plantilla, z
           </div>
         ) : null}
 
-        <textarea
-          value={texto}
-          onChange={e => setMensajes(v => ({ ...v, [s.servicio_id]: e.target.value }))}
-          rows={Math.min(10, texto.split('\n').length + 1)}
-          className="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#3D5A27]/30"
-        />
-        {plantillaZol && (
-          <p className="text-[11px] text-gray-400 -mt-2">
-            Este texto solo aplica al envío manual — el automático usa la plantilla aprobada en Meta.
-          </p>
-        )}
+        <div className="space-y-1">
+          {plantillaZol && (
+            <p className="text-[11px] text-gray-400 font-medium">
+              Mensaje del envío MANUAL (wa.me) — no es la plantilla de arriba:
+            </p>
+          )}
+          <textarea
+            value={texto}
+            onChange={e => setMensajes(v => ({ ...v, [s.servicio_id]: e.target.value }))}
+            rows={Math.min(10, texto.split('\n').length + 1)}
+            className="w-full rounded-xl border border-gray-200 px-3 py-2 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#3D5A27]/30"
+          />
+        </div>
 
         <div className="flex flex-wrap gap-2">
           <Button variant={plantillaZol ? 'secondary' : 'default'} onClick={onEnviar} disabled={busy[k]}>
