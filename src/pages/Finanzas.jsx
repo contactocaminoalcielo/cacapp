@@ -217,7 +217,10 @@ export default function Finanzas() {
             'servicio_id', idsSvc,
             q => q.eq('tipo', 'CLIENTE').order('created_at', { ascending: false }))
         : [],
-      incluirComprobantes ? dbIn('recibo_comprobantes', 'servicio_id', 'servicio_id', idsSvc) : [],
+      incluirComprobantes
+        ? dbIn('recibo_comprobantes', 'servicio_id', 'servicio_id', idsSvc,
+            q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))
+        : [],
       incluirComprobantes ? dbIn('recibos_tecnico', 'servicio_id, medios_pago', 'servicio_id', idsSvc) : [],
     ])
 
@@ -705,6 +708,22 @@ export default function Finanzas() {
     })
   }
 
+  // Qué servicios del cuadre tienen comprobante, TODOS, no solo los que
+  // registraron un pago digital. Hace falta para el caso "quedó en pagar
+  // después": ese recibo se guardó sin medios (digital = 0) y el técnico sube el
+  // comprobante más tarde; sin esto, el cuadre no tendría cómo enterarse de que
+  // el cliente ya pagó. Best-effort: si falla, el cuadre se muestra igual.
+  async function cargarComprobantesDeItems(items) {
+    const ids = [...new Set((items || []).map(it => it.servicio_id).filter(Boolean))]
+    if (!ids.length) return
+    try {
+      const { comprobantes } = await enriquecerServicios(ids.map(id => ({ id })), { incluirComprobantes: true })
+      setComprobantesSet(prev => new Set([...prev, ...comprobantes]))
+    } catch (err) {
+      console.error('[Finanzas] No se pudieron cargar los comprobantes del cuadre:', err)
+    }
+  }
+
   async function abrirCuadre(hdr) {
     setCuadreLoading(true); setCuadreError('')
     try {
@@ -720,6 +739,7 @@ export default function Finanzas() {
       setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setIaAnalisis(null)
       cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
+      cargarComprobantesDeItems(itemsConFechaRegistro)
       cargarRecategorizaciones(itemsConFechaRegistro)
       cargarSaldosAFavor(hdr)
       cargarEntregaNombre(hdr)
@@ -837,6 +857,7 @@ export default function Finanzas() {
       setCuadreData(hdr); setCuadreItems(itemsConFechaRegistro)
       setEntregaPorNombre(null); setIaAnalisis(null)
       cargarAjustesTecnico(itemsConFechaRegistro, hdr.tecnico_id)
+      cargarComprobantesDeItems(itemsConFechaRegistro)
       cargarRecategorizaciones(itemsConFechaRegistro)
       cargarSaldosAFavor(hdr)
     } catch (err) {
@@ -2835,6 +2856,16 @@ export default function Finanzas() {
                                           ))}
                                         </div>
                                       </div>
+                                    ) : comprobantesSet.has(it.servicio_id) ? (
+                                      // Sin pago digital registrado pero CON comprobante: casi
+                                      // siempre un recibo cerrado como "pago pendiente" al que el
+                                      // técnico le subió la prueba después. El cobro sigue sin
+                                      // registrar: hay que revisarlo y ponerle el medio y el valor.
+                                      <button onClick={() => setComprobanteItem(it)}
+                                        title="Llegó un comprobante y el cobro aún no está registrado. Revísalo y ponle el medio de pago."
+                                        className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF3C7] text-[#92400E] hover:bg-[#FDE68A] inline-flex items-center gap-0.5 transition-colors">
+                                        <FileText size={9} /> comprobante sin registrar
+                                      </button>
                                     ) : <span className="text-gray-400 tabular-nums">—</span>}
                                   </td>
                                   )}

@@ -4382,6 +4382,65 @@ function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo =
   )
 }
 
+// Tarjeta de un recibo que YA tiene comprobante. Dos caminos distintos, y la
+// diferencia importa: "Cambiar" REEMPLAZA (marca el viejo RECHAZADO, porque se
+// subió el equivocado), mientras que "Agregar otro" SUMA una prueba más sin
+// tocar la anterior — el caso de un pago en dos partes o de un segundo soporte.
+function TarjetaComprobanteSubido({ item, onPersistir }) {
+  const [agregando, setAgregando] = useState(false)
+  return (
+    <div className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
+      <div className="flex items-center gap-3">
+        <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '-'}</div>
+          <div className="text-[10px] text-gray-400">No. {item.numero}</div>
+          <div className="text-[10px] text-gray-500 truncate">
+            {item.pagoPendiente
+              ? 'Quedo en pagar despues - comprobante enviado'
+              : `${item.metodos.join(', ')} - ${fmt(item.monto)}`}
+          </div>
+        </div>
+        <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
+          <Check size={12} /> {item.nComps > 1 ? `${item.nComps} subidos` : 'Subido'}
+        </span>
+      </div>
+
+      {/* Un PAGO PENDIENTE no tiene "comprobante anterior" que reemplazar: su
+          único camino es sumar otro. */}
+      {!item.pagoPendiente && (
+        <ComprobanteUploader
+          servicioId={item.svcId}
+          stashId={`${item.reciboId}_reemplazo`}
+          actualUrl={item.yaUrl}
+          reemplazo
+          onSubido={(url, path, val) => onPersistir(item, url, path, val, { reemplazar: true })}
+        />
+      )}
+
+      {agregando ? (
+        <div className="mt-2">
+          <div className="flex items-start gap-2 mb-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
+            <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>Se suma como comprobante adicional. El anterior se mantiene.</span>
+          </div>
+          <ComprobanteUploader
+            servicioId={item.svcId}
+            stashId={`${item.reciboId}_extra${item.nComps || 0}`}
+            onSubido={(url, path, val) => { setAgregando(false); return onPersistir(item, url, path, val, { adicional: true }) }}
+          />
+        </div>
+      ) : (
+        <button type="button" onClick={() => setAgregando(true)}
+          className="mt-2 w-full py-2 rounded-xl border border-dashed text-[12px] font-semibold active:scale-98"
+          style={{ borderColor: '#BFDBFE', color: '#1E40AF', background: '#F8FAFF' }}>
+          + Agregar otro comprobante
+        </button>
+      )}
+    </div>
+  )
+}
+
 function ComprobanteTab({ tecnico, onCount }) {
   const [items, setItems]       = useState([])
   const [cargando, setCargando] = useState(true)
@@ -4401,7 +4460,7 @@ function ComprobanteTab({ tecnico, onCount }) {
       // si se filtrara allí, el recibo previo al corte igual entraría a la lista
       // pero sin mascota ni plan. El rango del técnico sube el piso sobre el corte.
       let q = db.from('recibos_tecnico')
-        .select('id, servicio_id, numero_recibo, medios_pago, created_at, servicios!inner(fecha_ingreso)')
+        .select('id, servicio_id, numero_recibo, medios_pago, datos_form, created_at, servicios!inner(fecha_ingreso)')
         .eq('tecnico_id', tecnico.id)
         .gte('servicios.fecha_ingreso', desde && desde > FECHA_CORTE ? desde : FECHA_CORTE)
       if (hasta) q = q.lte('servicios.fecha_ingreso', hasta)
@@ -4409,10 +4468,18 @@ function ComprobanteTab({ tecnico, onCount }) {
         .order('created_at', { ascending: false })
         .limit(500)
       if (error) throw error
-      // Un item por recibo que tenga al menos un medio DIGITAL con monto > 0
-      const recibos = (recs || []).filter(r =>
+      // Un item por recibo con al menos un medio DIGITAL con monto > 0…
+      const tieneDigital = r =>
         Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
-          METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0))
+          METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
+      // …y TAMBIÉN los cerrados como PAGO PENDIENTE. Esos se guardan sin medios
+      // (`medios_pago = []`, `valor_cobrado = 0`), así que el filtro de arriba los
+      // dejaba fuera y el técnico no tenía dónde subir el comprobante cuando el
+      // cliente pagaba después. Son 183 recibos, 176 sin comprobante.
+      // ⚠️ Subir aquí NO levanta el pendiente: solo adjunta la prueba. Quien
+      // convierte eso en un cobro (medio de pago y valor) es coordinación.
+      const esPagoPendiente = r => r.datos_form?.pago_pendiente === true
+      const recibos = (recs || []).filter(r => tieneDigital(r) || esPagoPendiente(r))
       // Mascota/plan de esos servicios, en lotes (cientos de ids en .in() dan 414)
       const ids = [...new Set(recibos.map(r => r.servicio_id).filter(Boolean))]
       const svcById = {}
@@ -4426,6 +4493,21 @@ function ComprobanteTab({ tecnico, onCount }) {
           .in('id', ids.slice(i, i + 80))
         for (const s of (svcs || [])) svcById[s.id] = s
       }
+      // Comprobantes ya subidos, por recibo. Hace falta para los PAGO PENDIENTE:
+      // no tienen medios en el jsonb, así que `yaUrl` no sirve para saber si el
+      // técnico ya subió algo. Se consulta la tabla formal (en lotes: cientos de
+      // ids en un .in() revientan la URL).
+      const compsPorRecibo = {}
+      const idsRec = recibos.map(r => r.id)
+      for (let i = 0; i < idsRec.length; i += 80) {
+        const { data: cps } = await db.from('recibo_comprobantes')
+          .select('recibo_id')
+          .in('recibo_id', idsRec.slice(i, i + 80))
+          .is('eliminado_en', null)
+          .neq('estado', 'RECHAZADO')
+        for (const c of (cps || [])) compsPorRecibo[c.recibo_id] = (compsPorRecibo[c.recibo_id] || 0) + 1
+      }
+
       const lista = []
       for (const r of recibos) {
         const medios  = Array.isArray(r.medios_pago) ? r.medios_pago : []
@@ -4434,6 +4516,20 @@ function ComprobanteTab({ tecnico, onCount }) {
         const yaUrl      = digital.find(m => m.comprobanteUrl)?.comprobanteUrl || ''
         const svc        = svcById[r.servicio_id]
         if (svc?.estado === 'CANCELADO') continue
+        const nComps = compsPorRecibo[r.id] || 0
+
+        // Cerrado como PAGO PENDIENTE: sin medios y sin cobro. Va a su propio
+        // grupo, y pasa a "subido" solo cuando ya hay un comprobante en la tabla.
+        if (esPagoPendiente(r) && digital.length === 0) {
+          lista.push({
+            reciboId: r.id, svcId: r.servicio_id, numero: r.numero_recibo,
+            mascota: svc?.mascotas, plan: svc?.planes?.nombre || '',
+            metodos: [], monto: 0, yaUrl: '', nComps,
+            pagoPendiente: true,
+            estado: nComps > 0 ? 'SUBIDO' : 'PAGO_PENDIENTE',
+          })
+          continue
+        }
         lista.push({
           reciboId: r.id,
           svcId:    r.servicio_id,
@@ -4444,9 +4540,15 @@ function ComprobanteTab({ tecnico, onCount }) {
           monto:    digital.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
           estado:   pendientes.length > 0 ? 'PENDIENTE' : 'SUBIDO',
           yaUrl,
+          nComps,
+          pagoPendiente: false,
         })
       }
       setItems(lista)
+      // El contador de la pestaña sigue contando SOLO los pagos digitales sin
+      // comprobante: son los que el técnico tiene que resolver. Un pago
+      // pendiente no es una tarea suya —puede que el cliente nunca pague— así
+      // que no debe encender el badge.
       if (onCount) onCount(lista.filter(i => i.estado === 'PENDIENTE').length)
     } catch (e) {
       setListErr(e.message || 'Error al cargar comprobantes')
@@ -4456,9 +4558,22 @@ function ComprobanteTab({ tecnico, onCount }) {
   useEffect(() => { cargar() }, [cargar])
 
   // Persistencia tras subir: jsonb (compat) + tabla formal recibo_comprobantes + novedad
-  async function persistir(item, publicUrl, storagePath, val, { reemplazar = false } = {}) {
+  // `adicional` = segundo (o tercero) comprobante del mismo recibo. NO pisa al
+  // anterior ni toca el jsonb: entra como fila suelta con `medio_pago_id` NULL,
+  // que es lo que el índice único de "un comprobante activo por medio de pago"
+  // permite repetir. Igual para los PAGO PENDIENTE, que no tienen medios.
+  //
+  // 🔒 En ninguno de los tres casos se toca `valor_cobrado`, `pago_aplicado`,
+  // `estado_pago` ni los montos: el técnico adjunta la PRUEBA, nunca levanta el
+  // pendiente. Convertir eso en cobro (medio y valor) es de coordinación.
+  async function persistir(item, publicUrl, storagePath, val, { reemplazar = false, adicional = false } = {}) {
+    const soloAdjuntar = adicional || item.pagoPendiente
     // 1. Compat: actualizar el medio digital en el jsonb.
     let idx = -1
+    // Un comprobante adicional o el de un pago pendiente NO entra aquí: escribir
+    // el `comprobanteUrl` pisaría el del medio que ya lo tenía, o inventaría un
+    // medio de pago donde el recibo no registró ninguno.
+    if (!soloAdjuntar) {
     try {
       const { data: row } = await db.from('recibos_tecnico').select('medios_pago').eq('id', item.reciboId).single()
       const arr = Array.isArray(row?.medios_pago) ? [...row.medios_pago] : []
@@ -4472,16 +4587,19 @@ function ComprobanteTab({ tecnico, onCount }) {
         await db.from('recibos_tecnico').update({ medios_pago: arr }).eq('id', item.reciboId)
       }
     } catch (_) {}
+    }
 
     // 2. Fuente formal (asociacion por medio_pago_id; best-effort si la tabla existe).
     try {
       let medioPagoId = null
-      const { data: rows } = await db.from('recibo_medios_pago')
-        .select('id, metodo, created_at').eq('recibo_id', item.reciboId)
-        .order('created_at', { ascending: true })
-      if (rows?.length) {
-        medioPagoId = (idx >= 0 && rows[idx]?.id) ||
-          rows.find(r => METODOS_CON_COMPROBANTE.includes(r.metodo))?.id || null
+      if (!soloAdjuntar) {
+        const { data: rows } = await db.from('recibo_medios_pago')
+          .select('id, metodo, created_at').eq('recibo_id', item.reciboId)
+          .order('created_at', { ascending: true })
+        if (rows?.length) {
+          medioPagoId = (idx >= 0 && rows[idx]?.id) ||
+            rows.find(r => METODOS_CON_COMPROBANTE.includes(r.metodo))?.id || null
+        }
       }
       if (reemplazar) {
         const marcarReemplazado = () => db.from('recibo_comprobantes')
@@ -4511,7 +4629,10 @@ function ComprobanteTab({ tecnico, onCount }) {
       await db.from('novedades_servicio').insert({
         servicio_id:    item.svcId,
         tipo_novedad:   'NOTA',
-        descripcion:    `Comprobante de pago ${reemplazar ? 'reemplazado' : 'subido'} (recibo ${item.numero}). Pendiente de revision.`,
+        descripcion:    item.pagoPendiente
+          ? `El tecnico subio un comprobante de pago para el recibo ${item.numero}, que se habia cerrado como PAGO PENDIENTE. `
+            + 'El cobro NO se registro: sigue pendiente hasta que coordinacion revise el comprobante y le ponga el medio de pago y el valor.'
+          : `Comprobante de pago ${reemplazar ? 'reemplazado' : adicional ? 'adicional subido' : 'subido'} (recibo ${item.numero}). Pendiente de revision.`,
         registrado_por: tecnico?.id || null,
       })
     } catch (_) {}
@@ -4540,6 +4661,7 @@ function ComprobanteTab({ tecnico, onCount }) {
     : items
   const hayBusqueda = termino.length > 0
   const pendientes = itemsFiltrados.filter(i => i.estado === 'PENDIENTE')
+  const porPagar   = itemsFiltrados.filter(i => i.estado === 'PAGO_PENDIENTE')
   const subidos    = itemsFiltrados.filter(i => i.estado === 'SUBIDO')
 
   return (
@@ -4645,31 +4767,51 @@ function ComprobanteTab({ tecnico, onCount }) {
                 </div>
               ))}
 
+              {porPagar.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
+                    Quedaron en pagar despues
+                  </div>
+                  <div className="rounded-2xl px-3 py-2 mb-2 text-[11px] leading-snug"
+                    style={{ background: '#FEF3C7', border: '1.5px solid #FDE68A', color: '#92400E' }}>
+                    Si el cliente ya te envio el pago, sube aqui el comprobante. <strong>El recibo sigue
+                    como pendiente</strong>: no estas registrando el cobro, solo dejando la prueba para
+                    que coordinacion la revise.
+                  </div>
+                  {porPagar.map(item => (
+                    <div key={item.reciboId} className="bg-white rounded-2xl p-4 border mb-2 shadow-sm" style={{ borderColor: '#FDE68A' }}>
+                      <div className="flex items-center gap-3">
+                        <span style={{ fontSize: 26 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-gray-900 leading-tight">{item.mascota?.nombre || '-'}</div>
+                          <div className="text-[11px] text-gray-500 truncate">
+                            {item.plan ? `${item.plan} - ` : ''}{item.mascota?.clientes?.nombre} {item.mascota?.clientes?.apellido}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                              PAGO PENDIENTE
+                            </span>
+                            <span className="text-[10px] text-gray-400">No. {item.numero}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <ComprobanteUploader
+                        servicioId={item.svcId}
+                        stashId={`${item.reciboId}_pendiente`}
+                        onSubido={(url, path, val) => persistir(item, url, path, val)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {subidos.length > 0 && (
                 <div className="mt-4">
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
                   {subidos.map(item => (
-                    <div key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
-                      className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
-                      <div className="flex items-center gap-3">
-                        <span style={{ fontSize: 22 }}>{petEmoji(item.mascota?.especies?.nombre)}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-gray-800 text-[13px] leading-tight">{item.mascota?.nombre || '-'}</div>
-                          <div className="text-[10px] text-gray-400">No. {item.numero}</div>
-                          <div className="text-[10px] text-gray-500 truncate">{item.metodos.join(', ')} - {fmt(item.monto)}</div>
-                        </div>
-                        <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
-                          <Check size={12} /> Subido
-                        </span>
-                      </div>
-                      <ComprobanteUploader
-                        servicioId={item.svcId}
-                        stashId={`${item.reciboId}_reemplazo`}
-                        actualUrl={item.yaUrl}
-                        reemplazo
-                        onSubido={(url, path, val) => persistir(item, url, path, val, { reemplazar: true })}
-                      />
-                    </div>
+                    <TarjetaComprobanteSubido
+                      key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
+                      item={item} onPersistir={persistir} />
                   ))}
                 </div>
               )}
