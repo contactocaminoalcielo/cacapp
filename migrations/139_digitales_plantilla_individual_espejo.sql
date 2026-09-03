@@ -10,15 +10,25 @@
 --    carácter por carácter: `texto` es un espejo manual (la API de GHL no expone
 --    el cuerpo, 401 en /businesses/templates). Si difiere, la evidencia miente.
 --
--- Presupuesto de Meta (1024 chars de cuerpo + parámetros ya resueltos, el
--- rechazo asíncrono #132005 de la 040):
---   cuerpo crudo                                807 chars (823 en unidades UTF-16)
+-- 🩸 2026-09-03 — ESTE ARCHIVO YA MINTIÓ UNA VEZ. La versión del 2-sep espejaba
+--    un texto REDACTADO A PROPÓSITO para esta migración (823 UTF-16, títulos en
+--    *_negrita cursiva_*, enlaces de Drive sin `?usp=sharing`, cierre con el
+--    teléfono 3193585508) que NUNCA se subió a Meta. Lo aprobado era —y sigue
+--    siendo— otro cuerpo distinto. Se reemplazó copiándolo carácter por carácter
+--    desde `GET /{waba}/message_templates?name=envio_digitales_individual`.
+--    🔑 El espejo se COPIA de Meta, no se escribe a mano. Fuente de verdad:
+--    WABA 1048633974692786 (familias) · plantilla id 905396532645818 · APPROVED.
+--
+-- Presupuesto de Meta (1024 de cuerpo con los parámetros ya resueltos, el
+-- rechazo asíncrono #132005 de la 040) — recalculado sobre el cuerpo APROBADO:
+--   cuerpo crudo                                863 chars (879 en unidades UTF-16)
 --   {{1}} video   https://www.youtube.com/watch?v=…   43
 --   {{2}} short   https://www.youtube.com/shorts/…    42
 --   {{3}} memorial https://www.instagram.com/reel/…/  43
---   resuelto, peor caso                         920 chars (936 UTF-16) → 88 de margen
--- Los enlaces de Drive van SIN `?usp=sharing` (−24 chars): la carpeta abre igual.
--- Antes de alargar el texto en Meta, rehacer esta cuenta.
+--   resuelto, peor caso                         992 UTF-16 → solo 32 de margen
+-- ⚠️ Los enlaces de Drive del cuerpo aprobado SÍ llevan `?usp=sharing`. Quitarlos
+--    libera 24, pero eso hay que cambiarlo EN META primero, no aquí.
+-- Antes de alargar el texto en Meta, rehacer esta cuenta: quedan 32 caracteres.
 --
 -- `cubre`: los tres recordatorios de enlace fijo que la plantilla entrega en su
 -- propio cuerpo, igual que en la 055. Los planes de 3 digitales llevan audio y
@@ -36,31 +46,30 @@ SET valor = jsonb_build_object(
       'nombre',    'envio_digitales_individual',
       'idioma',    'es_MX',
       'categoria', 'UTILITY',
-      'texto', $txt$🌷 Buen día, te habla ValerIA de *Camino al Cielo*
-Me complace entregarte los recordatorios digitales de tu plan, preparados con todo el respeto y cariño para honrar la memoria de tu mascota🤍🐾.
+      'texto', $txt$🌷 Buen día, te habla ValerIA de Camino al Cielo
 
-🎬 *_Video conmemorativo:_*
-👉 {{1}}
+Con mucho respeto y cariño, queremos entregarte los recuerdos digitales correspondientes a tu plan personalizado, preparados para honrar la memoria de tu mascotica 🤍🐾.
 
-✨ *_Short:_*
-👉 {{2}}
+🎬 *Video conmemorativo:*
+👉 Ver video: {{1}}
 
-🌸 *_Memorial digital:_*
-👉 {{3}}
+▶️ *Short de YouTube:*
+👉 Ver short: {{2}}
 
-🎶 *_Audio de despedida:_*
-👉 https://drive.google.com/drive/folders/1mxrnBgjKZSZofe_vA9azlUjcf1w46UEH
+🕊️ *Memorial digital:*
+👉 Ver memorial: {{3}}
 
-📖 *_Herramientas de superación de duelo:_*
-👉 https://drive.google.com/drive/folders/1cct2JVjDert-VS0MNVnpGRAhkt0SSCiZ
+🎶 *Audio de despedida:*
+👉 Escuchar audio: https://drive.google.com/drive/folders/1mxrnBgjKZSZofe_vA9azlUjcf1w46UEH?usp=sharing
 
-🙏 *_Tarjeta de oración:_*
-👉 https://vt.tiktok.com/ZSMXPYkf8/
+📖 *Herramientas de apoyo para el proceso de duelo:*
+👉 Ver recursos: https://drive.google.com/drive/folders/1cct2JVjDert-VS0MNVnpGRAhkt0SSCiZ?usp=sharing
 
-Con esto damos por finalizada la entrega de los recordatorios digitales incluidos en tu plan.
-Gracias de corazón por permitirnos acompañarte en este momento tan especial 💜🐾.
+🙏 *Tarjeta de oración:*
+👉 Ver tarjeta: https://vt.tiktok.com/ZSMXPYkf8/
 
-Para cualquier información adicional, comunícate al *3193585508*$txt$,
+Esperamos que estos recuerdos sean una forma especial de conservar su amor y su huella en el corazón.
+Gracias por permitirnos acompañarte en este proceso 🤍🐾$txt$,
       'cubre', jsonb_build_array(
         'a1cd8abf-f6e5-4c8e-a307-de91feb60866',  -- Audio de despedida
         'c74becc1-df53-489a-aeb4-73ca73e1da15',  -- Herramientas de superación de duelo
