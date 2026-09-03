@@ -223,6 +223,40 @@ export function enviarArchivo({ contacto, linea = null, base64, mime, nombre, pi
   })
 }
 
+/**
+ * Con qué nombre se guarda un adjunto del hilo al bajarlo.
+ *
+ * 🩸 Hasta el 2026-09-03 se bajaba como `whatsapp-<id>`, SIN extensión: el
+ * certificado o el recibo aterrizaban como un archivo que Windows no sabía
+ * abrir, y desde fuera eso se ve igual que "no me deja descargar".
+ *
+ * El nombre bueno, cuando existe, viene en el propio texto del mensaje: los
+ * documentos se guardan como `[documento] NOMBRE.pdf`. En 585 de los 1.228
+ * salientes el prefijo viene solo, sin nombre — ahí se arma uno con el mime.
+ */
+const EXT_POR_MIME = {
+  'application/pdf': 'pdf',
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+  'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/amr': 'amr',
+  'video/mp4': 'mp4', 'video/3gpp': '3gp',
+  'application/msword': 'doc', 'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'text/plain': 'txt', 'application/zip': 'zip',
+}
+
+export function nombreAdjunto(m) {
+  const mime = String(m?.archivo_mime || '').toLowerCase().split(';')[0].trim()
+  const ext  = EXT_POR_MIME[mime] || (mime.includes('/') ? mime.split('/')[1] : '') || 'bin'
+
+  const delTexto = /^\[documento\]\s*(.+\S)\s*$/i.exec(m?.texto || '')
+  if (delTexto) {
+    const limpio = delTexto[1].replace(/[\\/:*?"<>|]/g, '-').trim()
+    if (limpio) return /\.[a-z0-9]{2,5}$/i.test(limpio) ? limpio : `${limpio}.${ext}`
+  }
+  return `whatsapp-${m?.id}.${ext}`
+}
+
 /** Solo para saber qué icono y qué texto mostrar antes de enviarlo. */
 export function claseArchivo(mime = '') {
   const m = mime.toLowerCase()

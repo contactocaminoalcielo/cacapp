@@ -21,7 +21,7 @@ import {
   listarEtiquetas, ponerEtiqueta, quitarEtiqueta, GRUPOS,
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
   sePuedeGrabar, formatoGrabacion, duracionAudio,
-  bajarAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
+  bajarAdjunto, nombreAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
   identidadLinea, claveConversacion,
 } from '@/lib/whatsappInbox'
 import { listarAgentes } from '@/lib/agenteApi'
@@ -924,17 +924,42 @@ function Adjunto({ m, mio }) {
     return () => { vivo = false; if (creada) URL.revokeObjectURL(creada) }
   }, [m.id, m.tiene_archivo, enLinea])
 
-  async function descargar() {
+  // 🩸 Tres cosas rompían la descarga del certificado o el recibo, y las tres se
+  // ven desde fuera igual: "no me deja descargar".
+  //   1. El nombre iba SIN extensión (`whatsapp-123`), así que el archivo caía
+  //      en Descargas como algo que el sistema no sabe abrir.
+  //   2. El `<a>` nunca se metía en el DOM: Chrome lo tolera, otros navegadores
+  //      ignoran el clic y no pasa absolutamente nada.
+  //   3. `revokeObjectURL` se llamaba en la misma vuelta que el clic, así que a
+  //      veces el navegador se quedaba sin la fuente antes de empezar a bajar.
+  const [bajando, setBajando] = useState(false)
+
+  async function conBlob(accion) {
+    setBajando(true)
     try {
       const blob = await bajarAdjunto(m.id)
       const u = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = u
-      a.download = `whatsapp-${m.id}`
-      a.click()
-      URL.revokeObjectURL(u)
-    } catch (e) { setFallo(e.message) }
+      accion(u)
+      // Un minuto es de sobra para que arranque la descarga o cargue la pestaña,
+      // y evita dejar el blob vivo para siempre.
+      setTimeout(() => URL.revokeObjectURL(u), 60000)
+    } catch (e) { setFallo(e.message) } finally { setBajando(false) }
   }
+
+  const descargar = () => conBlob(u => {
+    const a = document.createElement('a')
+    a.href = u
+    a.download = nombreAdjunto(m)
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  })
+
+  // Un PDF casi siempre se quiere VER (el certificado, el recibo). Abrirlo en
+  // una pestaña evita del todo las rarezas de la descarga.
+  const esPdf = /^application\/pdf$/i.test(String(m.archivo_mime || '').split(';')[0].trim())
+  const abrir = () => conBlob(u => window.open(u, '_blank', 'noopener'))
 
   if (fallo) {
     return (
@@ -960,14 +985,29 @@ function Adjunto({ m, mio }) {
       : <div className="rounded-full mb-1.5 h-9 w-56 max-w-full bg-black/5 animate-pulse" />
   }
 
+  const claseBoton = `flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold disabled:opacity-60
+                      ${mio ? 'bg-white/15 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`
+
   return (
-    <button onClick={descargar}
-            className={`flex items-center gap-1.5 mb-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold
-                        ${mio ? 'bg-white/15 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-      <Download className="w-3.5 h-3.5" />
-      Descargar {m.tipo}
-      {m.archivo_bytes ? ` · ${Math.max(1, Math.round(m.archivo_bytes / 1024))} KB` : ''}
-    </button>
+    <div className="mb-1.5">
+      <div className={`text-[10.5px] mb-1 truncate ${mio ? 'text-white/75' : 'text-gray-500'}`}
+           title={nombreAdjunto(m)}>
+        {nombreAdjunto(m)}
+        {m.archivo_bytes ? ` · ${Math.max(1, Math.round(m.archivo_bytes / 1024))} KB` : ''}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {esPdf && (
+          <button onClick={abrir} disabled={bajando} className={claseBoton}>
+            <FileText className="w-3.5 h-3.5" />
+            {bajando ? 'Abriendo…' : 'Abrir'}
+          </button>
+        )}
+        <button onClick={descargar} disabled={bajando} className={claseBoton}>
+          <Download className="w-3.5 h-3.5" />
+          {bajando ? 'Bajando…' : 'Descargar'}
+        </button>
+      </div>
+    </div>
   )
 }
 
