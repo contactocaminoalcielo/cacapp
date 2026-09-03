@@ -144,6 +144,32 @@ function fmtMinutos(min) {
   return m ? `${h} h ${m} min` : `${h} h`
 }
 
+// Dónde se recoge, según el punto elegido en la solicitud.
+//
+// 🩸 La dirección del ALIADO solo manda cuando se recoge EN la veterinaria.
+// Hasta el 2026-09-03 el precargado del modal de conversión hacía
+// `aliado?.direccion || s.direccion` sin mirar el tipo, así que una solicitud
+// de aliado marcada "domicilio del propietario" —con su dirección escrita a
+// mano— se convertía con la dirección de la clínica pegada. El técnico salía a
+// la vet a recoger una mascota que estaba en la casa del dueño. Se veía bien en
+// `solicitudes_servicio` (ahí la dirección estaba correcta) y solo se torcía al
+// convertir, por eso nadie lo notó: `punto_recogida` sí decía DOMICILIO.
+// Pasó en 6 de las 7 conversiones a domicilio; la única sana fue la de una vet
+// que no tiene dirección guardada.
+function datosRecogidaPara(tipo, s, aliado) {
+  const enVet = tipo === 'veterinaria'
+  return {
+    ciudad:    enVet ? (aliado?.ciudad    || s?.ciudad    || 'Bogotá')
+                     : (s?.ciudad    || s?.cliente_ciudad    || 'Bogotá'),
+    localidad: enVet ? (aliado?.localidad || s?.localidad || '')
+                     : (s?.localidad || s?.cliente_localidad || ''),
+    barrio:    enVet ? (aliado?.barrio    || s?.barrio    || '')
+                     : (s?.barrio    || s?.cliente_barrio    || ''),
+    direccion: enVet ? (aliado?.direccion || s?.direccion || '')
+                     : (s?.direccion || s?.cliente_direccion || ''),
+  }
+}
+
 // Pendientes que arrastra un servicio según su etapa. La tarjeta se pinta
 // rojiza si devuelve algo, y el modal lista estos mismos motivos.
 // tiene_recibo/nevera_codigo llegan como undefined si su consulta falló →
@@ -766,13 +792,10 @@ export default function Kanban() {
       mascota_peso_kg:   s.mascota_peso_kg   ? String(s.mascota_peso_kg) : '',
       mascota_raza:      s.mascota_raza      || '',
       mascota_sexo:      s.mascota_sexo      || 'Macho',
-      // Recogida — si hay aliado, precargar su dirección
+      // Recogida — la dirección del aliado SOLO si se recoge en la veterinaria
       plan_id:         planId,
       tipo_recogida:   s.tipo_recogida   || 'domicilio',
-      ciudad:          aliado?.ciudad    || s.ciudad    || 'Bogotá',
-      localidad:       aliado?.localidad || s.localidad || '',
-      barrio:          aliado?.barrio    || s.barrio    || '',
-      direccion:       aliado?.direccion || s.direccion || '',
+      ...datosRecogidaPara(s.tipo_recogida || 'domicilio', s, aliado),
       hora_aproximada: s.hora_aproximada || '',
       notas_cliente:   s.notas_cliente   || '',
       // Servicio
@@ -4435,8 +4458,15 @@ export default function Kanban() {
                 <div className="col-span-2">
                   <label className={SOL_LABL}>Punto de recogida</label>
                   <div className="flex gap-2">
+                    {/* Cambiar el punto arrastra ciudad/barrio/dirección al bloque que
+                        corresponde: si no, al pasar a "veterinaria" quedaría la dirección
+                        del domicilio, y al revés. */}
                     {[{v:'domicilio',l:'🏠 Domicilio'},{v:'veterinaria',l:'🏥 Veterinaria'}].map(o => (
-                      <button key={o.v} type="button" onClick={() => set('tipo_recogida', o.v)}
+                      <button key={o.v} type="button"
+                        onClick={() => {
+                          if (cf.tipo_recogida === o.v) return
+                          setConvForm(p => ({ ...p, tipo_recogida: o.v, ...datosRecogidaPara(o.v, selSolicitud, aliadoSolData) }))
+                        }}
                         className={`flex-1 py-2 rounded-lg text-[12px] font-semibold border transition-all ${cf.tipo_recogida === o.v ? 'border-[#3D5A27] bg-[#F0F7EB] text-[#3D5A27]' : 'border-gray-200 text-gray-400'}`}>
                         {o.l}
                       </button>
