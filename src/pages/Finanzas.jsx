@@ -3740,6 +3740,16 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
   const [error, setError]     = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const [quitando, setQuitando]   = useState(null)   // storage_path en curso
+  const [quitarError, setQuitarError] = useState('')
+  const { confirm } = useConfirm()
+  const { personalData } = useAuth()
+  // La RPC exige el rol por nombre; `puedeEditarCuadre` también deja pasar por
+  // `rol_principal_id`, así que aquí se traduce igual o el botón se vería
+  // habilitado y la llamada moriría con NO_AUTORIZADO.
+  const rolEfectivo = personalData?.rol
+    || ({ 1: 'COORDINADOR', 6: 'ADMIN' })[Number(personalData?.rol_principal_id)]
+    || null
 
   useEffect(() => {
     let activo = true
@@ -3750,14 +3760,22 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
         // servicio puede tener varios recibos_tecnico (recreado/reabierto) y el
         // comprobante suele quedar bajo un recibo_id distinto al del item del cuadre
         // → daba "no hay comprobante" aunque el técnico sí lo había subido.
-        let query = db.from('recibo_comprobantes').select('id, bucket, storage_path, mime_type, estado')
+        let query = db.from('recibo_comprobantes').select('id, bucket, storage_path, mime_type, estado, eliminado_en')
         if (item.servicio_id)      query = query.eq('servicio_id', item.servicio_id)
         else if (item.recibo_id)   query = query.eq('recibo_id', item.recibo_id)
         else { if (activo) { setImgs([]); setLoading(false) } return }
-        const { data: comps, error: ce } = await query
+        const { data: todas, error: ce } = await query
         if (ce) throw ce
         const out = []
         const rutasVistas = new Set()   // storage_path ya incluidos (para deduplicar)
+        // Ocultas: quitadas por coordinación (migr. 141) o reemplazadas por el
+        // técnico. ⚠️ Sus rutas TAMBIÉN entran en `rutasVistas`, o el respaldo
+        // del jsonb de más abajo las devolvería a la galería por la otra puerta.
+        const oculta = c => c.eliminado_en != null || c.estado === 'RECHAZADO'
+        const comps  = (todas || []).filter(c => !oculta(c))
+        for (const c of (todas || []).filter(oculta)) {
+          if (c.storage_path) rutasVistas.add(c.storage_path)
+        }
         for (const c of comps || []) {
           const { data: signed } = await db.storage.from(c.bucket || 'evidencias').createSignedUrl(c.storage_path, 300)
           if (signed?.signedUrl) { out.push({ ...c, url: signed.signedUrl }); if (c.storage_path) rutasVistas.add(c.storage_path) }
@@ -3829,6 +3847,38 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
     }
   }
 
+  // ── Quitar un comprobante duplicado (migración 141) ─────────────────────────
+  // Solo coordinación/gerencia. Apaga las DOS fuentes —la fila de
+  // `recibo_comprobantes` y el `comprobanteUrl` del jsonb del recibo—; si solo
+  // se apagara una, la galería lo resucitaría en el siguiente render. El archivo
+  // NO se borra de storage: la marca es reversible.
+  async function quitarComprobante(c) {
+    if (!item.servicio_id) return
+    const ok = await confirm(
+      'El comprobante deja de verse en el cuadro y en la ficha del servicio. El archivo NO se borra: queda guardado y se puede recuperar. Queda registrado quién lo quitó en la bitácora del servicio.',
+      { title: '¿Quitar este comprobante?', variant: 'danger', confirmLabel: 'Sí, quitarlo' }
+    )
+    if (!ok) return
+    setQuitando(c.storage_path || c.id); setQuitarError('')
+    try {
+      const esFila = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(c.id))
+      const { data, error: e } = await db.rpc('eliminar_comprobante_pago', {
+        p_servicio_id:    item.servicio_id,
+        p_comprobante_id: esFila ? c.id : null,
+        p_storage_path:   c.storage_path || null,
+        p_url:            esFila ? null : String(c.id),   // en los del jsonb, el id ES la URL
+        p_actor_id:       actorId,
+        p_actor_rol:      rolEfectivo,
+        p_motivo:         'Comprobante duplicado',
+      })
+      if (e) throw e
+      if (data?.quitado === false) { setQuitarError(data?.motivo_no || 'No se pudo quitar.'); return }
+      setImgs(prev => prev.filter(x => x.id !== c.id))
+    } catch (err) {
+      setQuitarError(parsearErrorDB(err))
+    } finally { setQuitando(null) }
+  }
+
   const digitales = (item.medios_pago || []).filter(mp => String(mp.metodo).toUpperCase() !== 'EFECTIVO' && Number(mp.monto) > 0)
 
   return (
@@ -3872,6 +3922,16 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
             </div>
           ) : (
             <div className="space-y-3">
+              {imgs.length > 1 && editable && (
+                <div className="rounded-xl bg-[#FFF7ED] border border-[#FED7AA] px-3 py-2 text-[11px] text-[#9A3412] leading-snug">
+                  Este servicio tiene {imgs.length} comprobantes. Si alguno sobra —el técnico guardó el recibo varias veces— quítalo con la papelera: el archivo no se borra.
+                </div>
+              )}
+              {quitarError && (
+                <div className="flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
+                  <AlertCircle size={12} className="mt-0.5 flex-shrink-0" /> {quitarError}
+                </div>
+              )}
               {imgs.map(c => {
                 const esPdf = (c.mime_type || '').toLowerCase() === 'application/pdf' || /\.pdf($|\?)/i.test(c.storage_path || '')
                 return (
@@ -3886,7 +3946,19 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
                         <img src={c.url} alt="Comprobante" className="w-full object-contain max-h-[60vh] bg-gray-50" />
                       </a>
                     )}
-                    {c.estado && <span className="text-[10px] text-gray-400 mt-1 inline-block">Estado: {c.estado}</span>}
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      {c.estado
+                        ? <span className="text-[10px] text-gray-400">Estado: {c.estado}</span>
+                        : <span className="text-[10px] text-gray-300">Sin registro formal · solo en el recibo</span>}
+                      {editable && item.servicio_id && (
+                        <button type="button" onClick={() => quitarComprobante(c)}
+                          disabled={quitando != null}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-400 hover:text-red-600 disabled:opacity-40">
+                          <Trash2 size={12} />
+                          {quitando === (c.storage_path || c.id) ? 'Quitando…' : 'Quitar'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )
               })}

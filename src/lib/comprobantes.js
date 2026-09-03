@@ -59,10 +59,22 @@ export async function cargarComprobantesServicio(servicioId) {
   const out = []
   const rutasVistas = new Set()   // storage_path ya incluidos (deduplicar)
 
-  const { data: comps, error } = await db.from('recibo_comprobantes')
-    .select('id, recibo_id, bucket, storage_path, mime_type, estado')
+  // Se traen TODAS las filas, incluidas las ocultas, y se filtran aquí — no en
+  // la consulta. ⚠️ Si se filtraran en SQL, sus `storage_path` no entrarían en
+  // `rutasVistas` y el respaldo del jsonb de abajo las resucitaría: el mismo
+  // archivo volvería a la galería por la otra puerta.
+  // Ocultas = quitadas por coordinación (migr. 141) o reemplazadas por el
+  // técnico (`estado='RECHAZADO'`, que nadie filtraba y se veía al lado de la
+  // buena como si fueran dos comprobantes distintos).
+  const { data: todas, error } = await db.from('recibo_comprobantes')
+    .select('id, recibo_id, bucket, storage_path, mime_type, estado, eliminado_en')
     .eq('servicio_id', servicioId)
   if (error) throw error
+  const oculta = c => c.eliminado_en != null || c.estado === 'RECHAZADO'
+  const comps  = (todas || []).filter(c => !oculta(c))
+  for (const c of (todas || []).filter(oculta)) {
+    if (c.storage_path) rutasVistas.add(c.storage_path)
+  }
   for (const c of comps || []) {
     const { data: signed } = await db.storage
       .from(c.bucket || 'evidencias').createSignedUrl(c.storage_path, 300)

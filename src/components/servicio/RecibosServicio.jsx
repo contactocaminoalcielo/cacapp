@@ -27,6 +27,7 @@ export default function RecibosServicio({ servicioId, onCambio }) {
   const [corrError, setCorrError]      = useState('')
   const [corrSaving, setCorrSaving]    = useState(false)
   const [corrOk, setCorrOk]            = useState('')
+  const [quitandoComp, setQuitandoComp] = useState(null)   // id del comprobante en curso
   const { personalData } = useAuth()
   const { confirm } = useConfirm()
   const puedeSubir = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
@@ -117,6 +118,37 @@ export default function RecibosServicio({ servicioId, onCambio }) {
     } finally {
       setSubiendo(false)
     }
+  }
+
+  // ── Quitar un comprobante duplicado (migración 141) ─────────────────────────
+  // La RPC apaga las DOS fuentes: la fila de `recibo_comprobantes` y el
+  // `comprobanteUrl` del jsonb del recibo. Apagar solo una lo resucita en el
+  // siguiente render. El archivo sigue en storage; la marca es reversible.
+  async function quitarComprobante(c) {
+    const ok = await confirm(
+      'El comprobante deja de verse aquí y en el cuadre. El archivo NO se borra: queda guardado y se puede recuperar. Queda registrado en la bitácora del servicio quién lo quitó.',
+      { title: '¿Quitar este comprobante?', variant: 'danger', confirmLabel: 'Sí, quitarlo' }
+    )
+    if (!ok) return
+    setQuitandoComp(c.id); setCompsError('')
+    try {
+      const esFila = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(c.id))
+      const { data, error } = await db.rpc('eliminar_comprobante_pago', {
+        p_servicio_id:    servicioId,
+        p_comprobante_id: esFila ? c.id : null,
+        p_storage_path:   c.storage_path || null,
+        p_url:            esFila ? null : String(c.id),   // en los del jsonb, el id ES la URL
+        p_actor_id:       personalData?.id || null,
+        p_actor_rol:      personalData?.rol || null,
+        p_motivo:         'Comprobante duplicado',
+      })
+      if (error) throw error
+      if (data?.quitado === false) { setCompsError(data?.motivo_no || 'No se pudo quitar.'); return }
+      setComps(prev => (prev || []).filter(x => x.id !== c.id))
+      onCambio?.()
+    } catch (e) {
+      setCompsError(parsearErrorDB(e))
+    } finally { setQuitandoComp(null) }
   }
 
   // ── "El técnico marcó cobrado y no cobró" ───────────────────────────────────
@@ -344,24 +376,37 @@ export default function RecibosServicio({ servicioId, onCambio }) {
                 const esPdf = (c.mime_type || '').toLowerCase() === 'application/pdf' || /\.pdf($|\?)/i.test(c.storage_path || '')
                 const est = ESTADO_COMP[c.estado]
                 return (
-                  <a key={c.id} href={c.url} target="_blank" rel="noopener noreferrer"
-                    className="group relative rounded-lg overflow-hidden bg-blue-50 border block"
-                    style={{ aspectRatio: '1/1', borderColor: '#BFDBFE' }}
-                    title={c.estado ? `Comprobante · ${c.estado}` : 'Comprobante'}>
-                    {esPdf ? (
-                      <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[10px] font-bold" style={{ color: '#1E40AF' }}>
-                        <FileText size={20} /> PDF
-                      </div>
-                    ) : (
-                      <img src={c.url} alt="Comprobante" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
-                    )}
+                  // El botón de quitar NO puede ir dentro del <a> (clic en el
+                  // enlace + HTML inválido): el ancla y el botón son hermanos.
+                  <div key={c.id} className="group relative rounded-lg overflow-hidden bg-blue-50 border"
+                    style={{ aspectRatio: '1/1', borderColor: '#BFDBFE' }}>
+                    <a href={c.url} target="_blank" rel="noopener noreferrer" className="block w-full h-full"
+                      title={c.estado ? `Comprobante · ${c.estado}` : 'Comprobante'}>
+                      {esPdf ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[10px] font-bold" style={{ color: '#1E40AF' }}>
+                          <FileText size={20} /> PDF
+                        </div>
+                      ) : (
+                        <img src={c.url} alt="Comprobante" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
+                      )}
+                    </a>
                     {est && (
-                      <span className="absolute top-1 left-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full"
+                      <span className="absolute top-1 left-1 text-[8px] font-bold px-1.5 py-0.5 rounded-full pointer-events-none"
                         style={{ background: est.bg, color: est.color }}>
                         {est.label}
                       </span>
                     )}
-                  </a>
+                    {/* Visible siempre en táctil (ahí no hay hover); en escritorio aparece al pasar por encima. */}
+                    {puedeSubir && (
+                      <button type="button" onClick={() => quitarComprobante(c)} disabled={quitandoComp != null}
+                        title="Quitar este comprobante"
+                        className="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded-full bg-white/90 text-gray-400 hover:text-red-600 hover:bg-white shadow-sm opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity disabled:opacity-40">
+                        {quitandoComp === c.id
+                          ? <span className="text-[9px] font-bold">…</span>
+                          : <X size={13} />}
+                      </button>
+                    )}
+                  </div>
                 )
               })}
             </div>
