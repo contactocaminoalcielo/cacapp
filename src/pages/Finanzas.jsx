@@ -83,9 +83,29 @@ const CHIPS_MEDIO_CUADRE = [
 // el cuadre marcaba un falso faltante EXACTAMENTE por el valor de la comisión.
 // La comisión NUNCA es faltante del técnico: es plata de la veterinaria y se
 // gestiona en la pestaña Comisiones. La banda aceptable es [neto … bruto].
-function netoCuadreItem(it) {
+//
+// 🩸 Y se le quita lo VENDIDO DESPUÉS del recibo (migración 143). El técnico
+// recogía el valor completo del servicio y aun así el cuadre le marcaba
+// faltante, porque `valor_a_cobrar` se calcula con el `valor_total` de HOY y los
+// adicionales vendidos cuando él ya no estaba se le cobraban a él. Esa plata no
+// se pierde de vista: sigue pendiente en la cartera (`estado_pago` +
+// `valor_total − valor_pagado`), que es donde se persigue el cobro.
+// ⚠️ `valor_posterior_recibo` es 0 en todas las filas anteriores a la 143 y en
+// las que no tienen recibo, así que los cuadres ya CERRADOS —inmutables por
+// diseño— siguen dando exactamente las mismas cifras que el día que se firmaron.
+function posteriorRecibo(it) {
+  return Math.max(0, Number(it.valor_posterior_recibo) || 0)
+}
+// El bruto que de verdad le tocaba a este técnico: lo que valía el servicio
+// cuando emitió su recibo.
+function brutoCuadreItem(it) {
   const bruto = it.valor_a_cobrar  != null ? Number(it.valor_a_cobrar)
               : it.valor_a_recoger != null ? Number(it.valor_a_recoger) : null
+  if (bruto == null) return null
+  return bruto - posteriorRecibo(it)
+}
+function netoCuadreItem(it) {
+  const bruto = brutoCuadreItem(it)
   if (bruto == null) return null
   return bruto - (Number(it.comision) || 0)
 }
@@ -1018,7 +1038,9 @@ export default function Finanzas() {
     if (it.es_cancelado || esFactMensual(it)) return null
     const neto = valorARecoger(it)
     if (neto == null) return null
-    const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
+    // El techo de la banda también sin lo vendido después: si no, el tope
+    // quedaría por encima de lo que este técnico podía haber recogido.
+    const bruto = brutoCuadreItem(it) ?? neto
     const recogido = Number(it.total_cobrado) || 0
     if (recogido < neto)  return neto - recogido    // falta (+)
     if (recogido > bruto) return bruto - recogido   // de más (−)
@@ -2787,6 +2809,12 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 tabular-nums font-semibold text-gray-900" title="Neto que paga el cliente (la comisión va en su propia columna)">
                                     {valorARecoger(it) != null ? fmt(valorARecoger(it)) : '—'}
                                     {Number(it.valor_adicionales) > 0 && <div className="text-[10px] font-medium text-gray-400">incl. adic. {fmt(it.valor_adicionales)}</div>}
+                                    {posteriorRecibo(it) > 0 && (
+                                      <div className="text-[10px] font-semibold text-[#7C3AED] mt-0.5"
+                                        title="Se le vendió al cliente DESPUÉS de que el técnico emitió su recibo. No se le exige a él; queda pendiente de cobro en la cartera.">
+                                        + {fmt(posteriorRecibo(it))} vendido después
+                                      </div>
+                                    )}
                                   </td>
                                   )}
                                   {verCol('comision') && <td className="px-3 py-2.5 tabular-nums text-[#d97706] font-semibold">{it.comision > 0 ? fmt(it.comision) : '—'}</td>}
@@ -3537,7 +3565,11 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
     ciudad:      svc?.ciudad_recogida || item.ciudad || '',
     // NETO = bruto − comisión (lo que le queda a la empresa). La comisión es de
     // la vet y no la recoge el técnico → no es faltante suyo. Ver netoCuadreItem.
-    neto:       grossVal - comisionVal,
+    // …y sin lo vendido DESPUÉS del recibo (migr. 143): ese adicional se le
+    // vendió al cliente cuando el técnico ya no estaba, así que no es faltante
+    // suyo. Sigue pendiente de cobro en la cartera.
+    posterior:  posteriorRecibo(item),
+    neto:       grossVal - comisionVal - posteriorRecibo(item),
     recogido:   n(item.total_cobrado),
     medios:     Array.isArray(item.medios_pago) ? item.medios_pago : [],
   }
@@ -3576,7 +3608,7 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   cob.adicPendiente = cob.adic > 0 && Math.abs(cob.descuadre - cob.adic) <= 1
   // Diferencia con banda aceptable [neto … bruto] (la comisión no es falta ni de más).
   cob.diferencia = cob.recogido < cob.neto ? cob.neto - cob.recogido
-                 : cob.recogido > grossVal ? grossVal - cob.recogido
+                 : cob.recogido > (grossVal - cob.posterior) ? (grossVal - cob.posterior) - cob.recogido
                  : 0
 
   const Dato = ({ label, children }) => (
@@ -3687,6 +3719,13 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                   </span>
                   <span className="text-[13px] font-extrabold text-gray-900 tabular-nums">{fmt(cob.neto)}</span>
                 </div>
+                {cob.posterior > 0 && (
+                  <Dato label="Vendido después del recibo">
+                    <span className="text-[#7C3AED] font-semibold" title="Adicionales vendidos al cliente cuando el técnico ya no estaba. No se le exigen a él; siguen pendientes de cobro en la cartera.">
+                      {fmt(cob.posterior)} · no es del técnico
+                    </span>
+                  </Dato>
+                )}
                 <Dato label="Valor recogido">{fmt(cob.recogido)}</Dato>
                 <div className="pl-3 py-0.5 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
                   {cob.medios.length === 0 ? (
@@ -4531,7 +4570,7 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     if (it.modalidad_comision === 'FACTURACION_MENSUAL') return 'FM ' + fmt((Number(it.valor_a_cobrar) || 0) - (Number(it.comision) || 0))
     const neto = netoCuadreItem(it)
     if (neto == null) return '—'
-    const bruto = it.valor_a_cobrar != null ? Number(it.valor_a_cobrar) : neto
+    const bruto = brutoCuadreItem(it) ?? neto   // sin lo vendido después del recibo
     const recog = Number(it.total_cobrado) || 0
     if (recog < neto) return fmt(neto - recog)
     if (recog > bruto) return '+' + fmt(recog - bruto)
