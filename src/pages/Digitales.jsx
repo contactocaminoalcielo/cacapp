@@ -208,7 +208,20 @@ export default function Digitales() {
     // poll disparando dos peticiones cada 5 s para siempre.
     const enCurso = data.servicios.some(s => s.piezas.some(p => ['GENERANDO', 'PUBLICANDO'].includes(p.estado) && !atascada(p)))
     clearInterval(pollRef.current)
-    if (enCurso) pollRef.current = setInterval(cargar, 5000)
+    // 🩸 2026-09-07 — esto sondeaba cada 5 s, y cada vuelta son DOS peticiones,
+    // una de ~236 KB (`/digitales/servicios` devuelve todos los servicios con
+    // sus piezas). Con un lote de memoriales regenerándose eran ~2,8 MB/min por
+    // cada pestaña abierta, y el backend —Node, un solo hilo— tenía que armar
+    // ese JSON una y otra vez mientras servía al resto de la operación. En una
+    // hora: 87 MB solo de este módulo. Un render tarda minutos, así que mirar
+    // cada 5 s no aportaba nada.
+    // Y no se sondea con la pestaña de fondo: la gente deja Digitales abierto
+    // todo el día y seguía pidiendo aunque nadie estuviera mirando.
+    if (enCurso) {
+      pollRef.current = setInterval(() => {
+        if (!document.hidden) cargar()
+      }, 20000)
+    }
     return () => clearInterval(pollRef.current)
   }, [data, cargar])
 
