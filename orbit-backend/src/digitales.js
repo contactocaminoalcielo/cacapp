@@ -432,8 +432,14 @@ export async function generarMemorial({ servicioId, personalId, formato: formato
 // estrangulaban entre sí hasta pasarse del timeout del render. En fila tardan
 // más en arrancar, pero dejan de fallar por contención.
 let colaRender = Promise.resolve()
+// Cuántos hay esperando turno. La UI pinta el MISMO spinner para "renderizando"
+// y para "hace fila detrás de otros trece", así que catorce Generar seguidos se
+// ven exactamente igual que un memorial colgado. Al menos que el log lo diga.
+let enCola = 0
 function encolarRender(piezaId, payload) {
-  const turno = colaRender.then(() => runRender(piezaId, payload))
+  const puesto = ++enCola
+  if (puesto > 1) log(`[digitales] ${piezaId} en cola, puesto ${puesto}`)
+  const turno = colaRender.then(() => runRender(piezaId, payload)).finally(() => { enCola-- })
   // La cola nunca se rompe: un render que falla no puede frenar a los siguientes.
   colaRender = turno.catch(() => {})
   return turno
@@ -444,14 +450,63 @@ function encolarRender(piezaId, payload) {
 // el Chrome headless se cuelga antes, el hijo no cierra NUNCA — y sin 'close' la
 // fila se queda en GENERANDO para siempre y, peor, la cola entera se para detrás
 // de ella. Margen sobre los dos timeouts + el arranque.
-const RENDER_TIMEOUT_MS = parseInt(process.env.MEMORIAL_TIMEOUT_MS || '120000') || 120000
+//
+// 🩸 2026-09-07 (tarde) — el tope de 360 s se volvió MÁS CORTO QUE UN RENDER el
+// mismo día en que los renders pasaron a prioridad baja (ver MEMORIAL_NICE abajo).
+// Medido en prod con un lote de 14: cuatro murieron a los 360 s EXACTOS, uno a
+// uno cada 6 minutos, y el único que llegó tardó 322 s — 38 s de margen. Contra
+// el histórico de la base, un memorial solo tardaba 31-72 s (4-sep: 5 piezas,
+// todas bajo 72 s con la espera incluida). No estaban colgados: el tope llegaba
+// antes que el final. Un render que tarda de más no es un fallo, así que el tope
+// se pone donde de verdad significa "esto se colgó" y no "hoy hay cola".
+const RENDER_TIMEOUT_MS = parseInt(process.env.MEMORIAL_TIMEOUT_MS || '300000') || 300000
 const RENDER_HARD_MS = parseInt(process.env.MEMORIAL_HARD_TIMEOUT_MS) || (RENDER_TIMEOUT_MS * 2 + 120000)
+
+// Matar un render cancelado, ENTERO.
+// `child.kill()` mata solo al `node render.mjs`. Pero quien se come la máquina
+// son sus NIETOS: Remotion abre varios Chrome headless y un ffmpeg, y esos
+// sobrevivían al padre. Medido el 7-sep tras cuatro cancelaciones: 53 procesos
+// chrome zombie y 144 MB de basura en /tmp. Y mientras el cadáver del render
+// cancelado seguía quemando CPU, el siguiente de la cola ya había arrancado —
+// así que la garantía de "uno a la vez" se rompía justo después de cada fallo,
+// que es cuando más falta hace. Con `detached: true` el hijo es líder de grupo
+// y el PID en negativo se lo lleva todo por delante.
+function matarGrupo(child) {
+  try { process.kill(-child.pid, 'SIGKILL') }
+  catch { try { child.kill('SIGKILL') } catch { /* ya murió */ } }
+}
+
+// Basura que deja Remotion cuando el render no termina por su cuenta: el bundle
+// de webpack, el perfil de Chrome y los assets descargados. Al terminar bien los
+// borra él; al morir de un SIGKILL, no. Solo se tocan los de más de 30 min: el
+// tope duro es menor que eso, así que ninguno puede ser de un render vivo.
+const TMP_BASURA = /^(remotion-webpack-bundle-|puppeteer_dev_chrome_profile-|remotion-v[\d.]+-assets)/
+async function limpiarTemporalesViejos() {
+  try {
+    const tmp = os.tmpdir()
+    const corte = Date.now() - 30 * 60 * 1000
+    let n = 0
+    for (const nombre of await fs.promises.readdir(tmp)) {
+      if (!TMP_BASURA.test(nombre)) continue
+      const ruta = path.join(tmp, nombre)
+      try {
+        if ((await fs.promises.stat(ruta)).mtimeMs > corte) continue
+        await fs.promises.rm(ruta, { recursive: true, force: true })
+        n++
+      } catch { /* otro proceso lo tiene o ya no está */ }
+    }
+    if (n) log(`[digitales] ${n} temporal(es) de renders cancelados borrados`)
+  } catch (e) { log('[digitales] limpiarTemporalesViejos ERROR', e.message) }
+}
 
 async function runRender(piezaId, payload) {
   await fs.promises.mkdir(DATA_DIR, { recursive: true })
   const outPath = path.join(DATA_DIR, `${piezaId}.mp4`)
+  // `detached` NO es para desatender al hijo (seguimos leyendo su stdout y
+  // esperando su 'close'): es para que sea LÍDER DE SU GRUPO de procesos, y así
+  // poder matar de un golpe a él y a todos sus nietos. Ver el kill del guardia.
   const child = spawn('node', [RENDER_ENTRY, JSON.stringify({ ...payload, outPath })], {
-    cwd: APP_ROOT, env: process.env,
+    cwd: APP_ROOT, env: process.env, detached: true,
   })
 
   // 🩸 2026-09-07 — UN SOLO render dejaba Orbit inservible. Remotion abre Chrome
@@ -468,7 +523,14 @@ async function runRender(piezaId, payload) {
   // Los Chrome y el ffmpeg que abre Remotion HEREDAN este nivel al nacer, así
   // que basta con ponérselo al padre aquí. Si fallara —permisos, otro sistema—
   // se sigue: es una mejora, no un requisito para renderizar.
-  const NICE_RENDER = parseInt(process.env.MEMORIAL_NICE || '19')
+  //
+  // ⚠️ 2026-09-07 (tarde) — estuvo en 19 unas horas y fue DEMASIADO: 19 es el
+  // suelo absoluto, así que contra una máquina llena el render se queda con las
+  // sobras. Medido: recibía 2,2 de los 6 núcleos y el memorial pasó de ~50 s a
+  // 322 s, justo encima del tope que lo mataba. 10 sigue cediendo el paso a
+  // Orbit (que es lo que arregló el /health de 18,3 s a 0,01 s) sin matar de
+  // hambre al render.
+  const NICE_RENDER = parseInt(process.env.MEMORIAL_NICE || '10')
   try {
     os.setPriority(child.pid, Number.isFinite(NICE_RENDER) ? NICE_RENDER : 19)
   } catch (e) {
@@ -503,7 +565,8 @@ async function runRender(piezaId, payload) {
     }
 
     const guardia = setTimeout(() => {
-      child.kill('SIGKILL')
+      matarGrupo(child)
+      limpiarTemporalesViejos()
       terminar(false, `El render pasó de ${Math.round(RENDER_HARD_MS / 1000)} s y se canceló. Vuelve a intentarlo.`)
     }, RENDER_HARD_MS)
 
@@ -545,6 +608,8 @@ export async function recuperarRendersHuerfanos() {
     )
     if (rowCount) log(`[digitales] ${rowCount} render(s) huérfano(s) de un reinicio → ERROR`)
   } catch (e) { log('[digitales] recuperarRendersHuerfanos ERROR', e.message) }
+  // Mismo motivo: lo que dejaron a medias los renders que no cerraron solos.
+  await limpiarTemporalesViejos()
 }
 
 export async function aprobarMemorial({ id, personalId }) {
