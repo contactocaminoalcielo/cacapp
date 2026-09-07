@@ -5,7 +5,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
@@ -1145,33 +1145,56 @@ export default function Kanban() {
         // una sola vez supera el límite de nginx (414 Request-URI Too Large) y la
         // consulta falla en silencio (se pierden teléfonos alternos, badge de
         // adicional y peso). Se trocea en lotes de 80 ids (~3K chars por URL).
+        // 🩸 2026-09-07 — esto troceaba los ids en lotes de 80 y lanzaba
+        // 15 lotes × 6 tablas = **90 peticiones** cada vez que se abría el
+        // módulo, más la de v_kanban. Medido en el log de nginx:
+        // `servicio_recordatorios` acumulaba 1.964 llamadas en una hora. Eso es
+        // lo que la gente sentía como "cambiar de módulo se demora".
+        //
+        // El troceo existía por dos motivos reales, y los dos se resuelven sin
+        // él: la URL larga daba 414 (ahora se filtra por `servicios!inner` +
+        // FECHA_CORTE, que es EL MISMO criterio con el que se pidió v_kanban,
+        // así que el conjunto es idéntico) y el tope mudo de 1.000 filas de
+        // PostgREST (ahora lo pagina `dbTodo`).
+        //
+        // ⚠️ Cada consulta ordena por `id`: `dbTodo` avanza con `.range()`, y
+        // sin un orden estable la paginación se salta o repite filas — el fallo
+        // silencioso de [[feedback_limit_sin_order]].
+        // ⚠️ `servicio_recordatorios` es la excepción y sigue troceada a
+        // propósito: son ~11.400 filas, y `dbTodo` pagina EN SERIE (12 viajes
+        // encadenados) mientras que los lotes van en PARALELO. Cambiarla habría
+        // reducido las peticiones pero empeorado lo que siente el usuario.
+        // El arreglo bueno para esta es no traerlas: 11.400 filas se bajan solo
+        // para llenar el desplegable de filtro por recordatorio (37 opciones) y
+        // marcar 124 adicionales. Queda pendiente hacerlo perezoso.
         const lotes = Array.from({ length: Math.ceil(ids.length / 80) }, (_, i) => ids.slice(i * 80, i * 80 + 80))
-        const [telsParts, itemsParts, cfParts, recogParts, recibosParts, mediosParts] = await Promise.all([
-          Promise.all(lotes.map(l => db.from('servicios')
+        const [tels, itemsParts, cfRows, recogRows, recibosRows, mediosRows] = await Promise.all([
+          dbTodo(() => db.from('servicios')
             .select('id, metodo_pago, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
-            .in('id', l))),
+            .gte('fecha_ingreso', FECHA_CORTE).order('id')),
           Promise.all(lotes.map(l => db.from('servicio_recordatorios')
             .select('servicio_id, recordatorio_id, estado, origen')
             .neq('origen', 'REMOVIDO').in('servicio_id', l))),
           // Nevera solo mientras hay custodia física (fecha_salida IS NULL)
-          Promise.all(lotes.map(l => db.from('cuarto_frio')
-            .select('servicio_id, nevera_codigo')
-            .is('fecha_salida', null).in('servicio_id', l))),
+          dbTodo(() => db.from('cuarto_frio')
+            .select('servicio_id, nevera_codigo, servicios!inner(fecha_ingreso)')
+            .is('fecha_salida', null)
+            .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // hora_programada = llegada ESTIMADA al iniciar ruta;
           // hora_llegada    = llegada REAL sellada por el técnico al llegar al sitio
-          Promise.all(lotes.map(l => db.from('recogidas')
-            .select('servicio_id, hora_programada, hora_llegada')
-            .in('servicio_id', l))),
+          dbTodo(() => db.from('recogidas')
+            .select('servicio_id, hora_programada, hora_llegada, servicios!inner(fecha_ingreso)')
+            .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // Existe recibo generado (mismo criterio del gate de la app del técnico)
-          Promise.all(lotes.map(l => db.from('recibos_tecnico')
-            .select('servicio_id')
-            .in('servicio_id', l))),
+          dbTodo(() => db.from('recibos_tecnico')
+            .select('servicio_id, servicios!inner(fecha_ingreso)')
+            .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // Medios de pago reales cobrados en el recibo (EFECTIVO/NEQUI/…)
-          Promise.all(lotes.map(l => db.from('recibo_medios_pago')
-            .select('servicio_id, metodo')
-            .gt('monto', 0).in('servicio_id', l))),
+          dbTodo(() => db.from('recibo_medios_pago')
+            .select('servicio_id, metodo, servicios!inner(fecha_ingreso)')
+            .gt('monto', 0)
+            .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
         ])
-        const tels  = telsParts.flatMap(r => r.data || [])
         const items = itemsParts.flatMap(r => r.data || [])
         const mapa = {}
         const pesos = {}
@@ -1185,19 +1208,22 @@ export default function Kanban() {
         // Nevera: solo los servicios con fila vigente en cuarto_frio quedan en el
         // mapa (null = fila sin nevera → pendiente real; ausente = sin custodia)
         const neveraMap = {}
-        cfParts.flatMap(r => r.data || []).forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
+        cfRows.forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
         const horaMap = {}
         const llegadaMap = {}
-        recogParts.flatMap(r => r.data || []).forEach(r => {
+        recogRows.forEach(r => {
           if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada
           if (r.hora_llegada)    llegadaMap[r.servicio_id] = r.hora_llegada
         })
         // Si la consulta de recibos falló, tiene_recibo queda undefined para no
         // pintar todo el tablero en rojo por un error transitorio
-        const recibosOk  = recibosParts.every(r => !r.error)
-        const conRecibo  = new Set(recibosParts.flatMap(r => r.data || []).map(r => r.servicio_id))
+        // `dbTodo` lanza si falla, asi que llegar aqui ya significa que la
+        // consulta fue bien: si hubiera fallado, el catch de `cargar` pinta el
+        // error en vez de dejar el tablero entero en rojo por `tiene_recibo`.
+        const recibosOk  = true
+        const conRecibo  = new Set(recibosRows.map(r => r.servicio_id))
         const mediosMap  = {}
-        mediosParts.flatMap(r => r.data || []).forEach(r => {
+        mediosRows.forEach(r => {
           const arr = mediosMap[r.servicio_id] || (mediosMap[r.servicio_id] = [])
           const met = String(r.metodo || '').toUpperCase()
           if (met && !arr.includes(met)) arr.push(met)
