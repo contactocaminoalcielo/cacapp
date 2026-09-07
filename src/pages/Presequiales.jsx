@@ -30,6 +30,15 @@ import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, Ro
 // fallecer una se activa SOLO esa y las demás siguen cubiertas. La tabla
 // muestra una fila por mascota; el número de contrato se repite entre hermanas.
 // `contrato.valor` es el precio POR MASCOTA — el total es valor × nº mascotas.
+//
+// Cancelar tiene por eso DOS niveles y no hay que confundirlos:
+//   · Retirar una mascota (afiliacion_mascotas.estado = RETIRADA): sale del
+//     contrato sin haberlo usado, las hermanas siguen cubiertas y la renovación
+//     pasa a cobrarse solo por ellas. Se hace desde la fila de la mascota.
+//   · Cancelar la afiliación (afiliaciones.estado = CANCELADA): cae el contrato
+//     entero con todas sus mascotas. Botón del pie de la ficha.
+// Retirar la última mascota viva hace las dos cosas: un contrato VIGENTE sin
+// mascotas cubiertas se renovaría sobre nada.
 
 const FILTROS = [
   { key: 'VIGENTES',  label: 'Vigentes' },
@@ -206,7 +215,7 @@ function agruparFilasImportacion(filas) {
 
 export default function Presequiales() {
   const navigate = useNavigate()
-  const { confirm } = useConfirm()
+  const { confirm, alert: showAlert } = useConfirm()
   const { personalData } = useAuth()
 
   const [data, setData]         = useState([])   // contratos, con sus mascotas colgando
@@ -284,7 +293,9 @@ export default function Presequiales() {
     if (filtro === 'POR_VENCER') out = filas.filter(f => porVencer(f.a) && ['VIGENTE', 'VENCIDA'].includes(f.estado))
     if (filtro === 'VENCIDAS')   out = filas.filter(f => f.estado === 'VENCIDA')
     if (filtro === 'ACTIVADAS')  out = filas.filter(f => f.estado === 'ACTIVADA')
-    if (filtro === 'CANCELADAS') out = filas.filter(f => f.estado === 'CANCELADA')
+    // Una mascota RETIRADA está cancelada aunque su contrato siga vivo: sin esto
+    // desaparecería de todos los filtros menos "Todas".
+    if (filtro === 'CANCELADAS') out = filas.filter(f => ['CANCELADA', 'RETIRADA'].includes(f.estado))
     const q = busqueda.trim().toLowerCase()
     if (q) out = out.filter(f =>
       `${f.a.clientes?.nombre} ${f.a.clientes?.apellido} ${f.a.clientes?.cedula_nit} ${f.a.clientes?.whatsapp} ${f.am.mascotas?.nombre}`
@@ -448,11 +459,64 @@ export default function Presequiales() {
           onCancelar={async () => {
             const n = mascotasDe(ficha).filter(am => am.estado === 'VIGENTE').length
             const ok = await confirm(
-              `El contrato ${contratoVigente(ficha)?.numero_contrato} quedará CANCELADO y con él ${n === 1 ? 'la mascota que cubre' : `las ${n} mascotas que cubre`}. Si el cliente quiere volver, se afilia de nuevo desde cero (contrato 0, cláusulas reactivadas). ¿Continuar?`,
-              { title: 'Cancelar afiliación', confirmLabel: 'Sí, cancelar' },
+              `El contrato ${contratoVigente(ficha)?.numero_contrato} quedará CANCELADO y con él ${n === 1 ? 'la mascota que aún cubre' : `las ${n} mascotas que aún cubre`}. Para sacar solo una mascota y dejar el contrato vivo, usa «Retirar» en la fila de esa mascota. Si el cliente quiere volver, se afilia de nuevo desde cero (contrato 0, cláusulas reactivadas). ¿Continuar?`,
+              { title: 'Cancelar afiliación completa', confirmLabel: 'Sí, cancelar todo' },
             )
             if (!ok) return
             await db.from('afiliaciones').update({ estado: 'CANCELADA' }).eq('id', ficha.id)
+            await cargar()
+          }}
+          onRetirar={async am => {
+            // Cancelar UNA mascota, no el contrato: las hermanas siguen cubiertas
+            // y la próxima renovación se cobra solo por ellas (ModalRenovar ya
+            // cuenta únicamente las VIGENTE). Si era la última viva, el contrato
+            // ya no cubre a nadie: se cancela entero, porque dejarlo VIGENTE con
+            // cero mascotas lo deja renovándose sobre nada.
+            const nombre = am.mascotas?.nombre || 'la mascota'
+            const vivas = mascotasDe(ficha).filter(x => x.estado === 'VIGENTE')
+            const ultima = vivas.length <= 1
+            const quedan = vivas.length - 1
+            const ct = contratoVigente(ficha)
+            const ok = await confirm(
+              ultima
+                ? `${nombre} es la única mascota que le queda cubierta al contrato ${ct?.numero_contrato}: al retirarla, el contrato entero queda CANCELADO. Si el cliente quiere volver, se afilia de nuevo desde cero. ¿Continuar?`
+                : `${nombre} sale del contrato ${ct?.numero_contrato} sin haber usado el servicio. ${quedan === 1 ? 'La otra mascota sigue cubierta' : `Las otras ${quedan} mascotas siguen cubiertas`} y la próxima renovación se cobrará solo por ${quedan === 1 ? 'ella' : 'ellas'}. ¿Continuar?`,
+              { title: `Retirar a ${nombre} del contrato`, confirmLabel: 'Sí, retirar' },
+            )
+            if (!ok) return
+            const { error } = await db.from('afiliacion_mascotas').update({ estado: 'RETIRADA' }).eq('id', am.id)
+            if (error) { await showAlert(error.message, { title: 'No se pudo retirar la mascota' }); return }
+            // Rastro en la ficha: quién la sacó y cuándo (mismo sello que Reactivar)
+            const sello = `[${today()}] ${nombre} retirada del contrato por ${personalData?.nombre || 'coordinación'}` +
+              (ultima ? ' — era la última cubierta, el contrato queda CANCELADO' : '')
+            await db.from('afiliaciones').update({
+              notas: [ficha.notas, sello].filter(Boolean).join('\n'),
+              ...(ultima ? { estado: 'CANCELADA' } : {}),
+            }).eq('id', ficha.id)
+            await cargar()
+          }}
+          onVolverACubrir={async am => {
+            // Deshacer un retiro. Se permite aunque el contrato esté CANCELADO
+            // (retirar la última mascota lo cancela): devolverle una mascota viva
+            // es lo que vuelve a habilitar el botón Reactivar, que sin mascotas
+            // cubiertas no aparece y dejaría el caso sin salida por la interfaz.
+            const nombre = am.mascotas?.nombre || 'la mascota'
+            const vivoElContrato = ['VIGENTE', 'VENCIDA'].includes(ficha.estado)
+            const ok = await confirm(
+              vivoElContrato
+                ? `${nombre} vuelve a quedar cubierta por el contrato ${contratoVigente(ficha)?.numero_contrato} y la próxima renovación la incluye de nuevo. ¿Continuar?`
+                : `${nombre} vuelve a contar como mascota del contrato, pero el contrato sigue ${ficha.estado}: después hay que reactivarlo para que quede cubierta de verdad. ¿Continuar?`,
+              { title: `Volver a cubrir a ${nombre}`, confirmLabel: 'Sí, volver a cubrirla', variant: 'warning' },
+            )
+            if (!ok) return
+            // El trigger afiliacion_mascota_unica_viva rebota si la mascota ya
+            // está cubierta por otra afiliación viva: ese mensaje es el útil.
+            const { error } = await db.from('afiliacion_mascotas').update({ estado: 'VIGENTE' }).eq('id', am.id)
+            if (error) { await showAlert(error.message, { title: 'No se pudo volver a cubrir la mascota' }); return }
+            const sello = `[${today()}] ${nombre} vuelve al contrato (retiro deshecho) por ${personalData?.nombre || 'coordinación'}`
+            await db.from('afiliaciones')
+              .update({ notas: [ficha.notas, sello].filter(Boolean).join('\n') })
+              .eq('id', ficha.id)
             await cargar()
           }}
           onChanged={cargar} />
@@ -1285,7 +1349,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 }
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
-function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onChanged }) {
+function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged }) {
   const { alert: showAlert } = useConfirm()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
   const [pdfGen, setPdfGen] = useState(null)
@@ -1488,6 +1552,9 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   {am.estado === 'ACTIVADA' && (
                     <div className="text-[10px] text-[#5B21B6] font-semibold">Activada el {am.fecha_activacion} — servicio prestado</div>
                   )}
+                  {am.estado === 'RETIRADA' && (
+                    <div className="text-[10px] text-ink3 font-semibold">Retirada del contrato — ya no está cubierta ni se cobra al renovar</div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[est] || ''}`}>{est}</span>
@@ -1498,6 +1565,19 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   {['VIGENTE','VENCIDA'].includes(est) && (
                     <Button size="sm" variant="gold" onClick={() => onActivar(am)}>
                       <Rocket size={11} /> Activar
+                    </Button>
+                  )}
+                  {/* Cancelar SOLO esta mascota: las hermanas siguen cubiertas */}
+                  {['VIGENTE','VENCIDA'].includes(est) && (
+                    <Button size="sm" variant="ghost" className="text-danger" onClick={() => onRetirar(am)}
+                      title="Sacar solo a esta mascota del contrato, sin cancelar el de las demás">
+                      <X size={11} /> Retirar
+                    </Button>
+                  )}
+                  {am.estado === 'RETIRADA' && (
+                    <Button size="sm" variant="secondary" onClick={() => onVolverACubrir(am)}
+                      title="Deshacer el retiro: vuelve a quedar cubierta por este contrato">
+                      <RotateCcw size={11} /> Volver a cubrir
                     </Button>
                   )}
                 </div>
@@ -1909,7 +1989,7 @@ function ModalRenovar({ afiliacion: a, config, personalData, onClose, onSaved })
           </div>
           {mascotasDe(a).length > vivas.length && (
             <p className="text-[10px] text-ink3 mt-1">
-              Las mascotas ya activadas no se renuevan ni se cobran.
+              Las mascotas ya activadas o retiradas del contrato no se renuevan ni se cobran.
             </p>
           )}
         </div>
