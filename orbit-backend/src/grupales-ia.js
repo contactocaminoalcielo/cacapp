@@ -39,6 +39,7 @@ async function snapshot(client) {
 /** Resumen + priorización + inconsistencias (texto para el panel del coordinador). */
 export async function resumenPendientes() {
   const client = await pool.connect()
+  let liberado = false
   try {
     const ctx = await snapshot(client)
     if (!ctx.reportes.length) return { resumen: 'No hay reportes grupales pendientes. Todo al día. ✅', datos: ctx }
@@ -56,16 +57,19 @@ Tarea:
 3. Señala inconsistencias si las ves (datos incompletos, errores de envío, posibles cambios de plan).
 No incluyas nada que no esté en los datos. Sé breve.`
 
+    client.release()
+    liberado = true
     const resumen = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 700 })
     return { resumen, datos: ctx }
   } finally {
-    client.release()
+    if (!liberado) client.release()
   }
 }
 
 /** Redacta el mensaje de WhatsApp para un destinatario (el humano lo edita/confirma). */
 export async function redactarMensaje({ itemId }) {
   const client = await pool.connect()
+  let liberado = false
   try {
     const { rows } = await client.query(
       `SELECT i.mascota_nombre, i.propietario_nombre, r.tipo_proceso, l.numero_lote
@@ -84,10 +88,12 @@ ${it.propietario_nombre} el reporte de ${tipo} de su mascota ${it.mascota_nombre
 Es un momento sensible (la mascota falleció). No prometas devolución de cenizas/material.
 Cierra con "— Camino al Cielo 🕊️". Devuelve SOLO el texto del mensaje.`
 
+    client.release()
+    liberado = true
     const mensaje = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 300 })
     return { mensaje: mensaje.trim() }
   } finally {
-    client.release()
+    if (!liberado) client.release()
   }
 }
 
@@ -98,6 +104,7 @@ Cierra con "— Camino al Cielo 🕊️". Devuelve SOLO el texto del mensaje.`
  */
 export async function alertaVencimientos() {
   const client = await pool.connect()
+  let liberado = false
   try {
     const cfg = await cargarConfigGrupales(client)
     const sla = parseInt(cfg.sla_dias_habiles) || 3
@@ -141,9 +148,11 @@ PRÓXIMOS (${b.pronto.length}): ${JSON.stringify(b.pronto.slice(0, 15))}
 Redacta una alerta breve y clara (2-4 frases) para el coordinador. Prioriza vencidos y los
 que vencen hoy/mañana, menciona los nombres de las mascotas. No inventes datos.`
 
+    client.release()
+    liberado = true
     const alerta = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 500 })
     return { alerta, buckets: b }
   } finally {
-    client.release()
+    if (!liberado) client.release()
   }
 }

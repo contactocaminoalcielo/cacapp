@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Component } from 'react'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { db, dbIn } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
@@ -1691,7 +1692,7 @@ export default function TecnicoApp() {
   const [misCF,          setMisCF]          = useState([])
   const [pendientesCF,   setPendientesCF]   = useState([])
 
-  const cargar = useCallback(async (silent = false) => {
+  const cargar = useLecturaSerial(async (silent = false) => {
     if (!tecnico) return
     if (!silent) setLoading(true)
     setQueryErr('')
@@ -1907,7 +1908,7 @@ export default function TecnicoApp() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [tecnico])
+  })
 
   useEffect(() => {
     if (!tecnico) return

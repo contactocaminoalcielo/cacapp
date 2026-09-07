@@ -12,6 +12,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import { useChatWa } from '@/contexts/ChatWaContext'
 import ValorarRespuesta from '@/components/ValorarRespuesta'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
@@ -36,11 +37,15 @@ import {
 const POLL_MS = 10000
 
 export default function Whatsapp() {
+  const { todasConversaciones, bandejaCargada, errorBandeja, refrescarConversaciones } = useChatWa()
   // `todas` es lo que devuelve el backend; `convs` es lo que se pinta, ya
   // filtrado por la línea elegida. Ver más abajo.
   const [todas, setConvs]         = useState([])
   const [cargando, setCargando]   = useState(true)
   const [q, setQ]                 = useState('')
+  const busquedaActual = useRef('')
+  busquedaActual.current = q.trim()
+  const consultaLista = useRef(0)
   const [activo, setActivo]       = useState(null)
   const [hilo, setHilo]           = useState(null)
   const [cargandoHilo, setCargandoHilo] = useState(false)
@@ -89,19 +94,22 @@ export default function Whatsapp() {
 
   // ── Carga ──────────────────────────────────────────────────────────────────
   const cargarLista = useCallback(async ({ silencioso = false } = {}) => {
+    const numero = ++consultaLista.current
+    const filtro = q.trim()
     if (!silencioso) setCargando(true)
     try {
-      const r = await listarConversaciones(q)
+      const r = filtro ? await listarConversaciones(filtro) : await refrescarConversaciones()
+      if (numero !== consultaLista.current || busquedaActual.current !== filtro || !r) return
       setConvs(r.conversaciones || [])
       setErrorCarga(null)
     } catch (e) {
       // En el refresco silencioso no se molesta al usuario: si la red vuelve,
       // el siguiente tick lo arregla solo.
-      if (!silencioso) setErrorCarga(e.message)
+      if (!silencioso && numero === consultaLista.current && busquedaActual.current === filtro) setErrorCarga(e.message)
     } finally {
-      if (!silencioso) setCargando(false)
+      if (!silencioso && numero === consultaLista.current && busquedaActual.current === filtro) setCargando(false)
     }
-  }, [q])
+  }, [q, refrescarConversaciones])
 
   const cargarHilo = useCallback(async (contacto, { silencioso = false } = {}) => {
     if (!contacto) return
@@ -119,7 +127,20 @@ export default function Whatsapp() {
     }
   }, [])
 
-  useEffect(() => { cargarLista() }, [cargarLista])
+  useEffect(() => {
+    if (!q.trim()) return
+    const timer = setTimeout(() => cargarLista(), 300)
+    return () => { clearTimeout(timer); consultaLista.current++ }
+  }, [q, cargarLista])
+
+  // La lista sin búsqueda ya la mantiene el proveedor de avisos. No abrir
+  // otro temporizador que consulte exactamente la misma bandeja.
+  useEffect(() => {
+    if (q.trim()) return
+    setConvs(todasConversaciones)
+    setCargando(!bandejaCargada)
+    setErrorCarga(errorBandeja)
+  }, [q, todasConversaciones, bandejaCargada, errorBandeja])
 
   // El catálogo se lee una vez: son nueve filas que casi nunca cambian.
   useEffect(() => {
@@ -150,12 +171,12 @@ export default function Whatsapp() {
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState !== 'visible') return
-      cargarLista({ silencioso: true })
+      if (q.trim()) cargarLista({ silencioso: true })
       if (activoRef.current) cargarHilo(activoRef.current, { silencioso: true })
     }
     const id = setInterval(tick, POLL_MS)
     return () => clearInterval(id)
-  }, [cargarLista, cargarHilo])
+  }, [q, cargarLista, cargarHilo])
 
   // ── Abrir conversación ─────────────────────────────────────────────────────
   async function abrir(contacto, linea = null) {

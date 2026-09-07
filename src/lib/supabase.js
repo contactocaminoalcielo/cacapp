@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { leerPaginas } from './lecturas'
 
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON
@@ -64,17 +65,7 @@ const TOPE_PAGINAS = 50
  *     db.from('mascotas').select('*').order('nombre').order('id_mascota'))
  */
 export async function dbTodo(construir, { pagina = DB_MAX_ROWS } = {}) {
-  const out = []
-  for (let p = 0; p < TOPE_PAGINAS; p++) {
-    const desde = p * pagina
-    const { data, error } = await construir().range(desde, desde + pagina - 1)
-    if (error) throw new Error(error.message)
-    const lote = data || []
-    out.push(...lote)
-    // Una página incompleta es el final. Si viene exacta, puede haber más.
-    if (lote.length < pagina) return out
-  }
-  return out
+  return leerPaginas(construir, { pagina, maxPaginas: TOPE_PAGINAS })
 }
 
 export async function dbInsert(table, body) {

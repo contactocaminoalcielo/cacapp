@@ -100,7 +100,7 @@ export async function recategorizacionesPorServicio(servicioIds) {
         if (!e.peso) {
           // `markers` viene ordenado desc, así que el primero es el más reciente:
           // es el que se muestra en el tooltip.
-          e.peso = true; e.detallePeso = d; e.soloComision = soloCom
+          e.peso = true; e.detallePeso = r.descripcion; e.soloComision = soloCom
         } else if (!soloCom) {
           // Si ALGUNA movió el precio, manda la etiqueta de peso: es la señal
           // fuerte y no puede quedar tapada por una recalculación de comisión

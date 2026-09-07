@@ -12,6 +12,7 @@ import { Table, TableWrap, Th, Td, Tr } from '@/components/ui/table'
 import { db, dbIn } from '@/lib/supabase'
 import { esAliadoVip, VipStar, VIP_ORO } from '@/components/servicio/VipAliado'
 import { agruparRefresco } from '@/lib/realtime'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
 import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
@@ -939,6 +940,7 @@ export default function Produccion() {
   const [maquinas,      setMaquinas]      = useState([])
   const [loading,       setLoading]       = useState(true)
   const primeraCarga                      = useRef(true)
+  const cargar = useLecturaSerial(cargarDatos)
   const [error,         setError]         = useState(null)
   const [vista,         setVista]         = useState('servicio')
   const [filtroEstado,  setFiltroEstado]  = useState('pendientes')
@@ -984,7 +986,7 @@ export default function Produccion() {
   // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
   // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
   // la pagina entera y con ella cualquier modal abierto.
-  async function cargar() {
+  async function cargarDatos() {
     try {
       if (primeraCarga.current) setLoading(true)
       const [{ data: recs }, { data: per }, { data: maq }] = await Promise.all([

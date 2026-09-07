@@ -9,6 +9,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { listarConversaciones, claveConversacion } from '@/lib/whatsappInbox'
+import { lecturaSerial } from '@/lib/lecturas'
 
 const POLL_MS = 10000
 // Se lee del documento en vez de escribirlo a mano: puesto a pelo ("Orbit")
@@ -55,6 +56,10 @@ export function ChatWaProvider({ children }) {
   const vigila = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
 
   const [conversaciones, setConversaciones] = useState([])
+  const [bandejaCargada, setBandejaCargada] = useState(false)
+  const [errorBandeja, setErrorBandeja] = useState(null)
+  const refrescoRef = useRef(null)
+  const refrescarConversaciones = useCallback(() => refrescoRef.current?.() || Promise.resolve(null), [])
   const [avisos, setAvisos] = useState([])
   const [abierto, setAbierto] = useState(false)
   const [contactoActivo, setContactoActivo] = useState(null)
@@ -158,6 +163,8 @@ export function ChatWaProvider({ children }) {
         if (!vivo) return
         const lista = r.conversaciones || []
         setConversaciones(lista)
+        setBandejaCargada(true)
+        setErrorBandeja(null)
 
         // ── ¿Qué es nuevo? ──
         // Se compara contra lo que vimos la vuelta anterior. En la PRIMERA
@@ -198,12 +205,19 @@ export function ChatWaProvider({ children }) {
           })
           if (sonidoRef.current) pitar()
         }
-      } catch { /* si la red falla, la siguiente vuelta lo arregla */ }
+        return r
+      } catch (error) {
+        if (vivo) { setErrorBandeja(error.message); setBandejaCargada(true) }
+        throw error
+      }
     }
 
-    mirar()
-    const id = setInterval(mirar, POLL_MS)
-    return () => { vivo = false; clearInterval(id) }
+    const actualizar = lecturaSerial(() => vivo ? mirar() : null)
+    refrescoRef.current = actualizar
+    const tick = () => actualizar().catch(() => {})
+    tick()
+    const id = setInterval(tick, POLL_MS)
+    return () => { vivo = false; refrescoRef.current = null; clearInterval(id) }
   }, [vigila])
 
   // El título de la pestaña. Es el aviso que funciona con Orbit en otra
@@ -225,6 +239,7 @@ export function ChatWaProvider({ children }) {
       lineas, lineaSeleccionada, lineaActiva, seleccionarLinea,
       conSonido, alternarSonido, abrirChat, cerrarChat, descartarAviso,
       marcarVistaLocal,
+      todasConversaciones: conversaciones, bandejaCargada, errorBandeja, refrescarConversaciones,
     }}>
       {children}
     </ChatWaContext.Provider>

@@ -5,8 +5,9 @@ import { StatCard } from '@/components/ui/card'
 import { EstadoBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, parseDate } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -45,6 +46,7 @@ export default function Dashboard() {
   const [npsPromedio, setNpsPromedio] = useState(null)
   const [loading,   setLoading]   = useState(true)
   const primeraCarga              = useRef(true)
+  const cargar = useLecturaSerial(cargarDatos)
   const [error,     setError]     = useState(null)
 
   useEffect(() => {
@@ -61,28 +63,31 @@ export default function Dashboard() {
   // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
   // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
   // la pagina entera y con ella cualquier modal abierto.
-  async function cargar() {
+  async function cargarDatos() {
     try {
       if (primeraCarga.current) setLoading(true)
       const hoy = new Date()
       const primerMes = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-01`
 
-      let kanbanQ = db.from('v_kanban').select('*').gte('fecha_ingreso', FECHA_CORTE).order('fecha_ingreso', { ascending: false })
-      let alertasQ = db.from('v_alertas').select('*')
+      const kanbanQ = () => {
+        let q = db.from('v_kanban').select('*').gte('fecha_ingreso', FECHA_CORTE)
+          .order('fecha_ingreso', { ascending: false }).order('servicio_id')
+        return esProductor ? q.in('estado', ESTADOS_PROD) : q
+      }
+      const alertasQ = () => {
+        let q = db.from('v_alertas').select('*')
         .in('nivel_alerta', ['VENCIDO','HOY','URGENTE'])
         .gte('fecha_ingreso', FECHA_CORTE)
-        .order('dias_para_vencer', { ascending: true })
+        .order('dias_para_vencer', { ascending: true }).order('servicio_id')
+        return esProductor ? q.in('estado', ESTADOS_ACTIVOS_PROD) : q
+      }
       const npsQ = db.from('nps_seguimiento')
         .select('nps')
         .not('nps', 'is', null)
         .gte('fecha_realizada', primerMes)
 
-      if (esProductor) {
-        kanbanQ  = kanbanQ.in('estado', ESTADOS_PROD)
-        alertasQ = alertasQ.in('estado', ESTADOS_ACTIVOS_PROD)
-      }
-
-      const [{ data: kanban }, { data: alts }, { data: nps }] = await Promise.all([kanbanQ, alertasQ, npsQ])
+      const [kanban, alts, { data: nps, error: npsError }] = await Promise.all([dbTodo(kanbanQ), dbTodo(alertasQ), npsQ])
+      if (npsError) throw npsError
       setServicios(kanban || [])
       setAlertas(alts || [])
       if (nps?.length > 0) {

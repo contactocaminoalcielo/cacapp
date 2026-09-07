@@ -27,6 +27,7 @@ const trunca = (s, n) => {
 export async function analizarCuadre({ cuadreId }) {
   if (!cuadreId) return { status: 400, body: { error: 'Falta cuadre_id' } }
   const client = await pool.connect()
+  let liberado = false
   try {
     const { rows: cabRows } = await client.query(
       `SELECT c.*, trim(p.nombre || ' ' || COALESCE(p.apellido, '')) AS tecnico_nombre
@@ -140,9 +141,11 @@ Tarea (escribe para gerencia, sin tecnicismos):
 3. "Señales raras" solo si existen: recogido por encima del bruto, pago digital sin comprobante, o inconsistencias entre notas y montos.
 No incluyas nada que no esté en los datos. Si todo está cuadrado, dilo en una frase y no inventes pendientes. Sé breve: máximo ~15 líneas.`
 
+    client.release()
+    liberado = true
     const analisis = await llamarClaude({ system: SYSTEM, prompt, maxTokens: 1200, model: 'claude-opus-4-8' })
     return { status: 200, body: { analisis: analisis.trim(), generado_en: new Date().toISOString() } }
   } finally {
-    client.release()
+    if (!liberado) client.release()
   }
 }

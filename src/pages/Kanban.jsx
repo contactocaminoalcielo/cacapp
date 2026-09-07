@@ -6,6 +6,8 @@ import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { db, dbTodo } from '@/lib/supabase'
+import { cargarItemsKanban } from '@/lib/lecturasOperativas'
+import { serviciosListosDesdeItems, ESTADOS_AUTOCORREGIBLES } from '@/lib/kanbanEstado'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
@@ -19,6 +21,7 @@ import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, volumenM
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import {
   MessageCircle, RefreshCw, AlertTriangle, Package,
   LayoutGrid, Table2, Search, X, ChevronUp, ChevronDown, ChevronRight,
@@ -484,6 +487,7 @@ export default function Kanban() {
   const [recatMap,  setRecatMap]          = useState({})   // recategorizaciones (plan/peso) por servicio_id
   const [loading, setLoading]             = useState(true)
   const primeraCarga                      = useRef(true)
+  const cargar = useLecturaSerial(cargarDatos)
   const [error, setError]                 = useState(null)
 
   // ── UI ────────────────────────────────────────────────────────────────────
@@ -1124,16 +1128,15 @@ export default function Kanban() {
   // en segundo plano. Si volviera a `loading`, el `if (loading) return` de abajo
   // desmontaría el tablero entero — y con él cualquier modal abierto, perdiendo
   // lo que el usuario llevara escrito.
-  async function cargar() {
+  async function cargarDatos() {
     if (primeraCarga.current) setLoading(true)
     setError(null)
     try {
-      const { data, error: err } = await db
+      let rows = await dbTodo(() => db
         .from('v_kanban').select('*')
         .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: false })
-      if (err) throw err
-      let rows = data || []
+        .order('servicio_id'))
 
       // v_kanban solo expone un número (cliente_wa); traemos los teléfonos
       // alternos del cliente (telefono / telefono2) para mostrarlos en la tarjeta.
@@ -1141,40 +1144,13 @@ export default function Kanban() {
       // ADICIONAL) para mostrar el ícono de alerta en la tarjeta.
       const ids = rows.map(s => s.servicio_id).filter(Boolean)
       if (ids.length) {
-        // PostgREST filtra por URL: con cientos de servicios, `.in('id', ids)` de
-        // una sola vez supera el límite de nginx (414 Request-URI Too Large) y la
-        // consulta falla en silencio (se pierden teléfonos alternos, badge de
-        // adicional y peso). Se trocea en lotes de 80 ids (~3K chars por URL).
-        // 🩸 2026-09-07 — esto troceaba los ids en lotes de 80 y lanzaba
-        // 15 lotes × 6 tablas = **90 peticiones** cada vez que se abría el
-        // módulo, más la de v_kanban. Medido en el log de nginx:
-        // `servicio_recordatorios` acumulaba 1.964 llamadas en una hora. Eso es
-        // lo que la gente sentía como "cambiar de módulo se demora".
-        //
-        // El troceo existía por dos motivos reales, y los dos se resuelven sin
-        // él: la URL larga daba 414 (ahora se filtra por `servicios!inner` +
-        // FECHA_CORTE, que es EL MISMO criterio con el que se pidió v_kanban,
-        // así que el conjunto es idéntico) y el tope mudo de 1.000 filas de
-        // PostgREST (ahora lo pagina `dbTodo`).
-        //
-        // ⚠️ Cada consulta ordena por `id`: `dbTodo` avanza con `.range()`, y
-        // sin un orden estable la paginación se salta o repite filas — el fallo
-        // silencioso de [[feedback_limit_sin_order]].
-        // ⚠️ `servicio_recordatorios` es la excepción y sigue troceada a
-        // propósito: son ~11.400 filas, y `dbTodo` pagina EN SERIE (12 viajes
-        // encadenados) mientras que los lotes van en PARALELO. Cambiarla habría
-        // reducido las peticiones pero empeorado lo que siente el usuario.
-        // El arreglo bueno para esta es no traerlas: 11.400 filas se bajan solo
-        // para llenar el desplegable de filtro por recordatorio (37 opciones) y
-        // marcar 124 adicionales. Queda pendiente hacerlo perezoso.
-        const lotes = Array.from({ length: Math.ceil(ids.length / 80) }, (_, i) => ids.slice(i * 80, i * 80 + 80))
-        const [tels, itemsParts, cfRows, recogRows, recibosRows, mediosRows] = await Promise.all([
+        // El resumen conserva todos los estados/tipos, sin bajar cada copia de
+        // un mismo recordatorio. Todas las lecturas paginadas tienen orden único.
+        const [tels, items, cfRows, recogRows, recibosRows, mediosRows] = await Promise.all([
           dbTodo(() => db.from('servicios')
             .select('id, metodo_pago, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .gte('fecha_ingreso', FECHA_CORTE).order('id')),
-          Promise.all(lotes.map(l => db.from('servicio_recordatorios')
-            .select('servicio_id, recordatorio_id, estado, origen')
-            .neq('origen', 'REMOVIDO').in('servicio_id', l))),
+          cargarItemsKanban(ids),
           // Nevera solo mientras hay custodia física (fecha_salida IS NULL)
           dbTodo(() => db.from('cuarto_frio')
             .select('servicio_id, nevera_codigo, servicios!inner(fecha_ingreso)')
@@ -1195,7 +1171,6 @@ export default function Kanban() {
             .gt('monto', 0)
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
         ])
-        const items = itemsParts.flatMap(r => r.data || [])
         const mapa = {}
         const pesos = {}
         const metodoRegistro = {}
@@ -1278,27 +1253,17 @@ export default function Kanban() {
   }
 
   async function autoCorregirDesdeKanban(svcs) {
-    const candidatos = svcs
-      .filter(s => ['EN_PRODUCCION', 'EN_PROCESO', 'EN_CUARTO_FRIO', 'INGRESADO'].includes(s.estado))
-      .map(s => s.servicio_id)
-    if (!candidatos.length) return
-    const { data: items } = await db.from('servicio_recordatorios')
-      .select('servicio_id, estado')
-      .in('servicio_id', candidatos)
-      .neq('origen', 'REMOVIDO')
-      .neq('estado', 'NA')
-    if (!items?.length) return
-    const porSvc = {}
-    items.forEach(i => {
-      if (!porSvc[i.servicio_id]) porSvc[i.servicio_id] = []
-      porSvc[i.servicio_id].push(i)
-    })
-    const fijarListo = Object.entries(porSvc)
-      .filter(([_, its]) => its.length > 0 && its.every(i => i.estado === 'LISTO' || i.estado === 'ENTREGADO'))
-      .map(([id]) => id)
+    // Los mismos ítems completos alimentan filtros y estado. Antes esta segunda
+    // lectura generaba URLs >8 KB y podía decidir con solo las primeras 1000 filas.
+    const fijarListo = serviciosListosDesdeItems(svcs)
     if (!fijarListo.length) return
-    await db.from('servicios').update({ estado: 'LISTO' }).in('id', fijarListo)
-    setServicios(prev => prev.map(s => fijarListo.includes(s.servicio_id) ? { ...s, estado: 'LISTO' } : s))
+    for (let i = 0; i < fijarListo.length; i += 60) {
+      const { data, error } = await db.from('servicios').update({ estado: 'LISTO' })
+        .in('id', fijarListo.slice(i, i + 60)).in('estado', ESTADOS_AUTOCORREGIBLES).select('id')
+      if (error) throw error
+      const actualizados = new Set((data || []).map(s => s.id))
+      setServicios(prev => prev.map(s => actualizados.has(s.servicio_id) ? { ...s, estado: 'LISTO' } : s))
+    }
   }
 
   async function abrirModal(s) {

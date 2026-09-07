@@ -13,6 +13,7 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { db } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import { cargarConfigTenjo, sincronizarAlertasTenjo, CONFIG_DEFAULTS } from '@/lib/tenjo'
@@ -195,6 +196,7 @@ export default function Tenjo() {
   const [personal,          setPersonal]          = useState([])
   const [loading,           setLoading]           = useState(true)
   const primeraCarga                              = useRef(true)
+  const cargar = useLecturaSerial(cargarDatos)
   const [error,             setError]             = useState(null)
   const [modalNuevo,        setModalNuevo]        = useState(false)
   const [mascotaParaTraslado, setMascotaParaTraslado] = useState(null)
@@ -235,7 +237,7 @@ export default function Tenjo() {
   // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
   // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
   // la pagina entera y con ella cualquier modal abierto.
-  async function cargar() {
+  async function cargarDatos() {
     try {
       if (primeraCarga.current) setLoading(true)
       const [{ data: tras }, { data: cenizas }, { data: cuarto }, { data: per }, { data: procComp }] = await Promise.all([

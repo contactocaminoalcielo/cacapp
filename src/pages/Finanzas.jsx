@@ -656,12 +656,23 @@ export default function Finanzas() {
     // Nada que vigilar si ya está CERRADO y con la entrega confirmada.
     if (cuadreData.estado === 'CERRADO' && cuadreData.entrega_confirmada_en) return
     const campos = ['estado', 'tecnico_confirmado_en', 'tecnico_confirmado_monto', 'tecnico_observacion',
-      'entrega_confirmada_en', 'entrega_confirmada_por', 'entrega_confirmada_monto', 'entrega_notas']
+      'entrega_confirmada_en', 'entrega_confirmada_por', 'entrega_notas']
     let vivo = true
+    let consultando = false
     let lastSig = campos.map(k => String(cuadreData?.[k] ?? '')).join('|')
     const tick = async () => {
-      const { data } = await db.from('cuadres_tecnico')
-        .select(campos.join(', ')).eq('id', id).maybeSingle()
+      if (consultando || document.hidden) return
+      consultando = true
+      let data
+      try {
+        const respuesta = await db.from('cuadres_tecnico')
+          .select(campos.join(', ')).eq('id', id).maybeSingle()
+        if (respuesta.error) throw respuesta.error
+        data = respuesta.data
+      } catch (error) {
+        console.error('[Finanzas] No se pudo refrescar la confirmación:', error)
+        return
+      } finally { consultando = false }
       if (!vivo || !data) return
       const sig = campos.map(k => String(data[k] ?? '')).join('|')
       if (sig === lastSig) return

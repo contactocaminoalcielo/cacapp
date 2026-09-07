@@ -7,6 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
+import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
@@ -492,6 +493,7 @@ export default function CuartoFrio() {
   const [detalle,     setDetalle]     = useState(null)
   const [movimientos, setMovimientos] = useState([])
   const primeraCarga                  = useRef(true)
+  const cargar = useLecturaSerial(cargarDatos)
   const [busqueda,    setBusqueda]    = useState('')
 
   useEffect(() => {
@@ -509,7 +511,7 @@ export default function CuartoFrio() {
   // recargas posteriores (realtime de otro usuario, o tras guardar) pasan en
   // segundo plano. Si volviera a `loading`, el `if (loading) return` desmontaria
   // la pagina entera y con ella cualquier modal abierto.
-  async function cargar() {
+  async function cargarDatos() {
     try {
       if (primeraCarga.current) setLoading(true)
       const [{ data, error: err }, { data: rep }] = await Promise.all([
