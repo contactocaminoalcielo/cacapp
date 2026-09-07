@@ -1391,9 +1391,24 @@ export default function Kanban() {
     setGuardando(false)
   }
 
+  // 🩸 2026-09-06 (caso TOMMY): `mascotaParaPlan` se carga en segundo plano SIN
+  // esperar. Si el coordinador elegía el plan antes de que llegara, esto
+  // calculaba con peso 0 y especie 0, devolvía null, el campo de precio quedaba
+  // vacío… y `cambiarPlan` cambiaba SOLO el plan_id dejando el valor y la
+  // comisión del plan viejo. El servicio quedaba con nombre de un plan y precio
+  // de otro, sin que nada lo dijera. Por eso al gato (que sí alcanzó a cargar)
+  // le puso "Nuevo valor: $269.000" y al perro no le puso nada.
+  // Ahora, si falta el peso, se pide en el momento antes de calcular.
   async function calcularPrecioPlan(planId) {
     if (!planId) return null
-    return calcularPrecioPara(planId, mascotaParaPlan?.peso_kg || 0, mascotaParaPlan?.especie_id || 0)
+    let m = mascotaParaPlan
+    if (!(m?.peso_kg > 0) && detalle?.mascota_id) {
+      const { data } = await db.from('mascotas').select('peso_kg, especie_id')
+        .eq('id_mascota', detalle.mascota_id).maybeSingle()
+      if (data) { m = data; setMascotaParaPlan(data) }
+    }
+    if (!(m?.peso_kg > 0)) return null
+    return calcularPrecioPara(planId, m.peso_kg, m.especie_id || 0)
   }
 
   // Comisión del aliado para un plan y su precio base (valor del plan), según la
@@ -1434,6 +1449,18 @@ export default function Kanban() {
     const planAnterior = planPorId(detalle?.plan_id)?.nombre || 'plan anterior'
     const planNuevo    = planPorId(editPlanId)?.nombre        || 'nuevo plan'
     const precioFinal  = nuevoPrecio ? parseFloat(nuevoPrecio) : null
+
+    // Cerrojo (caso TOMMY, 2026-09-06): sin precio, el bloque de abajo solo
+    // cambiaba `plan_id` y dejaba valor y comisión del plan ANTERIOR. Cambiar de
+    // plan sin tocar la plata nunca es lo que se quiere: es un descuadre mudo.
+    if (!(precioFinal > 0)) {
+      await showAlert(
+        `No hay un valor para "${planNuevo}". Sin él, el plan cambiaría pero el servicio se quedaría cobrando el precio de "${planAnterior}".\n\n` +
+        'Escribe el nuevo valor a mano en el campo de arriba y vuelve a confirmar.',
+        { title: 'Falta el valor del nuevo plan', variant: 'warning' }
+      )
+      return
+    }
 
     const fuera = detalle?.fecha_limite_cambio_plan && parseDate(detalle.fecha_limite_cambio_plan) < new Date()
     const msg = [
@@ -3501,12 +3528,15 @@ export default function Kanban() {
                             style={{ borderColor: '#BBF7D0', focusRingColor: '#86EFAC' }}
                           />
                           {!nuevoPrecio && (
-                            <p className="text-[10px] text-amber-600 mt-1">⚠️ Ingresa el precio si no fue calculado automáticamente</p>
+                            <p className="text-[10px] text-amber-600 mt-1">
+                              ⚠️ No se pudo calcular el precio (¿la mascota tiene peso registrado?).
+                              Escríbelo a mano: sin valor, el plan cambiaría pero se seguiría cobrando el precio del plan anterior.
+                            </p>
                           )}
                         </div>
                         <button
                           onClick={cambiarPlan}
-                          disabled={cambiandoPlan}
+                          disabled={cambiandoPlan || !(parseFloat(nuevoPrecio) > 0)}
                           className="w-full py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-50"
                           style={{ background: '#15803D', color: '#fff' }}>
                           <ArrowRightLeft size={12} />
