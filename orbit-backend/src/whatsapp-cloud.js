@@ -57,6 +57,14 @@ async function lineaDe(contacto, linea) {
 export async function listarConversaciones({ q = null, linea = null } = {}) {
   const filtro = (q || '').trim().toLowerCase() || null
 
+  // Cuánto pasado trae la bandeja por defecto y cuántas filas como mucho. Ambos
+  // por variable de entorno para poder afinarlos sin volver a construir la
+  // imagen. 90 días cubre de sobra la operación (con 6.334 conversaciones, solo
+  // 690 tuvieron actividad en los últimos 30 días); el tope es la red de
+  // seguridad para que un día raro no repita el colapso del 7-sep.
+  const DIAS_BANDEJA = parseInt(process.env.BANDEJA_DIAS || '90') || 90
+  const TOPE_BANDEJA = parseInt(process.env.BANDEJA_TOPE || '400') || 400
+
   // Las etiquetas viajan con cada conversación: la bandeja las pinta y arma con
   // ellas sus listas (Novedades, Servicios, …) sin una segunda consulta. Van en
   // un LATERAL agregado para no multiplicar filas cuando hay varias.
@@ -88,8 +96,25 @@ export async function listarConversaciones({ q = null, linea = null } = {}) {
         AND ($1::text IS NULL
          OR lower(COALESCE(v.nombre, '')) LIKE '%' || $1 || '%'
          OR v.contacto LIKE '%' || $1 || '%')
-      ORDER BY v.ultimo_mensaje_en DESC NULLS LAST`,
-    [filtro, linea || null]
+        -- 🩸 2026-09-07 — SIN esta ventana, la bandeja devolvía las 6.334
+        -- conversaciones ENTERAS en cada sondeo. Y no es una lista barata: la
+        -- vista, por CADA fila, cruza aliados y clientes por teléfono y
+        -- corre tres subconsultas sobre 114.000 mensajes (último texto, última
+        -- dirección y no leídas). Medido ese día: 1.232 ms la lista completa
+        -- contra 22 ms acotada. Con varias bandejas abiertas sondeando, las
+        -- llamadas se solapaban y dejaban al backend —Node, un solo hilo— al
+        -- 97 % de CPU: no cargaban las conversaciones, no avanzaban los
+        -- renders de memoriales y la operación entera se caía.
+        --
+        -- La ventana NO se aplica al buscar: quien escribe en el buscador
+        -- quiere encontrar una conversación vieja, y esa consulta es puntual y
+        -- la dispara una persona, no un temporizador.
+        AND ($1::text IS NOT NULL
+             OR v.ultimo_mensaje_en IS NULL
+             OR v.ultimo_mensaje_en > now() - ($3::int || ' days')::interval)
+      ORDER BY v.ultimo_mensaje_en DESC NULLS LAST
+      LIMIT $4::int`,
+    [filtro, linea || null, DIAS_BANDEJA, TOPE_BANDEJA]
   )
 
   return {

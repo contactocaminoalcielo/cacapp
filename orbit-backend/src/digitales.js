@@ -5,6 +5,7 @@
 // servicio_recordatorios digitales correspondientes.
 // Diseño: docs/Modulo_Digitales_Diseno.md · Migración: 035_digitales.sql
 import { spawn } from 'node:child_process'
+import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
@@ -452,6 +453,27 @@ async function runRender(piezaId, payload) {
   const child = spawn('node', [RENDER_ENTRY, JSON.stringify({ ...payload, outPath })], {
     cwd: APP_ROOT, env: process.env,
   })
+
+  // 🩸 2026-09-07 — UN SOLO render dejaba Orbit inservible. Remotion abre Chrome
+  // headless (varios procesos) y un ffmpeg codificando video; en un VPS de 6
+  // núcleos que además sirve la app, la base y el agente de WhatsApp, eso se lo
+  // come todo. Medido ese día con un lote de 14 memoriales en cola: carga 31,9,
+  // CPU libre 0 %, `kcompactd` clavado al 100 % y `/health` del backend tardando
+  // 18,3 SEGUNDOS (la base respondía en 4 ms — el cuello era la CPU, no la DB).
+  //
+  // Bajarle la prioridad al hijo lo arregló en el acto: /health volvió a 0,01 s
+  // y la CPU libre subió a 16 %. El render tarda algo más y a nadie le importa:
+  // es un proceso de fondo, y la alternativa es que la operación se pare.
+  //
+  // Los Chrome y el ffmpeg que abre Remotion HEREDAN este nivel al nacer, así
+  // que basta con ponérselo al padre aquí. Si fallara —permisos, otro sistema—
+  // se sigue: es una mejora, no un requisito para renderizar.
+  const NICE_RENDER = parseInt(process.env.MEMORIAL_NICE || '19')
+  try {
+    os.setPriority(child.pid, Number.isFinite(NICE_RENDER) ? NICE_RENDER : 19)
+  } catch (e) {
+    log('[digitales] no se pudo bajar la prioridad del render:', e.message)
+  }
   let out = '', err = ''
   child.stdout.on('data', d => { out += d })
   child.stderr.on('data', d => { err += d })
