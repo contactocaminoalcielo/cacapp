@@ -12,19 +12,36 @@ const TTL_MS  = 24 * 60 * 60 * 1000 // 24 h
 function abrirDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1)
+    let terminado = false
+    const fallo = () => {
+      terminado = true; clearTimeout(timer)
+      reject(new Error('No se pudo abrir el respaldo local'))
+    }
+    const timer = setTimeout(fallo, 5000)
     req.onupgradeneeded = () => req.result.createObjectStore(STORE)
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
+    req.onsuccess = () => {
+      clearTimeout(timer)
+      if (terminado) { req.result.close(); return }
+      resolve(req.result)
+    }
+    req.onerror = fallo
+    req.onblocked = fallo
   })
 }
 
 function enTx(idb, mode, fn) {
   return new Promise((resolve, reject) => {
     const tx = idb.transaction(STORE, mode)
-    const out = fn(tx.objectStore(STORE))
-    tx.oncomplete = () => resolve(out?.result)
-    tx.onerror = () => reject(tx.error)
-  })
+    const timer = setTimeout(() => {
+      try { tx.abort() } catch (_) {}
+      reject(new Error('El respaldo local tardó demasiado'))
+    }, 5000)
+    tx.oncomplete = () => { clearTimeout(timer); resolve(out?.result) }
+    tx.onerror = tx.onabort = () => { clearTimeout(timer); reject(tx.error || new Error('Respaldo local interrumpido')) }
+    let out
+    try { out = fn(tx.objectStore(STORE)) }
+    catch (e) { clearTimeout(timer); reject(e) }
+  }).finally(() => idb.close())
 }
 
 /** Guarda el archivo ANTES de procesarlo (clave ej: `recibo_<servicioId>_<idx>`) */

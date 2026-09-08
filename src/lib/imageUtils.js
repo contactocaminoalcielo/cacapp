@@ -1,3 +1,5 @@
+import { conLimite } from './esperas.js'
+
 // Tipos de imagen que aceptamos en cualquier subida (portal y personal interno).
 export const MIMES_IMAGEN_OK = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
 
@@ -37,7 +39,11 @@ export async function compressImage(file, maxW = 1200, quality = 0.82) {
   try {
     let bitmap = null
     try {
-      bitmap = await createImageBitmap(file, { resizeWidth: maxW, resizeQuality: 'medium' })
+      let vencido = false
+      const preparando = createImageBitmap(file, { resizeWidth: maxW, resizeQuality: 'medium' })
+        .then(b => { if (vencido) b.close?.(); return b })
+      try { bitmap = await conLimite(preparando, 15000, 'No se pudo preparar la imagen') }
+      catch (e) { vencido = true; throw e }
     } catch (_) {
       // resizeWidth no soportado en este browser/device: subir el JPEG original
       // (ya comprimido por la cámara). Nunca decodificar a full-res — OOM seguro.
@@ -49,7 +55,7 @@ export async function compressImage(file, maxW = 1200, quality = 0.82) {
     canvas.height = Math.max(1, Math.round(bitmap.height * scale))
     canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
     bitmap.close?.()
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality))
+    const blob = await conLimite(new Promise(res => canvas.toBlob(res, 'image/jpeg', quality)), 10000, 'No se pudo comprimir la imagen')
     return blob || file
   } catch (_) {
     return file // jamás bloquear la subida por fallo de compresión

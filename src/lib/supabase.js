@@ -1,10 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 import { leerPaginas } from './lecturas'
+import { fetchSupabase } from './esperas'
 
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON
 
-export const db = createClient(SUPABASE_URL, SUPABASE_ANON)
+export const db = createClient(SUPABASE_URL, SUPABASE_ANON, { global: { fetch: fetchSupabase } })
 
 export async function dbGet(table, select = '*', filters = {}, order = null) {
   let q = db.from(table).select(select)

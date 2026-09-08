@@ -18,8 +18,12 @@ export default function Login() {
     setLoading(true)
     try {
       await login(email.trim().toLowerCase(), password)
-    } catch {
-      setError('Correo o contraseña incorrectos. Intenta de nuevo.')
+    } catch (e) {
+      setError(e?.code === 'invalid_credentials'
+        ? 'Correo o contraseña incorrectos. Intenta de nuevo.'
+        : e?.status === 429
+          ? 'Hubo varios intentos seguidos. Espera un momento y vuelve a intentar.'
+          : 'No pudimos completar el ingreso. Revisa la conexión e intenta de nuevo.')
     } finally {
       setLoading(false)
     }

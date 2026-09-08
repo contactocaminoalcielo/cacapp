@@ -28,6 +28,8 @@ try {
   const errores = []
   pagina.on('pageerror', e => errores.push(e.message))
   const peticiones = []
+  let falloPerfil = true
+  let rolPerfil = 6
   const usuario = { id: '10000000-0000-4000-8000-000000000001', email: 'prueba@example.invalid', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {} }
   const jwt = `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify({ sub: usuario.id, email: usuario.email, role: 'authenticated', exp: 4102444800 })).toString('base64url')}.prueba`
   const convs = [
@@ -38,10 +40,13 @@ try {
     const req = route.request(); const url = new URL(req.url())
     if (url.origin === base) return route.continue()
     peticiones.push({ path: url.pathname, q: url.searchParams.get('q'), method: req.method(), select: url.searchParams.get('select') })
+    if (url.pathname.endsWith('/rest/v1/personal') && falloPerfil) {
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'red simulada no disponible' }) })
+    }
     let data = []
     if (url.pathname.endsWith('/auth/v1/token')) data = { access_token: jwt, refresh_token: 'prueba', expires_in: 3600, token_type: 'bearer', user: usuario }
     else if (url.pathname.endsWith('/auth/v1/user')) data = usuario
-    else if (url.pathname.endsWith('/rest/v1/personal')) data = [{ id: usuario.id, auth_user_id: usuario.id, nombre: 'Prueba', apellido: 'Auditoria', email: usuario.email, rol_principal_id: 6, activo: true }]
+    else if (url.pathname.endsWith('/rest/v1/personal')) data = [{ id: usuario.id, auth_user_id: usuario.id, nombre: 'Prueba', apellido: 'Auditoria', email: usuario.email, rol_principal_id: rolPerfil, activo: true }]
     else if (url.pathname.endsWith('/rpc/orbit_contadores')) data = { kanban: 0, produccion: 0, imagenes: 0, nps: 0 }
     else if (url.pathname.endsWith('/api/whatsapp/conversaciones')) data = { ok: true, conversaciones: convs, sin_leer_total: 5, total: 2 }
     else if (url.pathname.startsWith('/api/')) data = { ok: true, agentes: [], etiquetas: [], servicios: [], lotes: [], candidatos: [], items: [], movimientos: [] }
@@ -56,6 +61,11 @@ try {
   await pagina.locator('input[type=email]').fill(usuario.email)
   await pagina.locator('input[type=password]').fill('solo-prueba-local')
   await pagina.locator('button[type=submit]').click()
+  await pagina.getByRole('heading', { name: 'No pudimos conectar' }).waitFor()
+  assert.equal(await pagina.getByText('Usuario sin perfil', { exact: true }).count(), 0)
+  falloPerfil = false
+  await pagina.getByRole('button', { name: 'Reintentar', exact: true }).click()
+  await pagina.getByRole('heading', { name: 'No pudimos conectar' }).waitFor({ state: 'hidden' })
   await pagina.waitForFunction(() => !document.querySelector('input[type=password]'))
   await pagina.waitForTimeout(800)
   for (const ruta of ['/kanban', '/produccion', '/cuarto-frio', '/calendario', '/finanzas', '/tenjo']) {
@@ -81,6 +91,12 @@ try {
   assert.equal(errores.length, 0, errores.join('; '))
   assert.equal(peticiones.filter(r => ['PATCH', 'DELETE', 'PUT'].includes(r.method)).length, 0)
   assert.equal(peticiones.filter(r => r.select?.includes('entrega_confirmada_monto')).length, 0)
+  rolPerfil = 2
+  await pagina.reload()
+  await pagina.waitForTimeout(2000)
+  assert.equal(await pagina.locator('input[type=password]').count(), 0, 'El técnico debe conservar su sesión')
+  assert.equal(await pagina.getByRole('heading', { name: 'No pudimos conectar' }).count(), 0)
+  assert.equal(errores.length, 0, 'Errores en la vista del técnico: ' + errores.join('; '))
   console.log(JSON.stringify({ ok: true, rutas: 8, errores: errores.length, sondeosEn11s: listas() - antes, busquedas: busquedas.map(r => r.q), produccion: 'sin conexiones reales' }))
 } finally {
   if (browser) await browser.close()

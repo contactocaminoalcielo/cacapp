@@ -125,7 +125,7 @@ function AppRoutes({ rol }) {
 }
 
 function InnerApp() {
-  const { session, personalData, loading, logout, debug } = useAuth()
+  const { session, personalData, loading, logout, debug, authError, retryAuth } = useAuth()
   const location = useLocation()
 
   // Rutas públicas — no requieren autenticación
@@ -161,6 +161,15 @@ function InnerApp() {
     )
   }
 
+  if (authError) return (
+    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
+      <div className="bg-white rounded-2xl p-6 max-w-sm text-center">
+        <h2 className="font-bold mb-2">No pudimos conectar</h2>
+        <p role="alert" className="text-sm text-gray-600 mb-4">{authError}</p>
+        <button onClick={retryAuth} className="rounded-lg bg-blue-700 px-5 py-3 text-white">Reintentar</button>
+      </div>
+    </div>
+  )
   if (loading) return <FullScreenLoader />
 
   // No autenticado → Login

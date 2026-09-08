@@ -16,6 +16,7 @@ import {
 import { enviarWhatsApp, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
+import { conLimite } from '@/lib/esperas'
 import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 
@@ -246,10 +247,7 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 // se muestra error y el archivo sigue en el stash para reintentar.
 const SUBIDA_TIMEOUT_MS = 60000
 function conTimeout(promise, msg) {
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), SUBIDA_TIMEOUT_MS)),
-  ])
+  return conLimite(promise, SUBIDA_TIMEOUT_MS, msg)
 }
 
 // La señal móvil falla y se recupera: reintentamos unas pocas veces con espera
@@ -257,7 +255,7 @@ function conTimeout(promise, msg) {
 async function conReintentos(fn, intentos = 3) {
   let ultimoErr
   for (let i = 0; i < intentos; i++) {
-    try { return await fn() }
+    try { return await fn(i) }
     catch (e) {
       ultimoErr = e
       if (i < intentos - 1) await new Promise(r => setTimeout(r, 700 * (i + 1)))
@@ -302,6 +300,8 @@ function validarArchivo(file, { permitirPdf = false } = {}) {
 
 function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir = true, label = 'Foto de la mascota', sublabel = 'Evidencia de recogida' }) {
   const [uploading, setUploading] = useState(false)
+  const [pasoSubida, setPasoSubida] = useState('Preparando foto…')
+  const subidaEnCurso = useRef(false)
   const [err, setErr]             = useState('')
   const cameraRef                 = useRef()
   const galeriaRef                = useRef()
@@ -320,6 +320,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
   }, [])
 
   async function subirFoto(file, { recuperado = false } = {}) {
+    if (subidaEnCurso.current) return
     const val = validarArchivo(file)
     if (val.error) {
       setErr(val.error)
@@ -327,27 +328,36 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
       if (galeriaRef.current) galeriaRef.current.value = ''
       return
     }
-    if (!recuperado) await stashPut(stashKey, file)
+    subidaEnCurso.current = true
     setUploading(true); setErr('')
+    setPasoSubida('Preparando foto…')
     try {
+      if (!recuperado) await stashPut(stashKey, file)
+      setPasoSubida('Verificando conexión…')
       // Asegura un token vigente antes de subir: si expiró por inactividad,
       // supabase lo refresca aquí y evita que la 1ª subida falle por token vencido.
-      await db.auth.getSession()
+      const { data: sesion, error: sesionError } = await conLimite(db.auth.getSession(), 35000, 'No se pudo verificar la sesión. Revisa la conexión y reintenta.')
+      if (sesionError) throw sesionError
+      if (!sesion?.session) throw new Error('La sesión terminó. Ingresa de nuevo para subir la foto.')
       // comprimir=false (cuarto frío): subir el original sin decodificar —
       // la rama createImageBitmap/canvas es la que falla desde galería Android
+      setPasoSubida('Preparando imagen…')
       const body = comprimir ? await compressImage(file) : file
+      const formato = body === file ? val : { mime: body.type || 'image/jpeg', ext: 'jpg' }
       // Subida con reintentos: cada intento usa una ruta única (no choca si una
       // subida previa quedó a medias) y un timeout para no colgarse.
-      const publicUrl = await conReintentos(async () => {
-        const path = `${storagePath}/${crypto.randomUUID()}.${comprimir ? 'jpg' : val.ext}`
+      const publicUrl = await conReintentos(async intento => {
+        setPasoSubida(intento ? `Reintentando subida (${intento + 1} de 3)…` : 'Subiendo foto…')
+        const path = `${storagePath}/${crypto.randomUUID()}.${formato.ext}`
         const { data, error: upErr } = await conTimeout(
-          db.storage.from('evidencias').upload(path, body, { upsert: false, contentType: comprimir ? 'image/jpeg' : val.mime }),
+          db.storage.from('evidencias').upload(path, body, { upsert: false, contentType: formato.mime }),
           'La subida tardó demasiado — revisa la señal y reintenta'
         )
         if (upErr) throw upErr
         return db.storage.from('evidencias').getPublicUrl(data.path).data.publicUrl
       })
       if (dbSave) {
+        setPasoSubida('Guardando foto en el servicio…')
         await conReintentos(async () => {
           const { error: dbErr } = await db.from(dbSave.table)
             .update({ [dbSave.column]: publicUrl }).eq('id', dbSave.id)
@@ -359,6 +369,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
     } catch (e) {
       setErr(e.message || 'Error al subir foto')
     } finally {
+      subidaEnCurso.current = false
       setUploading(false)
       if (cameraRef.current)  cameraRef.current.value  = ''
       if (galeriaRef.current) galeriaRef.current.value = ''
@@ -411,7 +422,7 @@ function FotoEvidencia({ storagePath, dbSave, fotoUrl, onFotoUploaded, comprimir
         <div className="w-full py-8 rounded-2xl border-2 border-dashed flex flex-col items-center gap-2"
           style={{ borderColor: '#D1D5DB', background: '#FAFAFA' }}>
           <div className="spinner" style={{ width: 28, height: 28 }} />
-          <span className="text-sm text-gray-500">Subiendo foto…</span>
+          <span role="status" className="text-sm text-gray-500">{pasoSubida}</span>
         </div>
       ) : (
         <div>
