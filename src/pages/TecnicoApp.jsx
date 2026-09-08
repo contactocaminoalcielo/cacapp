@@ -1646,6 +1646,7 @@ export default function TecnicoApp() {
   const [recHasta, setRecHasta]   = useState('')
   const [entDesde, setEntDesde]   = useState('')
   const [entHasta, setEntHasta]   = useState('')
+  const [busquedaEntrega, setBusquedaEntrega] = useState('')
   const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
   const [cuadresPend, setCuadresPend] = useState(0) // cuadres BORRADOR sin firmar (badge + aviso)
   const [sinCuadrar, setSinCuadrar] = useState(null) // servicios acumulados sin cuadrar (RPC 071)
@@ -2378,7 +2379,17 @@ export default function TecnicoApp() {
   // Filtro de fechas de las colas activas (cliente). Sin fecha no se oculta nada.
   const enRango = (f, d, h) => !f || ((!d || f >= d) && (!h || f <= h))
   const recogidasFiltradas = recogidas.filter(s => enRango(s.fecha_ingreso, recDesde, recHasta))
-  const entregasFiltradas  = entregas.filter(e => enRango(e.fecha_programada || e.servicios?.fecha_ingreso, entDesde, entHasta))
+  const normalizarBusqueda = valor => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const palabrasEntrega = normalizarBusqueda(busquedaEntrega).trim().split(/\s+/).filter(Boolean)
+  const coincideEntrega = e => {
+    const mascota = e.servicios?.mascotas
+    const cliente = mascota?.clientes
+    const texto = normalizarBusqueda([mascota?.nombre, cliente?.nombre, cliente?.apellido,
+      cliente?.whatsapp, cliente?.telefono, e.direccion_entrega, e.direccion].filter(Boolean).join(' '))
+    return palabrasEntrega.every(p => texto.includes(p))
+  }
+  const entregasFiltradas = entregas.filter(e => coincideEntrega(e) && enRango(e.fecha_programada || e.servicios?.fecha_ingreso, entDesde, entHasta))
+  const disponiblesFiltradas = disponibles.filter(coincideEntrega)
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
@@ -2601,6 +2612,21 @@ export default function TecnicoApp() {
           </div>
         ) : tab === 'entregas' ? (
           <div className="space-y-3">
+            <div className="bg-white rounded-2xl border p-3">
+              <label htmlFor="buscar-entregas" className="block text-xs font-semibold text-gray-600 mb-2">Buscar entregas</label>
+              <div className="flex items-center gap-2">
+                <Search size={18} className="text-gray-400 shrink-0" />
+                <input id="buscar-entregas" type="search" value={busquedaEntrega}
+                  onChange={e => setBusquedaEntrega(e.target.value)}
+                  placeholder="Mascota, cliente o teléfono"
+                  className="w-full min-w-0 py-2 text-base outline-none" />
+                {busquedaEntrega && <button type="button" onClick={() => setBusquedaEntrega('')}
+                  aria-label="Limpiar búsqueda de entregas" className="p-2 text-gray-500"><X size={18} /></button>}
+              </div>
+              {palabrasEntrega.length > 0 && <p role="status" className="text-xs text-gray-500 mt-2">
+                {entregasFiltradas.length} propias · {disponiblesFiltradas.length} disponibles
+              </p>}
+            </div>
 
             {/* ── Mis entregas ── */}
             {entregas.length > 0 && (
@@ -2608,9 +2634,9 @@ export default function TecnicoApp() {
             )}
             {entregasFiltradas.length === 0
               ? <EmptyState icon="📦"
-                  texto={entregas.length ? 'Sin entregas en ese rango' : 'No has tomado ninguna entrega'}
+                  texto={entregas.length ? 'Sin entregas con estos filtros' : 'No has tomado ninguna entrega'}
                   sub={entregas.length
-                    ? 'Ajusta o quita el filtro de fechas para ver las demás.'
+                    ? 'Ajusta la búsqueda o el filtro de fechas para ver las demás.'
                     : disponibles.length
                       ? 'Abajo están las disponibles: toma la que puedas hacer.'
                       : 'Cuando haya entregas listas, aparecerán aquí para tomarlas.'} />
@@ -2625,9 +2651,10 @@ export default function TecnicoApp() {
                 <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 mb-3 text-sm font-semibold"
                   style={{ background: '#EEF2FF', color: '#3730A3', border: '1px solid #C7D2FE' }}>
                   <Package size={15} style={{ flexShrink: 0 }} />
-                  {disponibles.length} entrega{disponibles.length > 1 ? 's' : ''} disponible{disponibles.length > 1 ? 's' : ''} — toma la que puedas hacer
+                  {disponiblesFiltradas.length} de {disponibles.length} entregas disponibles — toma la que puedas hacer
                 </div>
-                {disponibles.map(e => (
+                {disponiblesFiltradas.length === 0 && <p className="text-sm text-gray-500 px-3 pb-3">No hay entregas disponibles que coincidan con la búsqueda.</p>}
+                {disponiblesFiltradas.map(e => (
                   <CardDisponible key={e.id} ent={e}
                     tomando={tomando === e.id} onTomar={tomarEntrega} />
                 ))}
@@ -2722,10 +2749,11 @@ export default function TecnicoApp() {
       <div className="tec-nav-glass fixed bottom-0 left-1/2 -translate-x-1/2 w-full"
         style={{ maxWidth: 520, paddingBottom: 'env(safe-area-inset-bottom, 8px)' }}>
         <div className="flex">
-          {TABS.map(({ key, Icon, count, color }) => {
+          {TABS.map(({ key, label, Icon, count, color }) => {
             const activo = tab === key
             return (
               <button key={key} onClick={() => setTab(key)}
+                aria-label={label}
                 aria-current={activo ? 'page' : undefined}
                 className="flex-1 py-3 flex flex-col items-center justify-center gap-0.5 relative"
                 style={{ color: activo ? color : '#9CA3AF', transition: 'color .2s ease' }}>

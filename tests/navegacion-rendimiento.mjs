@@ -47,6 +47,14 @@ try {
     if (url.pathname.endsWith('/auth/v1/token')) data = { access_token: jwt, refresh_token: 'prueba', expires_in: 3600, token_type: 'bearer', user: usuario }
     else if (url.pathname.endsWith('/auth/v1/user')) data = usuario
     else if (url.pathname.endsWith('/rest/v1/personal')) data = [{ id: usuario.id, auth_user_id: usuario.id, nombre: 'Prueba', apellido: 'Auditoria', email: usuario.email, rol_principal_id: rolPerfil, activo: true }]
+    else if (rolPerfil === 2 && url.pathname.endsWith('/rest/v1/entregas')) {
+      const disponible = url.searchParams.get('estado') === 'eq.DISPONIBLE'
+      data = (disponible ? ['LUNA_PRUEBA'] : ['SIMÓN_PRUEBA', 'TOBY_PRUEBA']).map((nombre, i) => ({
+        id: `${disponible ? 'disponible' : 'propia'}-${i}`, estado: disponible ? 'DISPONIBLE' : 'ASIGNADA',
+        servicios: { id: `servicio-${i}`, estado: 'LISTO_ENTREGA', valor_total: 0, valor_pagado: 0,
+          mascotas: { nombre, clientes: { nombre: i ? 'Pedro' : 'María', apellido: 'Gómez', whatsapp: i ? '3002222222' : '3001111111' }, especies: { nombre: 'Canino' } } },
+      }))
+    }
     else if (url.pathname.endsWith('/rpc/orbit_contadores')) data = { kanban: 0, produccion: 0, imagenes: 0, nps: 0 }
     else if (url.pathname.endsWith('/api/whatsapp/conversaciones')) data = { ok: true, conversaciones: convs, sin_leer_total: 5, total: 2 }
     else if (url.pathname.startsWith('/api/')) data = { ok: true, agentes: [], etiquetas: [], servicios: [], lotes: [], candidatos: [], items: [], movimientos: [] }
@@ -97,6 +105,19 @@ try {
   assert.equal(await pagina.locator('input[type=password]').count(), 0, 'El técnico debe conservar su sesión')
   assert.equal(await pagina.getByRole('heading', { name: 'No pudimos conectar' }).count(), 0)
   assert.equal(errores.length, 0, 'Errores en la vista del técnico: ' + errores.join('; '))
+  await pagina.getByRole('button', { name: /Entregas/ }).click()
+  const buscarEntrega = pagina.getByRole('searchbox', { name: 'Buscar entregas' })
+  await pagina.getByText('SIMÓN_PRUEBA', { exact: true }).waitFor()
+  await buscarEntrega.fill('simon')
+  await pagina.getByText('TOBY_PRUEBA', { exact: true }).waitFor({ state: 'hidden' })
+  assert.equal(await pagina.getByText('SIMÓN_PRUEBA', { exact: true }).count(), 1)
+  await buscarEntrega.fill('maria gomez')
+  await pagina.getByText('LUNA_PRUEBA', { exact: true }).waitFor()
+  await buscarEntrega.fill('300222')
+  await pagina.getByText('TOBY_PRUEBA', { exact: true }).waitFor()
+  await pagina.getByText('SIMÓN_PRUEBA', { exact: true }).waitFor({ state: 'hidden' })
+  await pagina.getByRole('button', { name: 'Limpiar búsqueda de entregas' }).click()
+  await pagina.getByText('SIMÓN_PRUEBA', { exact: true }).waitFor()
   console.log(JSON.stringify({ ok: true, rutas: 8, errores: errores.length, sondeosEn11s: listas() - antes, busquedas: busquedas.map(r => r.q), produccion: 'sin conexiones reales' }))
 } finally {
   if (browser) await browser.close()
