@@ -99,7 +99,8 @@ El enlace vive `dias_ventana_portal` días (120 por defecto) desde el envío.
    respaldo del archivo anterior en `/root/`. Probado con `?dry=1`.
 5. **Plantilla `eleccion_planta_cliente`** creada en la WABA de familias
    (`1048633974692786`), id `2640610176457260`, categoría UTILITY (Meta **no** la
-   reclasificó). Su nombre ya está sembrado en `config_operativa`.
+   reclasificó) y **APROBADA** el mismo 9-sep. Su nombre está sembrado en
+   `config_operativa`, así que el envío automático queda armado.
 
 ### Prueba end-to-end en producción (y limpieza)
 
@@ -120,11 +121,43 @@ comprobó el camino completo, incluido el del dinero:
 Todo se revirtió después: servicio restaurado a 471.750 / COMPLETO, y sin
 elecciones, extras, novedades ni alertas de prueba.
 
+## Auditoría del 2026-09-09 — lo que se corrigió
+
+Revisando lo construido, en el código y **abriendo el portal en producción**:
+
+| Hallazgo | Por qué importaba |
+|---|---|
+| `fecha_cumplida` llegaba como `Date` de JS y no como texto | `String(fecha)+'T12:00:00'` daba fecha inválida ⇒ NaN ⇒ **la ventana del enlace no se cerraba nunca**, sin un solo error |
+| Botones de cantidad de 32 px | Por debajo del mínimo táctil de 44 px |
+| El tope de extras se aplicaba ANTES de descartar los ya comprados | Quien ya compró los primeros se quedaba sin ver los siguientes |
+| El job podía escribirle a un servicio ya `ENTREGADO` | Pedirle elegir la planta a quien ya la recibió |
+| Planta marcada solo como "opción" con precio | Nunca se cobraba, en silencio. Ahora el catálogo lo rechaza al guardar |
+| El enlace vencido a mitad del formulario | Dejaba al cliente reintentando contra una puerta cerrada |
+| **Helecho y pescadito se veían casi iguales** | Solo se vio ABRIENDO la pantalla: separarlos es lo único que la familia debe poder hacer |
+| **"Hay una versión nueva de Orbit"** dentro del portal | Colgaba de la raíz de `App`, así que salía también en el portal de fotos y en el de aliados **desde siempre** |
+| Nombres en MAYÚSCULAS (`JOSHUA`, `ANDRES`) | Se lee como un grito en una pantalla de despedida |
+
+## El diseño del portal
+
+No se parece al resto de Orbit a propósito: papel cálido en vez del azul de la
+marca, Playfair itálica para los titulares (ya venía cargada en `index.html`, no
+pide una fuente más) y verde de invernadero.
+
+**No usa iconos de librería.** Cada especie tiene su ilustración dibujada en SVG
+—la pluma del helecho, el zigzag escalonado del pescadito, la matera de barro—
+generada por el nombre del catálogo, con una rama genérica de respaldo. Un ícono
+repetido en las dos tarjetas volvía intercambiable justo lo que hay que decidir.
+
+Contrastes medidos sobre el papel: tinta 13:1, texto apagado 5.4:1, verde hondo
+7.7:1, botón 6.3:1 con blanco. El estado elegido no depende solo del color (dice
+"Elegida"), los controles miden 44 px, el foco de teclado va por `outline` —el
+anillo de Tailwind se pinta con box-shadow y aquí lo usan las sombras— y se
+respeta `prefers-reduced-motion`.
+
 ## Estado al 2026-09-09
 
-- **En producción y encendido.** Solo falta que Meta apruebe la plantilla
-  (quedó en `PENDING`, sin motivo de rechazo). Mientras tanto el job prepara los
-  avisos pero no escribe a nadie.
+- **En producción, encendido y con la plantilla APROBADA por Meta.** El envío
+  automático queda armado: el 15-sep saldrán los primeros avisos solos.
 - 65 mascotas en cubículo, **ninguna cumplida todavía**. Las cinco primeras
   (LUNA, WILLY, MAILO, OSIRIS, JOSHUA) cumplen el **15-sep-2026**, todas con
   WhatsApp válido. No hay backlog que pueda dispararse de golpe.
