@@ -87,21 +87,46 @@ El enlace vive `dias_ventana_portal` días (120 por defecto) desde el envío.
 | `src/components/configuracion/TabPlantas.jsx` | Configuración → Plantas: catálogo, aviso y tablero |
 | `src/components/servicio/FichaServicio.jsx` | Sección "Planta del compostaje" en la tarjeta |
 
-## Despliegue
+## Despliegue — HECHO el 2026-09-09
 
-1. **Migración** por SSH→psql (ver `memory/ops_aplicar_migraciones_vps.md`).
-   Ensayada en prod con ROLLBACK real y verificada después del rollback.
-2. **Backend** por `scp` + `docker compose up -d --build` — `git push` NO despliega
-   `orbit-backend/` (ver `memory/deploy_backend_no_actions.md`).
-3. **Frontend** por `git push` → Actions. Nunca por scp.
-4. **Cron**: copiar la línea nueva de `deploy/crontab.txt` a `/etc/cron.d/orbit-backend`.
-5. **Plantilla de Meta**: crearla y, al aprobarse, escribir su nombre en
-   Configuración → Plantas. Hasta entonces nada sale.
+1. **Migración 149 aplicada** en prod por SSH→psql. Antes se ensayó sobre una copia
+   sin `BEGIN;`/`COMMIT;` (el archivo trae los suyos y anularían el ROLLBACK) y se
+   verificó **después** del rollback que no había quedado nada.
+2. **Backend** por `scp` + `docker compose up -d --build`. Verificado el código vivo
+   en `/app/src/` y `/portal/planta/:codigo` respondiendo.
+3. **Frontend** por `git push` → Actions. Verificado contra el `sw.js` publicado.
+4. **Cron** instalado en `/etc/cron.d/orbit-backend` (`15 7 * * *`, hora Bogotá), con
+   respaldo del archivo anterior en `/root/`. Probado con `?dry=1`.
+5. **Plantilla `eleccion_planta_cliente`** creada en la WABA de familias
+   (`1048633974692786`), id `2640610176457260`, categoría UTILITY (Meta **no** la
+   reclasificó). Su nombre ya está sembrado en `config_operativa`.
+
+### Prueba end-to-end en producción (y limpieza)
+
+Con una fila temporal sobre un servicio real (JOSHUA, cubículo ROJO-M-01) se
+comprobó el camino completo, incluido el del dinero:
+
+| Comprobación | Resultado |
+|---|---|
+| El portal abre y muestra mascota, cubículo y las dos opciones | ✅ |
+| Elegir Helecho + 2 extras de $40.000 | ✅ `valor_total` 471.750 → 551.750 |
+| `valor_adicionales` | 0 → 80.000 |
+| **`estado_pago` COMPLETO → PARCIAL** (si no, el saldo desaparece de la cartera) | ✅ |
+| Novedad con `valor_antes`/`valor_despues` y motivo ADICIONAL | ✅ |
+| Alerta operativa `PLANTA_ELEGIDA` en ALTA | ✅ |
+| Reenviar el mismo formulario **no** vuelve a cobrar | ✅ total intacto |
+| Reenviar con otra especie **no** cambia la elegida | ✅ sigue Helecho |
+
+Todo se revirtió después: servicio restaurado a 471.750 / COMPLETO, y sin
+elecciones, extras, novedades ni alertas de prueba.
 
 ## Estado al 2026-09-09
 
-- Migración **ensayada, no aplicada**.
-- 65 mascotas en cubículo; **ninguna** ha cumplido todavía. Las cinco primeras
+- **En producción y encendido.** Solo falta que Meta apruebe la plantilla
+  (quedó en `PENDING`, sin motivo de rechazo). Mientras tanto el job prepara los
+  avisos pero no escribe a nadie.
+- 65 mascotas en cubículo, **ninguna cumplida todavía**. Las cinco primeras
   (LUNA, WILLY, MAILO, OSIRIS, JOSHUA) cumplen el **15-sep-2026**, todas con
   WhatsApp válido. No hay backlog que pueda dispararse de golpe.
-- Falta la plantilla de Meta.
+- Falta subir las fotos de Helecho y Pescadito (`imagen_url`): sin ellas el portal
+  muestra un ícono en su lugar, que funciona pero luce pobre.
