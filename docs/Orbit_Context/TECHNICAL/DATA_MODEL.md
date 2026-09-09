@@ -162,6 +162,28 @@ Ver `MODULES/OFERTAS.md`.
 - RLS: solo `authenticated` (ALL en catálogo, SELECT en respuestas). `anon` NO tiene acceso —
   el portal las lee por el backend propio. Bucket público `ofertas` para la foto del anuncio.
 
+### Elección de planta — tablas `plantas`, `planta_elecciones`, `planta_adicionales` (migraciones 149/150)
+
+Ver [MODULES/PLANTAS.md](../MODULES/PLANTAS.md).
+
+- `plantas.id` (UUID) — PK · `nombre` (UNIQUE), `descripcion`, `imagen_url`, `orden`, `activo`
+- `plantas.precio` (numeric) — **fuente de verdad del cobro** del extra; el navegador nunca manda precios
+- `plantas.elegible` (bool) — aparece entre las opciones que la familia escoge (va incluida)
+- `plantas.adicional` (bool) — se ofrece con su precio. CHECK: al menos uno de los dos
+- `planta_elecciones.servicio_id` (UUID FK) — **UNIQUE**, candado anti-duplicado del job
+- `planta_elecciones.lote_item_id` (UUID FK → `lotes_tenjo_items.id`, ON DELETE SET NULL)
+- `planta_elecciones.estado` ∈ `PENDIENTE | ENVIADO | ELEGIDA | ERROR | CANCELADA`
+- `planta_elecciones.codigo` — **es `servicios.codigo_fotos`**, el mismo secreto del portal de fotos
+- `planta_elecciones.fecha_cumplida` (date) — `fecha_compostaje_inicio + meses_compostaje` del item.
+  ⚠️ **Leerla siempre con `::text`**: como DATE llega a Node como Date de JS y rompe los cálculos
+- `planta_elecciones.planta_nombre` — snapshot; el catálogo puede cambiar después
+- `planta_adicionales` — `nombre`/`precio_unitario` son snapshot.
+  **UNIQUE (eleccion_id, planta_id)** = candado anti doble cobro
+- `v_plantas_pendientes` — vista del tablero, con `security_invoker = true`
+- RLS: `authenticated` (ALL en catálogo y elecciones, SELECT en adicionales). `anon` NO accede.
+  GRANTs explícitos a **`orbit_backend`** (los ALTER DEFAULT PRIVILEGES no lo cubren).
+  Bucket público `plantas` para las fotos del catálogo
+
 ## Relaciones críticas
 - `servicios → mascotas` vía `mascota_id` → para llegar a cliente: `mascotas(nombre, clientes(nombre, apellido))`
 - `servicios → aliados` vía `aliado_origen_id`
