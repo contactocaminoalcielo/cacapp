@@ -12,6 +12,8 @@ import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupal
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
+import { jobEleccionPlanta } from './jobs/plantas.js'
+import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
@@ -1079,6 +1081,18 @@ app.post('/jobs/digitales', requireJob, async (req, res) => {
   }
 })
 
+// ── Job: elección de planta al cumplirse el compostaje (migración 149) ──
+// Prepara el aviso de los compostajes cumplidos (ingreso al cubículo +
+// meses_compostaje) y manda la plantilla. ?dry=1 → solo dice a quién le tocaría.
+app.post('/jobs/eleccion-planta', requireJob, async (req, res) => {
+  try {
+    res.json(await jobEleccionPlanta({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[plantas/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── Job: vencimientos de afiliaciones pre-exequiales (VENCIDA / CANCELADA) ──
 app.post('/jobs/afiliaciones', requireJob, async (_req, res) => {
   try {
@@ -1193,6 +1207,36 @@ app.post('/portal/imagenes/:codigo', async (req, res) => {
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/imagenes POST', e)
+  }
+})
+
+// ── Portal público de la planta (mismo código que el portal de fotos) ──
+app.get('/portal/planta/:codigo', async (req, res) => {
+  try {
+    const r = await datosPortalPlanta({ codigo: req.params.codigo })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/planta GET', e)
+  }
+})
+
+app.post('/portal/planta/:codigo', async (req, res) => {
+  try {
+    const r = await guardarEleccionPlanta({ codigo: req.params.codigo, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/planta POST', e)
+  }
+})
+
+// Reenviar/forzar el aviso de una elección sin esperar al cron (lo decide una persona).
+app.post('/plantas/:id/enviar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await enviarAvisoPlanta({ eleccionId: req.params.id, personalId: req.personal.id })
+    res.status(r.enviado ? 200 : 409).json(r)
+  } catch (e) {
+    log('[plantas/enviar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 

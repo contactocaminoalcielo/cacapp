@@ -4,12 +4,14 @@ import { db } from '@/lib/supabase'
 import { fmt, parseDate, parsearErrorDB, petEmoji, fmtDateTime } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
+import { eleccionDeServicio, ESTADO_ELECCION } from '@/lib/plantas'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
 import {
   User, MapPin, CreditCard, Clock, Camera, Truck, Package, Snowflake, PawPrint,
+  Leaf,
 } from 'lucide-react'
 
 // ── Ficha completa del servicio / mascota ─────────────────────────────────────
@@ -59,6 +61,9 @@ export default function FichaServicio({ servicioId, onClose }) {
   const [items, setItems]       = useState([])
   const [novedades, setNovedades] = useState([])
   const [contactos, setContactos] = useState([])
+  // Elección de planta del compostaje (migración 149). Best-effort: si la
+  // migración aún no está aplicada, la consulta falla y la ficha se muestra igual.
+  const [planta, setPlanta] = useState(null)
   // Se incrementa cuando algo de dentro cambia el servicio (corregir un cobro):
   // la ficha se recarga sola en vez de quedarse mostrando el valor viejo.
   const [recarga, setRecarga] = useState(0)
@@ -106,6 +111,7 @@ export default function FichaServicio({ servicioId, onClose }) {
         setItems(itRes.data || [])
         setNovedades(nvRes.data || [])
         setContactos(ctRes.data || [])
+        eleccionDeServicio(servicioId).then(p => { if (activo) setPlanta(p) }).catch(() => {})
         // Nombre del mensajero en query aparte (evita depender del hint de FK)
         const ent = (enRes.data || [])[0] || null
         if (ent?.mensajero_id) {
@@ -333,6 +339,50 @@ export default function FichaServicio({ servicioId, onClose }) {
               <HistorialValor servicioId={svc?.id} valorTotal={svc?.valor_total} className="mt-2" />
             </Box>
           </div>
+
+          {/* Planta del compostaje — qué eligió la familia y qué extras compró */}
+          {planta?.eleccion && (() => {
+            const e  = planta.eleccion
+            const st = ESTADO_ELECCION[e.estado] || {}
+            const totalExtras = planta.adicionales.reduce((a, x) => a + Number(x.total || 0), 0)
+            return (
+              <Box icon={Leaf} titulo="Planta del compostaje">
+                <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ background: st.bg, color: st.color, border: `1px solid ${st.border || st.bg}` }}>
+                    {st.label || e.estado}
+                  </span>
+                  {e.planta_nombre && (
+                    <span className="text-[13px] font-bold text-gray-900">🌱 {e.planta_nombre}</span>
+                  )}
+                </div>
+                <Dato label="Cumplió el compostaje">{e.fecha_cumplida ? fmtD(e.fecha_cumplida) : null}</Dato>
+                <Dato label="Aviso enviado">{e.fecha_envio ? fmtTS(e.fecha_envio) : null}</Dato>
+                <Dato label="Eligió el">{e.fecha_eleccion ? fmtTS(e.fecha_eleccion) : null}</Dato>
+                <Dato label="Enlace">{e.enlace}</Dato>
+                {e.error && <div className="text-[11px] text-red-600 mt-1">{e.error}</div>}
+                {planta.adicionales.length > 0 && (
+                  <div className="mt-2 rounded-lg bg-white border border-gray-200 px-2.5 py-1.5">
+                    <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                      Adicionales que pidió en el portal
+                    </div>
+                    {planta.adicionales.map(x => (
+                      <div key={x.id} className="flex justify-between gap-2 text-[11px]">
+                        <span className="text-gray-500">{x.cantidad}× {x.nombre}</span>
+                        <span className="font-semibold text-gray-700">{fmt(x.total)}</span>
+                      </div>
+                    ))}
+                    {/* Ya está sumado a valor_total por el backend: aquí se muestra
+                        para que el cobro de la entrega no se olvide. */}
+                    <div className="flex justify-between gap-2 text-[11px] mt-1 pt-1 border-t border-gray-100">
+                      <span className="font-bold text-gray-600">Valor adicional</span>
+                      <span className="font-bold text-gray-900">{fmt(totalExtras)}</span>
+                    </div>
+                  </div>
+                )}
+              </Box>
+            )
+          })()}
 
           {/* Ítems de producción */}
           {items.length > 0 && (

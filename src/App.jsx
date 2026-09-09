@@ -14,6 +14,7 @@ import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 const TecnicoApp       = lazy(() => import('@/pages/TecnicoApp'))
 const Login            = lazy(() => import('@/pages/Login'))
 const FotosCliente     = lazy(() => import('@/pages/FotosCliente'))
+const PlantaCliente    = lazy(() => import('@/pages/PlantaCliente'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
 const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
 
@@ -157,6 +158,20 @@ function InnerApp() {
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <FotosCliente codigo={codigo} />
+      </Suspense>
+    )
+  }
+
+  // /planta        → pantalla de entrada (el cliente digita el código)
+  // /planta/CODIGO → elección de planta desde el link de WhatsApp. Es el MISMO
+  //                  código del portal de fotos: el cliente ya lo tiene.
+  if (location.pathname === '/planta' || location.pathname.startsWith('/planta/')) {
+    const codigo = location.pathname.startsWith('/planta/')
+      ? location.pathname.replace('/planta/', '')
+      : ''
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <PlantaCliente codigo={codigo} />
       </Suspense>
     )
   }

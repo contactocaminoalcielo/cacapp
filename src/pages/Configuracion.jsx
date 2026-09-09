@@ -12,7 +12,8 @@ import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
 import { invalidarTarifasEspecie } from '@/lib/precios'
-import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame } from 'lucide-react'
+import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame, Leaf } from 'lucide-react'
+import TabPlantas from '@/components/configuracion/TabPlantas'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 
@@ -3212,6 +3213,9 @@ export default function Configuracion() {
             <TabsTrigger value="tenjo">
               <Flame size={13} className="mr-1.5" /> Tenjo
             </TabsTrigger>
+            <TabsTrigger value="plantas">
+              <Leaf size={13} className="mr-1.5" /> Plantas
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal"><TabPersonal /></TabsContent>
@@ -3230,6 +3234,7 @@ export default function Configuracion() {
           <TabsContent value="pago-tecnico"><TabPagoTecnico /></TabsContent>
           <TabsContent value="afiliaciones"><TabAfiliaciones /></TabsContent>
           <TabsContent value="tenjo"><TabTenjo /></TabsContent>
+          <TabsContent value="plantas"><TabPlantas /></TabsContent>
         </Tabs>
       </div>
     </div>

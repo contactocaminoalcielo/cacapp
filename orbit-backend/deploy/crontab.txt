@@ -48,3 +48,9 @@
 # Afiliaciones pre-exequiales — marca VENCIDA (vencio el contrato vigente) y
 # CANCELADA (paso la gracia). Idempotente. Instalado en prod 2026-07-16.
 0 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/afiliaciones >> /var/log/orbit-backend-cron.log 2>&1
+
+# Eleccion de planta — avisa a la familia cuando se cumple el compostaje (ingreso
+# al cubiculo + meses_compostaje: 2, 2.5 o 3, segun lo que fijo el operario).
+# Prepara el aviso y manda la plantilla. Sin plantilla aprobada NO envia: deja los
+# avisos en PENDIENTE y avisa a coordinacion. Idempotente (UNIQUE por servicio).
+15 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/eleccion-planta >> /var/log/orbit-backend-cron.log 2>&1
