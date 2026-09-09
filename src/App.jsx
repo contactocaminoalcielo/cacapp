@@ -125,6 +125,21 @@ function AppRoutes({ rol }) {
   )
 }
 
+// Rutas públicas: las abre un cliente o una veterinaria, sin sesión. Se nombran
+// UNA vez porque el chrome interno tiene que respetarlas — el aviso de "hay una
+// versión nueva de Orbit" se le estaba mostrando a familias en duelo dentro del
+// portal de la planta y del de fotos, con un botón que no significa nada para
+// ellas.
+const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta']
+const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
+
+/** El aviso de versión nueva, solo donde hay alguien de la casa para atenderlo. */
+function AvisoSoloInterno() {
+  const { pathname } = useLocation()
+  if (esRutaPublica(pathname)) return null
+  return <AvisoNuevaVersion />
+}
+
 function InnerApp() {
   const { session, personalData, loading, logout, debug, authError, retryAuth } = useAuth()
   const location = useLocation()
@@ -260,7 +275,7 @@ export default function App() {
       <ConfirmProvider>
         <AuthProvider>
           <InnerApp />
-          <AvisoNuevaVersion />
+          <AvisoSoloInterno />
         </AuthProvider>
       </ConfirmProvider>
     </HashRouter>

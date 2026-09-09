@@ -41,48 +41,63 @@ const pesos = v => `$${Number(v || 0).toLocaleString('es-CO')}`
 // catálogo cae en el dibujo genérico, que sigue siendo una rama de verdad y no
 // un ícono de librería.
 
-/** Fronda de helecho: tallo con pinnas pareadas que se acortan hacia la punta. */
+/**
+ * Fronda de helecho: plumosa, angosta y alta. Muchas pinnas finas inclinadas
+ * hacia arriba — la silueta tiene que leerse como PLUMA desde 40px.
+ */
 function Helecho({ vivo }) {
-  const pinnas = Array.from({ length: 9 }, (_, i) => {
-    const y = 70 - i * 6.6
-    const largo = 20 * (1 - i / 11)
+  const pinnas = Array.from({ length: 14 }, (_, i) => {
+    const y = 71 - i * 4.5
+    const largo = 15.5 * Math.sin(Math.PI * (0.18 + 0.78 * (1 - i / 14)))
     return { y, largo, key: i }
   })
+  const claro = vivo ? VIVO : '#CBC5B5'
+  const oscuro = vivo ? HONDO : '#B4AC9B'
   return (
     <g>
-      <path d="M32 74 C 31 54, 31 30, 32 9" fill="none"
-        stroke={vivo ? HONDO : '#A9A292'} strokeWidth="2" strokeLinecap="round" />
+      <path d="M32 74 C 31.2 54, 31.2 28, 32 8" fill="none"
+        stroke={oscuro} strokeWidth="1.7" strokeLinecap="round" />
       {pinnas.map(({ y, largo, key }) => (
         <g key={key}>
-          <path d={`M32 ${y} Q ${32 - largo * 0.55} ${y - 0.5}, ${32 - largo} ${y - 7.5} Q ${32 - largo * 0.4} ${y - 3.5}, 32 ${y} Z`}
-            fill={vivo ? VIVO : '#CFCabb'} opacity={vivo ? 0.92 : 1} />
-          <path d={`M32 ${y} Q ${32 + largo * 0.55} ${y - 0.5}, ${32 + largo} ${y - 7.5} Q ${32 + largo * 0.4} ${y - 3.5}, 32 ${y} Z`}
-            fill={vivo ? HONDO : '#BDB6A6'} opacity={vivo ? 0.85 : 1} />
+          <path d={`M31.4 ${y} Q ${31.4 - largo * 0.62} ${y - 1.6}, ${31.4 - largo} ${y - 6.4}
+                    Q ${31.4 - largo * 0.34} ${y - 2.6}, 31.4 ${y} Z`} fill={claro} />
+          <path d={`M32.6 ${y} Q ${32.6 + largo * 0.62} ${y - 1.6}, ${32.6 + largo} ${y - 6.4}
+                    Q ${32.6 + largo * 0.34} ${y - 2.6}, 32.6 ${y} Z`} fill={oscuro} opacity="0.88" />
         </g>
       ))}
     </g>
   )
 }
 
-/** Pescadito: tallos planos en zigzag, con los lóbulos angulares de la especie. */
+/**
+ * Pescadito (cactus espina de pescado): NADA de plumas. Un tallo plano, ancho y
+ * carnoso, con pocos dientes grandes en zigzag. La silueta angular es lo único
+ * que lo separa del helecho de un vistazo, y separarlos es justo lo que la
+ * familia tiene que poder hacer.
+ */
 function Pescadito({ vivo }) {
-  const lobulos = Array.from({ length: 8 }, (_, i) => {
-    const y = 70 - i * 7.6
-    const largo = 21 * (1 - i / 13)
-    return { y, largo, key: i }
-  })
+  const n = 5, arriba = 15, abajo = 72
+  const paso = (abajo - arriba) / n
+  const ancho = i => 24 - i * 2.6
+
+  let d = `M32 ${abajo} `
+  for (let i = 0; i < n; i++) {          // sube dentando por la izquierda
+    const y = abajo - i * paso
+    d += `L ${32 - ancho(i)} ${y - paso * 0.62} L 30.5 ${y - paso} `
+  }
+  d += `L 32 ${arriba} `
+  for (let i = n - 1; i >= 0; i--) {     // baja dentando por la derecha
+    const y = abajo - i * paso
+    d += `L ${32 + ancho(i)} ${y - paso * 0.38} L 33.5 ${y} `
+  }
+  d += 'Z'
+
   return (
     <g>
-      <path d="M32 74 C 33 52, 31 28, 32 10" fill="none"
-        stroke={vivo ? HONDO : '#A9A292'} strokeWidth="2.4" strokeLinecap="round" />
-      {lobulos.map(({ y, largo, key }) => (
-        <g key={key}>
-          <path d={`M32 ${y} L ${32 - largo} ${y - 7} L ${32 - largo + 5.5} ${y + 1.5} Z`}
-            fill={vivo ? VIVO : '#CFCabb'} opacity={vivo ? 0.9 : 1} />
-          <path d={`M32 ${y - 3.6} L ${32 + largo} ${y - 10.6} L ${32 + largo - 5.5} ${y - 2.1} Z`}
-            fill={vivo ? HONDO : '#BDB6A6'} opacity={vivo ? 0.82 : 1} />
-        </g>
-      ))}
+      <path d={d} fill={vivo ? VIVO : '#CBC5B5'} />
+      {/* Nervadura central: la "espina" que le da el nombre */}
+      <path d={`M32 ${abajo} L 32 ${arriba}`} fill="none"
+        stroke={vivo ? HONDO : '#9E9584'} strokeWidth="2.2" strokeLinecap="round" opacity="0.9" />
     </g>
   )
 }
