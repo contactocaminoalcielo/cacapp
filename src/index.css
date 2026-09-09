@@ -328,14 +328,21 @@ a, button, [role="button"] {
    el nodo al cerrar y solo espera si detecta una ANIMACIÓN. Con `transition`
    la salida no se vería nunca. */
 @keyframes cac-fade-in   { from { opacity: 0; } }
-@keyframes cac-fade-out  { to   { opacity: 0; } }
 @keyframes cac-modal-in  { from { opacity: 0; transform: scale(0.97); } }
-@keyframes cac-modal-out { to   { opacity: 0; transform: scale(0.97); } }
 
-.cac-overlay[data-state='open']   { animation: cac-fade-in  150ms cubic-bezier(0.4, 0, 0.2, 1); }
-.cac-overlay[data-state='closed'] { animation: cac-fade-out 130ms cubic-bezier(0.4, 0, 0.2, 1); }
-.cac-modal[data-state='open']     { animation: cac-modal-in  180ms cubic-bezier(0.4, 0, 0.2, 1); }
-.cac-modal[data-state='closed']   { animation: cac-modal-out 130ms cubic-bezier(0.4, 0, 0.2, 1); }
+.cac-overlay[data-state='open'] { animation: cac-fade-in  150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.cac-modal[data-state='open']   { animation: cac-modal-in 180ms cubic-bezier(0.4, 0, 0.2, 1); }
+
+/* ⚠️ SOLO se anima la ENTRADA, a propósito. Animar la salida obliga a Radix a
+   retrasar el desmontaje hasta que llegue `animationend`; si ese evento no
+   llega, el overlay se queda montado y Radix deja `pointer-events: none` en el
+   <body> — la app entera se congela. Es un fallo mucho peor que un modal que
+   desaparece de golpe, y no se pudo comprobar en un navegador visible (en una
+   pestaña oculta Chrome congela las animaciones y el evento nunca llega, así
+   que la prueba no distingue un caso del otro).
+   Para añadir la salida: reponer `cac-fade-out`/`cac-modal-out` sobre
+   [data-state='closed'] y verificar, con la ventana AL FRENTE, que al cerrar un
+   modal el nodo se desmonta y el <body> recupera sus pointer-events. */
 /* La confirmación de acciones destructivas entra más rápido: es una puerta, no
    una presentación, y no debe hacerse esperar. */
 .cac-modal--rapido[data-state='open'] { animation-duration: 140ms; }
