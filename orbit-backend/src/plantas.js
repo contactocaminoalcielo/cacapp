@@ -192,7 +192,8 @@ export async function datosPortalPlanta({ codigo }) {
   const client = await pool.connect()
   try {
     const { rows } = await client.query(
-      `SELECT pe.id, pe.estado, pe.fecha_cumplida, pe.fecha_envio, pe.fecha_eleccion,
+      `SELECT pe.id, pe.estado, pe.fecha_cumplida::text AS fecha_cumplida,
+              pe.fecha_envio, pe.fecha_eleccion,
               pe.planta_id, pe.planta_nombre, pe.servicio_id,
               m.nombre AS mascota, esp.nombre AS especie,
               c.nombre AS cliente_nombre,
@@ -261,7 +262,15 @@ async function catalogo(client, campo, limite = null) {
   return rows.map(p => ({ ...p, precio: Number(p.precio) || 0 }))
 }
 
-/** ¿Se venció el enlace? Se cuenta desde el envío; si nunca salió, desde que se cumplió. */
+/**
+ * ¿Se venció el enlace? Se cuenta desde el envío; si nunca salió, desde que se
+ * cumplió el compostaje.
+ *
+ * `fecha_cumplida` DEBE llegar como TEXTO 'YYYY-MM-DD' (por eso el `::text` en
+ * las consultas): una columna DATE llega a Node como Date de JS, y entonces
+ * `String(fecha) + 'T12:00:00'` produce una fecha inválida — la resta da NaN, la
+ * comparación es siempre falsa y la ventana NO cerraría nunca. Fallo mudo.
+ */
 function fueraDeVentana(e, cfg) {
   const dias = parseInt(cfg.dias_ventana_portal) || 120
   const base = e.fecha_envio ? new Date(e.fecha_envio) : new Date(String(e.fecha_cumplida) + 'T12:00:00')
@@ -287,7 +296,8 @@ export async function guardarEleccionPlanta({ codigo, payload = {} }) {
     await lockClave(client, `planta:${cod}`)
 
     const { rows } = await client.query(
-      `SELECT pe.id, pe.servicio_id, pe.estado, pe.planta_id, pe.fecha_cumplida, pe.fecha_envio,
+      `SELECT pe.id, pe.servicio_id, pe.estado, pe.planta_id,
+              pe.fecha_cumplida::text AS fecha_cumplida, pe.fecha_envio,
               m.nombre AS mascota
          FROM public.planta_elecciones pe
          JOIN public.servicios s ON s.id = pe.servicio_id
