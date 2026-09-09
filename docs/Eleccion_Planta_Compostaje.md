@@ -85,6 +85,7 @@ El enlace vive `dias_ventana_portal` días (120 por defecto) desde el envío.
 | `src/pages/PlantaCliente.jsx` | Portal público `/#/planta/CODIGO` |
 | `src/lib/plantas.js` | Cliente del portal + CRUD del catálogo |
 | `src/components/configuracion/TabPlantas.jsx` | Configuración → Plantas: catálogo, aviso y tablero |
+| `migrations/150_plantas_bucket_fotos.sql` | Bucket público `plantas` para subir las fotos del catálogo |
 | `src/components/servicio/FichaServicio.jsx` | Sección "Planta del compostaje" en la tarjeta |
 
 ## Despliegue — HECHO el 2026-09-09
@@ -154,12 +155,25 @@ Contrastes medidos sobre el papel: tinta 13:1, texto apagado 5.4:1, verde hondo
 anillo de Tailwind se pinta con box-shadow y aquí lo usan las sombras— y se
 respeta `prefers-reduced-motion`.
 
+## Las fotos del catálogo
+
+Se suben desde **Configuración → Plantas** (botón "Subir foto"), no pegando una
+URL. Van al bucket público `plantas` (migración 150) — público porque el portal
+lo abre una familia sin sesión. Se recomprimen antes de subir (1200 px, 85 %) y
+el tipo se valida por los BYTES, no por la extensión.
+
+Es opcional: **sin foto el portal dibuja la planta**. Con foto, la foto manda.
+
+Probado end-to-end en producción: subida desde la pantalla real → recomprimida a
+JPEG → legible sin sesión (HTTP 200). El archivo de prueba se borró por la
+Storage API — Postgres bloquea el DELETE directo sobre `storage.objects`.
+
 ## Estado al 2026-09-09
 
 - **En producción, encendido y con la plantilla APROBADA por Meta.** El envío
   automático queda armado: el 15-sep saldrán los primeros avisos solos.
+- Falta, opcionalmente, subir las fotos de Helecho y Pescadito.
 - 65 mascotas en cubículo, **ninguna cumplida todavía**. Las cinco primeras
   (LUNA, WILLY, MAILO, OSIRIS, JOSHUA) cumplen el **15-sep-2026**, todas con
   WhatsApp válido. No hay backlog que pueda dispararse de golpe.
-- Falta subir las fotos de Helecho y Pescadito (`imagen_url`): sin ellas el portal
-  muestra un ícono en su lugar, que funciona pero luce pobre.
+
