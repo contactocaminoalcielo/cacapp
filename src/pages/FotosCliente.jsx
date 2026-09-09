@@ -345,13 +345,13 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const pasosVisibles = items.length + ofertas.length
   return (
     <div className="min-h-screen flex flex-col" style={{ background: BG }}>
-      <header className="sticky top-0 z-20 bg-white shadow-sm border-b" style={{ borderColor: BORD }}>
+      <header className="sticky top-0 z-20 border-b" style={{ borderColor: BORDE, background: PAPEL }}>
         <div className="max-w-lg mx-auto px-5 py-4">
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg flex-shrink-0" style={{ background: G }}>🌿</div>
+            <div className="flex-shrink-0"><Ilustracion nombre="helecho" vivo tam={30} /></div>
             <div>
-              <p className="text-[16px] font-bold text-gray-900 leading-none">{mascota}</p>
-              <p className="text-[12px] text-gray-500 mt-0.5">{servicio?.plan}</p>
+              <p className="font-serif text-[17px] leading-none" style={{ color: HONDO }}>{mascota}</p>
+              <p className="text-[12px] mt-1" style={{ color: APAGADO }}>{servicio?.plan}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
