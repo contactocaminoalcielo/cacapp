@@ -4,13 +4,19 @@ import { db } from '@/lib/supabase'
 import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 import { portalDatos, portalRecibir } from '@/lib/imagenes'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
-import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift } from 'lucide-react'
+import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, BORDE } from '@/components/portal/Botanica'
+import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package } from 'lucide-react'
 
-const G      = '#1A5CD8'
-const G_LITE = '#E8F3EB'
-const G_MID  = '#C5DEC9'
-const BG     = '#F4F7F4'
-const BORD   = '#D8E5D8'
+// Los nombres se conservan (los usan ~150 sitios de este archivo); lo que cambia
+// es a qué apuntan. El portal pasa del azul de Orbit al papel cálido y el verde
+// de invernadero que comparte con el portal de la planta — quien abre esto
+// acaba de perder a su mascota, y no debería sentir que entró al sistema
+// interno de una empresa.
+const G      = VERDE
+const G_LITE = '#EDF2E9'
+const G_MID  = '#B2CBB6'
+const BG     = `radial-gradient(120% 80% at 50% 0%, ${PAPEL} 0%, ${PAPEL2} 100%)`
+const BORD   = BORDE
 // Rojo del "no, gracias": rechazar es una decisión y debe SENTIRSE tomada. Con
 // el gris de antes el cliente no distinguía "dije que no" de "no he respondido".
 const R      = '#DC2626'
@@ -320,16 +326,16 @@ export default function FotosCliente({ codigo: codigoProp }) {
     </Centrado>
   )
   if (fase === 'no_encontrado') return (
-    <PantallaInfo emoji="❓" titulo="Código no encontrado"
+    <PantallaInfo titulo="Código no encontrado"
       texto="Por favor verifica el código que te enviamos por WhatsApp e intenta de nuevo."
       cta={{ label: 'Volver a intentar', fn: () => { setFase('entrada'); setCInput('') } }} />
   )
   if (fase === 'ya_procesado') return (
-    <PantallaInfo emoji="✅" titulo="¡Ya recibimos todo!"
+    <PantallaInfo ok titulo="¡Ya recibimos todo!"
       texto={`Las fotos de ${mascota} ya están registradas. Nuestro equipo está trabajando con mucho cariño.`} />
   )
   if (fase === 'fuera_ventana') return (
-    <PantallaInfo emoji="💬" titulo="Escríbenos para tus fotos"
+    <PantallaInfo titulo="Escríbenos para tus fotos"
       texto={`El servicio de ${mascota} ya avanzó de etapa. Para ayudarte con las fotos de sus recordatorios, por favor escríbenos por WhatsApp y con gusto lo resolvemos.`}
       cta={{ label: 'Escribir por WhatsApp', fn: () => { window.location.href = 'https://wa.me/573159891247' } }} />
   )
@@ -662,7 +668,7 @@ function CapturaRecordatorio({ rec, mascota, files, textosVals, onFilesChange, o
                       onChange={e => setTexto(campo.label, i, maxPalabras > 0 ? limitarPalabras(e.target.value, maxPalabras) : e.target.value)}
                       placeholder={campo.cantidad > 1 ? `${campo.label} ${i + 1}` : `Escribe aquí…`}
                       className="w-full text-[16px] border-2 rounded-xl px-4 py-3.5 outline-none transition-colors"
-                      style={{ borderColor: valor.trim() ? G : BORD, background: '#FAFCFA' }}
+                      style={{ borderColor: valor.trim() ? G : BORD, background: PAPEL }}
                       onFocus={e => e.target.style.borderColor = G}
                       onBlur={e  => e.target.style.borderColor = valor.trim() ? G : BORD} />
                     {maxPalabras > 0 && (
@@ -697,13 +703,18 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
     return (
       <div className="space-y-7">
         <div>
-          <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
+          <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: APAGADO }}>
             Para los recuerdos de {mascota}
           </p>
-          <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
+          <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>{nombre}</h2>
         </div>
         <div className="bg-white rounded-3xl border-2 p-7 text-center space-y-4" style={{ borderColor: BORD }}>
-          <div className="text-5xl">🚫</div>
+          <div className="mx-auto w-14 h-14 rounded-full flex items-center justify-center"
+               style={{ background: R_LITE, border: `2px solid ${R_MID}` }}>
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+              <path d="M4 4l14 14M18 4L4 18" stroke={R} strokeWidth="2.4" strokeLinecap="round" />
+            </svg>
+          </div>
           <p className="text-[17px] font-bold text-gray-800">No deseas este recordatorio</p>
           <p className="text-[14px] text-gray-500 leading-relaxed">
             No te pediremos fotos para este. Si cambias de opinión, puedes volver a activarlo.
@@ -721,10 +732,10 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
   return (
     <div className="space-y-7">
       <div>
-        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: '#9DBD9D' }}>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: APAGADO }}>
           Para los recuerdos de {mascota}
         </p>
-        <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{nombre}</h2>
+        <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>{nombre}</h2>
         <div className="mt-3">
           <CapturaRecordatorio
             rec={rec} mascota={mascota} files={files} textosVals={textosVals}
@@ -773,10 +784,10 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-[13px] font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5" style={{ color: '#9DBD9D' }}>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2 flex items-center gap-1.5" style={{ color: APAGADO }}>
           <Gift size={14} /> {orden ? `Propuesta ${orden.i} de ${orden.total}` : 'Una propuesta para ti'}
         </p>
-        <h2 className="text-[28px] font-bold text-gray-900 leading-tight">{oferta.titulo}</h2>
+        <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>{oferta.titulo}</h2>
       </div>
 
       <div className="bg-white rounded-3xl border-2 overflow-hidden"
@@ -873,15 +884,15 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-2xl border p-6 text-center" style={{ borderColor: BORD }}>
-        <div className="text-5xl mb-3">🌿</div>
-        <h2 className="text-[22px] font-bold text-gray-900 mb-1">Revisión final para {mascota}</h2>
+        <div className="flex justify-center mb-3"><Ilustracion nombre="helecho" vivo tam={56} /></div>
+        <h2 className="font-serif italic text-[24px] mb-1" style={{ color: HONDO }}>Revisión final para {mascota}</h2>
         <p className="text-[14px] text-gray-500 leading-relaxed">Revisa que todo esté correcto antes de enviar.</p>
       </div>
 
       {items.length > 0 && (
         <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: BORD }}>
           <div className="px-5 py-3 border-b" style={{ borderColor: BORD }}>
-            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: '#9DBD9D' }}>Recordatorios</p>
+            <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: APAGADO }}>Recordatorios</p>
           </div>
           {items.map((it, idx) => {
             const rec      = it.recordatorios
@@ -985,7 +996,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
                 </div>
                 <textarea value={interes.texto} onChange={e => setInteres(p => ({ ...p, texto: e.target.value }))} rows={3}
                   placeholder="Cuéntanos qué te gustaría (opcional)…"
-                  className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none" style={{ borderColor: BORD, background: '#FAFCFA' }} />
+                  className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none" style={{ borderColor: BORD, background: PAPEL }} />
               </div>
             </motion.div>
           )}
@@ -1025,7 +1036,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
         <p className="text-[13px] text-gray-500 mb-4 leading-relaxed">Cuéntanos indicaciones para tener en cuenta. Nuestro equipo las evaluará y aplicará lo que sea posible.</p>
         <textarea value={comentarios} onChange={e => setComentarios(e.target.value)} rows={4} placeholder="Escribe aquí tus indicaciones…"
           className="w-full text-[15px] border-2 rounded-xl px-4 py-3.5 outline-none resize-none transition-colors"
-          style={{ borderColor: comentarios.trim() ? G : BORD, background: '#FAFCFA' }}
+          style={{ borderColor: comentarios.trim() ? G : BORD, background: PAPEL }}
           onFocus={e => e.target.style.borderColor = G}
           onBlur={e  => e.target.style.borderColor = comentarios.trim() ? G : BORD} />
       </div>
@@ -1056,7 +1067,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
             <textarea value={entrega.horarios} onChange={e => setE('horarios', e.target.value)} rows={2}
               placeholder="Ej: entre semana después de las 2 pm, fines de semana en la mañana…"
               className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none"
-              style={{ borderColor: entrega.horarios.trim() ? G : BORD, background: '#FAFCFA' }} />
+              style={{ borderColor: entrega.horarios.trim() ? G : BORD, background: PAPEL }} />
             <p className="text-[12px] text-gray-400 mt-2 leading-relaxed">
               Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora exacta</strong> de entrega; te avisaremos cuando el mensajero vaya en camino.
             </p>
@@ -1114,7 +1125,7 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
           {actual.tipo === 'fotos' && (
             <>
               <div className="text-center">
-                <div className="text-4xl mb-2">📸</div>
+                <div className="flex justify-center mb-2"><Camera size={26} color={G} /></div>
                 <h3 className="text-[20px] font-bold text-gray-900">¿Ya subiste todas las fotos?</h3>
                 <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
                   Después de enviar no podrás agregar más desde aquí.
@@ -1150,13 +1161,13 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
           {actual.tipo === 'entrega' && (
             <>
               <div className="text-center">
-                <div className="text-4xl mb-2">📦</div>
+                <div className="flex justify-center mb-2"><Package size={26} color={G} /></div>
                 <h3 className="text-[20px] font-bold text-gray-900">¿Estos datos de entrega están bien?</h3>
                 <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
                   Con ellos llevaremos los recuerdos de {mascota}.
                 </p>
               </div>
-              <div className="rounded-2xl border p-4 space-y-2" style={{ borderColor: BORD, background: '#FAFCFA' }}>
+              <div className="rounded-2xl border p-4 space-y-2" style={{ borderColor: BORD, background: PAPEL }}>
                 <FilaDato label="Dirección" valor={entrega.direccion} />
                 {(entrega.barrio || entrega.localidad) &&
                   <FilaDato label="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
@@ -1175,7 +1186,7 @@ function ConfirmacionesEnvio({ mascota, items, fotos, declinados, entrega, pedir
           {actual.tipo === 'oferta' && (
             <>
               <div className="text-center">
-                <div className="text-4xl mb-2">🎁</div>
+                <div className="flex justify-center mb-2"><Gift size={26} color={G} /></div>
                 <h3 className="text-[20px] font-bold text-gray-900">
                   ¿Seguro que no deseas agregar {actual.oferta.recordatorio?.nombre || 'este recordatorio'}?
                 </h3>
@@ -1241,9 +1252,9 @@ function EntradaScreen({ cInput, setCInput, onBuscar }) {
     <div className="min-h-screen flex flex-col items-center justify-center px-5 py-12" style={{ background: BG }}>
       <div className="w-full max-w-sm">
         <div className="text-center mb-10">
-          <div className="w-24 h-24 rounded-3xl flex items-center justify-center text-5xl mx-auto mb-5 shadow-lg" style={{ background: G }}>🌿</div>
-          <h1 className="text-[28px] font-bold text-gray-900">Camino al Cielo</h1>
-          <p className="text-[15px] text-gray-500 mt-1.5">Portal para compartir fotos</p>
+          <div className="flex justify-center mb-4"><Ilustracion nombre="helecho" vivo tam={84} /></div>
+          <h1 className="font-serif italic text-[30px] leading-tight" style={{ color: HONDO }}>Camino al Cielo</h1>
+          <p className="text-[15px] mt-2" style={{ color: APAGADO }}>Portal para compartir fotos</p>
         </div>
         <div className="bg-white rounded-3xl p-7 shadow-sm border" style={{ borderColor: BORD }}>
           <p className="text-[15px] text-gray-600 mb-6 text-center leading-relaxed">Ingresa el código que te enviamos por WhatsApp para comenzar.</p>
@@ -1251,7 +1262,7 @@ function EntradaScreen({ cInput, setCInput, onBuscar }) {
           <input type="text" value={cInput} onChange={e => setCInput(e.target.value.toUpperCase())}
             onKeyDown={e => e.key === 'Enter' && onBuscar()} placeholder="Ej: ABC12345"
             className="w-full border-2 rounded-2xl px-4 py-4 text-[24px] font-bold text-center tracking-[0.12em] outline-none mb-5 transition-colors"
-            style={{ borderColor: cInput.trim() ? G : BORD, background: '#FAFCFA', color: '#1A2E1E' }}
+            style={{ borderColor: cInput.trim() ? G : BORD, background: '#FFFFFF', color: TINTA }}
             onFocus={e => e.target.style.borderColor = G}
             onBlur={e  => e.target.style.borderColor = cInput.trim() ? G : BORD}
             autoFocus autoCapitalize="characters" />
@@ -1271,22 +1282,24 @@ function EntradaScreen({ cInput, setCInput, onBuscar }) {
 function PantallaEnviado({ mascota }) {
   return (
     <Centrado>
-      <motion.div initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 200, damping: 14 }}
-        className="w-28 h-28 rounded-3xl flex items-center justify-center text-6xl mb-6 shadow-xl" style={{ background: G }}>🌿</motion.div>
-      <h1 className="text-[26px] font-bold text-gray-900 mb-3">¡Fotos recibidas!</h1>
-      <p className="text-[15px] text-gray-500 leading-relaxed max-w-xs text-center">
-        Gracias por compartir las fotos de <strong>{mascota}</strong>.<br /><br />Nuestro equipo comenzará a trabajar con mucho cariño.
+      <motion.div initial={{ scale: 0.88, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.1 }} className="mb-6">
+        <Ilustracion nombre="helecho" vivo tam={112} />
+      </motion.div>
+      <h1 className="font-serif italic text-[28px] mb-3" style={{ color: HONDO }}>Gracias</h1>
+      <p className="text-[15px] leading-relaxed max-w-xs text-center" style={{ color: APAGADO }}>
+        Recibimos las fotos de <strong style={{ color: TINTA }}>{mascota}</strong>.<br /><br />Nuestro equipo comenzará a trabajar con mucho cariño.
       </p>
       <p className="text-[13px] text-gray-400 mt-6">Puede cerrar esta ventana.</p>
     </Centrado>
   )
 }
 
-function PantallaInfo({ emoji, titulo, texto, cta }) {
+function PantallaInfo({ ok = false, titulo, texto, cta }) {
   return (
     <Centrado>
-      <div className="text-6xl mb-4">{emoji}</div>
-      <h1 className="text-[22px] font-bold text-gray-900 mb-3">{titulo}</h1>
+      <div className="mb-5"><Ilustracion nombre="rama" vivo={ok} tam={76} /></div>
+      <h1 className="font-serif italic text-[24px] mb-3" style={{ color: HONDO }}>{titulo}</h1>
       <p className="text-[15px] text-gray-500 max-w-xs text-center leading-relaxed">{texto}</p>
       {cta && <button onClick={cta.fn} className="mt-6 px-8 py-4 rounded-2xl font-bold text-white text-[16px]" style={{ background: G }}>{cta.label}</button>}
     </Centrado>
@@ -1316,7 +1329,7 @@ function CampoLocalidad({ value, onChange }) {
       <select value={value || ''} onChange={e => onChange(e.target.value)}
         className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none transition-colors"
         style={{
-          borderColor: lleno ? G : BORD, background: '#FAFCFA',
+          borderColor: lleno ? G : BORD, background: PAPEL,
           color: lleno ? '#111827' : '#9CA3AF',
         }}
         onFocus={e => e.target.style.borderColor = G}
@@ -1337,7 +1350,7 @@ function CampoEntrega({ label, value, onChange, placeholder, inputMode, required
       </label>
       <input type="text" inputMode={inputMode} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none transition-colors"
-        style={{ borderColor: value.trim() ? G : BORD, background: '#FAFCFA' }}
+        style={{ borderColor: value.trim() ? G : BORD, background: PAPEL }}
         onFocus={e => e.target.style.borderColor = G}
         onBlur={e  => e.target.style.borderColor = value.trim() ? G : BORD} />
     </div>
