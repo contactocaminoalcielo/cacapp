@@ -36,6 +36,16 @@ const ORO     = '#B07D08'
 
 const pesos = v => `$${Number(v || 0).toLocaleString('es-CO')}`
 
+/**
+ * Los nombres llegan en MAYÚSCULAS desde la base (así se registran en la
+ * operación). Gritar "JOSHUA" en la pantalla donde una familia se despide es
+ * áspero: aquí se muestran en su forma natural. Solo cambia lo que se ve; el
+ * dato no se toca.
+ */
+const bonito = s => String(s || '')
+  .toLocaleLowerCase('es-CO')
+  .replace(/(^|[\s'’-])(\p{L})/gu, (_, sep, letra) => sep + letra.toLocaleUpperCase('es-CO'))
+
 // ─── Ilustraciones botánicas ─────────────────────────────────────────────────
 // Se eligen por el nombre de la especie. Cualquier planta que David agregue al
 // catálogo cae en el dibujo genérico, que sigue siendo una rama de verdad y no
@@ -248,8 +258,8 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     }
   }
 
-  const mascota     = datos?.servicio?.mascota || 'tu mascota'
-  const nombreCli   = datos?.servicio?.nombre_cliente
+  const mascota     = bonito(datos?.servicio?.mascota) || 'tu mascota'
+  const nombreCli   = bonito(datos?.servicio?.nombre_cliente)
   const yaEligio    = !!datos?.ya_eligio
   const opciones    = datos?.opciones || []
   const disponibles = datos?.adicionales || []
