@@ -318,9 +318,48 @@ a, button, [role="button"] {
 /* ─── Numeric / currency values — tabular nums ───────────────── */
 .tabular { font-variant-numeric: tabular-nums; }
 
+/* ─── Entrada y salida de los modales (Radix) ────────────────── */
+/* 🩸 Esto NO existía. `dialog.jsx` decía animar con `animate-in fade-in-0
+   zoom-in-95`, clases de `tailwindcss-animate` — un plugin de Tailwind v3 que
+   este proyecto nunca instaló. Los 27 modales de la app (FichaServicio incluida)
+   aparecían de golpe desde siempre, y el código afirmaba lo contrario.
+
+   ⚠️ Se anima con @keyframes y NO con `transition` a propósito: Radix desmonta
+   el nodo al cerrar y solo espera si detecta una ANIMACIÓN. Con `transition`
+   la salida no se vería nunca. */
+@keyframes cac-fade-in   { from { opacity: 0; } }
+@keyframes cac-fade-out  { to   { opacity: 0; } }
+@keyframes cac-modal-in  { from { opacity: 0; transform: scale(0.97); } }
+@keyframes cac-modal-out { to   { opacity: 0; transform: scale(0.97); } }
+
+.cac-overlay[data-state='open']   { animation: cac-fade-in  150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.cac-overlay[data-state='closed'] { animation: cac-fade-out 130ms cubic-bezier(0.4, 0, 0.2, 1); }
+.cac-modal[data-state='open']     { animation: cac-modal-in  180ms cubic-bezier(0.4, 0, 0.2, 1); }
+.cac-modal[data-state='closed']   { animation: cac-modal-out 130ms cubic-bezier(0.4, 0, 0.2, 1); }
+/* La confirmación de acciones destructivas entra más rápido: es una puerta, no
+   una presentación, y no debe hacerse esperar. */
+.cac-modal--rapido[data-state='open'] { animation-duration: 140ms; }
+
 /* ─── Fade-in keyframe for CSS-only cases ────────────────────── */
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-up { animation: fadeUp 0.22s cubic-bezier(0.4, 0, 0.2, 1) both; }
+
+/* ─── "Reducir movimiento" del sistema ───────────────────────── */
+/* Se atenúa, no se anula: el usuario pidió menos movimiento, no una interfaz
+   que no responda. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Excepción deliberada: el spinner y el esqueleto NO decoran — informan de
+     que algo está ocurriendo. Congelarlos deja una pantalla que parece rota
+     mientras carga. Siguen girando, más despacio. */
+  .spinner  { animation: spin 1.4s linear infinite !important; }
+  .skeleton { animation: pulse-skeleton 2.4s ease-in-out infinite !important; }
+}

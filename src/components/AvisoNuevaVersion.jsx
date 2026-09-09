@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 
 /**
  * Aviso de versión nueva.
@@ -71,10 +72,18 @@ export default function AvisoNuevaVersion() {
     setTimeout(limpiarYRecargar, 3000)
   }
 
-  if (!necesitaRefresco) return null
+  // Entra y SALE por el mismo borde: el aviso llega desde arriba y se va por
+  // arriba. Antes teleportaba en ambos sentidos y parecía un parpadeo.
+  const quieto = useReducedMotion()
 
   return (
-    <div
+    <AnimatePresence>
+      {necesitaRefresco && (
+    <motion.div
+      initial={quieto ? { opacity: 0 } : { opacity: 0, y: '-100%' }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={quieto ? { opacity: 0 } : { opacity: 0, y: '-100%' }}
+      transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
       className="fixed inset-x-0 top-0 z-[9999] px-3 pointer-events-none"
       style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}
     >
@@ -98,6 +107,8 @@ export default function AvisoNuevaVersion() {
           <X size={16} />
         </button>
       </div>
-    </div>
+    </motion.div>
+      )}
+    </AnimatePresence>
   )
 }

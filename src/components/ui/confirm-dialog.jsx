@@ -44,12 +44,14 @@ export function ConfirmDialog({
   return (
     <Dialog.Root open={open} onOpenChange={v => { if (!v) onCancel?.() }}>
       <Dialog.Portal>
+        {/* `animation: fadeIn` apuntaba a un @keyframes que NO existe en
+            index.css: no animaba nada. Ahora usa el mismo vocabulario que el
+            resto de los modales. */}
         <Dialog.Overlay
-          className="fixed inset-0 z-[400] bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
-          style={{ animation: 'fadeIn 0.15s ease-out' }}
+          className="cac-overlay fixed inset-0 z-[400] bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
         >
           <Dialog.Content
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5"
+            className="cac-modal cac-modal--rapido bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5"
             style={{ animation: 'slideIn 0.18s ease-out' }}
             onInteractOutside={e => e.preventDefault()}
           >
@@ -97,12 +99,14 @@ export function AlertDialog({ open, title, message, variant = 'danger', onClose 
   return (
     <Dialog.Root open={open} onOpenChange={v => { if (!v) onClose?.() }}>
       <Dialog.Portal>
+        {/* `animation: fadeIn` apuntaba a un @keyframes que NO existe en
+            index.css: no animaba nada. Ahora usa el mismo vocabulario que el
+            resto de los modales. */}
         <Dialog.Overlay
-          className="fixed inset-0 z-[400] bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
-          style={{ animation: 'fadeIn 0.15s ease-out' }}
+          className="cac-overlay fixed inset-0 z-[400] bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
         >
           <Dialog.Content
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5"
+            className="cac-modal cac-modal--rapido bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5"
             style={{ animation: 'slideIn 0.18s ease-out' }}
             onInteractOutside={e => e.preventDefault()}
           >
