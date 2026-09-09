@@ -4,20 +4,183 @@
 //
 // El precio nunca sale de aquí: esta pantalla manda ids y cantidades, y el
 // backend resuelve el monto contra `plantas` dentro de su transacción.
+//
+// ── Sobre el diseño ─────────────────────────────────────────────────────────
+// Esta pantalla la abre alguien que acaba de perder a su mascota. No se parece
+// al resto de Orbit a propósito: fondo de papel cálido en vez del azul de la
+// marca, titulares en Playfair itálica (ya cargada en index.html, no pide una
+// fuente más) y un verde profundo en vez del azul corporativo.
+//
+// **No usa iconos de librería.** Cada especie tiene su ILUSTRACIÓN dibujada a
+// mano en SVG —la fronda del helecho, el zigzag del pescadito—, así el momento
+// de elegir se parece a mirar plantas y no a llenar un formulario. Un ícono
+// genérico repetido en las dos tarjetas volvería intercambiable justo lo único
+// que la familia tiene que decidir.
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { Check, Leaf, Loader2, Send, Plus, Minus } from 'lucide-react'
+import { motion, useReducedMotion } from 'framer-motion'
 import { portalPlanta, portalElegirPlanta } from '@/lib/plantas'
 
-const VERDE  = '#1D8A55'
-const V_LITE = '#E8F3EB'
-const V_MID  = '#A0D4B0'
-const BG     = '#F4F7F4'
-const BORD   = '#D8E5D8'
+// ── Paleta: papel cálido + verde de invernadero ─────────────────────────────
+// Contrastes medidos sobre el papel (#FBF7F0): tinta 13:1, apagado 5.4:1,
+// verde hondo 7.7:1. El botón usa #2F6B49 (6.3:1 con blanco) y no un verde más
+// claro, que se queda en 3.7:1 y no pasa.
+const PAPEL   = '#FBF7F0'
+const PAPEL2  = '#F1F0E6'
+const TINTA   = '#2A2620'
+const APAGADO = '#6B6257'
+const HONDO   = '#2F5D45'
+const VERDE   = '#2F6B49'
+const VIVO    = '#4E9B6E'
+const BORDE   = '#E3DDCE'
+const ORO     = '#B07D08'
 
 const pesos = v => `$${Number(v || 0).toLocaleString('es-CO')}`
 
+// ─── Ilustraciones botánicas ─────────────────────────────────────────────────
+// Se eligen por el nombre de la especie. Cualquier planta que David agregue al
+// catálogo cae en el dibujo genérico, que sigue siendo una rama de verdad y no
+// un ícono de librería.
+
+/** Fronda de helecho: tallo con pinnas pareadas que se acortan hacia la punta. */
+function Helecho({ vivo }) {
+  const pinnas = Array.from({ length: 9 }, (_, i) => {
+    const y = 70 - i * 6.6
+    const largo = 20 * (1 - i / 11)
+    return { y, largo, key: i }
+  })
+  return (
+    <g>
+      <path d="M32 74 C 31 54, 31 30, 32 9" fill="none"
+        stroke={vivo ? HONDO : '#A9A292'} strokeWidth="2" strokeLinecap="round" />
+      {pinnas.map(({ y, largo, key }) => (
+        <g key={key}>
+          <path d={`M32 ${y} Q ${32 - largo * 0.55} ${y - 0.5}, ${32 - largo} ${y - 7.5} Q ${32 - largo * 0.4} ${y - 3.5}, 32 ${y} Z`}
+            fill={vivo ? VIVO : '#CFCabb'} opacity={vivo ? 0.92 : 1} />
+          <path d={`M32 ${y} Q ${32 + largo * 0.55} ${y - 0.5}, ${32 + largo} ${y - 7.5} Q ${32 + largo * 0.4} ${y - 3.5}, 32 ${y} Z`}
+            fill={vivo ? HONDO : '#BDB6A6'} opacity={vivo ? 0.85 : 1} />
+        </g>
+      ))}
+    </g>
+  )
+}
+
+/** Pescadito: tallos planos en zigzag, con los lóbulos angulares de la especie. */
+function Pescadito({ vivo }) {
+  const lobulos = Array.from({ length: 8 }, (_, i) => {
+    const y = 70 - i * 7.6
+    const largo = 21 * (1 - i / 13)
+    return { y, largo, key: i }
+  })
+  return (
+    <g>
+      <path d="M32 74 C 33 52, 31 28, 32 10" fill="none"
+        stroke={vivo ? HONDO : '#A9A292'} strokeWidth="2.4" strokeLinecap="round" />
+      {lobulos.map(({ y, largo, key }) => (
+        <g key={key}>
+          <path d={`M32 ${y} L ${32 - largo} ${y - 7} L ${32 - largo + 5.5} ${y + 1.5} Z`}
+            fill={vivo ? VIVO : '#CFCabb'} opacity={vivo ? 0.9 : 1} />
+          <path d={`M32 ${y - 3.6} L ${32 + largo} ${y - 10.6} L ${32 + largo - 5.5} ${y - 2.1} Z`}
+            fill={vivo ? HONDO : '#BDB6A6'} opacity={vivo ? 0.82 : 1} />
+        </g>
+      ))}
+    </g>
+  )
+}
+
+/** Rama genérica, para cualquier especie que se agregue al catálogo después. */
+function Rama({ vivo }) {
+  const hojas = Array.from({ length: 5 }, (_, i) => {
+    const y = 66 - i * 12
+    const lado = i % 2 === 0 ? -1 : 1
+    const largo = 19 * (1 - i / 9)
+    return { y, lado, largo, key: i }
+  })
+  return (
+    <g>
+      <path d="M32 74 C 30 52, 34 28, 32 11" fill="none"
+        stroke={vivo ? HONDO : '#A9A292'} strokeWidth="2.2" strokeLinecap="round" />
+      {hojas.map(({ y, lado, largo, key }) => (
+        <path key={key}
+          d={`M32 ${y} C ${32 + lado * largo * 0.4} ${y - 1}, ${32 + lado * largo} ${y - 5}, ${32 + lado * largo} ${y - 12} C ${32 + lado * largo * 0.45} ${y - 8}, ${32 + lado * largo * 0.15} ${y - 4}, 32 ${y} Z`}
+          fill={vivo ? (key % 2 ? HONDO : VIVO) : (key % 2 ? '#BDB6A6' : '#CFCabb')} />
+      ))}
+    </g>
+  )
+}
+
+const DIBUJOS = [
+  { prueba: /helech|fern/i,            Componente: Helecho },
+  { prueba: /pescad|ric.?rac|fishbone/i, Componente: Pescadito },
+]
+
+/**
+ * Ilustración de una especie. `vivo` la enciende (elegida); apagada queda en los
+ * grises del papel, para que la elegida se distinga sin depender solo del color
+ * — hay quien no separa el verde del gris.
+ */
+function Ilustracion({ nombre, vivo = false, tam = 72 }) {
+  const { Componente } = DIBUJOS.find(d => d.prueba.test(nombre || '')) || { Componente: Rama }
+  return (
+    <svg viewBox="0 0 64 84" width={tam} height={tam * 84 / 64} aria-hidden="true"
+         style={{ display: 'block', overflow: 'visible' }}>
+      {/* Tierra: un arco bajo la planta, para que no flote en el aire */}
+      <ellipse cx="32" cy="76" rx="17" ry="3.6" fill={vivo ? '#DCD3BE' : '#E8E3D6'} />
+      <Componente vivo={vivo} />
+    </svg>
+  )
+}
+
+// Foco de teclado en CSS propio y no con utilidades: el anillo de Tailwind se
+// pinta con box-shadow y aquí el box-shadow ya lo usan las sombras de las
+// tarjetas — uno pisaría al otro y quien navega con teclado se quedaría sin
+// saber dónde está. Con `outline` no compiten, y escrito a mano no depende de
+// cómo se comporte `outline-2` en esta versión de Tailwind.
+const ESTILOS = `
+  .cac-foco:focus-visible { outline: 2px solid ${HONDO}; outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    .cac-suave { transition-duration: 0.01ms !important; }
+  }
+`
+
+// ─── Piezas de la página ─────────────────────────────────────────────────────
+
+function Marco({ children }) {
+  return (
+    <div className="min-h-screen w-full"
+      style={{ background: `radial-gradient(120% 80% at 50% 0%, ${PAPEL} 0%, ${PAPEL2} 100%)`, color: TINTA }}>
+      <style>{ESTILOS}</style>
+      <div className="mx-auto w-full max-w-[30rem] px-5">{children}</div>
+    </div>
+  )
+}
+
+function Firma() {
+  return (
+    <div className="flex flex-col items-center gap-1.5 py-9">
+      <span className="block h-px w-10" style={{ background: BORDE }} />
+      <p className="font-serif italic text-[13px]" style={{ color: APAGADO }}>Camino al Cielo</p>
+    </div>
+  )
+}
+
+/** Botón principal. 52px de alto: por encima del mínimo táctil de 44. */
+function Boton({ children, ...props }) {
+  return (
+    <button
+      className="cac-foco cac-suave w-full min-h-[52px] rounded-full px-6 text-[15px] font-semibold
+                 text-white transition-all duration-200 ease-out cursor-pointer
+                 disabled:cursor-not-allowed disabled:opacity-45"
+      style={{ background: VERDE, boxShadow: '0 6px 18px -6px rgba(47,107,73,0.55)' }}
+      {...props}
+    >
+      {children}
+    </button>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 export default function PlantaCliente({ codigo: codigoProp }) {
+  const quieto = useReducedMotion()
   const [fase,      setFase]      = useState(codigoProp ? 'cargando' : 'entrada')
   const [cInput,    setCInput]    = useState(codigoProp || '')
   const [codigo,    setCodigo]    = useState((codigoProp || '').toUpperCase())
@@ -37,7 +200,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     try {
       const r = await portalPlanta(c)
       if (r.status === 404 || !r.ok) {
-        setError('No encontramos este enlace. Verifica el código o escríbenos.')
+        setError('No encontramos este enlace. Revisa el código o escríbenos por WhatsApp.')
         setFase('entrada')
         return
       }
@@ -50,14 +213,15 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     }
   }
 
-  const mascota    = datos?.servicio?.mascota || 'tu mascota'
-  const saludo     = datos?.servicio?.nombre_cliente ? `Hola, ${datos.servicio.nombre_cliente}.` : 'Hola.'
-  const yaEligio   = !!datos?.ya_eligio
-  const opciones   = datos?.opciones || []
+  const mascota     = datos?.servicio?.mascota || 'tu mascota'
+  const nombreCli   = datos?.servicio?.nombre_cliente
+  const yaEligio    = !!datos?.ya_eligio
+  const opciones    = datos?.opciones || []
   const disponibles = datos?.adicionales || []
-  const comprados  = datos?.comprados || []
+  const comprados   = datos?.comprados || []
   const totalExtras = disponibles.reduce((s, p) => s + (extras[p.id] || 0) * (p.precio || 0), 0)
-  const puedeEnviar = (yaEligio || !!elegida) && (!yaEligio || totalExtras > 0 || Object.keys(extras).length > 0)
+  const hayExtras   = Object.keys(extras).length > 0
+  const puedeEnviar = yaEligio ? hayExtras : !!elegida
 
   function cambiarExtra(id, delta) {
     setExtras(p => {
@@ -77,9 +241,10 @@ export default function PlantaCliente({ codigo: codigoProp }) {
         adicionales: Object.entries(extras).map(([planta_id, cantidad]) => ({ planta_id, cantidad })),
       })
       if (!r.ok) {
-        setError(r.error === 'cerrado'
-          ? 'Este enlace ya no está disponible. Escríbenos y te ayudamos.'
-          : 'No pudimos guardar tu elección. Inténtalo de nuevo en un momento.')
+        // Si el enlace se venció mientras llenaba el formulario, no sirve dejarlo
+        // reintentando contra una puerta cerrada: se le dice y se cambia de pantalla.
+        if (r.error === 'cerrado') { setFase('cerrado'); return }
+        setError('No pudimos guardar tu elección. Inténtalo de nuevo en un momento.')
         return
       }
       setResultado(r)
@@ -91,83 +256,117 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     }
   }
 
-  // ── Pantallas simples ──────────────────────────────────────────────────────
+  const entra = quieto ? {} : { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 },
+                               transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } }
+
+  // ── Cargando ───────────────────────────────────────────────────────────────
   if (fase === 'cargando') return (
     <Marco>
-      <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <Loader2 className="animate-spin" size={26} color={VERDE} />
-        <p className="text-[13px] text-gray-500">Un momento…</p>
+      <div className="flex flex-col items-center justify-center gap-4 py-28">
+        <motion.div
+          animate={quieto ? {} : { opacity: [0.35, 1, 0.35] }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}>
+          <Ilustracion nombre="rama" vivo tam={56} />
+        </motion.div>
+        <p className="text-[14px]" style={{ color: APAGADO }}>Un momento…</p>
       </div>
     </Marco>
   )
 
+  // ── Entrada del código ─────────────────────────────────────────────────────
   if (fase === 'entrada') return (
     <Marco>
-      <div className="py-8">
-        <Leaf size={30} color={VERDE} className="mx-auto mb-3" />
-        <h1 className="text-[19px] font-bold text-center text-gray-900 mb-1">Elige la planta</h1>
-        <p className="text-[13px] text-gray-500 text-center mb-6">
+      <motion.div {...entra} className="pt-16 pb-10">
+        <div className="flex justify-center mb-6"><Ilustracion nombre="helecho" vivo tam={80} /></div>
+        <h1 className="font-serif italic text-center text-[30px] leading-tight" style={{ color: HONDO }}>
+          Elige su planta
+        </h1>
+        <p className="text-center text-[15px] leading-relaxed mt-3 mb-8" style={{ color: APAGADO }}>
           Escribe el código que te enviamos por WhatsApp.
         </p>
+        <label htmlFor="codigo-planta" className="sr-only">Código del enlace</label>
         <input
+          id="codigo-planta"
           value={cInput}
           onChange={e => setCInput(e.target.value.toUpperCase())}
           onKeyDown={e => e.key === 'Enter' && cargar(cInput)}
           placeholder="CÓDIGO"
-          className="w-full text-center tracking-[0.3em] text-[18px] font-bold rounded-xl border-2 px-4 py-3 outline-none"
-          style={{ borderColor: BORD, background: '#fff' }}
+          autoComplete="off"
+          autoCapitalize="characters"
+          className="w-full min-h-[56px] rounded-2xl px-4 text-center text-[18px] font-bold tracking-[0.28em]
+                     transition-colors duration-200 cac-foco cac-suave"
+          style={{ background: '#FFFFFF', border: `1.5px solid ${BORDE}`, color: TINTA }}
         />
-        {error && <p role="alert" className="text-[12px] text-red-600 mt-3 text-center">{error}</p>}
-        <button onClick={() => cargar(cInput)} disabled={!cInput.trim()}
-          className="w-full mt-4 rounded-xl py-3.5 text-white font-semibold text-[14px] disabled:opacity-40"
-          style={{ background: VERDE }}>
-          Continuar
-        </button>
-      </div>
+        {error && (
+          <p role="alert" className="text-[13px] text-center mt-3" style={{ color: '#A33A2A' }}>{error}</p>
+        )}
+        <div className="mt-5">
+          <Boton onClick={() => cargar(cInput)} disabled={!cInput.trim()}>Continuar</Boton>
+        </div>
+      </motion.div>
+      <Firma />
     </Marco>
   )
 
+  // ── Enlace cerrado ─────────────────────────────────────────────────────────
   if (fase === 'cerrado') return (
     <Marco>
-      <div className="py-12 text-center">
-        <Leaf size={30} color="#9CA3AF" className="mx-auto mb-3" />
-        <h1 className="text-[17px] font-bold text-gray-900 mb-2">Este enlace ya no está disponible</h1>
-        <p className="text-[13px] text-gray-500">
-          Escríbenos por WhatsApp y con gusto continuamos contigo.
+      <motion.div {...entra} className="pt-24 pb-6 text-center">
+        <div className="flex justify-center mb-6 opacity-70"><Ilustracion nombre="rama" tam={72} /></div>
+        <h1 className="font-serif italic text-[26px] leading-tight mb-3" style={{ color: HONDO }}>
+          Este enlace ya descansó
+        </h1>
+        <p className="text-[15px] leading-relaxed" style={{ color: APAGADO }}>
+          Escríbenos por WhatsApp y seguimos contigo con mucho gusto.
         </p>
-      </div>
+      </motion.div>
+      <Firma />
     </Marco>
   )
 
+  // ── Gracias ────────────────────────────────────────────────────────────────
   if (fase === 'listo') {
     const nombre = resultado?.planta || datos?.eleccion?.planta_nombre
     const nuevos = resultado?.extras || []
     return (
       <Marco>
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="py-10 text-center">
-          <div className="mx-auto mb-4 w-14 h-14 rounded-full flex items-center justify-center"
-               style={{ background: V_LITE, border: `2px solid ${V_MID}` }}>
-            <Check size={26} color={VERDE} />
-          </div>
-          <h1 className="text-[18px] font-bold text-gray-900 mb-2">Gracias por confiar en nosotros</h1>
+        <motion.div {...entra} className="pt-20 pb-4 text-center">
+          <motion.div className="flex justify-center mb-7"
+            initial={quieto ? false : { scale: 0.86, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}>
+            <Ilustracion nombre={nombre} vivo tam={116} />
+          </motion.div>
+          <h1 className="font-serif italic text-[28px] leading-snug" style={{ color: HONDO }}>
+            Gracias{nombreCli ? `, ${nombreCli}` : ''}
+          </h1>
           {nombre && (
-            <p className="text-[14px] text-gray-700 mb-1">
-              {mascota} continuará su camino en un <strong>{nombre}</strong>.
+            <p className="text-[16px] leading-relaxed mt-3" style={{ color: TINTA }}>
+              {mascota} seguirá su camino en un <strong style={{ color: HONDO }}>{nombre}</strong>.
             </p>
           )}
           {!!nuevos.length && (
-            <div className="mt-4 rounded-xl p-3 text-left" style={{ background: V_LITE, border: `1px solid ${V_MID}` }}>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Agregaste</p>
+            <div className="mt-7 rounded-2xl p-4 text-left"
+                 style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-2.5" style={{ color: APAGADO }}>
+                Agregaste
+              </p>
               {nuevos.map((x, i) => (
-                <div key={i} className="flex justify-between text-[13px] text-gray-800">
-                  <span>{x.cantidad}× {x.nombre}</span><span className="font-semibold">{pesos(x.total)}</span>
+                <div key={i} className="flex justify-between gap-3 text-[14px] py-0.5">
+                  <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
+                  <span className="font-bold tabular-nums" style={{ color: ORO }}>{pesos(x.total)}</span>
                 </div>
               ))}
-              <p className="text-[11px] text-gray-500 mt-2">Coordinamos el pago contigo al momento de la entrega.</p>
+              <p className="text-[12px] leading-relaxed mt-3" style={{ color: APAGADO }}>
+                Coordinamos el pago contigo en el momento de la entrega.
+              </p>
             </div>
           )}
-          <p className="text-[12px] text-gray-500 mt-5">Te escribiremos para coordinar la entrega.</p>
+          <p className="text-[14px] leading-relaxed mt-7" style={{ color: APAGADO }}>
+            Te escribiremos para coordinar la entrega.
+          </p>
         </motion.div>
+        <Firma />
       </Marco>
     )
   }
@@ -175,149 +374,199 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   // ── Formulario ─────────────────────────────────────────────────────────────
   return (
     <Marco>
-      <div className="pb-24">
-        <div className="text-center pt-6 pb-5">
-          <Leaf size={28} color={VERDE} className="mx-auto mb-2.5" />
-          <h1 className="text-[18px] font-bold text-gray-900 leading-snug">
+      <motion.div {...entra} className="pt-14" style={{ paddingBottom: '10.5rem' }}>
+
+        <header className="text-center">
+          <p className="text-[12px] font-bold uppercase tracking-[0.18em]" style={{ color: APAGADO }}>
+            {nombreCli ? `Hola, ${nombreCli}` : 'Hola'}
+          </p>
+          <h1 className="font-serif italic text-[30px] leading-[1.15] mt-3" style={{ color: HONDO }}>
             El proceso de {mascota} ha terminado
           </h1>
-          <p className="text-[13px] text-gray-600 mt-2 leading-relaxed">
-            {saludo} Su compostaje se completó con todo el cuidado.
-            Ahora {mascota} vuelve a la vida en forma de planta:
-            elige la que quieres que la acompañe.
+          <p className="text-[15px] leading-relaxed mt-4" style={{ color: APAGADO }}>
+            Su compostaje se completó con todo el cuidado. Ahora {mascota} vuelve a la
+            vida en forma de planta, y queremos que seas tú quien elija cuál la acompañará.
           </p>
+          {datos?.servicio?.cubiculo && (
+            <p className="text-[12px] mt-4 inline-block rounded-full px-3 py-1.5"
+               style={{ background: '#FFFFFF', border: `1px solid ${BORDE}`, color: APAGADO }}>
+              Cubículo {datos.servicio.cubiculo}
+            </p>
+          )}
+        </header>
+
+        <div className="my-9 flex items-center justify-center gap-3" aria-hidden="true">
+          <span className="h-px w-14" style={{ background: BORDE }} />
+          <Ilustracion nombre="rama" tam={18} />
+          <span className="h-px w-14" style={{ background: BORDE }} />
         </div>
 
-        {/* Elección de especie */}
+        {/* ── Elección de especie ── */}
         {yaEligio ? (
-          <div className="rounded-xl px-4 py-3 mb-5" style={{ background: V_LITE, border: `1px solid ${V_MID}` }}>
-            <p className="text-[13px] text-gray-800">
-              Ya elegiste <strong>{datos?.eleccion?.planta_nombre}</strong>.
+          <div className="rounded-2xl px-4 py-4 flex items-center gap-3.5"
+               style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
+            <Ilustracion nombre={datos?.eleccion?.planta_nombre} vivo tam={44} />
+            <p className="text-[14px] leading-relaxed" style={{ color: TINTA }}>
+              Ya elegiste <strong style={{ color: HONDO }}>{datos?.eleccion?.planta_nombre}</strong>.
               Si necesitas cambiarla, escríbenos por WhatsApp.
             </p>
           </div>
         ) : (
-          <>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Elige la planta</p>
-            <div className="space-y-2.5 mb-6">
+          <fieldset className="border-0 p-0 m-0">
+            <legend className="text-[12px] font-bold uppercase tracking-[0.16em] mb-4" style={{ color: APAGADO }}>
+              Elige la planta
+            </legend>
+            <div className="space-y-3.5">
               {opciones.map(p => {
                 const sel = elegida === p.id
                 return (
-                  <button key={p.id} onClick={() => setElegida(p.id)}
-                    className="w-full text-left rounded-2xl border-2 p-3.5 flex items-center gap-3 transition-all"
-                    style={{ borderColor: sel ? VERDE : BORD, background: sel ? V_LITE : '#fff' }}>
+                  <button key={p.id} type="button" onClick={() => setElegida(p.id)}
+                    aria-pressed={sel}
+                    className="w-full text-left rounded-3xl p-4 flex items-center gap-4 cursor-pointer
+                               transition-all duration-200 ease-out cac-foco cac-suave"
+                    style={{
+                      background: '#FFFFFF',
+                      border: `1.5px solid ${sel ? VIVO : BORDE}`,
+                      boxShadow: sel
+                        ? '0 12px 28px -14px rgba(47,93,69,0.5), inset 0 0 0 3px rgba(78,155,110,0.13)'
+                        : '0 2px 10px -8px rgba(42,38,32,0.4)',
+                    }}>
                     {p.imagen_url
-                      ? <img src={p.imagen_url} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0" />
-                      : <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0" style={{ background: V_LITE }}>
-                          <Leaf size={20} color={VERDE} />
-                        </div>}
+                      ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                             className="w-[68px] h-[88px] rounded-2xl object-cover shrink-0" />
+                      : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={68} /></div>}
                     <div className="min-w-0 flex-1">
-                      <div className="text-[14px] font-bold text-gray-900">{p.nombre}</div>
-                      {p.descripcion && <div className="text-[12px] text-gray-500 leading-snug mt-0.5">{p.descripcion}</div>}
-                    </div>
-                    <div className="w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0"
-                         style={{ borderColor: sel ? VERDE : '#D1D5DB', background: sel ? VERDE : '#fff' }}>
-                      {sel && <Check size={14} color="#fff" />}
+                      <div className="font-serif text-[19px] leading-tight" style={{ color: sel ? HONDO : TINTA }}>
+                        {p.nombre}
+                      </div>
+                      {p.descripcion && (
+                        <p className="text-[13px] leading-snug mt-1.5" style={{ color: APAGADO }}>{p.descripcion}</p>
+                      )}
+                      {/* El estado no depende solo del color */}
+                      <p className="text-[12px] font-bold mt-2" style={{ color: sel ? VERDE : '#9A9284' }}>
+                        {sel ? 'Elegida' : 'Tocar para elegir'}
+                      </p>
                     </div>
                   </button>
                 )
               })}
               {!opciones.length && (
-                <p className="text-[13px] text-gray-500">
+                <p className="text-[14px] leading-relaxed" style={{ color: APAGADO }}>
                   Estamos preparando las opciones. Escríbenos por WhatsApp y te ayudamos.
                 </p>
               )}
             </div>
-          </>
+          </fieldset>
         )}
 
-        {/* Extras ya comprados antes */}
+        {/* ── Extras ya comprados ── */}
         {!!comprados.length && (
-          <div className="rounded-xl p-3 mb-5" style={{ background: '#F9FAFB', border: `1px solid ${BORD}` }}>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1.5">Ya agregaste</p>
+          <div className="mt-8 rounded-2xl p-4" style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-2" style={{ color: APAGADO }}>
+              Ya agregaste
+            </p>
             {comprados.map(x => (
-              <div key={x.planta_id} className="flex justify-between text-[13px] text-gray-700">
-                <span>{x.cantidad}× {x.nombre}</span><span>{pesos(x.total)}</span>
+              <div key={x.planta_id} className="flex justify-between gap-3 text-[14px] py-0.5">
+                <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
+                <span className="tabular-nums" style={{ color: APAGADO }}>{pesos(x.total)}</span>
               </div>
             ))}
           </div>
         )}
 
-        {/* Extras disponibles */}
+        {/* ── Extras disponibles ── */}
         {!!disponibles.length && (
-          <>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">¿Deseas algo más?</p>
-            <p className="text-[12px] text-gray-500 mb-2.5">Opcional. Lo coordinamos contigo en la entrega.</p>
-            <div className="space-y-2.5">
+          <section className="mt-10">
+            <h2 className="font-serif italic text-[21px]" style={{ color: HONDO }}>¿Deseas algo más?</h2>
+            <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+              Es opcional. Si eliges algo, lo coordinamos contigo en la entrega.
+            </p>
+            <div className="space-y-3.5">
               {disponibles.map(p => {
                 const n = extras[p.id] || 0
                 return (
-                  <div key={p.id} className="rounded-2xl border-2 p-3.5 flex items-center gap-3"
-                       style={{ borderColor: n > 0 ? VERDE : BORD, background: n > 0 ? V_LITE : '#fff' }}>
-                    {p.imagen_url
-                      ? <img src={p.imagen_url} alt="" className="w-12 h-12 rounded-xl object-cover shrink-0" />
-                      : <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: '#F3F4F6' }}>
-                          <Plus size={18} color="#9CA3AF" />
-                        </div>}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[14px] font-bold text-gray-900">{p.nombre}</div>
-                      {p.descripcion && <div className="text-[12px] text-gray-500 leading-snug">{p.descripcion}</div>}
-                      <div className="text-[13px] font-bold mt-0.5" style={{ color: VERDE }}>{pesos(p.precio)}</div>
+                  <div key={p.id} className="rounded-3xl p-4 transition-all duration-200 ease-out"
+                    style={{
+                      background: '#FFFFFF',
+                      border: `1.5px solid ${n > 0 ? VIVO : BORDE}`,
+                      boxShadow: n > 0
+                        ? '0 12px 28px -14px rgba(47,93,69,0.45)'
+                        : '0 2px 10px -8px rgba(42,38,32,0.4)',
+                    }}>
+                    <div className="flex items-center gap-4">
+                      {p.imagen_url
+                        ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                               className="w-14 h-14 rounded-2xl object-cover shrink-0" />
+                        : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={n > 0} tam={52} /></div>}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-serif text-[17px] leading-tight" style={{ color: TINTA }}>{p.nombre}</div>
+                        {p.descripcion && (
+                          <p className="text-[13px] leading-snug mt-1" style={{ color: APAGADO }}>{p.descripcion}</p>
+                        )}
+                        <div className="text-[15px] font-bold mt-1.5 tabular-nums" style={{ color: ORO }}>
+                          {pesos(p.precio)}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button onClick={() => cambiarExtra(p.id, -1)} disabled={!n}
-                        aria-label={`Quitar ${p.nombre}`}
-                        className="w-8 h-8 rounded-lg border flex items-center justify-center disabled:opacity-30"
-                        style={{ borderColor: BORD }}>
-                        <Minus size={14} />
+                    {/* Controles de 44px: por debajo de eso el dedo falla */}
+                    <div className="flex items-center justify-end gap-2 mt-3">
+                      <button type="button" onClick={() => cambiarExtra(p.id, -1)} disabled={!n}
+                        aria-label={`Quitar una unidad de ${p.nombre}`}
+                        className="w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
+                                   transition-colors duration-200 cac-foco cac-suave
+                                   disabled:opacity-30 disabled:cursor-not-allowed"
+                        style={{ border: `1.5px solid ${BORDE}`, color: TINTA, background: PAPEL }}>
+                        <svg width="14" height="2" viewBox="0 0 14 2" aria-hidden="true">
+                          <rect width="14" height="2" rx="1" fill="currentColor" />
+                        </svg>
                       </button>
-                      <span className="w-5 text-center text-[14px] font-bold">{n}</span>
-                      <button onClick={() => cambiarExtra(p.id, 1)}
-                        aria-label={`Agregar ${p.nombre}`}
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-white"
+                      <span className="w-8 text-center text-[17px] font-bold tabular-nums"
+                            aria-live="polite" style={{ color: n > 0 ? HONDO : '#B3AB9C' }}>{n}</span>
+                      <button type="button" onClick={() => cambiarExtra(p.id, 1)}
+                        aria-label={`Agregar una unidad de ${p.nombre}`}
+                        className="w-11 h-11 rounded-full flex items-center justify-center text-white cursor-pointer
+                                   transition-transform duration-200 active:scale-95 cac-foco cac-suave"
                         style={{ background: VERDE }}>
-                        <Plus size={14} />
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                          <path d="M7 0.8v12.4M0.8 7h12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
                       </button>
                     </div>
                   </div>
                 )
               })}
             </div>
-          </>
+          </section>
         )}
 
-        {error && <p role="alert" className="text-[12px] text-red-600 mt-4">{error}</p>}
-      </div>
+        {error && (
+          <p role="alert" className="text-[13px] mt-6 text-center" style={{ color: '#A33A2A' }}>{error}</p>
+        )}
+      </motion.div>
 
-      {/* Barra fija de envío */}
-      <div className="fixed left-0 right-0 bottom-0 px-4 py-3 border-t"
-           style={{ background: '#fff', borderColor: BORD }}>
-        <div className="max-w-md mx-auto">
+      {/* ── Barra de envío ── */}
+      <div className="fixed left-0 right-0 bottom-0 z-20 px-5 pt-3"
+           style={{ background: `linear-gradient(to top, ${PAPEL2} 78%, rgba(241,240,230,0))`,
+                    paddingBottom: 'calc(0.85rem + env(safe-area-inset-bottom))' }}>
+        <div className="mx-auto w-full max-w-[30rem]">
           {totalExtras > 0 && (
-            <div className="flex justify-between text-[13px] mb-2">
-              <span className="text-gray-500">Adicionales</span>
-              <span className="font-bold text-gray-900">{pesos(totalExtras)}</span>
+            <div className="flex justify-between items-baseline text-[14px] mb-2.5 px-1">
+              <span style={{ color: APAGADO }}>Adicionales</span>
+              <span className="text-[17px] font-bold tabular-nums" style={{ color: ORO }}>{pesos(totalExtras)}</span>
             </div>
           )}
-          <button onClick={enviar} disabled={!puedeEnviar || enviando}
-            className="w-full rounded-xl py-3.5 text-white font-semibold text-[14px] flex items-center justify-center gap-2 disabled:opacity-40"
-            style={{ background: VERDE }}>
-            {enviando ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
-            {enviando ? 'Enviando…' : (yaEligio ? 'Agregar' : 'Confirmar mi elección')}
-          </button>
+          <Boton onClick={enviar} disabled={!puedeEnviar || enviando} aria-busy={enviando}>
+            {enviando
+              ? 'Enviando…'
+              : (yaEligio ? 'Agregar a mi entrega' : 'Confirmar mi elección')}
+          </Boton>
+          {!puedeEnviar && !enviando && !yaEligio && (
+            <p className="text-[12px] text-center mt-2.5" style={{ color: APAGADO }}>
+              Elige una planta para continuar
+            </p>
+          )}
         </div>
       </div>
     </Marco>
-  )
-}
-
-function Marco({ children }) {
-  return (
-    <div className="min-h-screen px-4" style={{ background: BG }}>
-      <div className="max-w-md mx-auto">
-        {children}
-        <p className="text-center text-[11px] text-gray-400 py-6">Camino al Cielo</p>
-      </div>
-    </div>
   )
 }

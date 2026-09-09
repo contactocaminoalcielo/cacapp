@@ -54,6 +54,11 @@ export async function guardarPlanta(planta) {
   if (!fila.nombre) throw new Error('La planta necesita un nombre.')
   if (!fila.elegible && !fila.adicional)
     throw new Error('Marca al menos un uso: opción a elegir o extra de pago. Si no, no se muestra en ningún sitio.')
+  // Una planta que SOLO se puede elegir no cobra nada: es la que va incluida en
+  // el plan. Ponerle precio y esperar que se cobre es la confusión fácil — y el
+  // dinero se perdería en silencio, sin un solo error.
+  if (fila.elegible && !fila.adicional && fila.precio > 0)
+    throw new Error('Una planta que solo es "opción a elegir" va incluida en el plan y NO se cobra. Deja el precio en $0, o márcala también como extra de pago para que se cobre.')
   const q = planta.id
     ? db.from('plantas').update(fila).eq('id', planta.id)
     : db.from('plantas').insert(fila)

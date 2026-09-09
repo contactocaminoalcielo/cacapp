@@ -216,19 +216,20 @@ export async function datosPortalPlanta({ codigo }) {
     const cfg = await cargarConfigPlantas(client)
     const cerrado = e.estado === 'CANCELADA' || fueraDeVentana(e, cfg)
 
-    const [opciones, extras, comprados] = await Promise.all([
-      catalogo(client, 'elegible'),
-      catalogo(client, 'adicional', parseInt(cfg.max_adicionales) || 4),
-      client.query(
-        `SELECT planta_id, nombre, cantidad, precio_unitario, total
-           FROM public.planta_adicionales WHERE eleccion_id = $1 ORDER BY created_at`,
-        [e.id]
-      ).then(r => r.rows),
-    ])
-
-    // Lo ya comprado no se vuelve a ofrecer: el UNIQUE lo rechazaría igual, pero
+    // Los comprados van primero: son la exclusión del catálogo de extras. Lo ya
+    // comprado no se vuelve a ofrecer — el UNIQUE lo rechazaría igual, pero
     // mostrarlo como disponible haría creer al cliente que puede pedirlo otra vez.
-    const yaCompradas = new Set(comprados.map(a => a.planta_id))
+    const { rows: comprados } = await client.query(
+      `SELECT planta_id, nombre, cantidad, precio_unitario, total
+         FROM public.planta_adicionales WHERE eleccion_id = $1 ORDER BY created_at`,
+      [e.id]
+    )
+    const yaCompradas = comprados.map(a => a.planta_id)
+
+    const [opciones, extras] = await Promise.all([
+      catalogo(client, 'elegible'),
+      catalogo(client, 'adicional', parseInt(cfg.max_adicionales) || 4, yaCompradas),
+    ])
 
     return { status: 200, body: {
       ok: true,
@@ -243,7 +244,7 @@ export async function datosPortalPlanta({ codigo }) {
         planta_nombre: e.planta_nombre,
       },
       opciones,
-      adicionales: cerrado ? [] : extras.filter(p => !yaCompradas.has(p.id)),
+      adicionales: cerrado ? [] : extras,
       comprados: comprados.map(a => ({ ...a, precio_unitario: Number(a.precio_unitario), total: Number(a.total) })),
     } }
   } finally {
@@ -251,13 +252,23 @@ export async function datosPortalPlanta({ codigo }) {
   }
 }
 
-async function catalogo(client, campo, limite = null) {
+/**
+ * Catálogo del portal. `excluir` son las plantas que este cliente YA compró.
+ *
+ * Se descartan DENTRO de la consulta, antes del tope: filtrarlas después dejaba
+ * a quien ya compró los primeros extras sin ver los siguientes — el tope se
+ * gastaba en filas que nunca se iban a mostrar.
+ */
+async function catalogo(client, campo, limite = null, excluir = []) {
+  const columna = campo === 'elegible' ? 'elegible' : 'adicional'
   const { rows } = await client.query(
     `SELECT id, nombre, descripcion, imagen_url, precio
        FROM public.plantas
-      WHERE activo = true AND ${campo === 'elegible' ? 'elegible' : 'adicional'} = true
+      WHERE activo = true AND ${columna} = true
+        AND NOT (id = ANY($1::uuid[]))
       ORDER BY orden ASC, nombre ASC
-      ${limite ? 'LIMIT ' + parseInt(limite) : ''}`
+      ${limite ? 'LIMIT ' + parseInt(limite) : ''}`,
+    [excluir]
   )
   return rows.map(p => ({ ...p, precio: Number(p.precio) || 0 }))
 }

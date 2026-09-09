@@ -53,7 +53,12 @@ export async function jobEleccionPlanta({ dryRun = false } = {}) {
        LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
       WHERE i.fecha_compostaje_inicio IS NOT NULL
         AND p.tipo_proceso = 'COMPOSTAJE_INDIVIDUAL'
-        AND s.estado <> 'CANCELADO'
+        -- ENTREGADO fuera: si la planta ya se entregó, pedirle a la familia que
+        -- la elija es quedar en ridículo. Hoy no hay ninguno así (los 65 en
+        -- cubículo están EN_PRODUCCION/EN_PROCESO/EN_CUARTO_FRIO/LISTO), pero la
+        -- planta no puede entregarse antes de elegirse: si aparece uno, es que
+        -- algo se cerró a mano y no hay que escribirle.
+        AND s.estado NOT IN ('CANCELADO', 'ENTREGADO')
         AND i.estado NOT IN ('RETIRADO_DEL_LOTE', 'NO_EJECUTADO')
         AND (i.fecha_compostaje_inicio + (i.meses_compostaje * INTERVAL '1 month'))::date
             <= public.fn_hoy_bogota()
