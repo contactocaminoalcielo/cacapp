@@ -9,7 +9,7 @@
 //   2. Aviso automático — interruptor + plantilla aprobada en Meta. Mientras la
 //      plantilla no exista, el job deja los avisos en PENDIENTE y NO envía nada.
 //   3. Tablero — a quién se le avisó, quién ya eligió y qué extras compró.
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { db } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,8 +19,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { fmt, parsearErrorDB } from '@/lib/utils'
-import { cargarPlantas, guardarPlanta, borrarPlanta, enviarAvisoPlanta, ESTADO_ELECCION } from '@/lib/plantas'
-import { Plus, Pencil, Trash2, CheckCircle, Leaf, Send, AlertCircle } from 'lucide-react'
+import { cargarPlantas, guardarPlanta, borrarPlanta, enviarAvisoPlanta,
+         subirImagenPlanta, MAX_MB_PLANTA, ESTADO_ELECCION } from '@/lib/plantas'
+import { Plus, Pencil, Trash2, CheckCircle, Leaf, Send, AlertCircle, Upload, Loader2 } from 'lucide-react'
 
 const LBL = 'text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
 const VACIA = { nombre: '', descripcion: '', imagen_url: '', precio: 0, elegible: true, adicional: false, orden: 100, activo: true }
@@ -43,8 +44,21 @@ function Catalogo() {
   const [sel, setSel]     = useState(null)
   const [err, setErr]     = useState('')
   const [saving, setSaving] = useState(false)
+  const [subiendo, setSubiendo] = useState(false)
+  const fileRef = useRef(null)
 
   useEffect(() => { recargar() }, [])
+
+  /** Sube la foto y deja su URL en el formulario. No guarda: eso lo decide David. */
+  async function subir(file) {
+    if (!file) return
+    setSubiendo(true); setErr('')
+    try {
+      const url = await subirImagenPlanta(file)
+      setSel(p => ({ ...p, imagen_url: url }))
+    } catch (e) { setErr(e.message) }
+    finally { setSubiendo(false) }
+  }
   async function recargar() {
     setLoad(true)
     try { setRows(await cargarPlantas()) } catch (e) { setErr(parsearErrorDB(e)) }
@@ -96,8 +110,17 @@ function Catalogo() {
               {rows.map(p => (
                 <Tr key={p.id}>
                   <Td>
-                    <div className="font-semibold text-gray-900">{p.nombre}</div>
-                    {p.descripcion && <div className="text-[11px] text-gray-400 max-w-xs">{p.descripcion}</div>}
+                    <div className="flex items-center gap-2.5">
+                      {p.imagen_url
+                        ? <img src={p.imagen_url} alt="" loading="lazy"
+                               className="w-9 h-9 rounded-lg object-cover shrink-0" />
+                        : <div className="w-9 h-9 rounded-lg shrink-0 flex items-center justify-center"
+                               style={{ background: '#F3F4F6' }}><Leaf size={14} className="text-gray-300" /></div>}
+                      <div className="min-w-0">
+                        <div className="font-semibold text-gray-900">{p.nombre}</div>
+                        {p.descripcion && <div className="text-[11px] text-gray-400 max-w-xs">{p.descripcion}</div>}
+                      </div>
+                    </div>
                   </Td>
                   <Td>
                     <div className="flex gap-1">
@@ -128,7 +151,7 @@ function Catalogo() {
         title={sel?.id ? `Editar — ${sel.nombre}` : 'Nueva planta'} maxWidth="max-w-lg"
         footer={<>
           <Button variant="ghost" onClick={() => setSel(null)}>Cancelar</Button>
-          <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
+          <Button onClick={guardar} disabled={saving || subiendo}>{saving ? 'Guardando...' : 'Guardar'}</Button>
         </>}>
         {sel && (
           <div className="space-y-3">
@@ -136,9 +159,39 @@ function Catalogo() {
               <Input value={sel.nombre} onChange={e => setSel(p => ({ ...p, nombre: e.target.value }))} placeholder="Helecho" /></div>
             <div><label className={LBL}>Descripción (la ve la familia)</label>
               <Textarea rows={2} value={sel.descripcion || ''} onChange={e => setSel(p => ({ ...p, descripcion: e.target.value }))} /></div>
-            <div><label className={LBL}>URL de la foto</label>
-              <Input value={sel.imagen_url || ''} onChange={e => setSel(p => ({ ...p, imagen_url: e.target.value }))} placeholder="https://…" />
-              <p className="text-[10px] text-gray-400 mt-1">Opcional. Debe ser pública: el portal se abre sin sesión.</p></div>
+            <div>
+              <label className={LBL}>Foto de la planta</label>
+              <div className="flex items-start gap-3">
+                <div className="w-20 h-20 rounded-xl overflow-hidden shrink-0 flex items-center justify-center"
+                     style={{ background: '#F3F4F6', border: '1px solid #E5E7EB' }}>
+                  {sel.imagen_url
+                    ? <img src={sel.imagen_url} alt={`Foto de ${sel.nombre || 'la planta'}`}
+                           className="w-full h-full object-cover" />
+                    : <Leaf size={20} className="text-gray-300" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <Button type="button" variant="secondary" disabled={subiendo}
+                    onClick={() => fileRef.current?.click()}>
+                    {subiendo
+                      ? <><Loader2 size={14} className="mr-1.5 animate-spin" /> Subiendo…</>
+                      : <><Upload size={14} className="mr-1.5" /> {sel.imagen_url ? 'Cambiar foto' : 'Subir foto'}</>}
+                  </Button>
+                  {sel.imagen_url && !subiendo && (
+                    <button type="button" onClick={() => setSel(p => ({ ...p, imagen_url: '' }))}
+                      className="block text-[11px] font-semibold text-red-500 mt-2">
+                      Quitar foto
+                    </button>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-2 leading-snug">
+                    Opcional. JPG, PNG o WEBP, hasta {MAX_MB_PLANTA} MB — se recomprime sola.
+                    Si no pones foto, el portal dibuja la planta.
+                  </p>
+                </div>
+              </div>
+              {/* El input real va oculto: el botón de arriba es el que se ve */}
+              <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                onChange={e => { subir(e.target.files?.[0]); e.target.value = '' }} />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={LBL}>Precio del extra</label>
                 <Input type="number" min="0" value={sel.precio} onChange={e => setSel(p => ({ ...p, precio: e.target.value }))} />

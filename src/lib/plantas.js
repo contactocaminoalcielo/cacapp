@@ -4,8 +4,12 @@
 // orbit-backend: allí el precio sale de la DB, nunca del navegador.
 import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
+import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 
 const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/api'
+
+export const BUCKET_PLANTAS = 'plantas'
+export const MAX_MB_PLANTA  = 5
 
 export const ESTADO_ELECCION = {
   PENDIENTE: { label: 'Por avisar',  color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
@@ -64,6 +68,35 @@ export async function guardarPlanta(planta) {
     : db.from('plantas').insert(fila)
   const { error } = await q
   if (error) throw error
+}
+
+/**
+ * Sube la foto de una planta al bucket público `plantas` y devuelve su URL.
+ *
+ * Público a propósito: el portal lo abre una familia sin sesión. Se recomprime
+ * antes de subir — la foto se ve en el celular de alguien que quizá está en la
+ * calle, y una imagen de cámara sin tocar tarda una eternidad.
+ *
+ * El `sniffMime` mira los BYTES, no la extensión: un .jpg que en realidad es
+ * otra cosa lo rechaza el bucket después, con un error que no dice nada.
+ */
+export async function subirImagenPlanta(file) {
+  const mime = await sniffMime(file)
+  if (!MIMES_IMAGEN_OK.includes(mime))
+    throw new Error('Ese archivo no es una imagen válida. Usa JPG, PNG o WEBP.')
+  const blob = await compressImage(file, 1200, 0.85)
+  if (blob.size > MAX_MB_PLANTA * 1024 * 1024)
+    throw new Error(`La imagen supera ${MAX_MB_PLANTA} MB. Usa una más liviana.`)
+  const ext  = extDeMime(blob.type === 'image/jpeg' ? 'image/jpeg' : mime)
+  const path = `catalogo/${crypto.randomUUID()}.${ext}`
+  const { error } = await db.storage.from(BUCKET_PLANTAS)
+    .upload(path, blob, { upsert: false, contentType: blob.type || mime })
+  if (error) {
+    console.error('[plantas] upload falló:', error?.message || error, { path })
+    throw new Error('No se pudo subir la imagen. Revisa la conexión e intenta de nuevo.')
+  }
+  const { data: { publicUrl } } = db.storage.from(BUCKET_PLANTAS).getPublicUrl(path)
+  return publicUrl
 }
 
 export async function borrarPlanta(id) {
