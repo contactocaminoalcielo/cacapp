@@ -83,12 +83,12 @@ function Pescadito({ vivo }) {
   let d = `M32 ${abajo} `
   for (let i = 0; i < n; i++) {          // sube dentando por la izquierda
     const y = abajo - i * paso
-    d += `L ${32 - ancho(i)} ${y - paso * 0.62} L 30.5 ${y - paso} `
+    d += `L ${32 - ancho(i)} ${y - paso * 0.78} L 30.5 ${y - paso} `
   }
   d += `L 32 ${arriba} `
   for (let i = n - 1; i >= 0; i--) {     // baja dentando por la derecha
     const y = abajo - i * paso
-    d += `L ${32 + ancho(i)} ${y - paso * 0.38} L 33.5 ${y} `
+    d += `L ${32 + ancho(i)} ${y - paso * 0.24} L 33.5 ${y} `
   }
   d += 'Z'
 
@@ -123,9 +123,29 @@ function Rama({ vivo }) {
   )
 }
 
+/**
+ * Matera / maceta. Los extras del catálogo no siempre son plantas —una matera,
+ * una placa— y dibujarles una rama es decirle a la familia que le venden algo
+ * que no es. Cuando el extra tenga foto propia (`imagen_url`) manda la foto.
+ */
+function Matera({ vivo }) {
+  const barro  = vivo ? '#B5734A' : '#CFC7B7'
+  const sombra = vivo ? '#8E5433' : '#B9B0A0'
+  return (
+    <g>
+      <path d="M17 34 L 47 34 L 42 72 Q 41.6 75, 38.5 75 L 25.5 75 Q 22.4 75, 22 72 Z" fill={barro} />
+      <path d="M32 34 L 47 34 L 42 72 Q 41.6 75, 38.5 75 L 32 75 Z" fill={sombra} opacity="0.45" />
+      <rect x="14.5" y="28" width="35" height="8" rx="3.2" fill={sombra} />
+      <path d="M27 48 Q 32 44, 37 48" fill="none" stroke={vivo ? '#F0DCC8' : '#E4DDCE'}
+        strokeWidth="1.6" strokeLinecap="round" opacity="0.8" />
+    </g>
+  )
+}
+
 const DIBUJOS = [
   { prueba: /helech|fern/i,            Componente: Helecho },
   { prueba: /pescad|ric.?rac|fishbone/i, Componente: Pescadito },
+  { prueba: /matera|maceta|vasija|porta/i, Componente: Matera },
 ]
 
 /**
