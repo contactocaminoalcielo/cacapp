@@ -303,3 +303,35 @@ No captura nada nuevo: reemplaza la planilla mostrándole al técnico sus propio
   `estadoSugerido`, `faltaPlata`, `tecnicoDebe`, `enConciliacion`, `cerrarCuadre`,
   `abrirCuadre`, `cargarHistorial`, `confirmarEntrega`, `seleccionarTecnico`.
 ```
+
+---
+
+## 4. Cobros hechos en la ENTREGA (migraciones 151 y 152 · 2026-09-10)
+
+Desde que el mensajero cobra el saldo en la puerta, ese dinero entra a **su** cuadre.
+
+**Clase de fila propia**, no un recibo: `cuadre_items.es_entrega = true` + `entrega_id`.
+Motivo: el cuadre fecha cada fila por `servicios.fecha_ingreso`, y una entrega ocurre semanas
+después — colarla por la vía del recibo la habría mandado a un período viejo, muchas veces ya
+CERRADO (inmutables por diseño, migración 015). La fila se fecha por `entregas.fecha_realizada`
+(fecha local), con `cobro_registrado_en` convertido a `America/Bogota` solo como respaldo.
+
+Reglas, todas heredadas del modelo existente:
+- Solo el **EFECTIVO** se le atribuye; transferencia/Nequi/Daviplata/tarjeta entraron directo a la
+  empresa (`digital_empresa`).
+- La fila queda **cuadrada por construcción** (`valor_a_cobrar` = lo cobrado): no puede marcar
+  faltante. Lo que el cliente quedó debiendo se persigue en la cartera, no en el cuadre — la misma
+  frontera que fijó la migración 143.
+- **Sin transporte ni recargos** automáticos. Lo que se le quiera reconocer por entregar se pone con
+  el lápiz de "Pago téc.", y esa edición se preserva al regenerar el borrador (mapa `v_prev_ent`,
+  indexado por `entrega_id`).
+
+⚠️ **Un servicio puede aparecer dos veces en el mismo cuadre** (su recogida y su entrega). Eso obligó
+a tres correcciones dentro de `generar_cuadre_tecnico`, documentadas en la cabecera de la migración
+152: el mapa de ediciones previas se agrega por servicio, el loop de "recogió y no cobró" descartaba
+por servicio sin mirar la clase de fila, y el descarte de la propia entrega va por `entrega_id`.
+En la UI: chip de filtro "Cobros en entrega", distintivo `COBRO EN ENTREGA` en la fila, y la fecha de
+esas filas NO se sobreescribe con la del ingreso del servicio (`conFechaRegistroServicio`).
+
+El mensajero recuperó el tab **Mis pagos** en la app de campo: `cerrar_cuadre` v2 (migración 038)
+exige su confirmación, y sin ese tab gerencia no podría cerrarle el cuadre.

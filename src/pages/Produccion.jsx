@@ -15,7 +15,7 @@ import { agruparRefresco } from '@/lib/realtime'
 import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
-import { petEmoji, parsearErrorDB, today, parseDate } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, parseDate, fmt } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
@@ -284,6 +284,7 @@ async function cargarEntregas(servicioIds = []) {
   const filas = await dbIn(
     'entregas',
     'id, servicio_id, estado, mensajero_id, publicada_en, tomada_en, ' +
+    'cobro_monto, cobro_metodo, cobro_no_realizado_motivo, ' +
     'personal:mensajero_id ( nombre, apellido )',
     'servicio_id',
     servicioIds,
@@ -308,6 +309,16 @@ function EstadoEntrega({ ent }) {
   return (
     <div className="mt-1.5 text-[11px] font-semibold text-center" style={{ color: CFG.color }}>
       {CFG.texto}
+      {/* Plata cobrada en la puerta: coordinación tiene que saber que ese
+          dinero lo tiene el mensajero, o por qué el cliente no pagó. */}
+      {ent.cobro_monto != null && (
+        <div style={{ color: '#15803D' }}>
+          💵 Cobró {fmt(ent.cobro_monto)} · {ent.cobro_metodo}
+        </div>
+      )}
+      {ent.cobro_no_realizado_motivo && (
+        <div style={{ color: '#B45309' }}>⚠️ {ent.cobro_no_realizado_motivo}</div>
+      )}
     </div>
   )
 }

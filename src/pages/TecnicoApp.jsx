@@ -1196,6 +1196,121 @@ function CardDisponible({ ent, tomando, onTomar }) {
   )
 }
 
+// ─── COBRO EN LA PUERTA ─────────────────────────────────────────────────
+// Cuando la mascota se entrega con saldo pendiente, el mensajero recibe el
+// dinero ahí mismo. Antes no tenía dónde registrarlo (solo ve el tab Entregas,
+// decisión de la migración 083) y ese cobro se le contaba a mano a
+// coordinación. Acá lo resuelve sin salir de la entrega.
+//
+// Es a TODO o NADA: se cobra el saldo completo o se dice por qué no se cobró.
+// No hay abono parcial a propósito — el monto real se relee de la DB al
+// completar, no de este snapshot, porque entre que la tarjeta cargó y el
+// mensajero llegó a la puerta el valor pudo cambiar.
+const COBRO_VACIO = { decision: '', metodo: 'EFECTIVO', comprobante: null, motivo: '' }
+
+// ¿El mensajero ya resolvió el tema plata? Sin esto la entrega no se completa.
+function cobroResuelto(saldo, cobro) {
+  if (!(saldo > 0)) return true
+  if (cobro.decision === 'NO_COBRE') return cobro.motivo.trim().length >= 4
+  if (cobro.decision !== 'COBRE') return false
+  if (!cobro.metodo) return false
+  // Un pago digital sin soporte es el hueco que ya obligó a crear la pestaña
+  // Comprobantes: acá se exige antes de cerrar, no después.
+  if (METODOS_CON_COMPROBANTE.includes(cobro.metodo)) return !!cobro.comprobante?.path
+  return true
+}
+
+// Qué le falta al cobro, en palabras del mensajero. '' = nada.
+function faltaCobroTexto(saldo, cobro) {
+  if (cobroResuelto(saldo, cobro)) return ''
+  if (cobro.decision === 'NO_COBRE') return 'el motivo de por qué no te pagaron'
+  if (cobro.decision === 'COBRE')    return 'el comprobante del pago'
+  return 'decir si te pagaron el saldo'
+}
+
+function PanelCobroEntrega({ servicioId, entregaId, saldo, cobro, onChange }) {
+  const set = patch => onChange({ ...cobro, ...patch })
+  const exigeComprobante = METODOS_CON_COMPROBANTE.includes(cobro.metodo)
+
+  const OpcionBtn = ({ valor, children, activoBg, activoColor }) => {
+    const activo = cobro.decision === valor
+    return (
+      <button type="button"
+        onClick={() => set({ decision: activo ? '' : valor })}
+        className="py-3 rounded-xl text-[13px] font-bold border-2 transition-all active:scale-98"
+        style={activo
+          ? { background: activoBg, color: '#fff', borderColor: activoBg }
+          : { background: '#fff', color: '#6B7280', borderColor: '#E5E7EB' }}>
+        {children}
+      </button>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl p-3.5" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[11px] font-bold uppercase tracking-wide flex items-center gap-1.5" style={{ color: '#92400E' }}>
+          <Wallet size={12} /> Dinero por cobrar
+        </span>
+        <span className="font-extrabold text-[17px]" style={{ color: '#B45309' }}>{fmt(saldo)}</span>
+      </div>
+      <p className="text-[11px] mb-3" style={{ color: '#A16207' }}>
+        Cóbralo antes de entregar. Si el cliente no paga, dilo acá y entrega igual.
+      </p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <OpcionBtn valor="COBRE"    activoBg="#16A34A">💵 Recibí el dinero</OpcionBtn>
+        <OpcionBtn valor="NO_COBRE" activoBg="#6B7280">No me pagaron</OpcionBtn>
+      </div>
+
+      {cobro.decision === 'COBRE' && (
+        <div className="mt-3">
+          <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
+            ¿Cómo te pagó?
+          </div>
+          <select value={cobro.metodo}
+            onChange={e => set({ metodo: e.target.value })}
+            className="w-full px-3 py-3 rounded-xl border-2 outline-none font-bold text-sm bg-white"
+            style={{ borderColor: '#FDE68A' }}>
+            {METODOS_PAGO.map(mp => <option key={mp} value={mp}>{mp}</option>)}
+          </select>
+
+          <div className="text-[11px] font-bold uppercase tracking-wide mt-3 mb-0.5" style={{ color: '#92400E' }}>
+            Comprobante {exigeComprobante ? '(obligatorio)' : '(opcional)'}
+          </div>
+          <p className="text-[11px]" style={{ color: '#A16207' }}>
+            {exigeComprobante
+              ? 'Sube la foto de la transferencia: sin ella no se puede cerrar la entrega.'
+              : 'Si tienes un soporte del efectivo, súbelo. No es obligatorio.'}
+          </p>
+          <ComprobanteUploader
+            servicioId={servicioId}
+            stashId={`entrega_${entregaId}`}
+            onSubido={(publicUrl, path, val) =>
+              set({ comprobante: { url: publicUrl, path, mime: val?.mime || null } })}
+          />
+        </div>
+      )}
+
+      {cobro.decision === 'NO_COBRE' && (
+        <div className="mt-3">
+          <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
+            ¿Por qué no se cobró?
+          </div>
+          <textarea value={cobro.motivo} rows={2}
+            onChange={e => set({ motivo: e.target.value })}
+            placeholder="Ej: el cliente dice que transfiere hoy en la noche"
+            className="w-full px-3 py-2.5 rounded-xl border-2 outline-none text-sm bg-white"
+            style={{ borderColor: cobro.motivo.trim().length >= 4 ? '#16A34A' : '#FDE68A' }} />
+          <p className="text-[11px] mt-1" style={{ color: '#A16207' }}>
+            Queda registrado en el servicio y coordinación lo ve. El saldo sigue pendiente.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── CARD ENTREGA ───────────────────────────────────────────────────────
 function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   const [contactoModal,  setContactoModal]  = useState(null)
@@ -1207,6 +1322,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   const [firmaDataUrl,   setFirmaDataUrl]   = useState(null)
   const [nombreCliente,  setNombreCliente]  = useState('')
   const [genCert,        setGenCert]        = useState(false)
+  const [cobro,          setCobro]          = useState(COBRO_VACIO)
 
   const mascota = ent.servicios?.mascotas
   const especie = mascota?.especies?.nombre || ''
@@ -1221,7 +1337,8 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   }
   const badge = BADGE[ent.estado] || { bg: '#F3F4F6', color: '#374151', label: ent.estado }
 
-  const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim())
+  const cobroOk        = cobroResuelto(saldo, cobro)
+  const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim()) && cobroOk
 
   async function aceptar() {
     setAceptando(true); setActErr('')
@@ -1232,7 +1349,10 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
 
   async function completar() {
     setCompletando(true); setActErr('')
-    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente }) }
+    // `saldoMostrado` = lo que la pantalla le pidió cobrar. Solo se usa si al
+    // guardar el saldo ya está en cero: es el único registro de cuánta plata
+    // recibió de verdad.
+    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente, cobro: { ...cobro, saldoMostrado: saldo } }) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompletando(false) }
   }
@@ -1320,6 +1440,16 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
       )}
 
 
+      {/* Aviso de plata antes de salir: en EN_CAMINO no va porque el panel de
+          cobro ya muestra el monto y qué hacer con él. */}
+      {saldo > 0 && ent.estado !== 'EN_CAMINO' && (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold mb-3"
+          style={{ background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
+          <Wallet size={13} className="flex-shrink-0" />
+          Hay que cobrar {fmt(saldo)} en la entrega
+        </div>
+      )}
+
       {/* Botón certificado */}
       <button onClick={descargarCertificado} disabled={genCert}
         className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[12px] font-bold mb-3 transition-all active:scale-98 disabled:opacity-60"
@@ -1372,6 +1502,17 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
             sublabel="Evidencia de que el cliente recibió los recordatorios"
           />
 
+          {/* Cobro del saldo — solo si el servicio debe plata */}
+          {saldo > 0 && (
+            <PanelCobroEntrega
+              servicioId={ent.servicio_id}
+              entregaId={ent.id}
+              saldo={saldo}
+              cobro={cobro}
+              onChange={setCobro}
+            />
+          )}
+
           {/* Firma del cliente */}
           <SignaturePad onSigned={setFirmaDataUrl} firmaDataUrl={firmaDataUrl} />
 
@@ -1391,7 +1532,11 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
             style={{ background: puedeCompletar ? '#22C55E' : '#9CA3AF', color: '#fff' }}>
             {completando ? 'Guardando…'
               : puedeCompletar ? '✅ Confirmar entrega completada'
-              : `Falta: ${!fotoUrl ? 'foto' : ''}${!fotoUrl && !firmaDataUrl && !nombreCliente ? ' + ' : ''}${!firmaDataUrl && !nombreCliente ? 'firma o nombre del cliente' : ''}`}
+              : `Falta: ${[
+                  !fotoUrl && 'foto',
+                  !firmaDataUrl && !nombreCliente.trim() && 'firma o nombre del cliente',
+                  faltaCobroTexto(saldo, cobro),
+                ].filter(Boolean).join(' + ')}`}
           </button>
         </div>
       )}
@@ -1631,10 +1776,10 @@ export default function TecnicoApp() {
   useEffect(() => {
     try { localStorage.setItem('tecnico_ui_tab', tab) } catch (_) {}
   }, [tab])
-  // El mensajero solo tiene Entregas: si venía una pestaña guardada de otro rol
-  // (o cambió de rol), la app abriría en una pestaña que ya no existe.
+  // El mensajero solo tiene Entregas y Mis pagos: si venía una pestaña guardada
+  // de otro rol (o cambió de rol), la app abriría en una que ya no existe.
   useEffect(() => {
-    if (tecnico?.rol === 'MENSAJERO' && tab !== 'entregas') setTab('entregas')
+    if (tecnico?.rol === 'MENSAJERO' && !['entregas', 'mis_cuadres'].includes(tab)) setTab('entregas')
   }, [tecnico, tab])
   const [recogidas, setRecogidas] = useState([])
   const [entregas, setEntregas]   = useState([])
@@ -2318,7 +2463,7 @@ export default function TecnicoApp() {
     await cargar()
   }
 
-  async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente }) {
+  async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente, cobro = COBRO_VACIO }) {
     const now = new Date()
     const patch = {
       estado:           'ENTREGADA',
@@ -2340,20 +2485,120 @@ export default function TecnicoApp() {
       } catch (_) { /* no bloquear si falla subida firma */ }
     }
 
+    // ── Dinero cobrado en la puerta ──────────────────────────────────────
+    // El saldo se RELEE de la DB, nunca del snapshot que traía la tarjeta: entre
+    // que se cargó la app y el mensajero llegó pudieron subir el valor o cobrar
+    // por otro lado, y una marca vieja de estado_pago ya escondió plata antes.
+    const svcPago = { estado: 'ENTREGADO' }
+    let novedadCobro = null
+    if (cobro?.decision === 'COBRE') {
+      const { data: sv, error: svErr } = await db.from('servicios')
+        .select('valor_total, valor_pagado').eq('id', ent.servicio_id).maybeSingle()
+      if (svErr) throw new Error('No se pudo leer el saldo del servicio: ' + svErr.message)
+      const total     = Number(sv?.valor_total  || 0)
+      const pagado    = Number(sv?.valor_pagado || 0)
+      const saldoReal = Math.max(0, total - pagado)
+
+      if (saldoReal <= 0) {
+        // El servicio ya está en saldo cero: o coordinación registró el pago
+        // mientras venía en camino, o es un reintento de un guardado que sí
+        // alcanzó a aplicar la plata. Sumarla otra vez inflaría `valor_pagado`,
+        // así que la CONTABILIDAD no se toca…
+        // …pero el dinero SÍ se le anota a él. Él tiene el efectivo en la mano y
+        // desde la migración 152 el cuadre se lo va a pedir; si no quedara
+        // registrado, esa plata no se la reclamaría nadie. Se guarda el monto
+        // que la app le mostró, que es el que le pidió al cliente.
+        const montoRecibido = Number(cobro.saldoMostrado) || 0
+        if (montoRecibido > 0) {
+          patch.cobro_monto          = montoRecibido
+          patch.cobro_metodo         = cobro.metodo
+          patch.cobro_comprobante_path = cobro.comprobante?.path || null
+          patch.cobro_registrado_en  = now.toISOString()
+          patch.cobro_registrado_por = tecnico?.id || null
+        }
+        novedadCobro = {
+          tipo_novedad: 'NOTA',
+          descripcion:  `⚠️ ${tecnico?.nombre || 'El mensajero'} recibió ${fmt(montoRecibido)} en la entrega (${cobro.metodo}), `
+                      + 'pero el servicio YA estaba en saldo cero. No se sumó al pago del servicio para no duplicarlo, '
+                      + 'y el dinero quedó a cargo del mensajero en su cuadre. Revisar si el cliente pagó dos veces.',
+          valor_ajuste: null,
+        }
+      } else {
+        const nuevoPagado = pagado + saldoReal
+        svcPago.valor_pagado = nuevoPagado
+        svcPago.estado_pago  = nuevoPagado >= total ? 'COMPLETO' : 'PARCIAL'
+        svcPago.metodo_pago  = cobro.metodo
+        patch.cobro_monto            = saldoReal
+        patch.cobro_metodo           = cobro.metodo
+        patch.cobro_comprobante_path = cobro.comprobante?.path || null
+        patch.cobro_registrado_en    = now.toISOString()
+        patch.cobro_registrado_por   = tecnico?.id || null
+        novedadCobro = {
+          tipo_novedad: 'PAGO_RECIBIDO',
+          descripcion:  `Cobrado en la entrega: ${fmt(saldoReal)} (${cobro.metodo})`
+                      + `${cobro.comprobante ? ', comprobante adjunto' : ''}. `
+                      + `Recibido por ${[tecnico?.nombre, tecnico?.apellido].filter(Boolean).join(' ') || 'el mensajero'}.`,
+          valor_ajuste: saldoReal,
+        }
+      }
+    } else if (cobro?.decision === 'NO_COBRE') {
+      patch.cobro_no_realizado_motivo = cobro.motivo.trim().slice(0, 500)
+      novedadCobro = {
+        tipo_novedad: 'NOTA',
+        descripcion:  `Entregado SIN cobrar el saldo. Motivo: ${cobro.motivo.trim()}`,
+        valor_ajuste: null,
+      }
+    }
+
+    // El servicio va PRIMERO y en un solo update (estado + plata): si se cae la
+    // señal entre las dos escrituras, lo que no puede perderse es el dinero. El
+    // mensajero reintenta, el saldo se relee y ya no se vuelve a sumar.
+    const { error: svcErr } = await db.from('servicios').update(svcPago).eq('id', ent.servicio_id)
+    if (svcErr) throw new Error('No se pudo registrar el pago: ' + svcErr.message)
+
     const { error } = await db.from('entregas').update(patch).eq('id', ent.id)
     if (error) throw new Error(error.message)
 
-    await db.from('servicios').update({ estado: 'ENTREGADO' }).eq('id', ent.servicio_id)
+    // Soporte del pago en la fuente formal (la misma que lee el clip de
+    // Finanzas). Best-effort, igual que en Kanban: el cobro ya quedó.
+    if (cobro?.comprobante?.path && patch.cobro_monto != null) {
+      try {
+        await db.from('recibo_comprobantes').insert({
+          servicio_id:  ent.servicio_id,
+          bucket:       'evidencias',
+          storage_path: cobro.comprobante.path,
+          mime_type:    cobro.comprobante.mime || null,
+          // Lo subió campo, no coordinación: entra a revisión como el resto de
+          // los comprobantes del técnico, no APROBADO como los de Kanban.
+          estado:       'PENDIENTE_REVISION',
+          uploaded_by:  tecnico?.id || null,
+        })
+      } catch (_) { /* el comprobante sigue en storage y en entregas.cobro_comprobante_path */ }
+    }
+
+    if (novedadCobro) {
+      try {
+        await db.from('novedades_servicio').insert({
+          servicio_id:    ent.servicio_id,
+          registrado_por: tecnico?.id || null,
+          ...novedadCobro,
+        })
+      } catch (_) { /* la traza del cobro ya quedó en entregas y en el servicio */ }
+    }
 
     // Notificar coordinadores
     const coords = await getCoordinadores()
     const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+    const notaPlata = patch.cobro_monto != null
+      ? ` Cobró ${fmt(patch.cobro_monto)} en ${patch.cobro_metodo}.`
+        + (svcPago.valor_pagado == null ? ' ⚠️ El servicio ya figuraba pagado — revisar doble cobro.' : '')
+      : patch.cobro_no_realizado_motivo ? ` ⚠️ Sin cobrar: ${patch.cobro_no_realizado_motivo}` : ''
     await Promise.all(coords.map(c => crearNotificacion({
       para_personal_id: c.id,
       de_personal_id:   tecnico?.id,
       tipo:             'ENTREGA_COMPLETADA',
       titulo:           'Entrega completada',
-      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.`,
+      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.${notaPlata}`,
       servicio_id:      ent.servicio_id,
     })))
 
@@ -2370,11 +2615,14 @@ export default function TecnicoApp() {
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length + disponibles.length, color: '#1A5CD8' },
     { key: 'mis_cuadres', label: 'Mis pagos', Icon: Wallet,    count: cuadresPend,           color: '#16a34a' },
   ]
-  // El MENSAJERO solo hace entregas: el resto de la app es del técnico de campo
-  // (decisión David 2026-07-31). Si algún día cobra en la puerta, habrá que
-  // devolverle Recibos/Comprobantes/Mis pagos.
+  // El MENSAJERO no recoge: nada del flujo de campo es suyo. Pero desde que
+  // cobra en la puerta (migr. 151/152) ese efectivo entra a SU cuadre, y un
+  // cuadre no se puede cerrar sin su confirmación (cerrar_cuadre v2, migr. 038):
+  // sin "Mis pagos" gerencia quedaría trabada. No necesita Recibos ni
+  // Comprobantes — el comprobante lo sube dentro de la propia entrega.
   const esMensajero = tecnico?.rol === 'MENSAJERO'
-  const TABS = esMensajero ? TABS_TODOS.filter(t => t.key === 'entregas') : TABS_TODOS
+  const TABS_MENSAJERO = ['entregas', 'mis_cuadres']
+  const TABS = esMensajero ? TABS_TODOS.filter(t => TABS_MENSAJERO.includes(t.key)) : TABS_TODOS
 
   // Filtro de fechas de las colas activas (cliente). Sin fecha no se oculta nada.
   const enRango = (f, d, h) => !f || ((!d || f >= d) && (!h || f <= h))
@@ -3037,6 +3285,14 @@ function CuadresList({ tecnico }) {
                           {it.mascota_nombre || '—'}
                           {it.es_cancelado && <span className="ml-1 text-[9px] font-bold text-red-500">CANC</span>}
                           {it.sin_recibo && <span className="ml-1 text-[9px] font-bold text-rose-500">SIN RECIBO</span>}
+                          {/* Un servicio puede salir dos veces: su recogida y la
+                              plata que se recibió al entregarlo. Sin esta marca
+                              parecerían la misma fila repetida. */}
+                          {it.es_entrega && (
+                            <span className="ml-1 text-[9px] font-bold text-indigo-500">
+                              COBRÉ AL ENTREGAR {fmt(it.total_cobrado)}
+                            </span>
+                          )}
                         </span>
                         <span className="font-semibold tabular-nums text-gray-800">{fmt(ganado)}</span>
                       </div>
@@ -3174,7 +3430,7 @@ function BitacoraTab({ tecnico }) {
           .select('servicio_id, fecha_emision, hora_emision, valor_cobrado, medios_pago, created_at')
           .in('servicio_id', lote).then(sinError)),
         enLotes(ids, lote => db.from('cuadre_items')
-          .select('servicio_id, transporte_reconocido, recargo_aplicado, pago_servicio, sin_recibo, es_cancelado')
+          .select('servicio_id, transporte_reconocido, recargo_aplicado, pago_servicio, sin_recibo, es_cancelado, es_entrega')
           .in('servicio_id', lote).then(sinError)),
         enLotes(ids, lote => db.from('bitacora_ajustes_tecnico')
           .select('servicio_id, cobrado_sugerido, medios_sugeridos, reconocido_sugerido, nota')
@@ -3203,9 +3459,14 @@ function BitacoraTab({ tecnico }) {
         if (!prev) { reciboMap[r.servicio_id] = r; continue }
         if ((prev.valor_cobrado || 0) === 0 && (r.valor_cobrado || 0) > 0) reciboMap[r.servicio_id] = r
       }
-      // Reconocimiento por servicio: preferir la fila con recibo (no sin_recibo)
+      // Reconocimiento por servicio: preferir la fila con recibo (no sin_recibo).
+      // ⚠️ Las filas de ENTREGA (migr. 152) se descartan aquí: son otra clase de
+      // fila del mismo servicio, sin transporte ni recargos, y como no son
+      // sin_recibo desplazarían a la de la recogida — el técnico vería en cero
+      // el transporte que sí se le reconoció.
       const ganadoMap = {}
       for (const it of (cItems || [])) {
+        if (it.es_entrega) continue
         if (!ganadoMap[it.servicio_id] || (ganadoMap[it.servicio_id].sin_recibo && !it.sin_recibo)) ganadoMap[it.servicio_id] = it
       }
 

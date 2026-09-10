@@ -64,6 +64,7 @@ const CHIPS_ESTADO_CUADRE = [
   { k: 'alerta',       label: 'Con diferencia' },
   { k: 'cancelado',    label: 'Cancelados' },
   { k: 'sin_recibo',   label: 'Sin recibo' },
+  { k: 'entrega',      label: 'Cobros en entrega' },
   { k: 'fact_mensual', label: 'Fact. mensual' },
   { k: 'lejania',      label: 'Lejanía' },
 ]
@@ -532,6 +533,7 @@ export default function Finanzas() {
         (f.estados.has('alerta')       && (faltaPlata(it) || cobroDeMasSinRevisar(it))) ||
         (f.estados.has('cancelado')    && it.es_cancelado) ||
         (f.estados.has('sin_recibo')   && it.sin_recibo) ||
+        (f.estados.has('entrega')      && it.es_entrega) ||
         (f.estados.has('fact_mensual') && esFactMensual(it)) ||
         (f.estados.has('lejania')      && it.es_lejania)
       if (!match) return false
@@ -731,7 +733,11 @@ export default function Finanzas() {
     }
     return lista.map(it => ({
       ...it,
-      fecha_registro_servicio: fechas[it.servicio_id] || null,
+      // Un cobro en entrega NO se muestra con la fecha de ingreso del servicio:
+      // su fila existe por el día en que el mensajero recibió la plata, que es
+      // semanas posterior. Con la fecha del servicio se ordenaría al principio
+      // del cuadre y parecería de otro período.
+      fecha_registro_servicio: it.es_entrega ? null : (fechas[it.servicio_id] || null),
     })).sort((a, b) => {
       const fechaA = a.fecha_registro_servicio || a.fecha || ''
       const fechaB = b.fecha_registro_servicio || b.fecha || ''
@@ -1121,6 +1127,14 @@ export default function Finanzas() {
     }
     if (it.conciliacion_resuelta)
       return 'Pendiente ya resuelto: el cobro se gestionó.'
+    if (it.es_entrega) {
+      const enEfectivo = (Number(it.efectivo) || 0) > 0
+      return `Plata que recibió al ENTREGAR, no al recoger: ${fmt(it.total_cobrado)} el ${it.fecha || '—'}. `
+        + (enEfectivo
+            ? 'Es efectivo que tiene en la mano y debe entregar con este cuadre.'
+            : 'Entró directo a la empresa (pago digital), así que no le suma a lo que debe entregar.')
+        + ' No lleva transporte ni recargos: una entrega no es una recogida. Si quieres reconocerle algo por entregarla, ponlo en "Pago téc.".'
+    }
     if (it.sin_recibo)
       return `El técnico recogió pero no generó recibo (no cobró). Falta cobrar ${fmt(montoPendiente(it))} ${esFactMensual(it) ? 'a la veterinaria (facturación mensual)' : 'al cliente'} — se sigue en Conciliaciones.`
     if (esFactMensual(it))
@@ -2767,7 +2781,9 @@ export default function Finanzas() {
                                         {alertaGestion && <AlertTriangle size={13} className="text-amber-500 flex-shrink-0" />}
                                         {it.mascota_nombre || '—'}
                                       </button>
-                                      {it.servicio_id && !it.sin_recibo && (
+                                      {/* La fila de un cobro en entrega no tiene recibo propio:
+                                          el PDF que abriría es el de la recogida, que es otra cosa. */}
+                                      {it.servicio_id && !it.sin_recibo && !it.es_entrega && (
                                         <button type="button"
                                           onClick={async () => {
                                             // 1) el PDF real que el técnico envió por WhatsApp (si existe);
@@ -2786,6 +2802,7 @@ export default function Finanzas() {
                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                       {it.es_cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600">CANCELADO</span>}
                                       {it.sin_recibo && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-700" title="El técnico recogió este servicio pero no generó recibo (no cobró). Pendiente por cobrar.">SIN RECIBO</span>}
+                                      {it.es_entrega && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-700" title="Plata que recibió al ENTREGAR, no al recoger. Va fechada el día del cobro y no lleva transporte ni recargos.">COBRO EN ENTREGA</span>}
                                       {esFactMensual(it) && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>}
                                       {er && <span className="text-[9px] font-bold px-1 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>}
                                       {it.conciliacion_resuelta && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-green-100 text-green-700">✓ conciliado</span>}
@@ -3166,7 +3183,9 @@ export default function Finanzas() {
                                       ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FFF3DC] text-[#9A5500]">FACT. MENSUAL</span>
                                       : er
                                         ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: er.bg, color: er.color }}>{er.short}</span>
-                                        : it.sin_recibo && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">SIN RECIBO</span>}
+                                        : it.es_entrega
+                                          ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">COBRO EN ENTREGA</span>
+                                          : it.sin_recibo && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">SIN RECIBO</span>}
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <select value={it.conciliacion_via || ''} onChange={e => guardarConciliacion(it, { via: e.target.value || null })}
@@ -4631,7 +4650,9 @@ async function generarCuadrePDF(c, items, tecnicoNombre) {
     let x = M + 1.5
     const vals = [
       fechaCorta(it.fecha_registro_servicio || it.fecha),
-      (it.mascota_nombre || '—').slice(0, 18),
+      // El PDF no tiene columna de tipo: la flecha distingue la plata recibida
+      // al entregar de la recogida del mismo servicio, que puede ir dos filas más arriba.
+      ((it.es_entrega ? '> ' : '') + (it.mascota_nombre || '—')).slice(0, 18),
       (it.ciudad || '—').slice(0, 11),
       (it.veterinaria || '—').slice(0, 18),
       (it.plan_nombre || '—').slice(0, 12),
