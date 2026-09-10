@@ -4,7 +4,7 @@
 // manualmente uno a un lote (útil para atrasados), buscar, filtrar por tipo/estado/fechas,
 // y pedirle a la IA una alerta de vencimientos. Vive dentro del módulo Certificados.
 import { useState, useEffect, useCallback } from 'react'
-import { db } from '@/lib/supabase'
+import { db, dbTodo, dbIn } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
@@ -78,14 +78,22 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
       if (!planIds.length) { setRows([]); setLoading(false); return }
 
       // 2. Servicios de esos planes (cualquier estado, incluso entregados)
-      const { data: svcs } = await db
+      //
+      // 🩸 `dbTodo` y no un select suelto: el servidor corta TODA respuesta en
+      // 1000 filas sin avisar, y esta consulta ordena por fecha ASCENDENTE, así
+      // que el corte se comía las mascotas MÁS NUEVAS. Medido el 10-sep: 1040
+      // servicios grupales, 1000 devueltos, y la pantalla se quedaba muda desde
+      // el **7 de septiembre en adelante** — 40 mascotas invisibles.
+      // El desempate por `id` es obligatorio para paginar: `fecha_ingreso`
+      // empata muchísimo (varias mascotas el mismo día) y sin él el corte de
+      // página repite una fila y se salta otra.
+      const lista = await dbTodo(() => db
         .from('servicios')
         .select('id, lote_id, estado, fecha_ingreso, plan_id, planes(nombre, codigo, tipo_proceso), mascotas(nombre, especie_id, especies(nombre), clientes(nombre, apellido, whatsapp))')
         .in('plan_id', planIds)
         .gte('fecha_ingreso', FECHA_CORTE)
         .order('fecha_ingreso', { ascending: true })
-
-      const lista = svcs || []
+        .order('id'))
 
       // 3. Lotes referenciados
       const loteIds = [...new Set(lista.map(s => s.lote_id).filter(Boolean))]
@@ -97,12 +105,23 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
       }
 
       // 4. Reporte (estado + vencimiento) por servicio
+      // 🩸 `dbIn` y no `.in()` a pelo: con mil uuids la URL pasaba de los 39.000
+      // caracteres y el servidor la rechazaba con 503 (tres reintentos, medido
+      // el 10-sep). Al fallar, `items` venía vacío y la columna de estado del
+      // reporte salía en blanco para TODAS las filas, sin ningún error visible.
       const svcIds = lista.map(s => s.id)
       let repMap = {}
+      // Va en su propio try: es un ENRIQUECIMIENTO. Si falla, la lista de
+      // mascotas —que es lo que se viene a ver— tiene que salir igual, solo que
+      // sin el estado del reporte.
       if (svcIds.length) {
-        const { data: items } = await db.from('reportes_grupales_items')
-          .select('servicio_id, estado, fecha_vencimiento').in('servicio_id', svcIds)
-        ;(items || []).forEach(i => { repMap[i.servicio_id] = i })
+        try {
+          const items = await dbIn('reportes_grupales_items',
+            'servicio_id, estado, fecha_vencimiento', 'servicio_id', svcIds)
+          items.forEach(i => { repMap[i.servicio_id] = i })
+        } catch (e) {
+          console.error('Control grupal: no se pudo leer el estado de los reportes —', e.message)
+        }
       }
 
       setRows(lista.map(s => {
