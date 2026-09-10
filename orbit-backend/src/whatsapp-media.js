@@ -210,16 +210,81 @@ export async function guardarMedia({ mensajeId, waMediaId, mimeDeclarado }) {
  * Una fila por mensaje, se haya podido bajar o no. El UPDATE del conflicto
  * permite reintentar un fallo sin dejar duplicados.
  */
-async function registrar({ mensajeId, waMediaId, mime = null, bytes = null, sha256 = null, archivo = null, error = null }) {
+async function registrar({ mensajeId, waMediaId, mime = null, bytes = null, sha256 = null, archivo = null, error = null, nombre = null }) {
   await pool.query(
-    `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, sha256, archivo, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, sha256, archivo, error, nombre)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (mensaje_id) DO UPDATE
        SET wa_media_id = EXCLUDED.wa_media_id,
            mime = EXCLUDED.mime, bytes = EXCLUDED.bytes, sha256 = EXCLUDED.sha256,
-           archivo = EXCLUDED.archivo, error = EXCLUDED.error`,
-    [mensajeId, waMediaId, mime, bytes, sha256, archivo, error]
+           archivo = EXCLUDED.archivo, error = EXCLUDED.error,
+           -- Un reintento sin nombre no borra el que ya se sabía.
+           nombre = COALESCE(EXCLUDED.nombre, public.whatsapp_media.nombre)`,
+    [mensajeId, waMediaId, mime, bytes, sha256, archivo, error, nombre]
   ).catch(e => log(MOD, 'no se pudo registrar el adjunto —', e.message))
+}
+
+/**
+ * Copia local del archivo que va en la CABECERA de una plantilla.
+ *
+ * 🩸 Por qué existe: el certificado sale como plantilla con el PDF en la
+ * cabecera, y esa vía nunca guardaba nada. En la bandeja el mensaje aparecía
+ * como texto (`[plantilla certificado_proceso] …`) y el coordinador no podía ni
+ * verlo ni descargarlo — medido en prod el 2026-09-10: de 887 plantillas
+ * enviadas, **0 tenían archivo**, mientras que 1.224 de 1.229 documentos
+ * mandados desde la bandeja sí (esos ya pasaban por `enviarArchivo`).
+ *
+ * Es el mismo criterio que el resto del módulo: el archivo vive junto a la fila,
+ * no en un bucket aparte que acabe divergiendo, y **si falla se registra el
+ * motivo** — un hueco mudo es lo que hizo que esto tardara en verse.
+ *
+ * Nunca lanza: el mensaje YA salió cuando esto corre. Que no se pueda guardar la
+ * copia no puede convertir un envío bueno en un error.
+ */
+export async function guardarCopiaCabecera({
+  mensajeId, mime = null, buffer = null, link = null, waMediaId = null, nombre = null,
+}) {
+  if (!mensajeId) return { ok: false, error: 'sin mensaje' }
+  try {
+    let buf = buffer ? Buffer.from(buffer) : null
+    let tipo = mime
+
+    if (!buf && link) {
+      // El enlace es nuestro (storage de Orbit): es de donde Meta bajó el PDF
+      // para mandarlo, así que es exactamente el archivo que recibió la familia.
+      const r = await fetch(link, { signal: AbortSignal.timeout(20000) })
+      if (!r.ok) {
+        await registrar({ mensajeId, waMediaId, mime: tipo, nombre, error: `no se pudo traer el archivo enviado (${r.status})` })
+        return { ok: false, error: `descarga ${r.status}` }
+      }
+      tipo = tipo || (r.headers.get('content-type') || '').split(';')[0].trim() || null
+      buf = Buffer.from(await r.arrayBuffer())
+    }
+
+    // Sin bytes y sin enlace solo queda el id de Meta: se baja por la vía normal.
+    if (!buf && waMediaId) return await guardarMedia({ mensajeId, waMediaId, mimeDeclarado: tipo })
+
+    if (!buf?.length) {
+      await registrar({ mensajeId, waMediaId, mime: tipo, nombre, error: 'el archivo enviado llegó vacío' })
+      return { ok: false, error: 'vacío' }
+    }
+    if (buf.length > MAX_COPIA) {
+      await registrar({
+        mensajeId, waMediaId, mime: tipo, bytes: buf.length, nombre,
+        error: `pesa ${(buf.length / 1048576).toFixed(1)} MB: se envió, pero no se guarda copia en la bandeja`,
+      })
+      return { ok: false, error: 'demasiado grande' }
+    }
+    if (!tipo && nombre) tipo = /\.pdf$/i.test(nombre) ? 'application/pdf' : null
+
+    await registrar({ mensajeId, waMediaId, mime: tipo || 'application/octet-stream', bytes: buf.length, archivo: buf, nombre })
+    log(MOD, `copia de la cabecera guardada (${buf.length} bytes) para el mensaje ${mensajeId}`)
+    return { ok: true, bytes: buf.length }
+  } catch (e) {
+    await registrar({ mensajeId, waMediaId, mime, nombre, error: `no se pudo guardar el archivo enviado: ${e.message}` }).catch(() => {})
+    log(MOD, `ERROR guardando copia de cabecera del mensaje ${mensajeId} —`, e.message)
+    return { ok: false, error: e.message }
+  }
 }
 
 /**
@@ -545,9 +610,9 @@ export async function enviarArchivo({
   // falla, el mensaje YA se envió: se registra y se sigue.
   if (r?.body?.ok && r.body.mensaje?.id && buf.length <= MAX_COPIA) {
     await pool.query(
-      `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, archivo)
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (mensaje_id) DO NOTHING`,
-      [r.body.mensaje.id, mediaId, mime, buf.length, buf]
+      `INSERT INTO public.whatsapp_media (mensaje_id, wa_media_id, mime, bytes, archivo, nombre)
+       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (mensaje_id) DO NOTHING`,
+      [r.body.mensaje.id, mediaId, mime, buf.length, buf, nombre]
     ).catch(e => log(MOD, 'enviado pero no se pudo guardar la copia —', e.message))
   }
 

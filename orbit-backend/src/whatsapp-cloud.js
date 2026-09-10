@@ -238,9 +238,12 @@ export async function hilo({ contacto, linea = null, limite = MAX_HILO }) {
               m.enviado_por,
               TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS enviado_por_nombre,
               (md.archivo IS NOT NULL) AS tiene_archivo,
-              md.mime  AS archivo_mime,
-              md.bytes AS archivo_bytes,
-              md.error AS archivo_error
+              md.mime   AS archivo_mime,
+              md.bytes  AS archivo_bytes,
+              md.error  AS archivo_error,
+              -- Con qué nombre se guarda al bajarlo. Un certificado sale como
+              -- plantilla, así que su nombre NO está en el texto del mensaje.
+              md.nombre AS archivo_nombre
          FROM public.whatsapp_mensajes m
          LEFT JOIN public.personal p ON p.id = m.enviado_por
          LEFT JOIN public.whatsapp_media md ON md.mensaje_id = m.id

@@ -45,6 +45,7 @@ import { construirEnlace } from './reglas-imagenes.js'
 // se sube aquí se puede reutilizar en otra plantilla y se ve donde se ven
 // todos. Ver `whatsapp_plantilla_cabecera` en la migración 102.
 import { guardarMaterial } from './whatsapp-materiales.js'
+import { guardarCopiaCabecera } from './whatsapp-media.js'
 
 const MOD = '[wa-plantillas]'
 const GRAPH = 'https://graph.facebook.com'
@@ -1473,6 +1474,11 @@ export async function mandarPlantilla({
   )
 
   // ── Cabecera ──
+  // Lo que haya que guardar como copia local del adjunto que sale. Se llena en
+  // las tres ramas de abajo y se usa DESPUÉS de que Meta acepte el envío: sin
+  // esto, un certificado enviado se ve en la bandeja como texto suelto y no hay
+  // forma de abrirlo ni descargarlo.
+  let copiaCabecera = null
   const cab = componente(plantilla, 'HEADER')
   if (cab?.format === 'TEXT') {
     const p = recoger('HEADER')
@@ -1491,16 +1497,26 @@ export async function mandarPlantilla({
     if (conf.archivo) {
       const sub = await mediaDeCabecera(conf.archivo, conf.mime, conf.nombre_archivo, desde, token)
       if (sub.error) return { status: 502, body: { ok: false, error: `No se pudo subir la cabecera: ${sub.error}` } }
+      // Los bytes ya están aquí: no hace falta volver a bajarlos de nadie.
+      copiaCabecera = { buffer: conf.archivo, mime: conf.mime, nombre: conf.nombre_archivo, waMediaId: sub.id }
       componentes.push({
         type: 'header',
         parameters: [{ type: clase, [clase]: { id: sub.id, ...(clase === 'document' ? { filename: conf.nombre_archivo } : {}) } }],
       })
     } else if (conf.id) {
+      copiaCabecera = { waMediaId: conf.id, mime: conf.mime || null, nombre: conf.filename || null }
       componentes.push({
         type: 'header',
         parameters: [{ type: clase, [clase]: { id: conf.id, ...(clase === 'document' && conf.filename ? { filename: conf.filename } : {}) } }],
       })
     } else if (conf.link || conf.url) {
+      // El caso del CERTIFICADO: el PDF vive en nuestro storage y Meta lo baja
+      // de ahí. Se guarda el mismo archivo que recibió la familia.
+      copiaCabecera = {
+        link: conf.link || conf.url,
+        mime: conf.mime || null,
+        nombre: conf.filename || conf.nombre_archivo || null,
+      }
       componentes.push({
         type: 'header',
         parameters: [{
@@ -1650,6 +1666,15 @@ export async function mandarPlantilla({
      RETURNING id, direccion, tipo, texto, estado, ocurrido_en, wa_message_id`,
     [desde, num, wamid, resumen, personalId]
   )
+
+  // La copia del adjunto que acaba de salir, para que el hilo lo muestre igual
+  // que muestra lo que entra. Best-effort a propósito: el mensaje YA se envió,
+  // así que un fallo aquí se registra (queda visible en la bandeja el motivo)
+  // pero nunca convierte un envío bueno en un error.
+  if (copiaCabecera && rows[0]?.id) {
+    await guardarCopiaCabecera({ mensajeId: rows[0].id, ...copiaCabecera })
+      .catch(e => log(MOD, 'enviado pero no se pudo guardar la copia de la cabecera —', e.message))
+  }
 
   // Mandar una plantilla es hablarle a alguien, así que cuenta como atendido —
   // pero solo si lo hizo una persona. Ver el bug del 11-ago en whatsapp-cloud.js.

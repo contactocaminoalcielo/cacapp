@@ -249,6 +249,17 @@ export function nombreAdjunto(m) {
   const mime = String(m?.archivo_mime || '').toLowerCase().split(';')[0].trim()
   const ext  = EXT_POR_MIME[mime] || (mime.includes('/') ? mime.split('/')[1] : '') || 'bin'
 
+  const limpiar = s => String(s).replace(/[\\/:*?"<>|]/g, '-').trim()
+
+  // El nombre REAL con el que salió o llegó el archivo (migración 153). Manda
+  // sobre todo lo demás: es el único que sabe que este PDF es "Certificado
+  // NN.pdf" y no `whatsapp-225922.pdf`, porque el texto de una plantilla no lo
+  // dice por ninguna parte.
+  if (m?.archivo_nombre) {
+    const propio = limpiar(m.archivo_nombre)
+    if (propio) return /\.[a-z0-9]{2,5}$/i.test(propio) ? propio : `${propio}.${ext}`
+  }
+
   const delTexto = /^\[documento\]\s*(.+\S)\s*$/i.exec(m?.texto || '')
   if (delTexto) {
     const limpio = delTexto[1].replace(/[\\/:*?"<>|]/g, '-').trim()
