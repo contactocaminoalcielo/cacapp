@@ -184,6 +184,39 @@ Ver [MODULES/PLANTAS.md](../MODULES/PLANTAS.md).
   GRANTs explícitos a **`orbit_backend`** (los ALTER DEFAULT PRIVILEGES no lo cubren).
   Bucket público `plantas` para las fotos del catálogo
 
+### Entrega — tabla `entregas` (cobro en la puerta: migración 151)
+- Estados: `PENDIENTE | DISPONIBLE | ASIGNADA | EN_CAMINO | ENTREGADA | FALLIDA | REPROGRAMADA`.
+  ⚠️ `PENDIENTE` es un cascarón del trigger `fn_post_crear_servicio`, **no** "lista para entregar"
+- `mensajero_id`, `publicada_en/por`, `tomada_en` (distingue "la tomó del pool" de "se la asignaron"),
+  `aceptada_en`, `fecha_realizada` (date, fecha LOCAL), `hora_realizada` (time)
+- `foto_entrega_url`, `foto_firma_url`
+- **Cobro (migr. 151):** `cobro_monto` numeric(12,2) · `cobro_metodo` text
+  (`EFECTIVO|TRANSFERENCIA|NEQUI|DAVIPLATA|TARJETA|OTRO`) · `cobro_comprobante_path` text
+  (ruta en el bucket `evidencias`) · `cobro_registrado_en` timestamptz ·
+  `cobro_registrado_por` uuid → `personal(id)` · `cobro_no_realizado_motivo` text
+- CHECKs: o cobró (monto + medio + quién) **o** explicó por qué no —nunca ambos—, y un medio que
+  no sea EFECTIVO/OTRO **exige comprobante**
+
+### Cuadre — tablas `cuadres_tecnico`, `cuadre_items`
+- `cuadre_items.es_entrega` bool + `entrega_id` uuid → `entregas(id)` (**migración 152**): la fila
+  es plata recibida al ENTREGAR, no al recoger. Se fecha por el día del cobro, no por
+  `servicios.fecha_ingreso`. `false`/NULL en todas las filas anteriores, así que los cuadres
+  CERRADOS siguen dando las mismas cifras
+- UNIQUE parcial `(cuadre_id, entrega_id)`: una entrega no entra dos veces al mismo cuadre
+- ⚠️ **Un servicio puede tener DOS filas en el mismo cuadre** (su recogida y su entrega). Todo lo
+  que descarte "por servicio" tiene que mirar la clase de fila — ver la cabecera de la migr. 152
+- `dinero_a_entregar = efectivo_recibido − total_reconocido − ajustes_manuales` (piso $0).
+  Solo el **EFECTIVO** se le atribuye a la persona; lo digital es `digital_empresa`
+
+### Adjuntos de WhatsApp — tabla `whatsapp_media`
+- Una fila por mensaje (`mensaje_id` único), `archivo` bytea, `mime`, `bytes`, `sha256`,
+  `transcripcion` (Whisper), `error` (**se registra también cuando falla**, para que la bandeja
+  diga por qué en vez de dejar un hueco)
+- `nombre` text (**migración 153**) — con qué nombre se baja el archivo. Hace falta porque el
+  texto de una plantilla no lo contiene y un certificado caía como `whatsapp-<id>.pdf`
+- Lo llenan: lo que ENTRA (webhook), lo que se manda desde la bandeja, y —desde el 10-sep— **la
+  cabecera de una plantilla**, que es como sale un certificado
+
 ## Relaciones críticas
 - `servicios → mascotas` vía `mascota_id` → para llegar a cliente: `mascotas(nombre, clientes(nombre, apellido))`
 - `servicios → aliados` vía `aliado_origen_id`

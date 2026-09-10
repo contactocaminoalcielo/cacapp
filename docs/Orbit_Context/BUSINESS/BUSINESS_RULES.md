@@ -98,6 +98,28 @@ RN074. El sistema debe permitir consultar historial completo por servicio.
 RN075. Las excepciones operativas deben clasificarse para análisis posterior.
 RN076. Los tiempos reales deben medirse para detectar cuellos de botella.
 
+## M. Cobro en la entrega (2026-09-10, migraciones 151/152)
+RN077. Si el servicio tiene saldo, el mensajero **debe resolver el dinero antes de cerrar la
+       entrega**: o registra el cobro, o deja por escrito por qué no le pagaron. No puede
+       completarla dejando el tema en blanco.
+RN078. Se cobra el **saldo completo o nada**: no hay abono parcial en la puerta.
+RN079. Un cobro que **no sea en efectivo exige comprobante** adjunto (front y CHECK en DB).
+RN080. Nunca se cobra sin cobrar: **el saldo se relee de la base al confirmar**. Si ya está en
+       cero no se vuelve a sumar al servicio — pero el monto sí se le anota al mensajero, que
+       tiene el efectivo en la mano, y queda aviso de posible doble cobro.
+RN081. Puede entregarse **sin cobrar** dejando el motivo. El saldo sigue vivo en la cartera:
+       el cuadre no es donde se persigue un cobro pendiente.
+RN082. El efectivo cobrado en la entrega entra al cuadre del mensajero **fechado por el día del
+       cobro**, no por el ingreso del servicio (una entrega ocurre semanas después, y ese
+       período suele estar cerrado).
+RN083. Solo el **EFECTIVO** se le atribuye a quien cobra; transferencia, Nequi, Daviplata y
+       tarjeta entraron directo a la cuenta de la empresa.
+RN084. **Al mensajero se le paga por HORAS, por fuera de Orbit.** Su cuadre responde una sola
+       pregunta: qué recaudó, cuánto de eso es efectivo que debe entregar y cuánto se fue a la
+       cuenta de la empresa. Las filas de entrega **no llevan transporte, recargos ni pago al
+       técnico**, y esos lápices están cerrados: como `dinero_a_entregar = efectivo −
+       reconocido`, cualquier valor ahí le bajaría en silencio el efectivo que se le pide.
+
 ## L. Reglas pendientes por validar
 - Estados exactos por plan.
 - Lista definitiva de recordatorios incluidos por plan.

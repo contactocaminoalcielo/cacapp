@@ -96,17 +96,26 @@ Estados granulares (a implementar si se requiere trazabilidad de aprobación):
 
 ## 7. Proceso de entrega
 Entrada: servicio en estado `LISTO`, componentes validados.
-Responsables: coordinador, mensajero, técnico.
-Salida: servicio cerrado con evidencia.
+Responsables: coordinador (prepara y publica), mensajero (entrega y cobra).
+Salida: servicio `ENTREGADO` con evidencia y, si había saldo, el dinero resuelto.
 
-Estados sugeridos:
-- `Pendiente de programación`
-- `Programada`
-- `En ruta`
-- `Entregada parcial`
-- `Entregada completa`
-- `Novedad`
-- `Cerrada`
+Estados REALES (`entregas.estado`, migración 083 — no son "sugeridos"):
+`PENDIENTE → DISPONIBLE → ASIGNADA → EN_CAMINO → ENTREGADA | FALLIDA | REPROGRAMADA`
+⚠️ `PENDIENTE` es el cascarón que crea el trigger al nacer el servicio, **no** "lista para entregar".
+
+1. Coordinación prepara la entrega en Producción (dirección, contacto, horarios) y la **publica
+   al pool** o la asigna directo a alguien. Publicar es manual a propósito: sin dirección ni
+   contacto el mensajero no puede decidir si le sirve.
+2. El mensajero la toma (o acepta la asignada) y sale → `EN_CAMINO`, el servicio pasa a
+   `EN_ENTREGA` y se notifica a coordinación.
+3. En la puerta: foto de la entrega + firma del cliente o su nombre.
+4. **Si el servicio tiene saldo, el dinero se resuelve ahí** (migraciones 151/152): registra el
+   cobro (medio de pago + comprobante, obligatorio si no es efectivo) o deja el motivo de por qué
+   no le pagaron. Sin eso no puede completar la entrega.
+5. Al confirmar: servicio `ENTREGADO`, se actualiza la cartera (`valor_pagado`/`estado_pago`),
+   queda la novedad `PAGO_RECIBIDO` y el comprobante, y el efectivo entra al cuadre del mensajero.
+
+Ver `MODULES/ENTREGAS.md` y las reglas RN077–RN084.
 
 ## 8. Proceso veterinarias/aliados
 1. Registro del aliado con modalidad de comisión.

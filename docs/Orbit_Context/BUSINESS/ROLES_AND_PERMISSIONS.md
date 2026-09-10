@@ -6,7 +6,7 @@
 |----|--------|-----------------------|
 | 1 | COORDINADOR | Gestión operativa completa: asigna técnicos, supervisa estados, acceso a Kanban y módulos operativos |
 | 2 | TECNICO | Acceso a TecnicoApp: recogidas y entregas asignadas, carga evidencias, reportes cuarto frío |
-| 3 | MENSAJERO | Similar a técnico; realiza entregas |
+| 3 | MENSAJERO | Solo entregas. **Cobra el saldo en la puerta y ese efectivo entra a su cuadre** (2026-09-10). Se le paga por HORAS, por fuera de Orbit |
 | 4 | PRODUCTOR | Módulo producción: cremación, aquamación, compostaje, cementerio |
 | 5 | OPERARIO | Apoyo operativo en producción o cuarto frío |
 | 6 | ADMIN | Acceso completo. Configura usuarios, planes, reglas, reportes, auditoría |
@@ -35,11 +35,18 @@ Estos roles existen en el diseño pero no tienen entrada en `roles_personal` aú
 - Gestión (aliados, configuración operativa).
 - Calendario.
 
-### TECNICO / MENSAJERO
-- TecnicoApp exclusivamente.
-- Ve solo servicios asignados a él.
-- Carga evidencias de recogida y entrega.
-- Reporte diario cuarto frío.
+### TECNICO
+- TecnicoApp exclusivamente. Ve solo lo asignado a él.
+- Pestañas: Recogidas, Recibos, Comprobantes, C. Frío, Entregas, Mis pagos.
+- Carga evidencias de recogida y entrega. Reporte diario de cuarto frío.
+
+### MENSAJERO
+- TecnicoApp, y **solo dos pestañas: Entregas y Mis pagos** (`TABS_MENSAJERO` en TecnicoApp.jsx).
+- NO ve Recogidas, Recibos, Comprobantes ni C. Frío: no emite recibos, y el comprobante del
+  cobro lo sube dentro de la propia entrega.
+- **Mis pagos no es opcional**: `cerrar_cuadre` v2 (migración 038) exige su confirmación, así que
+  sin esa pestaña gerencia no podría cerrarle el cuadre.
+- Quien lo ejerce hoy: **JUAN SEBASTIAN HERNANDEZ PINEDA** (59 de las 71 entregas hechas).
 
 ### PRODUCTOR / OPERARIO
 - Módulo Producción y Tenjo (compostaje/cenizas).
