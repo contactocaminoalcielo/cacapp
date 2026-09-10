@@ -1132,8 +1132,10 @@ export default function Finanzas() {
       return `Plata que recibió al ENTREGAR, no al recoger: ${fmt(it.total_cobrado)} el ${it.fecha || '—'}. `
         + (enEfectivo
             ? 'Es efectivo que tiene en la mano y debe entregar con este cuadre.'
-            : 'Entró directo a la empresa (pago digital), así que no le suma a lo que debe entregar.')
-        + ' No lleva transporte ni recargos: una entrega no es una recogida. Si quieres reconocerle algo por entregarla, ponlo en "Pago téc.".'
+            : 'Entró directo a la cuenta de la empresa (pago digital): no le suma a lo que debe entregar.')
+        + ' Esta fila solo dice qué recaudó y cuánto de eso es efectivo. No lleva transporte, recargos'
+        + ' ni pago al mensajero: a él se le paga por horas, por fuera del cuadre, y reconocerle algo'
+        + ' aquí le restaría al efectivo que debe entregar.'
     }
     if (it.sin_recibo)
       return `El técnico recogió pero no generó recibo (no cobró). Falta cobrar ${fmt(montoPendiente(it))} ${esFactMensual(it) ? 'a la veterinaria (facturación mensual)' : 'al cliente'} — se sigue en Conciliaciones.`
@@ -2936,7 +2938,12 @@ export default function Finanzas() {
                                   <td className="px-3 py-2.5 tabular-nums">
                                     <div className="flex items-center gap-1.5">
                                       {it.pago_servicio > 0 ? <span className="font-semibold text-[#0E7490]">{fmt(it.pago_servicio)}</span> : <span className="text-gray-400">—</span>}
-                                      {puedeEditarCuadre && !cuadreCerrado && (
+                                      {/* En un cobro en entrega NO se reconoce nada: al mensajero se le
+                                          paga por HORAS, aparte (David, 10-sep). Y como
+                                          `dinero_a_entregar = efectivo − reconocido`, poner algo aquí le
+                                          bajaría EN SILENCIO el efectivo que debe entregar, que es el
+                                          único número por el que existe su cuadre. */}
+                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_entrega && (
                                         <button type="button" onClick={() => setPagoTecnicoItem(it)}
                                           className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:text-[#0E7490] hover:bg-[#ECFEFF] transition-colors"
                                           title={it.es_cancelado ? 'Modificar el pago por el viaje cancelado' : 'Modificar el pago al técnico'}>
@@ -2965,7 +2972,9 @@ export default function Finanzas() {
                                           </div>
                                         </div>
                                       ) : <span className="text-gray-400 tabular-nums">—</span>}
-                                      {puedeEditarCuadre && !cuadreCerrado && (
+                                      {/* Mismo motivo que el pago: una entrega no lleva recargos, y
+                                          reconocerle algo aquí le restaría al efectivo a entregar. */}
+                                      {puedeEditarCuadre && !cuadreCerrado && !it.es_entrega && (
                                         <button type="button" onClick={() => setRecargoManualItem(it)}
                                           className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-gray-400 hover:text-[#d97706] hover:bg-amber-50 transition-colors"
                                           title="Modificar recargo">
