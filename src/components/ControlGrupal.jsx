@@ -4,7 +4,7 @@
 // manualmente uno a un lote (útil para atrasados), buscar, filtrar por tipo/estado/fechas,
 // y pedirle a la IA una alerta de vencimientos. Vive dentro del módulo Certificados.
 import { useState, useEffect, useCallback } from 'react'
-import { db, dbTodo, dbIn } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
@@ -105,23 +105,27 @@ export default function ControlGrupal({ onChanged, onGoPendientes }) {
       }
 
       // 4. Reporte (estado + vencimiento) por servicio
-      // 🩸 `dbIn` y no `.in()` a pelo: con mil uuids la URL pasaba de los 39.000
-      // caracteres y el servidor la rechazaba con 503 (tres reintentos, medido
-      // el 10-sep). Al fallar, `items` venía vacío y la columna de estado del
-      // reporte salía en blanco para TODAS las filas, sin ningún error visible.
-      const svcIds = lista.map(s => s.id)
+      // 🩸 Antes esto metía los mil uuids en un `.in()`: la URL pasaba de los
+      // 39.000 caracteres y el servidor la rechazaba con 503 (tres reintentos,
+      // medido el 10-sep). El estado del reporte salía en blanco en TODAS las
+      // filas y no se veía ningún error.
+      //
+      // Tampoco se trocea con `dbIn`: serían 18 peticiones seguidas, cada una
+      // con su preflight, y la pantalla se arrastra. La tabla entera cabe en
+      // una página (977 filas hoy), así que se lee de una con `dbTodo` —que
+      // además la pagina sola si algún día pasa de 1000— y el cruce se hace
+      // aquí. Sin `.in()` no hay URL que reventar.
       let repMap = {}
       // Va en su propio try: es un ENRIQUECIMIENTO. Si falla, la lista de
       // mascotas —que es lo que se viene a ver— tiene que salir igual, solo que
       // sin el estado del reporte.
-      if (svcIds.length) {
-        try {
-          const items = await dbIn('reportes_grupales_items',
-            'servicio_id, estado, fecha_vencimiento', 'servicio_id', svcIds)
-          items.forEach(i => { repMap[i.servicio_id] = i })
-        } catch (e) {
-          console.error('Control grupal: no se pudo leer el estado de los reportes —', e.message)
-        }
+      try {
+        const items = await dbTodo(() => db.from('reportes_grupales_items')
+          .select('servicio_id, estado, fecha_vencimiento')
+          .order('servicio_id').order('id'))
+        items.forEach(i => { repMap[i.servicio_id] = i })
+      } catch (e) {
+        console.error('Control grupal: no se pudo leer el estado de los reportes —', e.message)
       }
 
       setRows(lista.map(s => {
