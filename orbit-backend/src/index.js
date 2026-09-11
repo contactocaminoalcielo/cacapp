@@ -14,6 +14,7 @@ import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal 
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
 import { jobEleccionPlanta } from './jobs/plantas.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
+import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
@@ -1236,6 +1237,27 @@ app.post('/plantas/:id/enviar', requireAuth, requireRol('COORDINADOR', 'ADMIN'),
     res.status(r.enviado ? 200 : 409).json(r)
   } catch (e) {
     log('[plantas/enviar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Aviso de hora estimada a la veterinaria, al iniciar ruta el técnico.
+// Lo dispara `iniciarRecogida` en TecnicoApp. Responde 200 SIEMPRE que la
+// petición sea legítima —incluso cuando no se envía nada— porque el técnico ya
+// guardó su hora y ya salió: un 4xx aquí solo serviría para pintarle un error
+// por algo que no es suyo. El detalle viaja en `motivo`.
+app.post('/recogidas/aviso-vet', requireAuth, requireRol('TECNICO', 'COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const servicioId = String(req.body?.servicio_id || '').trim()
+    if (!servicioId) return res.status(400).json({ error: 'Falta servicio_id' })
+    const r = await avisarVetRecogida({
+      servicioId,
+      hora:  req.body?.hora || null,
+      actor: { id: req.personal.id, rol: req.personal.rol },
+    })
+    res.json(r)
+  } catch (e) {
+    log('[recogidas/aviso-vet] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

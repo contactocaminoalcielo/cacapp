@@ -19,6 +19,7 @@ import { compressImage } from '@/lib/imageUtils'
 import { conLimite } from '@/lib/esperas'
 import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
+import { orbitApi } from '@/lib/orbitApi'
 
 const POLL = 30_000
 
@@ -246,6 +247,8 @@ function ConfirmarHoraSheet({ svc, onConfirm, onClose }) {
 // "Subiendo…" queda infinito y el técnico no sabe si guardó. Al vencerse,
 // se muestra error y el archivo sigue en el stash para reintentar.
 const SUBIDA_TIMEOUT_MS = 60000
+// El aviso a la vet no es un paso del técnico: si tarda, se sigue sin él.
+const AVISO_VET_TIMEOUT_MS = 15000
 function conTimeout(promise, msg) {
   return conLimite(promise, SUBIDA_TIMEOUT_MS, msg)
 }
@@ -2129,6 +2132,29 @@ export default function TecnicoApp() {
     if (recogidaId && hora) {
       await db.from('recogidas').update({ hora_programada: hora }).eq('id', recogidaId)
     }
+
+    // ── Aviso a la veterinaria (solo recogidas EN la clínica) ──
+    // Sale por la línea de veterinarias en este mismo instante: es el momento en
+    // que la hora existe. Va DESPUÉS de guardarla y envuelto en try/catch a
+    // propósito — la hora ya está en DB, así que un fallo de Meta o de red no
+    // puede dejar al técnico sin poder salir ni pidiéndole repetir el paso.
+    // El backend decide a quién y si aplica; aquí no se replica esa regla.
+    let avisoVet = { enviado: false, motivo: 'no_intentado' }
+    try {
+      // Con tope: en red móvil un fetch se cuelga sin dar error, y el sheet se
+      // quedaría en "Iniciando ruta…" para siempre por un aviso que ni siquiera
+      // es el paso del técnico. El backend ya reclamó el envío, así que vencer
+      // el plazo aquí no manda el mensaje dos veces.
+      avisoVet = await conLimite(
+        orbitApi('/recogidas/aviso-vet', { method: 'POST', body: { servicio_id: svc.id, hora } }),
+        AVISO_VET_TIMEOUT_MS,
+        'El aviso a la veterinaria tardó demasiado.',
+      )
+    } catch (e) {
+      avisoVet = { enviado: false, motivo: 'error_red', error: e?.message }
+      console.error('[aviso-vet] hora guardada, falló el aviso:', e?.message)
+    }
+
     // Notificar a todos los coordinadores
     const coords = await getCoordinadores()
     const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
@@ -2153,8 +2179,27 @@ export default function TecnicoApp() {
         tecnico_nombre: `${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim(),
         wa_cliente:     tipoLugar !== 'CLINICA_ALIADA' ? waCliente : null,
         wa_aliado:      tipoLugar === 'CLINICA_ALIADA'  ? (waTelContacto || waCliente) : null,
+        // Para que el Kanban NO le ofrezca al coordinador un wa.me hacia una
+        // clínica a la que Orbit acaba de escribirle: recibiría el mismo aviso
+        // dos veces, una por la línea de veterinarias y otra por el celular de
+        // quien esté de turno.
+        aviso_vet:      avisoVet,
       },
     })))
+
+    // Rastro en el servicio: quién avisó, a qué número y a qué hora. La novedad
+    // es lo que se ve en la ficha; `recogidas.aviso_vet_*` guarda el detalle.
+    if (avisoVet?.enviado) {
+      await db.from('novedades_servicio').insert({
+        servicio_id:    svc.id,
+        tipo_novedad:   'NOTA',
+        descripcion:    `📲 Se le avisó a ${avisoVet.clinica || 'la veterinaria'} (${avisoVet.destino || 'su WhatsApp'}) que ${tecnico?.nombre || 'el técnico'} recoge a ${mascotaNombre} sobre las ${hora}.`,
+        registrado_por: tecnico?.id || null,
+      }).then(({ error: e }) => { if (e) console.error('[aviso-vet] novedad:', e.message) })
+      setNotif(`📲 Avisamos a ${avisoVet.clinica || 'la veterinaria'}: recoges a ${mascotaNombre} sobre las ${hora}.`)
+      setTimeout(() => setNotif(null), 6000)
+    }
+
     await cargar()
   }
 

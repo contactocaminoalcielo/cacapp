@@ -2316,7 +2316,11 @@ export default function Kanban() {
         )}
         {alertasRuta.map(n => {
           const d     = n.datos || {}
-          const waNum = d.wa_cliente || d.wa_aliado || ''
+          // Si Orbit ya le escribió a la clínica por la línea de veterinarias,
+          // el botón manual sobra: mandarlo otra vez desde el celular del
+          // coordinador es el MISMO aviso dos veces, por dos números distintos.
+          const yaAvisoVet = d.aviso_vet?.enviado === true
+          const waNum = yaAvisoVet ? '' : (d.wa_cliente || d.wa_aliado || '')
           const msg   = generarMsgRuta(n)
           return (
             <div key={n.id} className="bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden pointer-events-auto">
@@ -2333,7 +2337,12 @@ export default function Kanban() {
                 </button>
               </div>
               <div className="px-4 py-3">
-                {waNum ? (
+                {yaAvisoVet ? (
+                  <p className="text-[11px] font-semibold rounded-lg px-3 py-2"
+                    style={{ background: '#F0FDF4', color: '#166534' }}>
+                    ✅ Ya se le avisó a {d.aviso_vet?.clinica || 'la veterinaria'} por la línea de veterinarias.
+                  </p>
+                ) : waNum ? (
                   <a href={waLink(waNum, msg)}
                     target="_blank" rel="noreferrer"
                     onClick={() => descartarAlertaRuta(n.id)}
