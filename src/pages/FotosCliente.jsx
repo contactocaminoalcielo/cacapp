@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { db } from '@/lib/supabase'
 import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
-import { portalDatos, portalRecibir } from '@/lib/imagenes'
+import { portalDatos, portalRecibir, requiereImagen } from '@/lib/imagenes'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, BORDE } from '@/components/portal/Botanica'
 import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package } from 'lucide-react'
@@ -47,9 +47,24 @@ const slide = {
   exit:   d => ({ x: d > 0 ? '-60%' : '60%', opacity: 0, transition: { duration: 0.2 } }),
 }
 
+/**
+ * Cuántas fotos le pedimos AL CLIENTE por este recordatorio.
+ *
+ * 🩸 Una sola regla, y es la del catálogo (`requiereImagen`, la misma que usa
+ * el resto de la app). Antes convivían dos en este archivo: `recListo` sí
+ * miraba `solo_nombre`, pero lo que PINTABA los recuadros de subida usaba
+ * `requiere_imagen !== false` y se lo saltaba. Resultado: **Huella 3D**
+ * (`solo_nombre: true`, `max_fotos: 4`) le mostraba al cliente cuatro espacios
+ * para subir fotos. Esa huella la fotografía Tenjo, no la familia, y lo que el
+ * cliente subiera ahí pisaba lo que pusiera la planta.
+ */
+function maxFotosCliente(rec) {
+  return requiereImagen(rec) ? rec.max_fotos : 0
+}
+
 /** ¿Un recordatorio tiene ya todo lo que pide (fotos + textos)? */
 function recListo(rec, files, textosVals) {
-  const maxF = (rec?.requiere_imagen && !rec?.solo_nombre && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
+  const maxF = maxFotosCliente(rec)
   if (maxF > 0 && (files || []).filter(Boolean).length < maxF) return false
   for (const c of (rec?.campos_texto || [])) {
     const arr = textosVals?.[c.label] || []
@@ -199,8 +214,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
       const fi = {}
       it.forEach(item => {
         const rec = item.recordatorios
-        if (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0)
-          fi[item.id] = Array(rec.max_fotos).fill(null)
+        const maxF = maxFotosCliente(rec)
+        if (maxF > 0) fi[item.id] = Array(maxF).fill(null)
       })
       setFotos(fi)
 
@@ -499,8 +514,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
 
 // Estructuras iniciales de captura para un recordatorio del catálogo
 function iniFotos(rec) {
-  const max = (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
-  return Array(max).fill(null)
+  return Array(maxFotosCliente(rec)).fill(null)
 }
 function iniTextos(rec) {
   const out = {}
@@ -512,7 +526,7 @@ function iniTextos(rec) {
 // La usan el paso de recordatorio del plan y el paso de oferta aceptada, para
 // que el cliente vea exactamente la misma mecánica en ambos.
 function CapturaRecordatorio({ rec, mascota, files, textosVals, onFilesChange, onTextosChange }) {
-  const maxFotos = (rec?.requiere_imagen !== false && (rec?.max_fotos || 0) > 0) ? rec.max_fotos : 0
+  const maxFotos = maxFotosCliente(rec)
   const campos   = rec?.campos_texto || []
   const arreglo  = Array.from({ length: maxFotos }, (_, i) => files?.[i] ?? null)
   const filled   = arreglo.filter(Boolean).length

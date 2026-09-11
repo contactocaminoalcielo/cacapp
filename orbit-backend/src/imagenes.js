@@ -501,14 +501,35 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       }
       const entry = entradas.get(String(item.sr_id))
       const urls  = (entry.urls || []).filter(u => typeof u === 'string' && u.includes(s.id))
+      // 🩸 Las imágenes SOLO se escriben si ese recordatorio de verdad las pide
+      // al cliente. La condición es la del catálogo, la misma de
+      // `requiereImagen()` en el front, pero decidida AQUÍ: el portal es una
+      // PWA y puede estar corriendo una versión vieja en el teléfono de la
+      // familia, así que la regla no puede vivir solo en la pantalla.
+      //
+      // El caso que lo motivó: **Huella 3D** (`solo_nombre: true`) mostraba
+      // cuatro recuadros de subida y la familia metía ahí sus fotos. Esa huella
+      // la fotografía TENJO; lo que suba el cliente no puede pisarla. Si el
+      // recordatorio no toma imágenes del cliente, las columnas se quedan
+      // EXACTAMENTE como estaban —no se borran, no se sobrescriben— y el ítem
+      // igual avanza a EN_PROCESO, porque el cliente sí completó su paso.
       await client.query(
-        `UPDATE public.servicio_recordatorios
+        `UPDATE public.servicio_recordatorios sr
          SET estado = 'EN_PROCESO',
-             imagen_cliente_url = $3,
-             imagenes_cliente_urls = $4::text[],
-             datos_cliente = COALESCE($5::jsonb, datos_cliente)
-         WHERE id = $1 AND servicio_id = $2
-           AND COALESCE(origen,'') <> 'REMOVIDO' AND estado <> 'NA'`,
+             imagen_cliente_url = CASE WHEN rec.toma_fotos_del_cliente
+                                       THEN $3 ELSE sr.imagen_cliente_url END,
+             imagenes_cliente_urls = CASE WHEN rec.toma_fotos_del_cliente
+                                          THEN $4::text[] ELSE sr.imagenes_cliente_urls END,
+             datos_cliente = COALESCE($5::jsonb, sr.datos_cliente)
+         FROM (
+           SELECT r.id,
+                  (r.requiere_imagen IS TRUE
+                   AND COALESCE(r.solo_nombre, false) IS FALSE
+                   AND COALESCE(r.max_fotos, 0) > 0) AS toma_fotos_del_cliente
+             FROM public.recordatorios r
+         ) rec
+         WHERE sr.id = $1 AND sr.servicio_id = $2 AND rec.id = sr.recordatorio_id
+           AND COALESCE(sr.origen,'') <> 'REMOVIDO' AND sr.estado <> 'NA'`,
         [item.sr_id, s.id, urls[0] || null, urls,
          entry.textos && Object.keys(entry.textos).length ? JSON.stringify(entry.textos) : null]
       )
