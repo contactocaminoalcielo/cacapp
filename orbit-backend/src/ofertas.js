@@ -175,7 +175,17 @@ export async function registrarRechazoOferta(client, { servicioId, oferta }) {
  * Devuelve el id del servicio_recordatorio creado.
  */
 export async function aplicarOfertaAceptada(client, { servicioId, oferta, entry }) {
-  const urls = (entry?.urls || []).filter(u => typeof u === 'string' && u.includes(servicioId))
+  // 🩸 Solo se guardan imágenes del cliente si ESE recordatorio se las pide.
+  // La oferta viva "Porque un gran amor merece un recuerdo más" vende una
+  // **Huella 3D**, que fotografía TENJO y no la familia: el portal le mostraba
+  // recuadros de subida y lo que el cliente metiera ahí quedaba como la imagen
+  // del ítem, lista para pisar la foto buena de la planta. Mismo criterio que
+  // `ofertaCompleta` (que ya usa `requiereImagen`) y que el guardado de los
+  // recordatorios del plan en imagenes.js.
+  const tomaFotosDelCliente = requiereImagen(oferta.recordatorio)
+  const urls = tomaFotosDelCliente
+    ? (entry?.urls || []).filter(u => typeof u === 'string' && u.includes(servicioId))
+    : []
   const textos = entry?.textos && Object.keys(entry.textos).length ? JSON.stringify(entry.textos) : null
   const precio = Number(oferta.precio_oferta) || 0
 
