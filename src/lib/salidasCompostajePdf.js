@@ -127,7 +127,15 @@ export async function generarPdfSalidas(tipo, items) {
       pdf.setFont('helvetica', esNombre ? 'bold' : 'normal')
       pdf.setFontSize(8.5)
       pdf.setTextColor(...(esNombre ? [25, 32, 27] : GRIS))
-      const txt = pdf.splitTextToSize(String(valor(it, c.k)), c.w - 2)[0] || '—'
+      // Una sola línea por celda: la tabla es de altura fija. `splitTextToSize`
+      // devuelve varias y quedarse con la primera cortaba el nombre en seco, sin
+      // señal de que faltaba texto — un "FUNDACION INTEGRAL AND" parece el
+      // nombre completo. Con la elipsis al menos se ve que está recortado.
+      const completo = String(valor(it, c.k))
+      const partes   = pdf.splitTextToSize(completo, c.w - 2)
+      const txt      = partes.length > 1
+        ? `${pdf.splitTextToSize(completo, c.w - 4)[0].trimEnd()}…`
+        : (partes[0] || '—')
       pdf.text(txt, c.x, y)
     })
     y += 7.5
@@ -172,5 +180,17 @@ export function textoSalidasWa(tipo, items) {
     : `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · salió ${fmt(it.cubiculo_salida)}`
       + (it.servicios?.fecha_limite_entrega ? ` · entrega ${fmt(it.servicios.fecha_limite_entrega)}` : ''))
 
-  return `${cabeza}\n${`(${items.length} mascota${items.length !== 1 ? 's' : ''})`}\n\n${lineas.join('\n')}`
+  // 🔑 El listado viaja DENTRO de la URL de wa.me, ya codificada: un rango
+  // amplio de "ya salieron" son cientos de líneas, y wa.me y el intent de
+  // Android recortan una URL larga SIN AVISAR — el coordinador creería haber
+  // mandado la lista entera. Se corta aquí, contando lo que falta, y el resto
+  // queda en el PDF, que es el que aguanta cualquier tamaño.
+  const TOPE = 40
+  const visibles = lineas.slice(0, TOPE)
+  const resto    = lineas.length - visibles.length
+  if (resto > 0) {
+    visibles.push(`…y ${resto} más — la lista completa va en el PDF.`)
+  }
+
+  return `${cabeza}\n${`(${items.length} mascota${items.length !== 1 ? 's' : ''})`}\n\n${visibles.join('\n')}`
 }

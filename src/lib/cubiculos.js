@@ -198,8 +198,16 @@ export function finCompostaje(fechaStr, meses = 2) {
  * Las dos listas de la pestaña Salidas:
  *   · `porSacar`  — siguen en el cubículo y el compostaje ya se cumplió.
  *   · `enCurso`   — siguen dentro pero aún les falta (contexto, no urgencia).
+ *   · `sinFecha`  — siguen dentro y NO se sabe cuándo cumplen.
  *   · `salieron`  — ya salieron, desde `desde` (ISO) hacia acá.
  * Solo COMPOSTAJE_INDIVIDUAL: de un cubículo no sale otra cosa.
+ *
+ * 🔑 `sinFecha` es una lista aparte y no un rincón de `enCurso`. Sin fecha de
+ * ingreso (`fecha_compostaje_inicio` es nullable, y `asignarCubiculo` no la
+ * escribe al enlazar un código huérfano) `finCompostaje` devuelve null, y esa
+ * mascota no cumpliría "ya pasó su fecha" NUNCA: se quedaría en el cubículo sin
+ * aparecer jamás en la hoja de trabajo de la planta. Metida en `enCurso` el
+ * único síntoma sería un contador que sube. Aquí se ve y se puede corregir.
  */
 export async function cargarSalidasCompostaje({ desde } = {}) {
   const esCompostaje = it => it?.servicios?.planes?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
@@ -227,7 +235,8 @@ export async function cargarSalidasCompostaje({ desde } = {}) {
   const adentro = (dentro || []).filter(esCompostaje).map(conCalculo)
   return {
     porSacar: adentro.filter(it => it.fechaCumple && it.fechaCumple <= hoy),
-    enCurso:  adentro.filter(it => !it.fechaCumple || it.fechaCumple > hoy),
+    enCurso:  adentro.filter(it => it.fechaCumple && it.fechaCumple > hoy),
+    sinFecha: adentro.filter(it => !it.fechaCumple),
     salieron: (fuera || []).filter(esCompostaje).map(conCalculo),
   }
 }

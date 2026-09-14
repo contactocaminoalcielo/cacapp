@@ -114,7 +114,7 @@ function Acciones({ tipo, items }) {
 }
 
 export default function SalidasTab({ canPlan = false, personalData = null, onChanged }) {
-  const { confirm, alert: showAlert } = useConfirm()
+  const { alert: showAlert } = useConfirm()
   const [datos,   setDatos]   = useState(null)   // null = cargando
   const [error,   setError]   = useState(null)
   const [saving,  setSaving]  = useState(false)
@@ -133,7 +133,7 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
       setError(falta
         ? 'Falta aplicar la migración 155 (migrations/155_tenjo_salida_cubiculo_cupo.sql) en esta base de datos.'
         : parsearErrorDB(e))
-      setDatos({ porSacar: [], enCurso: [], salieron: [] })
+      setDatos({ porSacar: [], enCurso: [], sinFecha: [], salieron: [] })
     }
   }, [desde])
 
@@ -142,6 +142,9 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const porSacar = datos?.porSacar || []
   const salieron = datos?.salieron || []
   const enCurso  = datos?.enCurso  || []
+  // Dentro del cubículo pero sin fecha de ingreso: no cumplen "ya les tocó"
+  // NUNCA, así que si no se muestran aquí no aparecen en ningún sitio.
+  const sinFecha = datos?.sinFecha || []
 
   const seleccionados = useMemo(() => porSacar.filter(it => sel.has(it.id)), [porSacar, sel])
 
@@ -208,6 +211,35 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
         <StatCard label="Salieron en el rango" value={salieron.length} valueColor="#3B6FBF" />
         <StatCard label="Seleccionadas" value={seleccionados.length} valueColor={seleccionados.length > 0 ? '#9A5500' : '#9CA3AF'} />
       </div>
+
+      {/* ── SIN FECHA DE INGRESO ──
+          Estas no cumplen "ya les tocó" jamás: se quedarían en el cubículo sin
+          salir nunca en la hoja de trabajo. Se muestran para que se corrijan. */}
+      {sinFecha.length > 0 && (
+        <div className="rounded-2xl border-2 p-4" style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0" style={{ color: '#92400E' }} />
+            <div className="min-w-0">
+              <div className="font-semibold text-[13px]" style={{ color: '#92400E' }}>
+                {sinFecha.length} {sinFecha.length === 1 ? 'mascota está' : 'mascotas están'} en cubículo sin fecha de ingreso
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: '#78350F' }}>
+                Sin esa fecha no se puede calcular cuándo cumplen, así que nunca aparecerán
+                en «Por sacar». Corrígela en Tenjo → Jornada para que entren en la cola.
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {sinFecha.map(it => (
+                  <span key={it.id} className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: '#FEF3C7', color: '#92400E' }}>
+                    {it.servicios?.mascotas?.nombre || 'Sin nombre'}
+                    {it.cubiculos?.codigo ? ` · ${it.cubiculos.codigo}` : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── POR SACAR ── */}
       <div className="bg-surface border-2 rounded-2xl shadow-sm"
