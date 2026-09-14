@@ -373,6 +373,10 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         const etapa   = etapas[sId]
         const fmtCorta    = d => d?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
         const limite      = parseDate(servicio?.fecha_limite_entrega)
+        // Compostaje que la familia pidió recibir al final: su plazo lo abre la
+        // salida del cubículo, no las imágenes (migración 155).
+        const esperaSalidaCubiculo = plan?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+          && servicio?.recordatorios_anticipados !== true
         const diasAlLimite = limite ? Math.round((limite - parseDate(today())) / 86400000) : null
         const fechaFotos  = fotos_ok ? fmtCorta(parseDate(servicio.fecha_imagenes_recibidas)) : null
         const listosCnt = items.filter(i => ['LISTO', 'ENTREGADO'].includes(i.estado)).length
@@ -424,16 +428,25 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
             <div className="flex flex-wrap gap-1.5 mb-2.5">
               {limite && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                  title={[
-                    servicio?.fecha_imagenes_recibidas
-                      ? `Imágenes recibidas: ${parseDate(servicio.fecha_imagenes_recibidas)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`
-                      : null,
-                    servicio?.fecha_imagenes_recibidas && plan?.dias_entrega_prometidos != null
-                      ? `+ ${plan.dias_entrega_prometidos} días hábiles del plan ${plan.nombre}`
-                      : null,
-                    `= entrega máxima ${limite?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`,
-                    'No cuentan fines de semana ni festivos. La fecha de ingreso no entra en el cálculo.',
-                  ].filter(Boolean).join('\n')}
+                  title={(esperaSalidaCubiculo
+                    ? [
+                        'Cuenta desde que la mascota SALE del cubículo (Tenjo → Salidas), no desde las imágenes.',
+                        plan?.dias_entrega_prometidos != null
+                          ? `+ ${plan.dias_entrega_prometidos} días hábiles del plan ${plan.nombre}`
+                          : null,
+                        `= entrega máxima ${limite?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`,
+                        'No cuentan fines de semana ni festivos.',
+                      ]
+                    : [
+                        servicio?.fecha_imagenes_recibidas
+                          ? `Imágenes recibidas: ${parseDate(servicio.fecha_imagenes_recibidas)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`
+                          : null,
+                        servicio?.fecha_imagenes_recibidas && plan?.dias_entrega_prometidos != null
+                          ? `+ ${plan.dias_entrega_prometidos} días hábiles del plan ${plan.nombre}`
+                          : null,
+                        `= entrega máxima ${limite?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`,
+                        'No cuentan fines de semana ni festivos. La fecha de ingreso no entra en el cálculo.',
+                      ]).filter(Boolean).join('\n')}
                   style={diasAlLimite < 0
                     ? { background: '#FEE2E2', color: '#B91C1C' }
                     : diasAlLimite <= 2
@@ -1008,8 +1021,9 @@ export default function Produccion() {
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
             servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+                        recordatorios_anticipados,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
-                        planes ( nombre, codigo, dias_entrega_prometidos ),
+                        planes ( nombre, codigo, tipo_proceso, dias_entrega_prometidos ),
                         aliados:aliado_origen_id ( vip ) )
           `)
           .neq('origen', 'REMOVIDO')
@@ -1087,8 +1101,9 @@ export default function Produccion() {
                         recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
         servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+                    recordatorios_anticipados,
                     mascotas ( nombre, especie_id, especies ( nombre ) ),
-                    planes ( nombre, codigo, dias_entrega_prometidos ) )
+                    planes ( nombre, codigo, tipo_proceso, dias_entrega_prometidos ) )
       `)
       .neq('origen', 'REMOVIDO')
       .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])

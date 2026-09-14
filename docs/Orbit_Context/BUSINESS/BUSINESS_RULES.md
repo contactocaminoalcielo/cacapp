@@ -120,6 +120,19 @@ RN084. **Al mensajero se le paga por HORAS, por fuera de Orbit.** Su cuadre resp
        técnico**, y esos lápices están cerrados: como `dinero_a_entregar = efectivo −
        reconocido`, cualquier valor ahí le bajaría en silencio el efectivo que se le pide.
 
+RN085. **En el compostaje individual, el reloj de entrega de los recordatorios arranca cuando la
+       mascota SALE del cubículo**, no cuando la familia manda las fotos — salvo que haya pedido
+       expresamente recibirlos anticipados (`servicios.recordatorios_anticipados = true`). Quien
+       dijo "todos al final", y quien no contestó, cuenta desde `lotes_tenjo_items.cubiculo_salida`
+       + los días hábiles del plan. Mientras siga en el cubículo, `fecha_limite_entrega` es NULL:
+       todavía no hay compromiso que medir. Contarlo desde las fotos hacía nacer la fecha ya
+       vencida y pintaba de rojo dos meses de Kanban y Producción (migración 155).
+RN086. La fecha de salida del cubículo es **corregible** y al corregirla se recalcula sola la
+       fecha máxima de entrega. Se registra el día en que la mascota salió de verdad, no el día
+       en que alguien lo apuntó.
+RN087. Un cubículo puede alojar **más de una mascota**: su `capacidad` la fija a mano el
+       coordinador, cubículo por cubículo (por defecto 1). La base rechaza pasarse del cupo.
+
 ## L. Reglas pendientes por validar
 - Estados exactos por plan.
 - Lista definitiva de recordatorios incluidos por plan.

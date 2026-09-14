@@ -1,11 +1,16 @@
 // Cubículos de compostaje individual de la planta de Tenjo (migración 055).
 //
 // Catálogo cerrado de 218 cubículos: zona (color físico) → talla (P/M/G) → número.
-// La OCUPACIÓN no es una columna de estado: se deriva de "existe un item que
-// apunta a este cubículo y aún no fue liberado". Nunca introducir un
+// La OCUPACIÓN no es una columna de estado: se deriva de "qué items apuntan a
+// este cubículo y aún no fueron liberados". Nunca introducir un
 // `cubiculos.estado`: se desincronizaría de la realidad física (mismo patrón de
 // bug de los gates por `servicios.estado`).
-import { db } from '@/lib/supabase'
+//
+// Desde la migración 155 un cubículo admite VARIAS mascotas: `capacidad` dice
+// cuántas caben (1 por defecto) y un trigger en DB rechaza la que se pase. Por
+// eso `ocupacion[cubiculo_id]` es un ARRAY, no un item suelto.
+import { db, dbTodo } from '@/lib/supabase'
+import { hoyLocalISO } from '@/lib/utils'
 
 // ─── Zonas ───────────────────────────────────────────────────────────────────
 // El orden y la columna reproducen el plano real de la planta (boceto 2026-07-16):
@@ -52,30 +57,44 @@ export function sugerirTalla(pesoKg) {
 }
 
 // ─── Carga del catálogo + ocupación ──────────────────────────────────────────
+// Columnas que necesita cualquier vista de "quién está en el cubículo".
+const SELECT_ITEM_OCUPANTE =
+  'id, cubiculo_id, cubiculo_codigo, fecha_compostaje_inicio, meses_compostaje, '
+  + 'fecha_fin_proceso, cubiculo_salida, servicio_id, '
+  + 'servicios(id, estado, fecha_limite_entrega, recordatorios_anticipados, '
+  + 'mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), '
+  + 'planes(nombre, tipo_proceso, dias_entrega_prometidos))'
+
 /**
- * Trae los 218 cubículos y quién ocupa cada uno.
+ * Trae los 218 cubículos y quiénes ocupan cada uno.
  * OJO: la ocupación NO se filtra por FECHA_CORTE — un cubículo ocupado por un
  * servicio viejo (oculto en la UI) sigue estando físicamente ocupado.
- * @returns {Promise<{cubiculos: Array, ocupacion: Object}>} ocupacion: { cubiculo_id: item }
+ * @returns {Promise<{cubiculos: Array, ocupacion: Object}>} ocupacion: { cubiculo_id: [items] }
  */
 export async function cargarCubiculos() {
   const [{ data: cubs, error: errCubs }, { data: items, error: errItems }] = await Promise.all([
     db.from('cubiculos')
-      .select('id, zona, talla, numero, codigo, activo, notas')
+      .select('id, zona, talla, numero, codigo, activo, notas, capacidad')
       .order('zona').order('talla').order('numero'),
     db.from('lotes_tenjo_items')
-      .select('id, cubiculo_id, cubiculo_codigo, fecha_compostaje_inicio, meses_compostaje, '
-        + 'fecha_fin_proceso, servicio_id, '
-        + 'servicios(mascotas(nombre, peso_kg, especies(nombre)), planes(nombre, tipo_proceso))')
+      .select(SELECT_ITEM_OCUPANTE)
       .not('cubiculo_id', 'is', null)
-      .is('cubiculo_liberado_en', null),
+      .is('cubiculo_liberado_en', null)
+      .order('fecha_compostaje_inicio', { ascending: true, nullsFirst: true })
+      .order('id'),
   ])
   if (errCubs)  throw errCubs
   if (errItems) throw errItems
 
   const ocupacion = {}
-  for (const it of (items || [])) ocupacion[it.cubiculo_id] = it
+  for (const it of (items || [])) (ocupacion[it.cubiculo_id] ||= []).push(it)
   return { cubiculos: cubs || [], ocupacion }
+}
+
+/** Cuántos cupos quedan libres en un cubículo (0 si está fuera de servicio). */
+export function cuposLibres(cub, ocupantes) {
+  if (!cub?.activo) return 0
+  return Math.max(0, (cub.capacidad ?? 1) - (ocupantes?.length || 0))
 }
 
 /**
@@ -93,33 +112,122 @@ export async function cargarCodigosHuerfanos() {
 }
 
 // ─── Acciones ────────────────────────────────────────────────────────────────
-/** Libera el cubículo que ocupa un item (liberación manual por el operario). */
-export async function liberarCubiculo(itemId, personalId) {
+/**
+ * Libera el cubículo que ocupa un item (liberación manual por el operario).
+ * Dos fechas, a propósito distintas:
+ *   · `cubiculo_liberado_en` — sello de cuándo se pulsó el botón (auditoría).
+ *   · `cubiculo_salida`      — el día en que la mascota salió de verdad. Es el
+ *     hecho operativo, se puede corregir después y de él cuelgan los días
+ *     hábiles de entrega de los recordatorios (migración 155).
+ */
+export async function liberarCubiculo(itemId, personalId, fechaSalida = null) {
   const { error } = await db.from('lotes_tenjo_items').update({
     cubiculo_liberado_en:  new Date().toISOString(),
     cubiculo_liberado_por: personalId || null,
-  }).eq('id', itemId)
-  if (error) throw error
-}
-
-/** Reasigna un item a otro cubículo (o lo enlaza por primera vez). */
-export async function asignarCubiculo(itemId, cubiculoId) {
-  const { error } = await db.from('lotes_tenjo_items').update({
-    cubiculo_id: cubiculoId,
-    cubiculo_liberado_en:  null,
-    cubiculo_liberado_por: null,
+    cubiculo_salida:       fechaSalida || hoyLocalISO(),
   }).eq('id', itemId)
   if (error) throw error
 }
 
 /**
- * Traduce el error del índice único a algo que un operario entienda.
- * `uq_cubiculo_ocupado` impide dos mascotas en el mismo cubículo a nivel de DB.
+ * Corrige el día en que la mascota salió del cubículo. El trigger de DB
+ * recalcula solo `servicios.fecha_limite_entrega` de los compostajes que
+ * esperan al final del proceso.
+ */
+export async function actualizarFechaSalida(itemId, fechaSalida) {
+  if (!fechaSalida) throw new Error('Indica la fecha de salida.')
+  const { error } = await db.from('lotes_tenjo_items')
+    .update({ cubiculo_salida: fechaSalida }).eq('id', itemId)
+  if (error) throw error
+}
+
+/**
+ * Reasigna un item a otro cubículo (o lo enlaza por primera vez).
+ * `cubiculo_salida` se borra a propósito: si vuelve a entrar, la salida vieja
+ * dejaría corriendo un plazo de entrega que ya no corresponde.
+ */
+export async function asignarCubiculo(itemId, cubiculoId) {
+  const { error } = await db.from('lotes_tenjo_items').update({
+    cubiculo_id: cubiculoId,
+    cubiculo_liberado_en:  null,
+    cubiculo_liberado_por: null,
+    cubiculo_salida:       null,
+  }).eq('id', itemId)
+  if (error) throw error
+}
+
+/**
+ * Traduce el error de la compuerta de DB a algo que un operario entienda.
+ * `cubiculo_sin_cupo` (trigger, migr. 155) frena al que se pasa del cupo;
+ * `uq_cubiculo_ocupado` es el candado viejo, por si la 155 no está aplicada.
  */
 export function mensajeErrorCubiculo(e) {
   const msg = e?.message || ''
+  if (msg.includes('cubiculo_sin_cupo')) {
+    return 'Ese cubículo ya está en su tope de mascotas. Actualiza el mapa y elige otro, o súbele el cupo desde la pestaña Cubículos.'
+  }
   if (msg.includes('uq_cubiculo_ocupado')) {
     return 'Ese cubículo ya está ocupado por otra mascota. Actualiza el mapa y elige uno libre.'
   }
+  if (msg.includes('cubiculo_fuera_de_servicio')) {
+    return 'Ese cubículo está marcado como fuera de servicio. Reactívalo en la pestaña Cubículos o elige otro.'
+  }
+  if (msg.includes('cubiculo_inexistente')) {
+    return 'Ese cubículo ya no está en el catálogo. Actualiza el mapa y elige otro.'
+  }
   return msg || 'No se pudo guardar el cubículo.'
+}
+
+// ─── Salidas del compostaje ──────────────────────────────────────────────────
+// Fin del compostaje = ingreso al cubículo + N meses (2, 2.5 o 3, por cubículo).
+// Admite medios meses: los enteros con setMonth y la fracción como días (½ ≈ 15).
+// Misma regla que `calcularListoProceso` de lib/tenjo.js y que la migración 149:
+// con "2 meses" fijos se sacaría antes de tiempo a los de 2.5 y 3.
+export function finCompostaje(fechaStr, meses = 2) {
+  if (!fechaStr) return null
+  const n = Number(meses) || 2
+  const d = new Date(fechaStr + 'T12:00:00')
+  const enteros = Math.trunc(n)
+  d.setMonth(d.getMonth() + enteros)
+  const frac = n - enteros
+  if (frac) d.setDate(d.getDate() + Math.round(frac * 30))
+  return hoyLocalISO(d)
+}
+
+/**
+ * Las dos listas de la pestaña Salidas:
+ *   · `porSacar`  — siguen en el cubículo y el compostaje ya se cumplió.
+ *   · `enCurso`   — siguen dentro pero aún les falta (contexto, no urgencia).
+ *   · `salieron`  — ya salieron, desde `desde` (ISO) hacia acá.
+ * Solo COMPOSTAJE_INDIVIDUAL: de un cubículo no sale otra cosa.
+ */
+export async function cargarSalidasCompostaje({ desde } = {}) {
+  const esCompostaje = it => it?.servicios?.planes?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+  const conCalculo = it => {
+    const cumple = finCompostaje(it.fecha_compostaje_inicio, it.meses_compostaje)
+    return { ...it, fechaCumple: cumple }
+  }
+
+  const [dentro, fuera] = await Promise.all([
+    dbTodo(() => db.from('lotes_tenjo_items')
+      .select(SELECT_ITEM_OCUPANTE + ', cubiculos(id, codigo, zona, talla, numero)')
+      .not('cubiculo_id', 'is', null)
+      .is('cubiculo_liberado_en', null)
+      .order('fecha_compostaje_inicio', { ascending: true, nullsFirst: true })
+      .order('id')),
+    dbTodo(() => db.from('lotes_tenjo_items')
+      .select(SELECT_ITEM_OCUPANTE + ', cubiculos(id, codigo, zona, talla, numero)')
+      .not('cubiculo_salida', 'is', null)
+      .gte('cubiculo_salida', desde || '2026-01-01')
+      .order('cubiculo_salida', { ascending: false })
+      .order('id')),
+  ])
+
+  const hoy = hoyLocalISO()
+  const adentro = (dentro || []).filter(esCompostaje).map(conCalculo)
+  return {
+    porSacar: adentro.filter(it => it.fechaCumple && it.fechaCumple <= hoy),
+    enCurso:  adentro.filter(it => !it.fechaCumple || it.fechaCumple > hoy),
+    salieron: (fuera || []).filter(esCompostaje).map(conCalculo),
+  }
 }

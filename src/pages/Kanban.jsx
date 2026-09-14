@@ -271,12 +271,28 @@ function SortIcon({ field, sortField, sortDir }) {
 //   fecha_imagenes_recibidas + los días hábiles prometidos por el plan.
 // La tarjeta solo mostraba la fecha de ingreso junto al "Vencido Nd", y eso
 // hacía leer el vencimiento contra una fecha que no entra en el cálculo.
+// EXCEPCIÓN (migración 155): en el compostaje individual cuya familia NO pidió
+// los recordatorios anticipados, el reloj arranca cuando la mascota SALE del
+// cubículo — 2 ó 3 meses después. Contarlo desde las fotos hacía nacer vencida
+// la fecha y pintaba en rojo toda la columna durante meses. Mientras siga
+// adentro no hay fecha: `fecha_limite_entrega` es NULL a propósito.
 const fmtDiaMes = d => parseDate(d)?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) || null
 
 function explicaLimite(s, diasPlan) {
   if (!s?.fecha_limite_entrega) return undefined
   const largo = d => parseDate(d)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })
   const l = []
+  // Compostaje individual que espera al final: el reloj lo abre la salida del
+  // cubículo, no las imágenes (migración 155). Decirlo, o el tooltip miente.
+  if (s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL' && s.recordatorios_anticipados !== true) {
+    l.push('Cuenta desde que la mascota SALE del cubículo (Tenjo → Salidas),')
+    l.push(diasPlan != null
+      ? `+ ${diasPlan} días hábiles del plan ${s.plan}`
+      : `+ los días hábiles prometidos del plan ${s.plan}`)
+    l.push(`= entrega máxima ${largo(s.fecha_limite_entrega)}`)
+    l.push('No cuentan fines de semana ni festivos.')
+    return l.join('\n')
+  }
   if (s.fecha_imagenes_recibidas) {
     l.push(`Imágenes recibidas: ${largo(s.fecha_imagenes_recibidas)}`)
     l.push(diasPlan != null

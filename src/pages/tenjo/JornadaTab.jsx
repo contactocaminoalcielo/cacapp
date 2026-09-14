@@ -13,7 +13,7 @@ import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
-import { petEmoji, parsearErrorDB, today, hoyLocalISO, waLink } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, waLink } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
   ITEM_ESTADO_CFG, LOTE_ESTADO_CFG, CONFIG_DEFAULTS, reconciliarServicioTenjo,
@@ -22,7 +22,7 @@ import {
 } from '@/lib/tenjo'
 import { registrarSalidaCuartoFrio } from '@/lib/cuartoFrio'
 import {
-  cargarCubiculos, sugerirTalla, etiquetaCubiculo, mensajeErrorCubiculo, tallaLbl,
+  cargarCubiculos, sugerirTalla, etiquetaCubiculo, mensajeErrorCubiculo, tallaLbl, finCompostaje,
 } from '@/lib/cubiculos'
 import MapaCubiculos, { LeyendaCubiculos } from '@/pages/tenjo/MapaCubiculos'
 import { Play, Square, ClipboardCheck, Lock, Camera, AlertTriangle, CheckCircle2, PackageCheck, PackageX, Inbox, Phone, MessageCircle, Info, Check, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
@@ -32,18 +32,6 @@ const fmtFechaLarga = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
   : '—'
 const ahoraISO = () => new Date().toISOString()
-// Fin estimado del compostaje = inicio + N meses calendario (2, 2.5 o 3).
-// Admite medios meses: enteros con setMonth y la fracción como días (½ mes ≈ 15 días).
-const finCompostaje = (fechaStr, meses = 2) => {
-  if (!fechaStr) return null
-  const n = Number(meses) || 2
-  const d = new Date(fechaStr + 'T12:00:00')
-  const enteros = Math.trunc(n)
-  d.setMonth(d.getMonth() + enteros)
-  const frac = n - enteros
-  if (frac) d.setDate(d.getDate() + Math.round(frac * 30))
-  return hoyLocalISO(d)
-}
 const fmtFechaCorta = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
   : '—'
@@ -242,8 +230,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
       await showAlert('Selecciona en el mapa el cubículo donde quedó la mascota.', { title: 'Cubículo requerido' }); return
     }
     const inicioComp = cubForm.fecha_compostaje_inicio || today()
-    // El índice único `uq_cubiculo_ocupado` rechaza a nivel de DB un cubículo ya
-    // ocupado (carrera entre dos operarios). Se traduce a lenguaje de planta.
+    // El trigger `fn_cubiculo_cupo` rechaza a nivel de DB un cubículo que ya
+    // está en su tope (carrera entre dos operarios). Se traduce a lenguaje de
+    // planta. `cubiculo_salida` se limpia: si la mascota vuelve a entrar, la
+    // salida vieja dejaría corriendo un plazo de entrega que ya no aplica.
     try {
       const { error } = await db.from('lotes_tenjo_items').update({
         estado: 'PROCESADO',
@@ -251,6 +241,7 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
         cubiculo_id: cubForm.cubiculo_id,
         cubiculo_liberado_en: null,
         cubiculo_liberado_por: null,
+        cubiculo_salida: null,
         fecha_compostaje_inicio: inicioComp,
         meses_compostaje: [2, 2.5, 3].includes(cubForm.meses) ? cubForm.meses : 2,
         decidido_por: personalData?.id || null,

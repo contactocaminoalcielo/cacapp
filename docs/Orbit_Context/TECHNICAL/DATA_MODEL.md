@@ -184,6 +184,23 @@ Ver [MODULES/PLANTAS.md](../MODULES/PLANTAS.md).
   GRANTs explícitos a **`orbit_backend`** (los ALTER DEFAULT PRIVILEGES no lo cubren).
   Bucket público `plantas` para las fotos del catálogo
 
+### Cubículos de Tenjo — tablas `cubiculos`, `lotes_tenjo_items` (migraciones 055 / 155)
+
+Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
+
+- `cubiculos.codigo` — columna **GENERADA** (`ZONA-T-NN`, ej. `AZUL-P-05`). No se escribe a mano
+- `cubiculos.capacidad` smallint NOT NULL DEFAULT 1, CHECK 1–20 (migr. 155) — cuántas mascotas
+  caben a la vez. **NO existe `cubiculos.estado`**: la ocupación se DERIVA de los items
+- `lotes_tenjo_items.cubiculo_id` + `cubiculo_liberado_en` (timestamptz) / `cubiculo_liberado_por` —
+  ocupa el cubículo ⟺ `cubiculo_id IS NOT NULL AND cubiculo_liberado_en IS NULL`
+- `lotes_tenjo_items.cubiculo_salida` (date, migr. 155) — el día en que **salió la mascota**,
+  editable. Distinto de `cubiculo_liberado_en`, que es cuándo se pulsó el botón
+- `lotes_tenjo_items.fecha_compostaje_inicio` + `meses_compostaje` numeric(3,1) CHECK IN (2, 2.5, 3)
+- ⚠️ El índice único `uq_cubiculo_ocupado` **ya no existe** (migr. 155): lo reemplaza el trigger
+  `fn_cubiculo_cupo`, que bloquea la fila del cubículo (`FOR UPDATE`) y rechaza pasarse del cupo
+- `fn_compostaje_espera_salida(uuid)` / `fn_recalcular_limite_compostaje(uuid)` +
+  trigger `trg_item_salida_limite` — el plazo de entrega de los recordatorios (ver BUSINESS_RULES RN085)
+
 ### Entrega — tabla `entregas` (cobro en la puerta: migración 151)
 - Estados: `PENDIENTE | DISPONIBLE | ASIGNADA | EN_CAMINO | ENTREGADA | FALLIDA | REPROGRAMADA`.
   ⚠️ `PENDIENTE` es un cascarón del trigger `fn_post_crear_servicio`, **no** "lista para entregar"
