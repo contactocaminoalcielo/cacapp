@@ -28,7 +28,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, History, PawPrint, Zap,
+  ImageUp, History, PawPrint, Zap, Star,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import ResumenEntrega from '@/components/servicio/ResumenEntrega'
@@ -527,6 +527,9 @@ export default function Kanban() {
   // únicos que hay que producir mientras la mascota sigue en el cubículo. El
   // resto espera a la salida y su fecha límite ni siquiera existe (migr. 155).
   const [soloAnticipados, setSoloAnticipados] = useState(false)
+  // Solo las mascotas que llegan de una veterinaria VIP (mismo criterio que
+  // pinta la tarjeta de dorado: `esAliadoVip` entiende las formas de v_kanban).
+  const [soloVip, setSoloVip] = useState(false)
   const [soloConImagenes, setSoloConImagenes] = useState(false) // solo las familias que ya mandaron las fotos
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
@@ -2186,6 +2189,10 @@ export default function Kanban() {
     // Solo los compostajes que se producen YA porque la familia los pidió
     // anticipados (el resto no se toca hasta que la mascota salga del cubículo)
     if (soloAnticipados && !esCompostajeAnticipado(s)) return false
+    // Solo las de veterinaria VIP. Se reusa `esAliadoVip` a propósito: si aquí
+    // se leyera `s.aliado_vip` a pelo, el filtro y el dorado de la tarjeta
+    // podrían discrepar el día que cambie de dónde sale el dato.
+    if (soloVip && !esAliadoVip(s)) return false
     // Filtro por recordatorio (y opcionalmente su estado): solo tablero de producción
     if (esVistaProd && filtroRec) {
       const delRec = (s.items_rec || []).filter(i => String(i.recordatorio_id) === String(filtroRec) && i.estado !== 'NA')
@@ -2226,6 +2233,7 @@ export default function Kanban() {
     if (soloAdicional && !s.tiene_adicional)                      setSoloAdicional(false)
     if (soloConImagenes && !s.fecha_imagenes_recibidas)           setSoloConImagenes(false)
     if (soloAnticipados && !esCompostajeAnticipado(s))            setSoloAnticipados(false)
+    if (soloVip && !esAliadoVip(s))                               setSoloVip(false)
     abrirModal(s)
   }
 
@@ -2649,6 +2657,21 @@ export default function Kanban() {
           >
             <Zap size={13} />
             Anticipados
+          </button>
+
+          {/* Solo las mascotas de veterinaria VIP. La estrella va en el oro de
+              la marca cuando está apagado y en blanco cuando filtra: sobre el
+              fondo dorado activo, el dorado de `VipStar` desaparecería. */}
+          <button
+            onClick={() => setSoloVip(v => !v)}
+            title={soloVip
+              ? 'Mostrando solo las mascotas de veterinaria VIP — clic para ver todas'
+              : 'Mostrar solo las mascotas que llegan de una veterinaria VIP'}
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloVip ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
+            style={soloVip ? { background: VIP_ORO.texto } : {}}
+          >
+            <Star size={13} style={{ color: soloVip ? '#fff' : VIP_ORO.estrella, fill: soloVip ? '#fff' : VIP_ORO.estrella }} />
+            VIP
           </button>
 
           <div className="ml-auto flex items-center gap-2">
