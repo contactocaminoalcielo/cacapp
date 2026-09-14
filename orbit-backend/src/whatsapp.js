@@ -14,6 +14,44 @@ import { enviarSobre } from './whatsapp-cloud.js'
 
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 
+// ── Tope del ENCABEZADO de una plantilla ────────────────────────────────────
+// Meta corta el encabezado de texto en 60 caracteres YA RESUELTO y rechaza el
+// envío con `(#132005) Translated text too long`. NO es el tope de 1024 del
+// cuerpo, que es el que vigilaban las guardas del módulo de imágenes: por eso
+// un mensaje podía pasar la revisión local y aun así ser rechazado.
+//
+// Aquí no se puede medir el encabezado completo —el texto fijo vive en Meta, no
+// en Orbit—, así que se acota el PARÁMETRO y se reserva el resto para ese texto.
+// 45 sale de los datos (14-sep-2026): de 1.325 clientes, el nombre más largo
+// después del caso patológico mide 38, el p99 mide 34 y la mediana 16. Con 45
+// no se recorta a nadie real y quedan 15 caracteres para la parte fija —
+// `alerta_fin_de_contacto_individuales` usa 9 ("Buen dia ").
+export const LIMITE_HEADER_META  = 60
+export const MAX_PARAM_HEADER    = 45
+
+/**
+ * Acorta los parámetros del encabezado para que Meta no rechace el envío.
+ * Corta en el último espacio para no partir una palabra por la mitad, y deja
+ * `…` como señal de que se recortó. Devuelve también qué se tocó, para que
+ * quien envía pueda dejarlo en el log: un recorte silencioso cambiaría lo que
+ * ve el cliente sin que nadie se entere.
+ */
+export function recortarHeaderParams(params = []) {
+  const recortados = []
+  const out = (params || []).map(v => {
+    const s = String(v ?? '')
+    if (s.length <= MAX_PARAM_HEADER) return s
+    const duro  = s.slice(0, MAX_PARAM_HEADER - 1)
+    const corte = duro.lastIndexOf(' ')
+    // Solo se respeta la palabra si el corte no deja un resto ridículo.
+    const base  = corte > MAX_PARAM_HEADER * 0.6 ? duro.slice(0, corte) : duro
+    const fin   = `${base.trimEnd()}…`
+    recortados.push({ de: s.length, a: fin.length, valor: fin })
+    return fin
+  })
+  return { params: out, recortados }
+}
+
 // Bloque que fija la línea emisora. Va DENTRO de `whatsapp` y lleva el phone_number_id
 // de Meta — `fromNumber` en la raíz lo ignora GHL para números importados de Meta.
 // Ver linea-wa.js para el porqué y la medición del daño.
@@ -69,12 +107,17 @@ async function enviarPlantillaMetaDirecta({
   cabecera = null, fromNumberId = LINEA_WA_ID, personalId = null,
 }) {
   const agenteId = await agenteIdDeLinea(fromNumberId)
+  // Un encabezado de más de 60 caracteres resueltos hace que Meta rechace el
+  // envío entero (#132005). Antes que perder el mensaje, se acorta el nombre.
+  const { params: headerSeguro, recortados } = recortarHeaderParams(headerParams)
+  recortados.forEach(x =>
+    console.log(`[whatsapp] encabezado de ${plantillaNombre} recortado de ${x.de} a ${x.a}: "${x.valor}"`))
   const r = await enviarPlantillaMeta({
     contacto: telefono,
     nombre: plantillaNombre,
     idioma,
     variables: bodyParams,
-    variablesCabecera: headerParams,
+    variablesCabecera: headerSeguro,
     cabecera,
     personalId,
     agenteId,
@@ -290,7 +333,10 @@ export async function enviarPlantillaGenerica({
     whatsapp: {
       type: 'template',
       template: { name: plantillaNombre, lang: idioma, category },
-      placeholders: { header: headerParams, body: bodyParams, buttons: [] },
+      // Mismo recorte que en la vía Meta directa: GHL reenvía a Meta y topa con
+      // el mismo límite de 60, solo que responde 201 y el rechazo aparece
+      // después, al consultar el estado.
+      placeholders: { header: recortarHeaderParams(headerParams).params, body: bodyParams, buttons: [] },
       ...lineaEmisora(numero, fromNumberId),
     },
   }

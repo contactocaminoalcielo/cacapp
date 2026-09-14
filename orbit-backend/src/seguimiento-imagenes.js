@@ -164,7 +164,17 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
   client.release()
 
   // ── Fase 2 (red): enviar por el transporte configurado ────────────────────
-  // Guardia #132005: plantilla + parámetros > 1024 chars → Meta rechaza async.
+  // Guardia del tope de 1024 del CUERPO. Ojo con lo que NO cubre:
+  //  1. Mide `reserva.mensaje` —el texto que Orbit compone para la evidencia—
+  //     y NO el cuerpo real de la plantilla, que vive en Meta. Si la plantilla
+  //     fuera más larga que este espejo, la revisión pasaría igual.
+  //  2. Suma los parámetros aparte aunque `mensaje` ya los lleve dentro, así
+  //     que sobreestima. Es conservador, no peligroso.
+  //  3. NO cubría el ENCABEZADO, que tiene su propio tope de 60 caracteres y
+  //     devuelve el MISMO #132005. Ese fue el fallo real del 9 al 14-sep-2026:
+  //     una fundación de 52 caracteres pasaba esta revisión y Meta la rechazaba
+  //     cuatro días seguidos. Se resuelve arriba, en `recortarHeaderParams`
+  //     (whatsapp.js), que acorta el nombre antes de enviar.
   const largo = reserva.mensaje.length + reserva.bodyParams.join('').length + reserva.headerParams.join('').length
   if (largo > LIMITE_META_CHARS) {
     await marcarContacto(reserva.id, {
