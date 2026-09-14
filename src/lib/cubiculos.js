@@ -10,7 +10,7 @@
 // cuántas caben (1 por defecto) y un trigger en DB rechaza la que se pase. Por
 // eso `ocupacion[cubiculo_id]` es un ARRAY, no un item suelto.
 import { db, dbTodo } from '@/lib/supabase'
-import { hoyLocalISO } from '@/lib/utils'
+import { hoyLocalISO, parsearErrorDB } from '@/lib/utils'
 
 // ─── Zonas ───────────────────────────────────────────────────────────────────
 // El orden y la columna reproducen el plano real de la planta (boceto 2026-07-16):
@@ -175,7 +175,16 @@ export function mensajeErrorCubiculo(e) {
   if (msg.includes('cubiculo_inexistente')) {
     return 'Ese cubículo ya no está en el catálogo. Actualiza el mapa y elige otro.'
   }
-  return msg || 'No se pudo guardar el cubículo.'
+  // Camino contrario al de `cubiculo_sin_cupo`: bajarle el cupo a uno que ya
+  // está lleno (trigger de la migración 156).
+  if (msg.includes('cubiculo_capacidad_menor_que_ocupacion')) {
+    const n = msg.match(/tiene (\d+) mascota/)?.[1]
+    return n
+      ? `No se puede bajar el cupo: ese cubículo tiene ${n} mascota${n === '1' ? '' : 's'} adentro. Sácalas primero.`
+      : 'No se puede bajar el cupo por debajo de las mascotas que ya están adentro. Sácalas primero.'
+  }
+  // Cualquier otro error pasa por el traductor general en vez de salir crudo.
+  return parsearErrorDB(e) || 'No se pudo guardar el cubículo.'
 }
 
 // ─── Salidas del compostaje ──────────────────────────────────────────────────

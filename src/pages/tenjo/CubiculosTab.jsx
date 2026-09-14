@@ -127,7 +127,10 @@ export default function CubiculosTab({ canPlan, personalData, onChanged }) {
       setModalDetalle(null)
       await cargar(); onChanged?.()
     } catch (e) {
-      await showAlert(parsearErrorDB(e), { title: 'No se pudo guardar', variant: 'danger' })
+      // `mensajeErrorCubiculo` y no `parsearErrorDB`: aquí se edita el cupo, y
+      // la compuerta de la migración 156 devuelve un error propio que el
+      // traductor general no conoce — saldría crudo de Postgres.
+      await showAlert(mensajeErrorCubiculo(e), { title: 'No se pudo guardar', variant: 'danger' })
     } finally { setSaving(false) }
   }
 
