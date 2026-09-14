@@ -30,6 +30,14 @@ const ESTADO_COLOR  = {
 }
 const ESTADOS_PROD = ['PENDIENTE', 'EN_PROCESO', 'LISTO']
 
+// ¿Es un compostaje cuya familia pidió los recordatorios ANTICIPADOS? Es el
+// único grupo que se produce mientras la mascota sigue en el cubículo; el resto
+// espera a que salga (migración 155) y ni siquiera tiene fecha límite todavía.
+// Se exige `=== true` a propósito: NULL es "no contestó" y cuenta como "al
+// final", no como anticipado.
+const esCompostajeAnticipado = svc =>
+  svc?.planes?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL' && svc?.recordatorios_anticipados === true
+
 function initials(p) {
   if (!p) return '?'
   return `${(p.nombre || '')[0] || ''}${(p.apellido || '')[0] || ''}`.toUpperCase()
@@ -324,9 +332,12 @@ function EstadoEntrega({ ent }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, onClickItem, onPrepararEntrega }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
+    // Va ANTES del atajo de los LISTO: si no, un servicio listo que no es
+    // anticipado se colaría por ese `return true` y el filtro mentiría.
+    if (soloAnticipados && !esCompostajeAnticipado(r.servicios)) return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
     if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
     // Servicios en LISTO siempre visibles en cualquier filtro (botón de entrega).
@@ -690,9 +701,10 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
 }
 
 // ── VISTA TABLA ───────────────────────────────────────────────────────────────
-function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, onClickItem }) {
+function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
+    if (soloAnticipados && !esCompostajeAnticipado(r.servicios)) return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
     if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
     if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
@@ -970,6 +982,9 @@ export default function Produccion() {
   const [filtroEstado,  setFiltroEstado]  = useState('pendientes')
   const [filtroPersona, setFiltroPersona] = useState('')
   const [filtroRec,     setFiltroRec]     = useState('')   // id de recordatorio; '' = todos
+  // Solo los compostajes que la familia pidió ANTICIPADOS: lo que hay que
+  // producir ya, con la mascota todavía en el cubículo (migración 155).
+  const [soloAnticipados, setSoloAnticipados] = useState(false)
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
   const [logRows,       setLogRows]       = useState([])   // bitácora (solo admin)
@@ -1220,6 +1235,19 @@ export default function Produccion() {
                   </button>
                 ))}
               </div>
+
+              {/* Solo los compostajes con recordatorios anticipados: lo único
+                  que se produce mientras la mascota sigue en el cubículo. */}
+              <button
+                onClick={() => setSoloAnticipados(v => !v)}
+                title={soloAnticipados
+                  ? 'Mostrando solo los compostajes con recordatorios anticipados — clic para ver todos'
+                  : 'Mostrar solo los compostajes cuya familia pidió los recordatorios por anticipado'}
+                className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloAnticipados ? 'text-white border-transparent shadow-sm' : 'text-ink2 bg-white hover:bg-surface2'}`}
+                style={soloAnticipados ? { background: '#059669', borderColor: 'transparent' } : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                <Zap size={13} />
+                Anticipados
+              </button>
             </>
           )}
 
@@ -1251,6 +1279,7 @@ export default function Produccion() {
             recordatorios={recordatorios} personal={personal} maquinas={maquinas} etapas={etapas}
             entregas={entregas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
+            soloAnticipados={soloAnticipados}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
           />
@@ -1259,6 +1288,7 @@ export default function Produccion() {
           <VistaTabla
             recordatorios={recordatorios} personal={personal} maquinas={maquinas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
+            soloAnticipados={soloAnticipados}
             onClickItem={setModalItem}
           />
         )}
