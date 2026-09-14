@@ -1206,11 +1206,17 @@ const PAGO_COLOR = {
   COMPLETO:  { bg: '#E8F3EB', text: '#1D8A55' },
 }
 
-const SELECT_HISTORIAL = `
+// La especie vive en `mascotas`, no en `servicios`, así que filtrarla obliga a
+// un join INTERNO: sin `!inner`, PostgREST deja la fila y solo vacía el embed,
+// o sea el filtro no filtraría nada.
+// 🔑 El `!inner` se pone SOLO al filtrar por especie. Dejarlo fijo haría que un
+// servicio sin mascota desapareciera del historial sin que nadie lo notara (hoy
+// no hay ninguno, pero el día que lo haya el síntoma sería invisible).
+const selectHistorial = (filtraEspecie = false) => `
   id, estado, fecha_ingreso, valor_pagado, estado_pago,
   canal_entrada, ciudad_recogida, punto_recogida,
   aliado_origen_id, ${COLS_CONSISTENCIA_COMISION},
-  mascotas:mascota_id(
+  mascotas:mascota_id${filtraEspecie ? '!inner' : ''}(
     nombre, peso_kg, raza,
     especies(nombre),
     clientes:cliente_id(nombre, apellido, whatsapp, telefono, telefono2, email)
@@ -1251,6 +1257,7 @@ function TabHistorialServicios({ canEdit }) {
   const [catPlanes,   setCatPlanes]   = useState([])
   const [catAliados,  setCatAliados]  = useState([])
   const [catPersonal, setCatPersonal] = useState([])
+  const [catEspecies, setCatEspecies] = useState([])
   // filtros
   const [busqueda,      setBusqueda]      = useState('')
   const [filtroEstado,  setFiltroEstado]  = useState('')
@@ -1259,6 +1266,7 @@ function TabHistorialServicios({ canEdit }) {
   const [filtroAliado,  setFiltroAliado]  = useState('')
   const [filtroTecnico, setFiltroTecnico] = useState('')
   const [filtroUsuario, setFiltroUsuario] = useState('')
+  const [filtroEspecie, setFiltroEspecie] = useState('')   // especies.id; '' = todas
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
@@ -1271,10 +1279,12 @@ function TabHistorialServicios({ canEdit }) {
       db.from('planes').select('id,nombre').order('nombre'),
       db.from('aliados').select('id_aliado,nombre').eq('activo', true).order('nombre'),
       db.from('personal').select('id,nombre,apellido').eq('activo', true).order('nombre'),
-    ]).then(([{ data: pl }, { data: al }, { data: pe }]) => {
+      db.from('especies').select('id,nombre').order('nombre'),
+    ]).then(([{ data: pl }, { data: al }, { data: pe }, { data: es }]) => {
       setCatPlanes(pl || [])
       setCatAliados(al || [])
       setCatPersonal(pe || [])
+      setCatEspecies(es || [])
     })
   }, [])
 
@@ -1289,6 +1299,8 @@ function TabHistorialServicios({ canEdit }) {
     if (filtroTecnico) base = base.eq('tecnico_id', filtroTecnico)
     if (filtroUsuario === '__none__') base = base.is('registrado_por', null)
     else if (filtroUsuario)           base = base.eq('registrado_por', filtroUsuario)
+    // Filtra sobre la tabla embebida; solo muerde porque el select lleva `!inner`
+    if (filtroEspecie) base = base.eq('mascotas.especie_id', filtroEspecie)
     if (desde)         base = base.gte('fecha_ingreso', desde)
     if (hasta)         base = base.lte('fecha_ingreso', hasta)
     return base
@@ -1302,7 +1314,7 @@ function TabHistorialServicios({ canEdit }) {
     // otro, porque el orden de las filas empatadas no está garantizado.
     const construir = () => buildQuery(
       db.from('servicios')
-        .select(SELECT_HISTORIAL, { count: 'exact' })
+        .select(selectHistorial(!!filtroEspecie), { count: 'exact' })
         .order('fecha_ingreso', { ascending: false })
         .order('id', { ascending: false })
     )
@@ -1336,7 +1348,7 @@ function TabHistorialServicios({ canEdit }) {
     return () => clearTimeout(t)
   }, [busqueda])
 
-  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, desde, hasta, busquedaDebounced])
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie, desde, hasta, busquedaDebounced])
 
   async function exportarCSV() {
     setExporting(true)
@@ -1344,7 +1356,7 @@ function TabHistorialServicios({ canEdit }) {
     // CSV salía mocho — el peor sitio para un corte mudo, porque nadie cuenta
     // las filas de un export antes de cuadrar con él.
     const filas = await dbTodo(() => buildQuery(
-      db.from('servicios').select(SELECT_HISTORIAL)
+      db.from('servicios').select(selectHistorial(!!filtroEspecie))
         .order('fecha_ingreso', { ascending: false })
         .order('id', { ascending: false })
     ))
@@ -1565,11 +1577,11 @@ function TabHistorialServicios({ canEdit }) {
   const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
   const fmtFecha = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
 
-  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || filtroUsuario || desde || hasta || busqueda
+  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || filtroUsuario || filtroEspecie || desde || hasta || busqueda
   function limpiarFiltros() {
     setBusqueda(''); setFiltroEstado(''); setFiltroPago('')
     setFiltroPlan(''); setFiltroAliado(''); setFiltroTecnico(''); setFiltroUsuario('')
-    setDesde(''); setHasta('')
+    setFiltroEspecie(''); setDesde(''); setHasta('')
   }
 
   return (
@@ -1609,6 +1621,10 @@ function TabHistorialServicios({ canEdit }) {
           <option value="PENDIENTE">Pendiente</option>
           <option value="PARCIAL">Parcial</option>
           <option value="COMPLETO">Completo</option>
+        </Select>
+        <Select value={filtroEspecie} onChange={e => setFiltroEspecie(e.target.value)} className="w-40">
+          <option value="">Todas las especies</option>
+          {catEspecies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
         </Select>
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Desde</span>
