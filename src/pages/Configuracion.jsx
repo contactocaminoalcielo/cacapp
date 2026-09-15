@@ -3164,7 +3164,7 @@ export default function Configuracion() {
       <Topbar />
       <div className="p-4 sm:p-7">
         <Tabs defaultValue="personal">
-          <TabsList className="mb-6 flex-wrap gap-1">
+          <TabsList className="mb-6 gap-1">
             <TabsTrigger value="personal">
               <Users size={13} className="mr-1.5" /> Personal
             </TabsTrigger>

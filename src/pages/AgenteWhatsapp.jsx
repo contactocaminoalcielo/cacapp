@@ -345,7 +345,7 @@ export default function AgenteWhatsapp() {
             que eran de este agente. Con más líneas por venir, esa forma no
             escalaba: cada agente nuevo habría sumado tres entradas más al menú. */}
         <Tabs value={pestana} onValueChange={setPestana} className="space-y-5">
-          <TabsList className="flex-wrap">
+          <TabsList>
             <TabsTrigger value="cerebro">Cerebro</TabsTrigger>
             <TabsTrigger value="ajustes">Ajustes</TabsTrigger>
             <TabsTrigger value="reglas">Reglas</TabsTrigger>
