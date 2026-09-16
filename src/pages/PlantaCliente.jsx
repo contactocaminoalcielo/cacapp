@@ -19,7 +19,9 @@
 import { useState, useEffect } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { portalPlanta, portalElegirPlanta } from '@/lib/plantas'
-import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE, ORO } from '@/components/portal/Botanica'
+import { Ilustracion } from '@/components/portal/Botanica'
+import { ESTILOS_VIVERO, FondoVivero, Brota, useFuentesVivero,
+         CAMPO, TINTA, MUSGO, SELVA, BROTE, HOJA, LINDE, MIEL } from '@/components/portal/Vivero'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 
 // La paleta y las ilustraciones viven en components/portal/Botanica.jsx: las
@@ -56,10 +58,11 @@ const bonito = s => String(s || '')
 // ─── Piezas de la página ─────────────────────────────────────────────────────
 
 function Marco({ children }) {
+  useFuentesVivero()
   return (
-    <div className="min-h-screen w-full"
-      style={{ background: `radial-gradient(120% 80% at 50% 0%, ${PAPEL} 0%, ${PAPEL2} 100%)`, color: TINTA }}>
-      <style>{ESTILOS}</style>
+    <div className="vv-cuerpo min-h-screen w-full" style={{ color: TINTA }}>
+      <style>{ESTILOS_VIVERO}</style>
+      <FondoVivero />
       <div className="mx-auto w-full max-w-[30rem] px-5">{children}</div>
     </div>
   )
@@ -67,9 +70,9 @@ function Marco({ children }) {
 
 function Firma() {
   return (
-    <div className="flex flex-col items-center gap-1.5 py-9">
-      <span className="block h-px w-10" style={{ background: BORDE }} />
-      <p className="font-serif italic text-[13px]" style={{ color: APAGADO }}>Camino al Cielo</p>
+    <div className="flex flex-col items-center gap-2 py-10">
+      <Ilustracion nombre="rama" tam={16} />
+      <p className="vv-firma italic text-[13px]" style={{ color: MUSGO }}>Camino al Cielo</p>
     </div>
   )
 }
@@ -78,10 +81,11 @@ function Firma() {
 function Boton({ children, ...props }) {
   return (
     <button
-      className="cac-foco cac-suave w-full min-h-[52px] rounded-full px-6 text-[15px] font-semibold
+      className="vv-foco vv-suave w-full min-h-[52px] rounded-full px-6 text-[15px] font-semibold
                  text-white transition-all duration-200 ease-out cursor-pointer
                  disabled:cursor-not-allowed disabled:opacity-45"
-      style={{ background: VERDE, boxShadow: '0 6px 18px -6px rgba(47,107,73,0.55)' }}
+      style={{ background: `linear-gradient(180deg, #35895A 0%, ${BROTE} 100%)`,
+               boxShadow: '0 10px 24px -10px rgba(22,56,42,0.7)' }}
       {...props}
     >
       {children}
@@ -93,9 +97,9 @@ function Boton({ children, ...props }) {
 function DatoEntrega({ etiqueta, valor }) {
   if (!String(valor || '').trim()) return null
   return (
-    <div className="py-1.5">
-      <p className="text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: APAGADO }}>{etiqueta}</p>
-      <p className="text-[15px] leading-snug mt-0.5" style={{ color: TINTA }}>{valor}</p>
+    <div className="py-2 flex gap-3 items-baseline">
+      <p className="text-[13px] shrink-0 w-[92px]" style={{ color: MUSGO }}>{etiqueta}</p>
+      <p className="text-[15px] leading-snug flex-1" style={{ color: TINTA }}>{valor}</p>
     </div>
   )
 }
@@ -110,14 +114,15 @@ function CampoEntrega({ campo, label, value, onChange, placeholder, inputMode, r
   const id = `entrega-${campo}`
   return (
     <div>
-      <label htmlFor={id} className="text-[12px] font-bold block mb-1.5" style={{ color: APAGADO }}>
+      <label htmlFor={id} className="text-[13px] block mb-1.5" style={{ color: MUSGO }}>
         {label}{requerido && <span aria-hidden="true" style={{ color: '#A33A2A' }}> *</span>}
       </label>
       <input id={id} type="text" inputMode={inputMode} required={requerido}
         value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         className="w-full min-h-[48px] text-[15px] rounded-2xl px-3.5 py-2.5 transition-colors
-                   duration-200 cac-foco cac-suave"
-        style={{ background: PAPEL, border: `1.5px solid ${lleno ? VIVO : BORDE}`, color: TINTA }} />
+                   duration-200 vv-foco vv-suave"
+        style={{ background: 'rgba(255,255,255,0.92)', border: `1.5px solid ${lleno ? HOJA : LINDE}`,
+                 color: TINTA }} />
     </div>
   )
 }
@@ -127,16 +132,16 @@ function CampoLocalidad({ value, onChange }) {
   const lleno = !!String(value || '').trim()
   return (
     <div>
-      <label htmlFor="entrega-localidad" className="text-[12px] font-bold block mb-1.5" style={{ color: APAGADO }}>
+      <label htmlFor="entrega-localidad" className="text-[13px] block mb-1.5" style={{ color: MUSGO }}>
         Localidad
       </label>
       {/* Se deja la flecha NATIVA: sin ella el campo se ve igual que "Barrio" y
           la familia intenta escribir encima. */}
       <select id="entrega-localidad" value={value || ''} onChange={e => onChange(e.target.value)}
         className="w-full min-h-[48px] text-[15px] rounded-2xl px-3 py-2.5 transition-colors
-                   duration-200 cac-foco cac-suave"
-        style={{ background: PAPEL, border: `1.5px solid ${lleno ? VIVO : BORDE}`,
-                 color: lleno ? TINTA : '#9A9284' }}>
+                   duration-200 vv-foco vv-suave"
+        style={{ background: 'rgba(255,255,255,0.92)', border: `1.5px solid ${lleno ? HOJA : LINDE}`,
+                 color: lleno ? TINTA : MUSGO }}>
         <option value="">Selecciona…</option>
         {LOCALIDADES_BOGOTA.map(l => <option key={l} value={l}>{l}</option>)}
         <option value={FUERA_BOGOTA}>{FUERA_BOGOTA}</option>
@@ -271,9 +276,9 @@ export default function PlantaCliente({ codigo: codigoProp }) {
         <motion.div
           animate={quieto ? {} : { opacity: [0.35, 1, 0.35] }}
           transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}>
-          <Ilustracion nombre="rama" vivo tam={56} />
+          <Ilustracion nombre="rama" vivo tam={60} />
         </motion.div>
-        <p className="text-[14px]" style={{ color: APAGADO }}>Un momento…</p>
+        <p className="text-[14px]" style={{ color: MUSGO }}>Un momento…</p>
       </div>
     </Marco>
   )
@@ -282,11 +287,11 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   if (fase === 'entrada') return (
     <Marco>
       <motion.div {...entra} className="pt-16 pb-10">
-        <div className="flex justify-center mb-6"><Ilustracion nombre="helecho" vivo tam={80} /></div>
-        <h1 className="font-serif italic text-center text-[30px] leading-tight" style={{ color: HONDO }}>
+        <Brota className="mb-7"><Ilustracion nombre="helecho" vivo tam={96} /></Brota>
+        <h1 className="vv-titular text-center text-[31px] leading-tight" style={{ color: SELVA }}>
           Elige su planta
         </h1>
-        <p className="text-center text-[15px] leading-relaxed mt-3 mb-8" style={{ color: APAGADO }}>
+        <p className="text-center text-[16px] leading-[1.6] mt-3 mb-8" style={{ color: MUSGO }}>
           Escribe el código que te enviamos por WhatsApp.
         </p>
         <label htmlFor="codigo-planta" className="sr-only">Código del enlace</label>
@@ -298,9 +303,9 @@ export default function PlantaCliente({ codigo: codigoProp }) {
           placeholder="CÓDIGO"
           autoComplete="off"
           autoCapitalize="characters"
-          className="w-full min-h-[56px] rounded-2xl px-4 text-center text-[18px] font-bold tracking-[0.28em]
-                     transition-colors duration-200 cac-foco cac-suave"
-          style={{ background: '#FFFFFF', border: `1.5px solid ${BORDE}`, color: TINTA }}
+          className="vv-vidrio w-full min-h-[56px] rounded-2xl px-4 text-center text-[18px] font-semibold
+                     tracking-[0.28em] transition-colors duration-200 vv-foco vv-suave"
+          style={{ color: TINTA }}
         />
         {error && (
           <p role="alert" className="text-[13px] text-center mt-3" style={{ color: '#A33A2A' }}>{error}</p>
@@ -317,11 +322,11 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   if (fase === 'cerrado') return (
     <Marco>
       <motion.div {...entra} className="pt-24 pb-6 text-center">
-        <div className="flex justify-center mb-6 opacity-70"><Ilustracion nombre="rama" tam={72} /></div>
-        <h1 className="font-serif italic text-[26px] leading-tight mb-3" style={{ color: HONDO }}>
+        <div className="flex justify-center mb-6 opacity-70"><Ilustracion nombre="rama" tam={80} /></div>
+        <h1 className="vv-titular text-[27px] leading-tight mb-3" style={{ color: SELVA }}>
           Este enlace ya descansó
         </h1>
-        <p className="text-[15px] leading-relaxed" style={{ color: APAGADO }}>
+        <p className="text-[16px] leading-[1.6]" style={{ color: MUSGO }}>
           Escríbenos por WhatsApp y seguimos contigo con mucho gusto.
         </p>
       </motion.div>
@@ -336,38 +341,34 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     return (
       <Marco>
         <motion.div {...entra} className="pt-20 pb-4 text-center">
-          <motion.div className="flex justify-center mb-7"
-            initial={quieto ? false : { scale: 0.86, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}>
-            <Ilustracion nombre={nombre} vivo tam={116} />
-          </motion.div>
-          <h1 className="font-serif italic text-[28px] leading-snug" style={{ color: HONDO }}>
+          {/* La planta elegida crece una vez, ya alimentada. Es el cierre del
+              gesto que abrio la pantalla. */}
+          <Brota className="mb-7" retraso={120}>
+            <Ilustracion nombre={nombre} vivo tam={132} />
+          </Brota>
+          <h1 className="vv-titular text-[29px] leading-snug" style={{ color: SELVA }}>
             Gracias{nombreCli ? `, ${nombreCli}` : ''}
           </h1>
           {nombre && (
-            <p className="text-[16px] leading-relaxed mt-3" style={{ color: TINTA }}>
-              {mascota} seguirá su camino en un <strong style={{ color: HONDO }}>{nombre}</strong>.
+            <p className="text-[17px] leading-[1.55] mt-3" style={{ color: TINTA }}>
+              {mascota} seguirá su camino en un <strong style={{ color: SELVA }}>{nombre}</strong>.
             </p>
           )}
           {!!nuevos.length && (
-            <div className="mt-7 rounded-2xl p-4 text-left"
-                 style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
-              <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-2.5" style={{ color: APAGADO }}>
-                Agregaste
-              </p>
+            <div className="vv-vidrio mt-7 rounded-[24px] p-4 text-left">
+              <p className="vv-titular text-[17px] mb-2.5" style={{ color: SELVA }}>Agregaste</p>
               {nuevos.map((x, i) => (
                 <div key={i} className="flex justify-between gap-3 text-[14px] py-0.5">
                   <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
-                  <span className="font-bold tabular-nums" style={{ color: ORO }}>{pesos(x.total)}</span>
+                  <span className="font-bold tabular-nums" style={{ color: MIEL }}>{pesos(x.total)}</span>
                 </div>
               ))}
-              <p className="text-[12px] leading-relaxed mt-3" style={{ color: APAGADO }}>
+              <p className="text-[12px] leading-relaxed mt-3" style={{ color: MUSGO }}>
                 Coordinamos el pago contigo en el momento de la entrega.
               </p>
             </div>
           )}
-          <p className="text-[14px] leading-relaxed mt-7" style={{ color: APAGADO }}>
+          <p className="text-[14px] leading-relaxed mt-7" style={{ color: MUSGO }}>
             Te escribiremos para coordinar la entrega.
           </p>
         </motion.div>
@@ -381,45 +382,43 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     <Marco>
       <motion.div {...entra} className="pt-14" style={{ paddingBottom: '10.5rem' }}>
 
-        <header className="text-center">
-          <p className="text-[12px] font-bold uppercase tracking-[0.18em]" style={{ color: APAGADO }}>
-            {nombreCli ? `Hola, ${nombreCli}` : 'Hola'}
-          </p>
-          <h1 className="font-serif italic text-[30px] leading-[1.15] mt-3" style={{ color: HONDO }}>
+        {/* El nombre de la mascota es lo más grande de la pantalla: es de lo
+            único que trata. El saludo va DENTRO de la frase y no como rótulo
+            en mayúsculas encima — un "HOLA, MARÍA" tracked-out es adorno de
+            plantilla, no información. */}
+        <header>
+          <Brota alinear="flex-start" className="mb-7">
+            <Ilustracion nombre="rama" vivo tam={124} />
+          </Brota>
+          <h1 className="vv-titular text-[33px] leading-[1.07]" style={{ color: SELVA }}>
             El proceso de {mascota} ha terminado
           </h1>
-          <p className="text-[15px] leading-relaxed mt-4" style={{ color: APAGADO }}>
-            Su compostaje se completó con todo el cuidado. Ahora {mascota} vuelve a la
-            vida en forma de planta, y queremos que seas tú quien elija cuál la acompañará.
+          <p className="text-[16px] leading-[1.62] mt-4" style={{ color: MUSGO }}>
+            {nombreCli ? `${nombreCli}, su` : 'Su'} compostaje se completó con todo el cuidado.
+            Ahora {mascota} vuelve a la vida en forma de planta, y queremos que seas tú quien
+            elija cuál la acompañará.
           </p>
           {datos?.servicio?.cubiculo && (
-            <p className="text-[12px] mt-4 inline-block rounded-full px-3 py-1.5"
-               style={{ background: '#FFFFFF', border: `1px solid ${BORDE}`, color: APAGADO }}>
+            <p className="vv-vidrio text-[13px] mt-5 inline-block rounded-full px-3.5 py-1.5"
+               style={{ color: MUSGO }}>
               Cubículo {datos.servicio.cubiculo}
             </p>
           )}
         </header>
 
-        <div className="my-9 flex items-center justify-center gap-3" aria-hidden="true">
-          <span className="h-px w-14" style={{ background: BORDE }} />
-          <Ilustracion nombre="rama" tam={18} />
-          <span className="h-px w-14" style={{ background: BORDE }} />
-        </div>
-
         {/* ── Elección de especie ── */}
         {yaEligio ? (
-          <div className="rounded-2xl px-4 py-4 flex items-center gap-3.5"
-               style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
+          <div className="vv-vidrio mt-10 rounded-[28px] px-4 py-4 flex items-center gap-3.5">
             <Ilustracion nombre={datos?.eleccion?.planta_nombre} vivo tam={44} />
             <p className="text-[14px] leading-relaxed" style={{ color: TINTA }}>
-              Ya elegiste <strong style={{ color: HONDO }}>{datos?.eleccion?.planta_nombre}</strong>.
+              Ya elegiste <strong style={{ color: SELVA }}>{datos?.eleccion?.planta_nombre}</strong>.
               Si necesitas cambiarla, escríbenos por WhatsApp.
             </p>
           </div>
         ) : (
-          <fieldset className="border-0 p-0 m-0">
-            <legend className="text-[12px] font-bold uppercase tracking-[0.16em] mb-4" style={{ color: APAGADO }}>
-              Elige la planta
+          <fieldset className="border-0 p-0 m-0 mt-10">
+            <legend className="vv-titular text-[23px] leading-tight mb-4" style={{ color: SELVA }}>
+              ¿En cuál quieres que siga?
             </legend>
             <div className="space-y-3.5">
               {opciones.map(p => {
@@ -427,28 +426,29 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                 return (
                   <button key={p.id} type="button" onClick={() => setElegida(p.id)}
                     aria-pressed={sel}
-                    className="w-full text-left rounded-3xl p-4 flex items-center gap-4 cursor-pointer
-                               transition-all duration-200 ease-out cac-foco cac-suave"
+                    className="vv-vidrio w-full text-left rounded-[28px] p-4 flex items-center gap-4
+                               cursor-pointer transition-all duration-300 ease-out vv-foco vv-suave"
                     style={{
-                      background: '#FFFFFF',
-                      border: `1.5px solid ${sel ? VIVO : BORDE}`,
+                      border: `1.5px solid ${sel ? HOJA : 'rgba(255,255,255,0.85)'}`,
+                      // La elegida se LEVANTA del vidrio: es la respuesta al toque, no adorno.
+                      transform: sel ? 'translateY(-2px)' : 'none',
                       boxShadow: sel
-                        ? '0 12px 28px -14px rgba(47,93,69,0.5), inset 0 0 0 3px rgba(78,155,110,0.13)'
-                        : '0 2px 10px -8px rgba(42,38,32,0.4)',
+                        ? '0 26px 44px -26px rgba(18,48,33,0.75), inset 0 0 0 3px rgba(88,169,122,0.16)'
+                        : '0 18px 40px -30px rgba(18,48,33,0.5)',
                     }}>
                     {p.imagen_url
                       ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
                              className="w-[68px] h-[88px] rounded-2xl object-cover shrink-0" />
                       : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={68} /></div>}
                     <div className="min-w-0 flex-1">
-                      <div className="font-serif text-[19px] leading-tight" style={{ color: sel ? HONDO : TINTA }}>
+                      <div className="vv-titular text-[21px] leading-tight" style={{ color: sel ? SELVA : TINTA }}>
                         {p.nombre}
                       </div>
                       {p.descripcion && (
-                        <p className="text-[13px] leading-snug mt-1.5" style={{ color: APAGADO }}>{p.descripcion}</p>
+                        <p className="text-[13px] leading-snug mt-1.5" style={{ color: MUSGO }}>{p.descripcion}</p>
                       )}
                       {/* El estado no depende solo del color */}
-                      <p className="text-[12px] font-bold mt-2" style={{ color: sel ? VERDE : '#9A9284' }}>
+                      <p className="text-[13px] font-semibold mt-2" style={{ color: sel ? BROTE : MUSGO }}>
                         {sel ? 'Elegida' : 'Tocar para elegir'}
                       </p>
                     </div>
@@ -456,7 +456,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                 )
               })}
               {!opciones.length && (
-                <p className="text-[14px] leading-relaxed" style={{ color: APAGADO }}>
+                <p className="text-[14px] leading-relaxed" style={{ color: MUSGO }}>
                   Estamos preparando las opciones. Escríbenos por WhatsApp y te ayudamos.
                 </p>
               )}
@@ -466,14 +466,12 @@ export default function PlantaCliente({ codigo: codigoProp }) {
 
         {/* ── Extras ya comprados ── */}
         {!!comprados.length && (
-          <div className="mt-8 rounded-2xl p-4" style={{ background: '#FFFFFF', border: `1px solid ${BORDE}` }}>
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] mb-2" style={{ color: APAGADO }}>
-              Ya agregaste
-            </p>
+          <div className="vv-vidrio mt-8 rounded-[24px] p-4">
+            <p className="vv-titular text-[17px] mb-2" style={{ color: SELVA }}>Ya agregaste</p>
             {comprados.map(x => (
               <div key={x.planta_id} className="flex justify-between gap-3 text-[14px] py-0.5">
                 <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
-                <span className="tabular-nums" style={{ color: APAGADO }}>{pesos(x.total)}</span>
+                <span className="tabular-nums" style={{ color: MUSGO }}>{pesos(x.total)}</span>
               </div>
             ))}
           </div>
@@ -482,21 +480,20 @@ export default function PlantaCliente({ codigo: codigoProp }) {
         {/* ── Extras disponibles ── */}
         {!!disponibles.length && (
           <section className="mt-10">
-            <h2 className="font-serif italic text-[21px]" style={{ color: HONDO }}>¿Deseas algo más?</h2>
-            <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+            <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿Deseas algo más?</h2>
+            <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
               Es opcional. Si eliges algo, lo coordinamos contigo en la entrega.
             </p>
             <div className="space-y-3.5">
               {disponibles.map(p => {
                 const n = extras[p.id] || 0
                 return (
-                  <div key={p.id} className="rounded-3xl p-4 transition-all duration-200 ease-out"
+                  <div key={p.id} className="vv-vidrio rounded-[28px] p-4 transition-all duration-300 ease-out"
                     style={{
-                      background: '#FFFFFF',
-                      border: `1.5px solid ${n > 0 ? VIVO : BORDE}`,
+                      border: `1.5px solid ${n > 0 ? HOJA : 'rgba(255,255,255,0.85)'}`,
                       boxShadow: n > 0
-                        ? '0 12px 28px -14px rgba(47,93,69,0.45)'
-                        : '0 2px 10px -8px rgba(42,38,32,0.4)',
+                        ? '0 26px 44px -26px rgba(18,48,33,0.7)'
+                        : '0 18px 40px -30px rgba(18,48,33,0.5)',
                     }}>
                     <div className="flex items-center gap-4">
                       {p.imagen_url
@@ -504,9 +501,9 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                                className="w-14 h-14 rounded-2xl object-cover shrink-0" />
                         : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={n > 0} tam={52} /></div>}
                       <div className="min-w-0 flex-1">
-                        <div className="font-serif text-[17px] leading-tight" style={{ color: TINTA }}>{p.nombre}</div>
+                        <div className="vv-titular text-[17px] leading-tight" style={{ color: TINTA }}>{p.nombre}</div>
                         {p.descripcion && (
-                          <p className="text-[13px] leading-snug mt-1" style={{ color: APAGADO }}>{p.descripcion}</p>
+                          <p className="text-[13px] leading-snug mt-1" style={{ color: MUSGO }}>{p.descripcion}</p>
                         )}
                         {/* El precio real es el de la derecha. El tachado es el precio
                             de lista del catálogo (`precio_antes`, migración 158): el
@@ -514,17 +511,17 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                             "antes" con todas sus letras porque un tachado a secas no
                             se oye en un lector de pantalla. */}
                         <div className="flex items-baseline gap-2 flex-wrap mt-1.5">
-                          <span className="text-[15px] font-bold tabular-nums" style={{ color: ORO }}>
+                          <span className="text-[15px] font-bold tabular-nums" style={{ color: MIEL }}>
                             {pesos(p.precio)}
                           </span>
                           {p.precio_antes > 0 && (
-                            <span className="text-[13px] tabular-nums" style={{ color: APAGADO }}>
+                            <span className="text-[13px] tabular-nums" style={{ color: MUSGO }}>
                               antes <s>{pesos(p.precio_antes)}</s>
                             </span>
                           )}
                         </div>
                         {p.precio_antes > 0 && (
-                          <p className="text-[11.5px] font-semibold leading-snug mt-1" style={{ color: VERDE }}>
+                          <p className="text-[11.5px] font-semibold leading-snug mt-1" style={{ color: BROTE }}>
                             Precio especial por tu plan de compostaje
                           </p>
                         )}
@@ -535,20 +532,20 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                       <button type="button" onClick={() => cambiarExtra(p.id, -1)} disabled={!n}
                         aria-label={`Quitar una unidad de ${p.nombre}`}
                         className="w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
-                                   transition-colors duration-200 cac-foco cac-suave
+                                   transition-colors duration-200 vv-foco vv-suave
                                    disabled:opacity-30 disabled:cursor-not-allowed"
-                        style={{ border: `1.5px solid ${BORDE}`, color: TINTA, background: PAPEL }}>
+                        style={{ border: `1.5px solid ${LINDE}`, color: TINTA, background: CAMPO }}>
                         <svg width="14" height="2" viewBox="0 0 14 2" aria-hidden="true">
                           <rect width="14" height="2" rx="1" fill="currentColor" />
                         </svg>
                       </button>
                       <span className="w-8 text-center text-[17px] font-bold tabular-nums"
-                            aria-live="polite" style={{ color: n > 0 ? HONDO : '#B3AB9C' }}>{n}</span>
+                            aria-live="polite" style={{ color: n > 0 ? SELVA : '#B3AB9C' }}>{n}</span>
                       <button type="button" onClick={() => cambiarExtra(p.id, 1)}
                         aria-label={`Agregar una unidad de ${p.nombre}`}
                         className="w-11 h-11 rounded-full flex items-center justify-center text-white cursor-pointer
-                                   transition-transform duration-200 active:scale-95 cac-foco cac-suave"
-                        style={{ background: VERDE }}>
+                                   transition-transform duration-200 active:scale-95 vv-foco vv-suave"
+                        style={{ background: BROTE }}>
                         <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
                           <path d="M7 0.8v12.4M0.8 7h12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                         </svg>
@@ -563,14 +560,15 @@ export default function PlantaCliente({ codigo: codigoProp }) {
 
         {/* ── Entrega ── */}
         <section className="mt-10">
-          <h2 className="font-serif italic text-[21px]" style={{ color: HONDO }}>¿A dónde la llevamos?</h2>
+          <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿A dónde la llevamos?</h2>
 
           {!editandoEntrega ? (
             <>
-              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
                 Estos son los datos que nos dejaste. Confírmanos si siguen estando bien.
               </p>
-              <div className="rounded-3xl p-4" style={{ background: '#FFFFFF', border: `1.5px solid ${entregaConfirmada ? VIVO : BORDE}` }}>
+              <div className="vv-vidrio rounded-[28px] p-4"
+                   style={{ border: `1.5px solid ${entregaConfirmada ? HOJA : 'rgba(255,255,255,0.85)'}` }}>
                 <DatoEntrega etiqueta="Dirección" valor={entrega.direccion} />
                 {(entrega.barrio || entrega.localidad) &&
                   <DatoEntrega etiqueta="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
@@ -582,27 +580,27 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                 <button type="button" onClick={() => setEntregaConfirmada(true)}
                   aria-pressed={entregaConfirmada}
                   className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
-                             transition-all duration-200 ease-out cac-foco cac-suave"
+                             transition-all duration-200 ease-out vv-foco vv-suave"
                   style={entregaConfirmada
-                    ? { background: VERDE, color: '#FFFFFF', border: `1.5px solid ${VERDE}` }
-                    : { background: '#FFFFFF', color: HONDO, border: `1.5px solid ${BORDE}` }}>
+                    ? { background: BROTE, color: '#FFFFFF', border: `1.5px solid ${BROTE}` }
+                    : { background: 'rgba(255,255,255,0.72)', color: SELVA, border: `1.5px solid ${LINDE}` }}>
                   {entregaConfirmada ? 'Datos confirmados' : 'Sí, están bien'}
                 </button>
                 <button type="button"
                   onClick={() => { setEditandoEntrega(true); setEntregaConfirmada(false) }}
                   className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
-                             transition-all duration-200 ease-out cac-foco cac-suave"
-                  style={{ background: PAPEL, color: TINTA, border: `1.5px solid ${BORDE}` }}>
+                             transition-all duration-200 ease-out vv-foco vv-suave"
+                  style={{ background: 'rgba(255,255,255,0.45)', color: TINTA, border: `1.5px solid ${LINDE}` }}>
                   Cambiaron
                 </button>
               </div>
             </>
           ) : (
             <>
-              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
                 Para poder llevarte a {mascota} necesitamos saber dónde y con quién dejarla.
               </p>
-              <div className="rounded-3xl p-4 space-y-3.5" style={{ background: '#FFFFFF', border: `1.5px solid ${BORDE}` }}>
+              <div className="vv-vidrio rounded-[28px] p-4 space-y-3.5">
                 <CampoEntrega campo="direccion" label="Dirección" requerido value={entrega.direccion}
                   onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
                 <div className="grid grid-cols-2 gap-3">
@@ -620,7 +618,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                 </div>
                 <CampoEntrega campo="horarios" label="Horarios en que hay alguien" value={entrega.horarios}
                   onChange={v => setE('horarios', v)} placeholder="Ej.: entre semana después de las 5 p. m." />
-                <p className="text-[12px] leading-relaxed" style={{ color: APAGADO }}>
+                <p className="text-[12px] leading-relaxed" style={{ color: MUSGO }}>
                   Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora
                   exacta</strong>; te avisaremos cuando vayamos en camino.
                 </p>
@@ -635,14 +633,15 @@ export default function PlantaCliente({ codigo: codigoProp }) {
       </motion.div>
 
       {/* ── Barra de envío ── */}
-      <div className="fixed left-0 right-0 bottom-0 z-20 px-5 pt-3"
-           style={{ background: `linear-gradient(to top, ${PAPEL2} 78%, rgba(241,240,230,0))`,
-                    paddingBottom: 'calc(0.85rem + env(safe-area-inset-bottom))' }}>
+      <div className="vv-vidrio vv-vidrio-hondo fixed left-0 right-0 bottom-0 z-20 px-5 pt-3.5"
+           style={{ borderRadius: '28px 28px 0 0', borderBottom: 'none',
+                    boxShadow: '0 -18px 40px -30px rgba(18,48,33,0.6)',
+                    paddingBottom: 'calc(0.95rem + env(safe-area-inset-bottom))' }}>
         <div className="mx-auto w-full max-w-[30rem]">
           {totalExtras > 0 && (
             <div className="flex justify-between items-baseline text-[14px] mb-2.5 px-1">
-              <span style={{ color: APAGADO }}>Adicionales</span>
-              <span className="text-[17px] font-bold tabular-nums" style={{ color: ORO }}>{pesos(totalExtras)}</span>
+              <span style={{ color: MUSGO }}>Adicionales</span>
+              <span className="text-[17px] font-bold tabular-nums" style={{ color: MIEL }}>{pesos(totalExtras)}</span>
             </div>
           )}
           <Boton onClick={enviar} disabled={!puedeEnviar || enviando} aria-busy={enviando}>
@@ -651,7 +650,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
               : (yaEligio ? 'Agregar a mi entrega' : 'Confirmar mi elección')}
           </Boton>
           {!puedeEnviar && !enviando && pista && (
-            <p className="text-[12px] text-center mt-2.5" style={{ color: APAGADO }}>{pista}</p>
+            <p className="text-[12px] text-center mt-2.5" style={{ color: MUSGO }}>{pista}</p>
           )}
         </div>
       </div>
