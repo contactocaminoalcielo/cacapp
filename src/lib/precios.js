@@ -382,7 +382,7 @@ export async function aplicarRecalculoPorPeso(mascotaId, pesoNuevo, especieIdRaw
 // Columnas mínimas que necesita `comisionInconsistente`. Para que quien la use
 // no tenga que adivinar qué traer en el select.
 export const COLS_CONSISTENCIA_COMISION =
-  'valor_total, valor_plan, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, comision_aliado, comision_descontada'
+  'valor_total, valor_plan, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, comision_aliado, comision_descontada, valor_eutanasia'
 
 /**
  * ¿`valor_total` y `comision_descontada` se están contradiciendo?
@@ -413,5 +413,10 @@ export function comisionInconsistente(svc) {
   const extras = (Number(svc.valor_adicionales) || 0) + (Number(svc.valor_transporte) || 0)
                + (Number(svc.recargo_nocturno)  || 0)
                - (Math.abs(descuento - comision) < 0.5 ? 0 : descuento)
-  return (Number(svc.valor_total) || 0) >= plan + extras - 0.5
+  // La eutanasia viaja DENTRO de valor_total (migr. 159) y no es parte del bruto
+  // del plan: dejarla adentro inflaba el total y hacía parecer inconsistente un
+  // servicio sano, lo que apagaba la reconstrucción del bruto en el recibo y le
+  // cobraba al cliente el neto (la comisión de menos).
+  const total = (Number(svc.valor_total) || 0) - (Number(svc.valor_eutanasia) || 0)
+  return total >= plan + extras - 0.5
 }

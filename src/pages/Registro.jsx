@@ -890,6 +890,10 @@ export default function Registro() {
         valor_adicionales:           valorAdicionales,
         valor_transporte:            recargoCiudad,
         recargo_nocturno:            recargoNocturnoNum,
+        // Cuánto del total ES eutanasia (migración 159). Sin este dato nadie
+        // podía saber si el valor estaba dentro del total, y el técnico terminaba
+        // cobrando otra vez lo que el doctor ya había cobrado.
+        valor_eutanasia:             valorEutanasia || 0,
       }).select('id')
       if (svcErr) throw svcErr
 
