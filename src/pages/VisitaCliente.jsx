@@ -174,6 +174,14 @@ export default function VisitaCliente({ codigo: codigoProp }) {
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
+  // Tenjo recibe visitas en una sola jornada (8 a 12). Con una sola franja no
+  // hay nada que escoger: se selecciona sola y la pantalla la muestra como dato.
+  // Preguntar "¿mañana o mañana?" es un paso que no decide nada.
+  useEffect(() => {
+    const fs = datos?.franjas || []
+    if (fs.length === 1) setFranja(fs[0].clave)
+  }, [datos])
+
   async function cargar(cod) {
     const c = String(cod || '').trim().toUpperCase()
     if (!c) return
@@ -203,7 +211,7 @@ export default function VisitaCliente({ codigo: codigoProp }) {
   // Un botón apagado sin decir por qué es una pantalla que no se deja usar.
   // Se nombra lo PRIMERO que falta, no todo a la vez.
   const pista = !fecha ? 'Escoge el día en que te gustaría venir'
-    : !franja ? 'Escoge si prefieres la mañana o la tarde'
+    : !franja ? 'Escoge la jornada que te queda mejor'
     : null
 
   async function enviar() {
@@ -370,7 +378,15 @@ export default function VisitaCliente({ codigo: codigoProp }) {
               ))}
             </div>
 
-            {fecha && (
+            {fecha && franjas.length === 1 && (
+              <div className="mt-5 rounded-2xl px-4 py-3 text-[13px]"
+                style={{ background: PAPEL, border: `1px solid ${BORDE}`, color: TINTA }}>
+                Las visitas son <strong>{franjas[0].detalle || 'en la mañana'}</strong>.
+                Te confirmamos la hora exacta por WhatsApp.
+              </div>
+            )}
+
+            {fecha && franjas.length > 1 && (
               <div className="mt-6">
                 <p className="text-[12px] font-bold uppercase tracking-[0.12em] mb-2" style={{ color: APAGADO }}>
                   ¿A qué hora te queda mejor?
