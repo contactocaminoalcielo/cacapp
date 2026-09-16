@@ -57,3 +57,28 @@ Los nombres de columnas/PKs y valores de enums tienen trampas reales que ya caus
 1. Un cambio nunca vive solo: rastrear impacto transversal (tablas, vistas, otras páginas, flujo end-to-end).
 2. Realtime activo: varias páginas se suscriben a cambios de Supabase — mantener sincronizado.
 3. Al crear tablas o vistas con SQL raw: aplicar el patrón de RLS/GRANTs documentado en `supabase/security/`.
+
+## ⛔ NADIE HACE `git push` — hay UNA sola sesión de despliegue
+**Regla de David, 16-sep-2026.** Varias sesiones trabajan sobre ESTE MISMO árbol al mismo
+tiempo. Cuando cada una empujaba lo suyo, `main` se movía debajo de las otras: pushes
+rechazados, ramas divergidas, commits que se llevaban archivos ajenos a medio editar y
+renombrados de otra sesión colados dentro de un commit que no era suyo. Todo eso ya pasó.
+
+**Qué hace tu sesión:**
+1. Trabaja y **commitea** lo tuyo. Commitear sí, siempre.
+2. Commitea **solo tus archivos**, nombrándolos uno por uno:
+   `git commit -m "..." -- ruta/uno ruta/dos`.
+   ⚠️ Aun nombrando rutas, un renombrado que otra sesión dejó en el índice se cuela en tu
+   commit. **Revisa con `git show --stat HEAD` después de commitear** y sácalo si aparece.
+3. **NO hagas `git push`. NO hagas `git pull`, `rebase`, `reset --hard` ni `stash`**: el
+   árbol tiene trabajo sin guardar de otras sesiones y lo destruyes.
+4. Termina diciéndole a David **qué commiteaste y qué falta por subir**. Él lo sube desde
+   la sesión de despliegue.
+
+**Si te toca ser la sesión de despliegue**, antes de empujar revisa que no se vaya basura:
+hoy conviven en la raíz bundles compilados (`Gestion.js`, `precios.js`, `precios_new.js`)
+y un CSV con WhatsApp de clientes (`revision_87_*.csv`) — **eso no sube a GitHub**.
+
+Los cambios de **base de datos** son aparte y no dependen de esto: van por SSH a Contabo
+(`migrations/NNN_*.sql`), y una migración aplicada en producción **no queda desplegada**
+hasta que su código llegue por push.
