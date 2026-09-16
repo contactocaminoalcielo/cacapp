@@ -13,6 +13,8 @@
 // imágenes (ver imagenes.js / portal público).
 import crypto from 'crypto'
 import { pool, log } from './db.js'
+import { autorizacionDelPayload, registrarAutorizacion, FALTA_AUTORIZACION }
+  from './autorizaciones.js'
 
 const APP_URL = (process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')
 
@@ -56,7 +58,7 @@ export async function validarTokenPortal({ token }) {
 // ─── Flujo A · crear la solicitud de servicio (origen ALIADO) ───────────────
 // Escribe en las MISMAS columnas que /solicitud → la conversión del Kanban
 // (convertirSolicitud) la procesa sin cambios. aliado_id sale del token.
-export async function crearSolicitudAliado({ token, payload = {} }) {
+export async function crearSolicitudAliado({ token, payload = {}, contexto = {} }) {
   const t = txt(token, 60)
   if (!t) return { status: 400, body: { ok: false, error: 'token_requerido' } }
 
@@ -92,6 +94,22 @@ export async function crearSolicitudAliado({ token, payload = {} }) {
   if (tipoRecogida === 'domicilio' && !direccionDom) faltan.push('dirección de recogida')
   if (faltan.length) return { status: 422, body: { ok: false, error: 'incompleto', faltan } }
 
+  // Los datos son de un TERCERO: quien los entrega es la clínica, que declara
+  // contar con la autorización del dueño (Ley 1581 de 2012, art. 9). La
+  // constancia va ANTES del INSERT porque aquí no hay transacción: si no se
+  // puede probar la autorización, no nos quedamos con los datos del dueño.
+  const versionPolitica = autorizacionDelPayload(payload)
+  if (!versionPolitica) return FALTA_AUTORIZACION
+  await registrarAutorizacion(pool, {
+    origen: 'SOLICITUD_ALIADO', medio: 'DECLARADA_POR_ALIADO', politicaVersion: versionPolitica,
+    titular: {
+      nombre: clienteNombre, apellido: txt(prop.apellido, 120),
+      documento: txt(prop.cedula, 30), telefono: whatsapp, email: txt(prop.email, 160),
+    },
+    aliadoId, contexto,
+    notas: 'La veterinaria declara contar con la autorización del dueño de la mascota.',
+  })
+
   const { rows } = await pool.query(
     `INSERT INTO public.solicitudes_servicio (
         cliente_nombre, cliente_apellido, cliente_cedula, cliente_whatsapp,
@@ -125,9 +143,14 @@ export async function crearSolicitudAliado({ token, payload = {} }) {
 // Inserta en aliados con estado 'pendiente_validacion' (sin token). Dedup por
 // NIT: si ya existe una vet con ese NIT, NO duplica. Respuesta genérica siempre
 // (no revela si existía: anti-enumeración).
-export async function registrarAfiliacion({ payload = {} }) {
+export async function registrarAfiliacion({ payload = {}, contexto = {} }) {
   const nombre = txt(payload.nombre, 120)
   if (!nombre) return { status: 422, body: { ok: false, error: 'nombre_requerido' } }
+
+  // Aquí el titular es la persona de contacto de la veterinaria, que marca la
+  // casilla ella misma.
+  const versionPolitica = autorizacionDelPayload(payload)
+  if (!versionPolitica) return FALTA_AUTORIZACION
 
   const nit = txt(payload.identificacion_nit, 30)
   if (nit) {
@@ -155,6 +178,16 @@ export async function registrarAfiliacion({ payload = {} }) {
       txt(payload.direccion, 250), txt(payload.notas, 2000),
     ]
   )
+  await registrarAutorizacion(pool, {
+    origen: 'AFILIACION_ALIADO', medio: 'PORTAL_WEB', politicaVersion: versionPolitica,
+    titular: {
+      nombre: txt(payload.contacto_nombre, 120) || nombre,
+      telefono: soloDigitos(payload.whatsapp).slice(0, 25) || soloDigitos(payload.telefono).slice(0, 25),
+      email: txt(payload.email, 160),
+      documento: nit,
+    },
+    contexto, notas: `Afiliación de la veterinaria ${nombre}.`,
+  })
   log('[aliados/afiliacion]', 'pendiente_validacion creada', nombre)
   return { status: 200, body: { ok: true } }
 }

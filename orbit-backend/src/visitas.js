@@ -14,6 +14,8 @@
 // Y la visita NO queda confirmada: se pide. Quien confirma es la casa.
 import { pool, log } from './db.js'
 import { cargarConfig as cargarConfigTenjo } from './reglas.js'
+import { autorizacionDelPayload, registrarAutorizacion, titularDeServicio, FALTA_AUTORIZACION }
+  from './autorizaciones.js'
 
 const MOD = 'VISITAS_TENJO'
 
@@ -188,7 +190,7 @@ export async function datosPortalVisita({ codigo }) {
  * La familia pide la visita. Devuelve la fila creada, SIEMPRE en `SOLICITADA`:
  * este endpoint no programa nada, y el texto del portal lo dice.
  */
-export async function guardarSolicitudVisita({ codigo, payload = {} }) {
+export async function guardarSolicitudVisita({ codigo, payload = {}, contexto = {} }) {
   const cod = (codigo || '').trim().toUpperCase()
   if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
 
@@ -213,6 +215,16 @@ export async function guardarSolicitudVisita({ codigo, payload = {} }) {
       await client.query('ROLLBACK')
       return { status: 410, body: { ok: false, error: 'cerrado' } }
     }
+
+    // Autorización de datos (Ley 1581 de 2012): la familia dice quiénes vienen
+    // y deja una nota, y eso queda asociado a su servicio.
+    const versionPolitica = autorizacionDelPayload(payload)
+    if (!versionPolitica) { await client.query('ROLLBACK'); return FALTA_AUTORIZACION }
+    const { clienteId, titular } = await titularDeServicio(client, a.servicio_id)
+    await registrarAutorizacion(client, {
+      origen: 'PORTAL_VISITA', medio: 'PORTAL_WEB', politicaVersion: versionPolitica,
+      titular, servicioId: a.servicio_id, clienteId, contexto,
+    })
 
     // ── El día y la franja se validan contra lo que ESTE servidor ofrece ──
     const fecha  = String(payload.fecha || '').trim()

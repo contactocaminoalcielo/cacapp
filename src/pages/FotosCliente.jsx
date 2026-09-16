@@ -6,6 +6,8 @@ import { portalDatos, portalRecibir, requiereImagen } from '@/lib/imagenes'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, BORDE } from '@/components/portal/Botanica'
 import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package } from 'lucide-react'
+import CasillaDatos from '@/components/CasillaDatos'
+import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 
 // Los nombres se conservan (los usan ~150 sitios de este archivo); lo que cambia
 // es a qué apuntan. El portal pasa del azul de Orbit al papel cálido y el verde
@@ -88,6 +90,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [textos,      setTextos]     = useState({})
   const [comentarios, setComentarios]= useState('')
   const [entrega,     setEntrega]    = useState({ direccion: '', barrio: '', localidad: '', recibe: '', telefono: '', telefono_adicional: '', horarios: '' })
+  const [autorizo,    setAutorizo]   = useState(false)
   const [anticipados, setAnticipados]= useState(null)
   const [interes,     setInteres]    = useState({ quiere: false, recordatorio_id: '', texto: '' })
   const [catalogo,    setCatalogo]   = useState([])
@@ -145,7 +148,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const respActual      = ofertaActual ? ofertaResp[ofertaActual.id] : undefined
   // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
-  const puedeEnviar  = todoListo && ofertasListas && entregaReqOk
+  const puedeEnviar  = todoListo && ofertasListas && entregaReqOk && autorizo
 
   // ¿El anuncio vende algo que el cliente YA lleva en su plan? Se le ofrece
   // igual (es "un recuerdo más"), pero conviene decírselo para que no crea que
@@ -308,6 +311,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         anticipados: esCompostajeIndividual ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
         entrega: entregaLlena ? entrega : undefined,
+        autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
         ofertas: ofertasPayload.length ? ofertasPayload : undefined,
         // Compat: un backend viejo solo entiende `oferta` (singular). El nuevo
         // ignora esta clave cuando `ofertas` viene como array, así que mandar
@@ -435,6 +439,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
         </AnimatePresence>
       </div>
 
+      {esFinal && (
+        <div className="px-5 pb-2 max-w-lg mx-auto w-full">
+          <CasillaDatos tono="portal" checked={autorizo} onChange={setAutorizo} />
+        </div>
+      )}
+
       <div className="sticky bottom-0 z-20 bg-white border-t shadow-lg px-5 py-4" style={{ borderColor: BORD }}>
         <div className="max-w-lg mx-auto space-y-3">
           {esFinal ? (
@@ -447,7 +457,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
                       ? (faltaResponder
                           ? `Responde si deseas ${ofertas.length > 1 ? 'las ofertas' : 'la oferta'} para poder enviar.`
                           : 'Falta subir la foto del recordatorio que aceptaste.')
-                      : 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'}
+                      : !entregaReqOk
+                        ? 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'
+                        : 'Marca la autorización de datos para poder enviar.'}
                 </p>
               )}
               <motion.button onClick={() => setConfirmando(true)} disabled={guardando || !puedeEnviar} whileTap={{ scale: 0.98 }}

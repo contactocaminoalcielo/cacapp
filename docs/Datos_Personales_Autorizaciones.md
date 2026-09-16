@@ -1,0 +1,108 @@
+# Datos personales: política y autorizaciones
+
+Orbit no tenía política de tratamiento de datos ni pedía autorización en ningún
+formulario. Esto lo cierra: una política publicada, una casilla obligatoria en
+cada punto donde se captan datos, y la prueba de cada autorización guardada.
+
+Marco: **Ley 1581 de 2012** y **Decreto 1377 de 2013**, compilado en el
+**Decreto 1074 de 2015** (Libro 2, Parte 2, Título 2, Capítulo 25).
+
+## Responsable
+
+**MARTEN´S INVERSIONES S.A.S**, NIT 901.792.844-5, que opera como *Camino al
+Cielo*. Lo confirmó David el 16-sep-2026: en el repo conviven dos identidades
+—los recibos y certificados salen a nombre de «Camino al Cielo» con NIT
+901792845-5— y la que responde por los datos es la sociedad.
+
+⚠️ La dirección de notificaciones que usa la política es la operativa de los
+recibos (Calle 57 # 80-86, Los Monjes, Engativá). Si el domicilio social de la
+sociedad es otro, hay que corregirlo en `src/lib/privacidad.js`.
+
+## Dónde vive el texto
+
+`src/lib/privacidad.js` es la **fuente única**: de ahí salen la página pública,
+el aviso corto de las casillas y este documento. Tiene `VERSION` y
+`VIGENTE_DESDE`.
+
+**Si el texto cambia, hay que subir `VERSION`.** Cada autorización guarda la
+versión aceptada; sin eso, una autorización deja de probar algo el día que el
+texto cambie.
+
+La página es la ruta pública `/privacidad`. Orbit corre con HashRouter, así que
+la URL real es `https://orbit.orbitacac.com/#/privacidad` — sin el `#` el
+servidor entrega el index y la persona termina en el login. Por eso el enlace
+sale de `URL_POLITICA` y no se escribe a mano.
+
+## Dónde está la casilla
+
+| Formulario | Quién marca | origen | medio |
+|---|---|---|---|
+| `/solicitud` | la familia | `SOLICITUD_CLIENTE` | `PORTAL_WEB` |
+| `/aliado` (flujo A) | la clínica, por un tercero | `SOLICITUD_ALIADO` | `DECLARADA_POR_ALIADO` |
+| `/aliado` (flujo B) | la veterinaria, por sus datos | `AFILIACION_ALIADO` | `PORTAL_WEB` |
+| `/fotos` | la familia | `PORTAL_FOTOS` | `PORTAL_WEB` |
+| `/planta` | la familia | `PORTAL_PLANTA` | `PORTAL_WEB` |
+| `/visita` | la familia | `PORTAL_VISITA` | `PORTAL_WEB` |
+| `/registro` (interno) | quien registra, declarando | `REGISTRO_INTERNO` | `DECLARADA_POR_PERSONAL` |
+
+La casilla **nace vacía siempre**. Marcarla por defecto no es autorización: es
+un dato puesto por nosotros. Tampoco se guarda en el borrador de `localStorage`
+de `/solicitud` ni de `/registro`, para que no aparezca marcada al volver.
+
+Tres redacciones en `components/CasillaDatos.jsx`: `titular` (autoriza por lo
+suyo), `tercero` (la clínica declara tener la autorización del dueño) e
+`interno` (el equipo deja constancia de una autorización dada por teléfono o
+WhatsApp, firmada con su usuario en `declarada_por`).
+
+## Dónde queda la prueba
+
+Tabla `public.autorizaciones_datos` (migración 161). **Solo se agrega**: nunca
+UPDATE ni DELETE. Una revocación es otra fila con `accion='REVOCA'`.
+
+Guarda quién autorizó (nombre, documento, teléfono y correo tal como se dieron,
+no solo la llave), a qué servicio/cliente/solicitud/aliado corresponde, la
+versión de la política, el medio, y —cuando pasa por el backend— la IP y el
+navegador.
+
+`anon` solo puede **INSERTAR**: el portal público escribe su propia constancia y
+no puede leer las de nadie.
+
+La versión de la política **la manda el frontend**, no la fija el backend. Es a
+propósito: lo que hay que probar es qué texto vio la persona, y quien lo mostró
+fue su navegador. Un cliente con el build viejo en caché manda la versión vieja,
+que es exactamente lo que aceptó.
+
+## Cómo se comporta si falla
+
+- `/solicitud`: la constancia se guarda **antes** que la solicitud. Si no se
+  puede probar la autorización, no nos quedamos con los datos.
+- Portales de fotos, planta y visita: la constancia va **dentro de la misma
+  transacción** que el resto. O quedan las dos cosas, o no queda ninguna.
+- `/aliado`: no hay transacción en ese módulo, así que la constancia va antes
+  del INSERT de la solicitud. Un fallo posterior deja una constancia huérfana,
+  que es inofensiva.
+- `/registro` interno: el servicio ya está creado cuando se registra la
+  constancia. Si eso falla, **no se tumba el servicio**: se muestra el error
+  para que alguien lo resuelve a mano.
+
+El backend **rechaza con 422 `falta_autorizacion`** cualquier envío de los
+portales sin la autorización. Por eso el orden de despliegue importa:
+**migración → frontend → backend**. Al revés, una familia con el build viejo
+queda bloqueada.
+
+## Lo que quedó pendiente
+
+- **Publicación de memoriales en Instagram y YouTube.** Hoy se publican piezas
+  con la foto que manda la familia y **esta política no lo cubre**: se decidió
+  el 16-sep-2026 tratarlo aparte. Para una finalidad que no es necesaria para
+  prestar el servicio, la ley pide una autorización separada y opcional. La
+  tabla ya está preparada: `finalidades` es un arreglo, así que esa casilla
+  futura es otro elemento y no otra tabla.
+- **Registro Nacional de Bases de Datos (RNBD) de la SIC.** Verificar si la
+  sociedad supera el umbral de activos que obliga a registrarse.
+- **Canal formal de PQR de habeas data.** Hoy es el correo y el WhatsApp de la
+  empresa; no hay bandeja aparte ni control de los plazos de los artículos 14 y
+  15 dentro de Orbit.
+- **Datos que ya están en la base sin autorización registrada.** Lo anterior a
+  esta fecha no tiene constancia. El Decreto 1074 pide pedir autorización a los
+  titulares ya cargados; eso es una campaña, no un cambio de código.

@@ -22,6 +22,7 @@ import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
+import { contextoPeticion } from './autorizaciones.js'
 import {
   listarCandidatos, listarServicios, generarMemorial, aprobarMemorial,
   publicarManual, registrarEnlace, registrarEnvio, enviarAutomatico, previsualizarEnvio,
@@ -1220,7 +1221,7 @@ app.get('/portal/imagenes/:codigo', async (req, res) => {
 
 app.post('/portal/imagenes/:codigo', async (req, res) => {
   try {
-    const r = await recibirImagenesPortal({ codigo: req.params.codigo, payload: req.body || {} })
+    const r = await recibirImagenesPortal({ codigo: req.params.codigo, payload: req.body || {}, contexto: contextoPeticion(req) })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/imagenes POST', e)
@@ -1239,7 +1240,7 @@ app.get('/portal/planta/:codigo', async (req, res) => {
 
 app.post('/portal/planta/:codigo', async (req, res) => {
   try {
-    const r = await guardarEleccionPlanta({ codigo: req.params.codigo, payload: req.body || {} })
+    const r = await guardarEleccionPlanta({ codigo: req.params.codigo, payload: req.body || {}, contexto: contextoPeticion(req) })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/planta POST', e)
@@ -1285,7 +1286,7 @@ app.get('/portal/visita/:codigo', async (req, res) => {
 
 app.post('/portal/visita/:codigo', async (req, res) => {
   try {
-    const r = await guardarSolicitudVisita({ codigo: req.params.codigo, payload: req.body || {} })
+    const r = await guardarSolicitudVisita({ codigo: req.params.codigo, payload: req.body || {}, contexto: contextoPeticion(req) })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/visita POST', e)
@@ -1337,7 +1338,7 @@ app.post('/portal/aliado/validar', async (req, res) => {
 
 app.post('/portal/aliado/solicitud', async (req, res) => {
   try {
-    const r = await crearSolicitudAliado({ token: req.body?.token, payload: req.body || {} })
+    const r = await crearSolicitudAliado({ token: req.body?.token, payload: req.body || {}, contexto: contextoPeticion(req) })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/aliado/solicitud', e)
@@ -1347,7 +1348,7 @@ app.post('/portal/aliado/solicitud', async (req, res) => {
 // Flujo B: una veterinaria NO aliada solicita afiliación (queda pendiente_validacion).
 app.post('/portal/aliado/afiliacion', async (req, res) => {
   try {
-    const r = await registrarAfiliacion({ payload: req.body || {} })
+    const r = await registrarAfiliacion({ payload: req.body || {}, contexto: contextoPeticion(req) })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/aliado/afiliacion', e)

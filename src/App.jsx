@@ -18,6 +18,7 @@ const PlantaCliente    = lazy(() => import('@/pages/PlantaCliente'))
 const VisitaCliente    = lazy(() => import('@/pages/VisitaCliente'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
 const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
+const Privacidad       = lazy(() => import('@/pages/Privacidad'))
 
 const Dashboard          = lazy(() => import('@/pages/Dashboard'))
 const Kanban             = lazy(() => import('@/pages/Kanban'))
@@ -133,7 +134,7 @@ function AppRoutes({ rol }) {
 // versión nueva de Orbit" se le estaba mostrando a familias en duelo dentro del
 // portal de la planta y del de fotos, con un botón que no significa nada para
 // ellas.
-const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita']
+const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita', '/privacidad']
 const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
 
 /**
@@ -155,6 +156,18 @@ function InnerApp() {
   const location = useLocation()
 
   // Rutas públicas — no requieren autenticación
+
+  // /privacidad → Política de Tratamiento de Datos. La enlazan las casillas de
+  // autorización de TODOS los formularios, así que se resuelve antes que nada y
+  // sin sesión: se abre desde un portal, desde el Orbit interno y desde fuera.
+  if (location.pathname === '/privacidad') {
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <Privacidad />
+      </Suspense>
+    )
+  }
+
   if (location.pathname === '/solicitud') {
     return (
       <Suspense fallback={<FullScreenLoader />}>

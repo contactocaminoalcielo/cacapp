@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
+import CasillaDatos from '@/components/CasillaDatos'
+import { registrarAutorizacion } from '@/lib/autorizaciones'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
@@ -169,6 +171,12 @@ export default function Registro() {
   const [error, setError]     = useState(null)
   const [success, setSuccess] = useState(false)
   const [iaOpen, setIaOpen]       = useState(false)
+
+  // Constancia de que el titular autorizó. Aquí los datos los toma el equipo por
+  // teléfono o WhatsApp, así que la casilla no es del titular: es la declaración
+  // de quien registra, y queda firmada con su usuario. Nunca viene marcada.
+  const [autorizo, setAutorizo] = useState(false)
+  const [errAutorizo, setErrAutorizo] = useState(null)
 
   // Validación campo a campo
   const [errReg, setErrReg]     = useState({})
@@ -767,6 +775,11 @@ export default function Registro() {
 
   // ── guardar ──
   async function guardar() {
+    if (!autorizo) {
+      setErrAutorizo('Falta dejar constancia de la autorización de datos del titular.')
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
+      return
+    }
     if (!tecnicoSeleccionado) {
       const ok = await confirm('No asignaste un técnico de recogida.\n¿Deseas guardar el servicio sin técnico asignado?', { title: 'Sin técnico asignado', variant: 'warning', confirmLabel: 'Guardar sin técnico', cancelLabel: 'Volver' })
       if (!ok) return
@@ -969,6 +982,30 @@ export default function Registro() {
         if (eutData?.id) {
           await db.from('servicios').update({ eutanasia_id: eutData.id }).eq('id', svcData[0].id)
         }
+      }
+
+      // Constancia de la autorización. Va al final, con el servicio ya creado,
+      // para poder amarrarla al servicio y al cliente. Si falla, NO se tumba un
+      // servicio ya registrado: se avisa y queda el error a la vista.
+      try {
+        await registrarAutorizacion({
+          origen: 'REGISTRO_INTERNO',
+          medio:  'DECLARADA_POR_PERSONAL',
+          titular: {
+            nombre:    clienteSeleccionado?.nombre   ?? formCliente.nombre,
+            apellido:  clienteSeleccionado?.apellido ?? formCliente.apellido,
+            documento: clienteSeleccionado?.cedula_nit ?? formCliente.cedula_nit,
+            telefono:  clienteSeleccionado?.whatsapp ?? formCliente.whatsapp,
+            email:     clienteSeleccionado?.email    ?? formCliente.email,
+          },
+          servicioId:   svcData?.[0]?.id || null,
+          clienteId:    clienteId || null,
+          aliadoId:     aliadoSeleccionado?.id_aliado || null,
+          declaradaPor: personalData?.id || null,
+          notas:        'Autorización declarada al registrar el servicio.',
+        })
+      } catch (e) {
+        setError('El servicio quedó registrado, pero no se pudo guardar la constancia de autorización: ' + (e.message || ''))
       }
 
       limpiarBorrador()
@@ -2034,6 +2071,17 @@ export default function Registro() {
               Los recordatorios del plan se asignarán automáticamente.
             </Alert>
           </div>
+        )}
+
+        {/* Autorización de datos — obligatoria para guardar */}
+        {paso === PASOS.length - 1 && (
+          <CasillaDatos
+            className="mt-4"
+            variante="interno"
+            checked={autorizo}
+            onChange={v => { setAutorizo(v); if (v) setErrAutorizo(null) }}
+            error={errAutorizo}
+          />
         )}
 
         {/* Navegación */}

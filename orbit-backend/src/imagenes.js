@@ -21,6 +21,8 @@ import {
 import { enviarPlantillaGenerica, consultarEstadoMensajeOperativo } from './whatsapp.js'
 import { LINEA_WA_NUMERO } from './linea-wa.js'
 import { sanitizarEntrega, entregaNucleoOk } from './entrega.js'
+import { autorizacionDelPayload, registrarAutorizacion, titularDeServicio, FALTA_AUTORIZACION }
+  from './autorizaciones.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
@@ -367,7 +369,7 @@ export async function datosPortal({ codigo }) {
 
 // ─── Portal público: recepción transaccional de imágenes/textos (POST) ──────
 // payload: { recordatorios:[{sr_id, urls:[], textos:{}}], comentarios, anticipados, adicional_interes:{recordatorio_id?, texto?}, entrega:{direccion,barrio,localidad,recibe,telefono,telefono_adicional,horarios} }
-export async function recibirImagenesPortal({ codigo, payload = {} }) {
+export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {} }) {
   const cod = (codigo || '').trim().toUpperCase()
   if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
   const client = await pool.connect()
@@ -403,6 +405,17 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
       await client.query('ROLLBACK')
       return { status: 409, body: { ok: false, error: 'fuera_de_ventana' } }
     }
+
+    // Autorización de datos (Ley 1581 de 2012). Va ANTES de guardar nada: aquí
+    // la familia entrega dirección, teléfonos y fotos. Sin constancia de la
+    // autorización no nos quedamos con eso.
+    const versionPolitica = autorizacionDelPayload(payload)
+    if (!versionPolitica) { await client.query('ROLLBACK'); return FALTA_AUTORIZACION }
+    const { clienteId, titular } = await titularDeServicio(client, s.id)
+    await registrarAutorizacion(client, {
+      origen: 'PORTAL_FOTOS', medio: 'PORTAL_WEB', politicaVersion: versionPolitica,
+      titular, servicioId: s.id, clienteId, contexto,
+    })
 
     const { rows: solRows } = await client.query(
       `SELECT id, solo_adicional FROM public.solicitudes_imagenes

@@ -14,6 +14,8 @@ import { pool, log } from './db.js'
 import { enviarPlantillaGenerica } from './whatsapp.js'
 import { LINEA_WA_ID, LINEA_WA_NUMERO } from './linea-wa.js'
 import { sanitizarEntrega, entregaNucleoOk } from './entrega.js'
+import { autorizacionDelPayload, registrarAutorizacion, titularDeServicio, FALTA_AUTORIZACION }
+  from './autorizaciones.js'
 
 const MOD = 'PLANTAS'
 
@@ -314,7 +316,7 @@ function fueraDeVentana(e, cfg) {
  * - Cada extra se cobra al precio de `plantas`, jamás al que mande el navegador.
  * - Todo es una sola transacción: o queda la elección con su cobro, o no queda nada.
  */
-export async function guardarEleccionPlanta({ codigo, payload = {} }) {
+export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {} }) {
   const cod = (codigo || '').trim().toUpperCase()
   if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
 
@@ -344,6 +346,16 @@ export async function guardarEleccionPlanta({ codigo, payload = {} }) {
       await client.query('ROLLBACK')
       return { status: 410, body: { ok: false, error: 'cerrado' } }
     }
+
+    // Autorización de datos (Ley 1581 de 2012): la familia va a dejar dirección
+    // y teléfonos para la entrega de la planta.
+    const versionPolitica = autorizacionDelPayload(payload)
+    if (!versionPolitica) { await client.query('ROLLBACK'); return FALTA_AUTORIZACION }
+    const { clienteId, titular } = await titularDeServicio(client, e.servicio_id)
+    await registrarAutorizacion(client, {
+      origen: 'PORTAL_PLANTA', medio: 'PORTAL_WEB', politicaVersion: versionPolitica,
+      titular, servicioId: e.servicio_id, clienteId, contexto,
+    })
 
     // ── Entrega: la planta es un objeto físico que hay que llevar ──
     // A diferencia del portal de fotos, aquí NO se pregunta si hay algo físico:

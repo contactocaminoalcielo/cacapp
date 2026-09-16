@@ -18,6 +18,8 @@ import { useState, useEffect } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { portalVisita, portalPedirVisita, FRANJA_LABEL } from '@/lib/visitas'
 import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE } from '@/components/portal/Botanica'
+import CasillaDatos from '@/components/CasillaDatos'
+import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 
 /**
  * Los nombres llegan en MAYÚSCULAS desde la base. Gritar "JOSHUA" en una
@@ -171,6 +173,7 @@ export default function VisitaCliente({ codigo: codigoProp }) {
   const [notas,    setNotas]    = useState('')
   const [error,    setError]    = useState('')
   const [enviando, setEnviando] = useState(false)
+  const [autorizo, setAutorizo] = useState(false)
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
@@ -212,13 +215,17 @@ export default function VisitaCliente({ codigo: codigoProp }) {
   // Se nombra lo PRIMERO que falta, no todo a la vez.
   const pista = !fecha ? 'Escoge el día en que te gustaría venir'
     : !franja ? 'Escoge la jornada que te queda mejor'
+    : !autorizo ? 'Falta marcar la autorización de datos'
     : null
 
   async function enviar() {
-    if (enviando || !fecha || !franja) return
+    if (enviando || !fecha || !franja || !autorizo) return
     setEnviando(true); setError('')
     try {
-      const r = await portalPedirVisita(codigo, { fecha, franja, personas, notas })
+      const r = await portalPedirVisita(codigo, {
+        fecha, franja, personas, notas,
+        autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
+      })
       if (!r.ok) {
         // El día se llenó mientras la familia decidía: se recarga y se le
         // muestran los que quedan, en vez de dejarla contra un error seco.
@@ -427,7 +434,8 @@ export default function VisitaCliente({ codigo: codigoProp }) {
             {error && <p role="alert" className="text-[13px] mt-3 text-center" style={{ color: '#A33A2A' }}>{error}</p>}
 
             <div className="mt-5">
-              <Boton onClick={enviar} disabled={!fecha || !franja || enviando}>
+              <CasillaDatos className="mb-3" tono="portal" checked={autorizo} onChange={setAutorizo} />
+              <Boton onClick={enviar} disabled={!fecha || !franja || !autorizo || enviando}>
                 {enviando ? 'Enviando…' : 'Pedir la visita'}
               </Boton>
               {pista && (

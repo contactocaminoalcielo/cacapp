@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { db } from '@/lib/supabase'
+import CasillaDatos from '@/components/CasillaDatos'
+import { registrarAutorizacion } from '@/lib/autorizaciones'
 import { fmt, today, petEmoji } from '@/lib/utils'
 import { CheckCircle, ChevronRight, ChevronLeft, MapPin, Building2, Clock, AlertCircle, X, ChevronDown, ChevronUp, Package, Smartphone, Leaf, ExternalLink, Truck } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -171,6 +173,12 @@ export default function SolicitudCliente() {
   const [recogida, setRecogida] = useState({ ...DEFAULT_RECOGIDA, ...(borrador?.recogida ?? {}) })
   const [hp, setHp] = useState('')
 
+  // Autorización de datos. NO va al borrador de localStorage a propósito: la
+  // ley pide una manifestación del titular, y una casilla que aparece marcada
+  // sola al volver a abrir el formulario no es eso.
+  const [autorizo, setAutorizo] = useState(false)
+  const [errAutorizo, setErrAutorizo] = useState(null)
+
   // Auto-guardado
   useEffect(() => {
     try {
@@ -329,9 +337,26 @@ export default function SolicitudCliente() {
       setError('Ya enviaste una solicitud recientemente. Por favor espera unos minutos.')
       return
     }
+    if (!autorizo) {
+      setErrAutorizo('Necesitamos tu autorización para poder usar tus datos y prestar el servicio.')
+      return
+    }
     setSubmitting(true); setError('')
     try {
       const t = s => (s ?? '').trim()
+      // La constancia va PRIMERO: si no podemos probar la autorización, no nos
+      // quedamos con los datos. Si esto falla, el formulario no se envía.
+      await registrarAutorizacion({
+        origen: 'SOLICITUD_CLIENTE',
+        medio:  'PORTAL_WEB',
+        titular: {
+          nombre:    cliente.nombre,
+          apellido:  cliente.apellido,
+          documento: cliente.cedula_nit,
+          telefono:  (cliente.whatsapp ?? '').replace(/\D/g, '') || cliente.telefono,
+          email:     cliente.email,
+        },
+      })
       const { error: err } = await db.from('solicitudes_servicio').insert({
         cliente_nombre:      t(cliente.nombre),
         cliente_apellido:    t(cliente.apellido)   || null,
@@ -975,6 +1000,16 @@ export default function SolicitudCliente() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Autorización de datos — obligatoria para enviar */}
+        {paso === PASOS.length - 1 && (
+          <CasillaDatos
+            className="mt-4"
+            checked={autorizo}
+            onChange={v => { setAutorizo(v); if (v) setErrAutorizo(null) }}
+            error={errAutorizo}
+          />
         )}
 
         {/* Error global */}

@@ -4,6 +4,8 @@ import { fmt, petEmoji } from '@/lib/utils'
 import { aliadoValidar, aliadoCrearSolicitud, aliadoAfiliacion } from '@/lib/aliados'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { CheckCircle, ChevronRight, ChevronLeft, MapPin, Building2, Clock, AlertCircle, X, Stethoscope } from 'lucide-react'
+import CasillaDatos from '@/components/CasillaDatos'
+import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 
 // ── Anti doble-envío en el mismo navegador ───────────────────────────────────
 const RATE_KEY = 'cac_aliado_ts'
@@ -147,6 +149,8 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
   const [masc, setMasc] = useState({ nombre: '', especie_id: '', sexo: '', peso_kg: '', raza: '' })
   const [planId, setPlanId] = useState('')
   const [rec, setRec]   = useState({ tipo: 'veterinaria', ciudad: aliado?.ciudad || 'Bogotá', localidad: aliado?.localidad || '', barrio: aliado?.barrio || '', direccion: '', hora_aproximada: '', notas: '' })
+  const [autorizo, setAutorizo] = useState(false)
+  const [errAutorizo, setErrAutorizo] = useState(null)
 
   function getPrecio(pid) {
     if (!pid || !masc.peso_kg) return null
@@ -202,12 +206,17 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
   }
 
   async function enviar() {
+    if (!autorizo) {
+      setErrAutorizo('Necesitamos que declares que el dueño autorizó el uso de sus datos.')
+      return
+    }
     const last = localStorage.getItem(RATE_KEY)
     if (last && Date.now() - parseInt(last) < RATE_MS) { setError('Acabas de enviar una solicitud. Espera unos minutos.'); return }
     setSubmitting(true); setError('')
     try {
       const r = await aliadoCrearSolicitud({
         token,
+        autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
         propietario: {
           nombre: prop.nombre, apellido: prop.apellido, cedula: prop.cedula,
           whatsapp: prop.whatsapp, telefono: prop.telefono, email: prop.email,
@@ -460,6 +469,16 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
           </div>
         )}
 
+        {paso === PASOS.length - 1 && (
+          <CasillaDatos
+            className="mt-4"
+            variante="tercero"
+            checked={autorizo}
+            onChange={v => { setAutorizo(v); if (v) setErrAutorizo(null) }}
+            error={errAutorizo}
+          />
+        )}
+
         <div className={`flex gap-3 mt-6 ${paso > 0 ? 'justify-between' : 'justify-end'}`}>
           {paso > 0 && (
             <button type="button" onClick={() => { setPaso(p => p - 1); setError(''); window.scrollTo({ top: 0 }) }}
@@ -503,15 +522,21 @@ function FlujoAfiliacion({ submitting, setSubmitting, error, setError, onDone })
   const [f, setF] = useState({ nombre: '', identificacion_nit: '', contacto_nombre: '', whatsapp: '', telefono: '', email: '', ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '', notas: '' })
   const [tocado, setTocado] = useState(false)
   const errNombre = tocado && !f.nombre.trim() ? 'El nombre comercial es requerido' : null
+  const [autorizoB, setAutorizoB] = useState(false)
+  const [errAutorizoB, setErrAutorizoB] = useState(null)
 
   async function enviar() {
     setTocado(true)
     if (!f.nombre.trim()) { setError('Ingresa el nombre comercial de la veterinaria.'); return }
+    if (!autorizoB) {
+      setErrAutorizoB('Necesitamos tu autorización para tratar los datos de contacto.')
+      return
+    }
     const last = localStorage.getItem(RATE_KEY)
     if (last && Date.now() - parseInt(last) < RATE_MS) { setError('Acabas de enviar una solicitud. Espera unos minutos.'); return }
     setSubmitting(true); setError('')
     try {
-      const r = await aliadoAfiliacion(f)
+      const r = await aliadoAfiliacion({ ...f, autorizacion: { aceptada: autorizoB, politica_version: POLITICA_VERSION } })
       if (r.status === 200 && r.ok) { localStorage.setItem(RATE_KEY, Date.now().toString()); onDone(); return }
       setError('No se pudo enviar. Intenta de nuevo en unos minutos.')
     } catch {
@@ -599,6 +624,8 @@ function FlujoAfiliacion({ submitting, setSubmitting, error, setError, onDone })
           </div>
         )}
 
+        <CasillaDatos className="mb-3" variante="titular" checked={autorizoB}
+          onChange={v => { setAutorizoB(v); if (v) setErrAutorizoB(null) }} error={errAutorizoB} />
         <button type="button" onClick={enviar} disabled={submitting}
           className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl text-[14px] font-bold text-white disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #3D5A27, #263218)' }}>
