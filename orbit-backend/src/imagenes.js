@@ -20,6 +20,7 @@ import {
 } from './ofertas.js'
 import { enviarPlantillaGenerica, consultarEstadoMensajeOperativo } from './whatsapp.js'
 import { LINEA_WA_NUMERO } from './linea-wa.js'
+import { sanitizarEntrega, entregaNucleoOk } from './entrega.js'
 
 const MOD = 'SOLICITUDES_IMAGENES'
 
@@ -481,7 +482,7 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     // Basta con que UNA de las aceptadas sea física.
     const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true ||
                                aceptadas.some(r => r.oferta.es_fisico)
-    if (tieneEntregaFisica && (!entrega || !entrega.direccion || !entrega.recibe || !entrega.telefono)) {
+    if (tieneEntregaFisica && !entregaNucleoOk(entrega)) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
     }
@@ -666,27 +667,6 @@ export async function recibirImagenesPortal({ codigo, payload = {} }) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
-}
-
-// Datos de entrega que deja el cliente en el portal. Se saneen server-side (no
-// se confía en el navegador): solo campos conocidos, recortados. Devuelve null
-// si el cliente no llenó nada.
-function sanitizarEntrega(e) {
-  if (!e || typeof e !== 'object') return null
-  const txt = (v, max = 300) => {
-    const s = (v == null ? '' : String(v)).trim()
-    return s ? s.slice(0, max) : null
-  }
-  const out = {
-    direccion:          txt(e.direccion),
-    barrio:             txt(e.barrio, 120),
-    localidad:          txt(e.localidad, 120),
-    recibe:             txt(e.recibe, 120),
-    telefono:           txt(e.telefono, 40),
-    telefono_adicional: txt(e.telefono_adicional, 40),
-    horarios:           txt(e.horarios, 300),
-  }
-  return Object.values(out).some(Boolean) ? out : null
 }
 
 // ¿El recordatorio recibió todos sus requisitos? (imágenes completas + textos requeridos)

@@ -13,6 +13,7 @@
 import { pool, log } from './db.js'
 import { enviarPlantillaGenerica } from './whatsapp.js'
 import { LINEA_WA_ID, LINEA_WA_NUMERO } from './linea-wa.js'
+import { sanitizarEntrega, entregaNucleoOk } from './entrega.js'
 
 const MOD = 'PLANTAS'
 
@@ -197,7 +198,10 @@ export async function datosPortalPlanta({ codigo }) {
               pe.planta_id, pe.planta_nombre, pe.servicio_id,
               m.nombre AS mascota, esp.nombre AS especie,
               c.nombre AS cliente_nombre,
-              cu.codigo AS cubiculo
+              cu.codigo AS cubiculo,
+              -- Lo que la familia ya dejó en el portal de fotos: aquí se
+              -- confirma o se corrige, no se vuelve a pedir desde cero.
+              s.datos_entrega_cliente, s.datos_entrega_recibidos_en
          FROM public.planta_elecciones pe
          JOIN public.servicios s      ON s.id = pe.servicio_id
          JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
@@ -237,6 +241,10 @@ export async function datosPortalPlanta({ codigo }) {
       ya_eligio: e.estado === 'ELEGIDA',
       servicio: { mascota: e.mascota, especie: e.especie, cubiculo: e.cubiculo,
                   nombre_cliente: (e.cliente_nombre || '').split(' ')[0] || '' },
+      // Se sanea también a la SALIDA: la columna es jsonb y pudo escribirla una
+      // versión anterior con campos que ya no existen.
+      entrega: sanitizarEntrega(e.datos_entrega_cliente),
+      entrega_recibidos_en: e.datos_entrega_recibidos_en,
       eleccion: {
         estado: e.estado,
         fecha_cumplida: e.fecha_cumplida,
@@ -337,6 +345,18 @@ export async function guardarEleccionPlanta({ codigo, payload = {} }) {
       return { status: 410, body: { ok: false, error: 'cerrado' } }
     }
 
+    // ── Entrega: la planta es un objeto físico que hay que llevar ──
+    // A diferencia del portal de fotos, aquí NO se pregunta si hay algo físico:
+    // lo que se está eligiendo ES lo físico. Un servicio 100 % digital nunca
+    // llega a esta pantalla, porque sin cubículo no hay compostaje que cumplir.
+    // Núcleo requerido igual que en la solicitud de imágenes, para que
+    // coordinación reciba siempre la misma forma.
+    const entrega = sanitizarEntrega(payload.entrega)
+    if (!entregaNucleoOk(entrega)) {
+      await client.query('ROLLBACK')
+      return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
+    }
+
     // ── Especie: obligatoria la primera vez, ignorada después ──
     let plantaId = e.planta_id
     let plantaNombre = null
@@ -408,6 +428,18 @@ export async function guardarEleccionPlanta({ codigo, payload = {} }) {
       const despues = Number(sv[0]?.valor_total)
       if (Number.isFinite(despues)) { valorDespues = despues; valorAntes = despues - totalExtras }
     }
+
+    // PISA lo anterior a propósito (el portal de fotos hace COALESCE y conserva).
+    // Aquí la familia acaba de MIRAR estos datos y decir que son los buenos: si
+    // corrigió la dirección porque se mudó, conservar la vieja sería el bug.
+    // `datos_entrega_recibidos_en` pasa a ser la fecha de esa confirmación.
+    await client.query(
+      `UPDATE public.servicios
+          SET datos_entrega_cliente = $2::jsonb,
+              datos_entrega_recibidos_en = now()
+        WHERE id = $1`,
+      [e.servicio_id, JSON.stringify(entrega)]
+    )
 
     await client.query(
       `UPDATE public.planta_elecciones

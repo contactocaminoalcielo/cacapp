@@ -20,11 +20,28 @@ import { useState, useEffect } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { portalPlanta, portalElegirPlanta } from '@/lib/plantas'
 import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE, ORO } from '@/components/portal/Botanica'
+import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 
 // La paleta y las ilustraciones viven en components/portal/Botanica.jsx: las
 // comparte con el portal de fotos.
 
 const pesos = v => `$${Number(v || 0).toLocaleString('es-CO')}`
+
+// ─── Datos de entrega ────────────────────────────────────────────────────────
+// Los trae la familia desde la solicitud de imágenes (`servicios.datos_entrega_cliente`).
+// Aquí NO se vuelven a pedir desde cero: se muestran para confirmar, y solo si
+// faltan —o si la familia dice que cambiaron— se abre el formulario.
+//
+// El núcleo obligatorio es el mismo que en el portal de fotos: sin dirección,
+// sin quién recibe y sin teléfono, el mensajero no puede salir. Ojo, esto es
+// solo la reja de la pantalla; la de verdad la pone el backend.
+const ENTREGA_VACIA = {
+  direccion: '', barrio: '', localidad: '', recibe: '',
+  telefono: '', telefono_adicional: '', horarios: '',
+}
+const CAMPOS_ENTREGA_REQ = ['direccion', 'recibe', 'telefono']
+const FUERA_BOGOTA = 'Fuera de Bogotá'
+const nucleoOk = e => CAMPOS_ENTREGA_REQ.every(k => String(e?.[k] || '').trim())
 
 /**
  * Los nombres llegan en MAYÚSCULAS desde la base (así se registran en la
@@ -72,6 +89,62 @@ function Boton({ children, ...props }) {
   )
 }
 
+/** Una línea de la tarjeta de solo lectura. Nada que confirmar sin poder leerlo. */
+function DatoEntrega({ etiqueta, valor }) {
+  if (!String(valor || '').trim()) return null
+  return (
+    <div className="py-1.5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: APAGADO }}>{etiqueta}</p>
+      <p className="text-[15px] leading-snug mt-0.5" style={{ color: TINTA }}>{valor}</p>
+    </div>
+  )
+}
+
+/**
+ * Campo de texto. El borde verde al llenarse es la única señal de avance que
+ * tiene la familia en el formulario; el asterisco NO va solo en color, lleva
+ * también el texto "obligatorio" en el aviso de la barra.
+ */
+function CampoEntrega({ campo, label, value, onChange, placeholder, inputMode, requerido }) {
+  const lleno = !!String(value || '').trim()
+  const id = `entrega-${campo}`
+  return (
+    <div>
+      <label htmlFor={id} className="text-[12px] font-bold block mb-1.5" style={{ color: APAGADO }}>
+        {label}{requerido && <span aria-hidden="true" style={{ color: '#A33A2A' }}> *</span>}
+      </label>
+      <input id={id} type="text" inputMode={inputMode} required={requerido}
+        value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        className="w-full min-h-[48px] text-[15px] rounded-2xl px-3.5 py-2.5 transition-colors
+                   duration-200 cac-foco cac-suave"
+        style={{ background: PAPEL, border: `1.5px solid ${lleno ? VIVO : BORDE}`, color: TINTA }} />
+    </div>
+  )
+}
+
+/** Localidad: mismo catálogo que el portal de fotos, no una lista aparte. */
+function CampoLocalidad({ value, onChange }) {
+  const lleno = !!String(value || '').trim()
+  return (
+    <div>
+      <label htmlFor="entrega-localidad" className="text-[12px] font-bold block mb-1.5" style={{ color: APAGADO }}>
+        Localidad
+      </label>
+      {/* Se deja la flecha NATIVA: sin ella el campo se ve igual que "Barrio" y
+          la familia intenta escribir encima. */}
+      <select id="entrega-localidad" value={value || ''} onChange={e => onChange(e.target.value)}
+        className="w-full min-h-[48px] text-[15px] rounded-2xl px-3 py-2.5 transition-colors
+                   duration-200 cac-foco cac-suave"
+        style={{ background: PAPEL, border: `1.5px solid ${lleno ? VIVO : BORDE}`,
+                 color: lleno ? TINTA : '#9A9284' }}>
+        <option value="">Selecciona…</option>
+        {LOCALIDADES_BOGOTA.map(l => <option key={l} value={l}>{l}</option>)}
+        <option value={FUERA_BOGOTA}>{FUERA_BOGOTA}</option>
+      </select>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PlantaCliente({ codigo: codigoProp }) {
   const quieto = useReducedMotion()
@@ -84,6 +157,12 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const [error,     setError]     = useState('')
   const [enviando,  setEnviando]  = useState(false)
   const [resultado, setResultado] = useState(null)
+  // Entrega: `editando` abre el formulario; `confirmada` es el "sí, están bien"
+  // explícito. Se mantienen separados porque teclear en el formulario ya vale
+  // como confirmación, pero mirar una tarjeta de solo lectura no.
+  const [entrega,    setEntrega]    = useState(ENTREGA_VACIA)
+  const [editandoEntrega, setEditandoEntrega] = useState(true)
+  const [entregaConfirmada, setEntregaConfirmada] = useState(false)
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
@@ -100,6 +179,14 @@ export default function PlantaCliente({ codigo: codigoProp }) {
       }
       setDatos(r)
       setElegida(r.eleccion?.planta_id || '')
+      // Si lo que ya dejó está completo, se le muestra para confirmar. Si viene
+      // a medias, se abre el formulario con lo que haya: volver a escribir una
+      // dirección que ya dio es exactamente lo que no queremos.
+      const previa = { ...ENTREGA_VACIA, ...(r.entrega || {}) }
+      const completa = nucleoOk(previa)
+      setEntrega(previa)
+      setEditandoEntrega(!completa)
+      setEntregaConfirmada(false)
       setFase(r.cerrado ? 'cerrado' : (r.ya_eligio && !r.adicionales?.length ? 'listo' : 'form'))
     } catch {
       setError('No pudimos conectar. Revisa tu conexión e inténtalo de nuevo.')
@@ -115,7 +202,18 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const comprados   = datos?.comprados || []
   const totalExtras = disponibles.reduce((s, p) => s + (extras[p.id] || 0) * (p.precio || 0), 0)
   const hayExtras   = Object.keys(extras).length > 0
-  const puedeEnviar = yaEligio ? hayExtras : !!elegida
+  // Teclear en el formulario ya vale como confirmación; mirar la tarjeta, no.
+  const entregaLista = editandoEntrega ? nucleoOk(entrega) : entregaConfirmada
+  const puedeEnviar  = (yaEligio ? hayExtras : !!elegida) && entregaLista
+  const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
+
+  // Un botón apagado sin decir por qué es una pantalla que no se deja usar.
+  // Se nombra lo PRIMERO que falta, no todo a la vez.
+  const pista = (!yaEligio && !elegida) ? 'Elige una planta para continuar'
+    : !entregaLista ? (editandoEntrega
+        ? 'Completa dirección, quién recibe y teléfono para continuar'
+        : 'Confirma los datos de entrega para continuar')
+    : null
 
   function cambiarExtra(id, delta) {
     setExtras(p => {
@@ -133,11 +231,24 @@ export default function PlantaCliente({ codigo: codigoProp }) {
       const r = await portalElegirPlanta(codigo, {
         planta_id: yaEligio ? undefined : elegida,
         adicionales: Object.entries(extras).map(([planta_id, cantidad]) => ({ planta_id, cantidad })),
+        // Se manda siempre, aunque no haya cambiado: el backend refresca
+        // `datos_entrega_recibidos_en` y esa fecha es la prueba de que la
+        // familia miró estos datos hoy y no hace tres meses.
+        entrega,
       })
       if (!r.ok) {
         // Si el enlace se venció mientras llenaba el formulario, no sirve dejarlo
         // reintentando contra una puerta cerrada: se le dice y se cambia de pantalla.
         if (r.error === 'cerrado') { setFase('cerrado'); return }
+        // El backend también revisa el núcleo: si llega aquí es que la pantalla
+        // dejó pasar algo. Se abre el formulario, o el aviso no tendría dónde
+        // resolverse.
+        if (r.error === 'entrega_incompleta') {
+          setEditandoEntrega(true)
+          setEntregaConfirmada(false)
+          setError('Nos faltan la dirección, quién recibe y un teléfono para poder llevarla.')
+          return
+        }
         setError('No pudimos guardar tu elección. Inténtalo de nuevo en un momento.')
         return
       }
@@ -450,6 +561,74 @@ export default function PlantaCliente({ codigo: codigoProp }) {
           </section>
         )}
 
+        {/* ── Entrega ── */}
+        <section className="mt-10">
+          <h2 className="font-serif italic text-[21px]" style={{ color: HONDO }}>¿A dónde la llevamos?</h2>
+
+          {!editandoEntrega ? (
+            <>
+              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+                Estos son los datos que nos dejaste. Confírmanos si siguen estando bien.
+              </p>
+              <div className="rounded-3xl p-4" style={{ background: '#FFFFFF', border: `1.5px solid ${entregaConfirmada ? VIVO : BORDE}` }}>
+                <DatoEntrega etiqueta="Dirección" valor={entrega.direccion} />
+                {(entrega.barrio || entrega.localidad) &&
+                  <DatoEntrega etiqueta="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
+                <DatoEntrega etiqueta="Quién recibe" valor={entrega.recibe} />
+                <DatoEntrega etiqueta="Teléfono" valor={[entrega.telefono, entrega.telefono_adicional].filter(Boolean).join(' · ')} />
+                {entrega.horarios && <DatoEntrega etiqueta="Horarios" valor={entrega.horarios} />}
+              </div>
+              <div className="flex gap-2.5 mt-3.5">
+                <button type="button" onClick={() => setEntregaConfirmada(true)}
+                  aria-pressed={entregaConfirmada}
+                  className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
+                             transition-all duration-200 ease-out cac-foco cac-suave"
+                  style={entregaConfirmada
+                    ? { background: VERDE, color: '#FFFFFF', border: `1.5px solid ${VERDE}` }
+                    : { background: '#FFFFFF', color: HONDO, border: `1.5px solid ${BORDE}` }}>
+                  {entregaConfirmada ? 'Datos confirmados' : 'Sí, están bien'}
+                </button>
+                <button type="button"
+                  onClick={() => { setEditandoEntrega(true); setEntregaConfirmada(false) }}
+                  className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
+                             transition-all duration-200 ease-out cac-foco cac-suave"
+                  style={{ background: PAPEL, color: TINTA, border: `1.5px solid ${BORDE}` }}>
+                  Cambiaron
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: APAGADO }}>
+                Para poder llevarte a {mascota} necesitamos saber dónde y con quién dejarla.
+              </p>
+              <div className="rounded-3xl p-4 space-y-3.5" style={{ background: '#FFFFFF', border: `1.5px solid ${BORDE}` }}>
+                <CampoEntrega campo="direccion" label="Dirección" requerido value={entrega.direccion}
+                  onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
+                <div className="grid grid-cols-2 gap-3">
+                  <CampoEntrega campo="barrio" label="Barrio" value={entrega.barrio}
+                    onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
+                  <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
+                </div>
+                <CampoEntrega campo="recibe" label="¿Quién recibe?" requerido value={entrega.recibe}
+                  onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
+                <div className="grid grid-cols-2 gap-3">
+                  <CampoEntrega campo="telefono" label="Teléfono" requerido value={entrega.telefono}
+                    onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
+                  <CampoEntrega campo="telefono_adicional" label="Otro teléfono" value={entrega.telefono_adicional}
+                    onChange={v => setE('telefono_adicional', v)} placeholder="Opcional" inputMode="tel" />
+                </div>
+                <CampoEntrega campo="horarios" label="Horarios en que hay alguien" value={entrega.horarios}
+                  onChange={v => setE('horarios', v)} placeholder="Ej.: entre semana después de las 5 p. m." />
+                <p className="text-[12px] leading-relaxed" style={{ color: APAGADO }}>
+                  Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora
+                  exacta</strong>; te avisaremos cuando vayamos en camino.
+                </p>
+              </div>
+            </>
+          )}
+        </section>
+
         {error && (
           <p role="alert" className="text-[13px] mt-6 text-center" style={{ color: '#A33A2A' }}>{error}</p>
         )}
@@ -471,10 +650,8 @@ export default function PlantaCliente({ codigo: codigoProp }) {
               ? 'Enviando…'
               : (yaEligio ? 'Agregar a mi entrega' : 'Confirmar mi elección')}
           </Boton>
-          {!puedeEnviar && !enviando && !yaEligio && (
-            <p className="text-[12px] text-center mt-2.5" style={{ color: APAGADO }}>
-              Elige una planta para continuar
-            </p>
+          {!puedeEnviar && !enviando && pista && (
+            <p className="text-[12px] text-center mt-2.5" style={{ color: APAGADO }}>{pista}</p>
           )}
         </div>
       </div>
