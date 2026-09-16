@@ -12,15 +12,16 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
-import { petEmoji, parsearErrorDB, today } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, waLink } from '@/lib/utils'
 import { etiquetaCubiculo } from '@/lib/cubiculos'
 import {
   cargarVisitasTenjo, crearVisitaTenjo, marcarVisitaTenjo, mensajeGrupoVisitas,
-  fmtHoraVisita, VISITA_ESTADO_CFG, TIPO_PROCESO_LABEL,
+  fmtHoraVisita, VISITA_ESTADO_CFG, TIPO_PROCESO_LABEL, FRANJA_VISITA,
 } from '@/lib/tenjo'
+import { confirmarSolicitudVisita } from '@/lib/visitas'
 import {
   CalendarPlus, Users, Copy, Check, CheckCircle2, Ban, Search,
-  Send, AlertTriangle, Clock,
+  Send, AlertTriangle, Clock, CalendarCheck, MessageCircle,
 } from 'lucide-react'
 
 const fmtFechaLarga = f => f
@@ -51,6 +52,16 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
   const [novCierre,   setNovCierre]   = useState('')
   const [modalGrupo,  setModalGrupo]  = useState(null) // { fecha, texto }
   const [copiado,     setCopiado]     = useState(false)
+
+  // Confirmar una solicitud de la familia (migr. 159). La familia pidió una
+  // FRANJA; la hora exacta la pone la casa, que es quien conoce la jornada.
+  const [modalConfirmar, setModalConfirmar] = useState(null) // visita SOLICITADA
+  const [horaConf,       setHoraConf]       = useState('')
+  const [notaConf,       setNotaConf]       = useState('')
+  // Lo que sigue a confirmar: decírselo a la familia. Va por wa.me y no por
+  // plantilla — lo "dice" el coordinador desde su celular y el hilo se queda
+  // con él (ver feedback_canales_whatsapp).
+  const [modalAviso,     setModalAviso]     = useState(null) // { numero, texto }
 
   const cargar = useCallback(async () => {
     try {
@@ -135,6 +146,72 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
     } finally { setSaving(false) }
   }
 
+  // ── Solicitudes de la familia (portal, migr. 159) ──────────────────────────
+
+  /**
+   * Confirma la visita que pidió la familia: SOLICITADA → PROGRAMADA con hora.
+   *
+   * Al terminar NO se cierra el asunto: se abre el aviso a la familia. Una
+   * visita confirmada que la familia no sabe que existe es una familia que no
+   * viene — y del otro lado quedó alguien esperando una respuesta que el portal
+   * le prometió.
+   */
+  async function confirmarVisita() {
+    const v = modalConfirmar
+    if (!v) return
+    setSaving(true)
+    try {
+      await confirmarSolicitudVisita(v.id, {
+        hora: horaConf || null,
+        novedades: notaConf.trim() || v.novedades || null,
+        personalId: personalData?.id,
+      })
+      const cl  = v.servicios?.mascotas?.clientes
+      const rec = Array.isArray(v.servicios?.recogidas) ? v.servicios.recogidas[0] : v.servicios?.recogidas
+      setModalConfirmar(null)
+      setModalAviso({
+        numero: cl?.whatsapp || rec?.contacto_telefono || '',
+        texto:  mensajeVisitaConfirmada(v, horaConf),
+      })
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  /** Mensaje para la familia. Lo manda una persona por wa.me, no una plantilla. */
+  function mensajeVisitaConfirmada(v, hora) {
+    const m = v.servicios?.mascotas
+    const cl = v.servicios?.mascotas?.clientes
+    const nombre = (cl?.nombre || '').split(' ')[0] || ''
+    const cuando = fmtHoraVisita(hora) ? ` a las *${fmtHoraVisita(hora)}*` : ''
+    return [
+      `Hola${nombre ? ` ${nombre}` : ''}, esperamos que te encuentres bien.`,
+      ``,
+      `Confirmamos tu visita a nuestra planta en Tenjo para el *${fmtFechaLarga(v.fecha_visita)}*${cuando}, para acompañar a *${m?.nombre || 'tu mascotica'}*.`,
+      ``,
+      `Cualquier cosa que necesites, respóndenos por aquí.`,
+      ``,
+      `Con cariño,`,
+      `Equipo Camino al Cielo 🤍🐾`,
+    ].join('\n')
+  }
+
+  async function rechazarSolicitud(v) {
+    const m = v.servicios?.mascotas
+    if (!await confirm(
+      `Se rechazará la visita que pidió la familia de ${m?.nombre || 'la mascota'} para el ${fmtFechaLarga(v.fecha_visita)}. ` +
+      `Avísale por WhatsApp y propónle otra fecha: ella ya sabe que la pidió.`,
+      { title: '¿No se puede ese día?', variant: 'danger', confirmLabel: 'Rechazar' })) return
+    setSaving(true)
+    try {
+      await marcarVisitaTenjo(v.id, { estado: 'CANCELADA', personalId: personalData?.id })
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
   function abrirGrupo(fecha, lista) {
     setModalGrupo({ fecha, texto: mensajeGrupoVisitas({ fechaLarga: fmtFechaLarga(fecha), visitas: lista }) })
   }
@@ -163,7 +240,12 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
   const programadas = visitas.filter(v => v.estado === 'PROGRAMADA')
   const proximas    = programadas.filter(v => v.fecha_visita >= hoy)
   const vencidas    = programadas.filter(v => v.fecha_visita < hoy)
-  const historial   = visitas.filter(v => v.estado !== 'PROGRAMADA').slice(-15).reverse()
+  // Pedidas por la familia y sin validar. Van ARRIBA de todo: es lo único de
+  // esta pantalla donde hay alguien afuera esperando respuesta.
+  const solicitadas = visitas.filter(v => v.estado === 'SOLICITADA')
+  const historial   = visitas
+    .filter(v => !['PROGRAMADA', 'SOLICITADA'].includes(v.estado))
+    .slice(-15).reverse()
 
   // Agrupar las próximas por fecha (cada día tiene su propio mensaje al grupo)
   const porFecha = []
@@ -235,6 +317,64 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
     )
   }
 
+  // ── Render de una solicitud de la familia ──
+  function SolicitudRow({ v }) {
+    const m  = v.servicios?.mascotas
+    const cl = m?.clientes
+    const rec = Array.isArray(v.servicios?.recogidas) ? v.servicios.recogidas[0] : v.servicios?.recogidas
+    const contacto = cl?.whatsapp || rec?.contacto_telefono || null
+    const franja = FRANJA_VISITA[v.franja]
+    const pasada = v.fecha_visita < hoy
+    return (
+      <div className="flex items-start gap-3 p-3.5 rounded-xl border"
+        style={{ borderColor: '#FCD34D', background: '#FFFBEB' }}>
+        <span className="text-2xl">{petEmoji(m?.especies?.nombre)}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-ink">{m?.nombre || '—'}</span>
+            <Chip cfg={VISITA_ESTADO_CFG[v.estado]} fallback={v.estado} />
+            <span className="text-[11px] font-bold" style={{ color: '#92400E' }}>
+              Pidió el {fmtFechaLarga(v.fecha_visita)}{franja ? ` ${franja.label}` : ''}
+            </span>
+            {pasada && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEE2E2', color: '#991B1B' }}>
+                ya pasó
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-ink3 mt-0.5">
+            {cl?.nombre} {cl?.apellido}
+            {v.personas ? ` · ${v.personas} persona${v.personas !== 1 ? 's' : ''}` : ''}
+            {contacto && ` · 📞 ${contacto}`}
+          </div>
+          {v.cubiculo ? (
+            <div className="text-[11px] mt-0.5 font-medium" style={{ color: '#065F46' }}>
+              🌿 Está en el cubículo <strong>{etiquetaCubiculo(v.cubiculo)}</strong>
+            </div>
+          ) : (
+            <div className="text-[10px] text-ink3 mt-0.5">Sin cubículo activo</div>
+          )}
+          {v.novedades && <div className="text-[11px] text-ink2 mt-0.5 italic">📝 {v.novedades}</div>}
+        </div>
+        {canPlan && (
+          <div className="flex flex-col sm:flex-row gap-1.5 flex-shrink-0">
+            <Button size="sm" variant="gold" disabled={saving}
+              onClick={() => {
+                setModalConfirmar(v)
+                setHoraConf(FRANJA_VISITA[v.franja]?.hora_sugerida || '')
+                setNotaConf(v.novedades || '')
+              }}>
+              <CalendarCheck size={12} /> Confirmar
+            </Button>
+            <Button size="sm" variant="secondary" disabled={saving} onClick={() => rechazarSolicitud(v)}>
+              <Ban size={12} />
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const nom = busca.trim().toLowerCase()
   const candidatosVisibles = (candidatos || []).filter(c => {
     if (!nom) return true
@@ -265,6 +405,27 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
           </Button>
         )}
       </div>
+
+      {/* ── Pedidas por la familia desde el portal (migr. 159) ── */}
+      {/* Van primero por una razón operativa, no estética: del otro lado hay una
+          familia esperando. El portal le dijo "te confirmamos por WhatsApp". */}
+      {solicitadas.length > 0 && (
+        <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#FCD34D' }}>
+          <div className="px-5 py-4 border-b flex items-center gap-2" style={{ borderColor: 'rgba(252,211,77,0.4)' }}>
+            <span className="text-lg">📩</span>
+            <div className="flex-1">
+              <div className="font-semibold text-[15px] text-ink">Visitas que pidieron las familias</div>
+              <p className="text-[11px] text-ink3 mt-0.5">
+                Todavía no están confirmadas. Valida el día contra la jornada, ponle hora y avísale a la familia.
+              </p>
+            </div>
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>{solicitadas.length}</span>
+          </div>
+          <div className="p-4 space-y-2.5">
+            {solicitadas.map(v => <SolicitudRow key={v.id} v={v} />)}
+          </div>
+        </div>
+      )}
 
       {/* ── Programadas de fechas pasadas sin cerrar ── */}
       {vencidas.length > 0 && (
@@ -434,6 +595,68 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
                 {copiado ? <><Check size={12} /> Copiado</> : <><Copy size={12} /> Copiar mensaje</>}
               </Button>
             </div>
+          </div>
+        </Modal>
+      )}
+      {/* ── Modal: confirmar la visita que pidió la familia ── */}
+      {modalConfirmar && (
+        <Modal open onClose={() => setModalConfirmar(null)}
+          title={`Confirmar visita — ${modalConfirmar.servicios?.mascotas?.nombre || ''}`}
+          maxWidth="max-w-md"
+          footer={<>
+            <Button variant="secondary" onClick={() => setModalConfirmar(null)}>Cancelar</Button>
+            <Button onClick={confirmarVisita} disabled={saving}>{saving ? 'Guardando…' : 'Confirmar visita'}</Button>
+          </>}>
+          <div className="space-y-4">
+            <div className="rounded-xl px-3.5 py-3 text-[12px]" style={{ background: '#FFFBEB', border: '1px solid #FCD34D', color: '#92400E' }}>
+              La familia pidió el <strong>{fmtFechaLarga(modalConfirmar.fecha_visita)}</strong>
+              {FRANJA_VISITA[modalConfirmar.franja] ? ` ${FRANJA_VISITA[modalConfirmar.franja].label}` : ''}
+              {modalConfirmar.personas ? `, ${modalConfirmar.personas} persona${modalConfirmar.personas !== 1 ? 's' : ''}` : ''}.
+              {' '}Ella pidió una franja; la hora exacta la pones tú.
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Hora de la visita</label>
+              <Input type="time" value={horaConf} onChange={e => setHoraConf(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Indicaciones para el operario (opcional)</label>
+              <Textarea value={notaConf} onChange={e => setNotaConf(e.target.value)}
+                placeholder="Ej: vienen con niños, avisar al llegar a la portería…" />
+            </div>
+            <p className="text-[11px] text-ink3">
+              Al confirmar se abre el mensaje para avisarle a la familia. Si no se lo mandas, no se entera.
+            </p>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal: avisarle a la familia que quedó confirmada ── */}
+      {/* Sale SOLO, pegado a la confirmación, y no como un botón más en la fila:
+          es el paso que cierra el círculo que abrió el portal. */}
+      {modalAviso && (
+        <Modal open onClose={() => setModalAviso(null)}
+          title="Avísale a la familia"
+          maxWidth="max-w-lg"
+          footer={<Button variant="secondary" onClick={() => setModalAviso(null)}>Cerrar</Button>}>
+          <div className="space-y-4">
+            <p className="text-[12px] text-ink2">
+              La visita ya quedó programada en Orbit, pero la familia todavía no lo sabe.
+              El mensaje sale <strong>desde tu WhatsApp</strong>, para que la conversación se quede contigo.
+            </p>
+            <Textarea rows={10} value={modalAviso.texto} readOnly className="text-[12px]" />
+            {modalAviso.numero ? (
+              <a href={waLink(modalAviso.numero, modalAviso.texto)} target="_blank" rel="noreferrer"
+                onClick={() => setModalAviso(null)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-white"
+                style={{ background: '#25D366' }}>
+                <MessageCircle size={13} /> Avisarle por WhatsApp
+              </a>
+            ) : (
+              <p className="text-[12px] rounded-xl px-3.5 py-3" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                ⚠️ No hay un WhatsApp registrado para esta familia. Búscalo en la ficha del servicio
+                y escríbele: pidió la visita y está esperando respuesta.
+              </p>
+            )}
           </div>
         </Modal>
       )}

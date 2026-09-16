@@ -13,6 +13,9 @@ import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
 import { jobEleccionPlanta } from './jobs/plantas.js'
+import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
+import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
+import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
@@ -1094,6 +1097,19 @@ app.post('/jobs/eleccion-planta', requireJob, async (req, res) => {
   }
 })
 
+// ── Job: aviso de mitad de compostaje (migración 159) ──────────────────
+// «va con normalidad» + invitación a visitar el cubículo, a la mitad del proceso
+// de CADA mascota (inicio + meses_compostaje/2, que no es "un mes": hay de 2,
+// 2.5 y 3 meses). ?dry=1 → solo dice a quién le tocaría, sin escribir ni enviar.
+app.post('/jobs/mitad-compostaje', requireJob, async (req, res) => {
+  try {
+    res.json(await jobMitadCompostaje({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[mitad/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── Job: vencimientos de afiliaciones pre-exequiales (VENCIDA / CANCELADA) ──
 app.post('/jobs/afiliaciones', requireJob, async (_req, res) => {
   try {
@@ -1227,6 +1243,52 @@ app.post('/portal/planta/:codigo', async (req, res) => {
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/planta POST', e)
+  }
+})
+
+// ── Tablero de automatizaciones (qué manda Orbit solo) ──────────────────────
+// Solo lectura agregada: los conteos se hacen en SQL porque las tablas de envío
+// pasan de mil filas y traerlas sería contar mal.
+app.get('/automatizaciones/resumen', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  try {
+    res.json(await resumenAutomatizaciones())
+  } catch (e) {
+    log('[automatizaciones] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Encender/apagar un flujo. Escribe en config_operativa, que es de donde comen
+// los jobs: por eso va con rol y con lista blanca de llaves.
+app.post('/automatizaciones/:clave/activo', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await cambiarInterruptor({ clave: req.params.clave, activo: req.body?.activo === true })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[automatizaciones] ERROR interruptor', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Portal público de la visita a planta (mismo código que el portal de fotos) ──
+// Se abre desde el aviso de mitad de compostaje. GET muestra el avance del
+// proceso y los días que la planta puede recibir; POST registra la SOLICITUD
+// — no programa la visita, eso lo valida la casa contra la jornada.
+app.get('/portal/visita/:codigo', async (req, res) => {
+  try {
+    const r = await datosPortalVisita({ codigo: req.params.codigo })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/visita GET', e)
+  }
+})
+
+app.post('/portal/visita/:codigo', async (req, res) => {
+  try {
+    const r = await guardarSolicitudVisita({ codigo: req.params.codigo, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/visita POST', e)
   }
 })
 

@@ -54,3 +54,10 @@
 # Prepara el aviso y manda la plantilla. Sin plantilla aprobada NO envia: deja los
 # avisos en PENDIENTE y avisa a coordinacion. Idempotente (UNIQUE por servicio).
 15 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/eleccion-planta >> /var/log/orbit-backend-cron.log 2>&1
+
+# Mitad de compostaje (migr. 159) — le cuenta a la familia que el proceso va con
+# normalidad y la invita a visitar el cubiculo. La mitad es inicio +
+# meses_compostaje/2 (NO "un mes": hay de 2, 2.5 y 3 meses). Idempotente por
+# UNIQUE(servicio_id). Sin plantilla aprobada no envia: deja PENDIENTE y avisa.
+# 07:25, despues de la eleccion de planta para no pelear por el pool.
+25 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/mitad-compostaje >> /var/log/orbit-backend-cron.log 2>&1

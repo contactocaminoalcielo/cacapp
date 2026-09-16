@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
-  MessageCircle, Bot, FileText, Boxes } from 'lucide-react'
+  MessageCircle, Bot, FileText, Boxes, Radio } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { filterNavGroups } from '@/lib/roles'
@@ -62,6 +62,7 @@ const ALL_NAV_GROUPS = [
     items: [
       { path: '/finanzas',      label: 'Finanzas',       icon: Wallet    },
       { path: '/reportes',      label: 'Reportes',       icon: BarChart3 },
+      { path: '/automatizaciones', label: 'Automatizaciones', icon: Radio },
       { path: '/recibos',       label: 'Recibos',        icon: Receipt   },
       { path: '/configuracion', label: 'Configuración',  icon: Settings  },
     ],
