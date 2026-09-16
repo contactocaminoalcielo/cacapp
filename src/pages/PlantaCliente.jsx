@@ -397,9 +397,26 @@ export default function PlantaCliente({ codigo: codigoProp }) {
                         {p.descripcion && (
                           <p className="text-[13px] leading-snug mt-1" style={{ color: APAGADO }}>{p.descripcion}</p>
                         )}
-                        <div className="text-[15px] font-bold mt-1.5 tabular-nums" style={{ color: ORO }}>
-                          {pesos(p.precio)}
+                        {/* El precio real es el de la derecha. El tachado es el precio
+                            de lista del catálogo (`precio_antes`, migración 158): el
+                            backend solo lo manda cuando de verdad es mayor. Se escribe
+                            "antes" con todas sus letras porque un tachado a secas no
+                            se oye en un lector de pantalla. */}
+                        <div className="flex items-baseline gap-2 flex-wrap mt-1.5">
+                          <span className="text-[15px] font-bold tabular-nums" style={{ color: ORO }}>
+                            {pesos(p.precio)}
+                          </span>
+                          {p.precio_antes > 0 && (
+                            <span className="text-[13px] tabular-nums" style={{ color: APAGADO }}>
+                              antes <s>{pesos(p.precio_antes)}</s>
+                            </span>
+                          )}
                         </div>
+                        {p.precio_antes > 0 && (
+                          <p className="text-[11.5px] font-semibold leading-snug mt-1" style={{ color: VERDE }}>
+                            Precio especial por tu plan de compostaje
+                          </p>
+                        )}
                       </div>
                     </div>
                     {/* Controles de 44px: por debajo de eso el dedo falla */}

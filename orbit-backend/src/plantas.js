@@ -262,7 +262,7 @@ export async function datosPortalPlanta({ codigo }) {
 async function catalogo(client, campo, limite = null, excluir = []) {
   const columna = campo === 'elegible' ? 'elegible' : 'adicional'
   const { rows } = await client.query(
-    `SELECT id, nombre, descripcion, imagen_url, precio
+    `SELECT id, nombre, descripcion, imagen_url, precio, precio_antes
        FROM public.plantas
       WHERE activo = true AND ${columna} = true
         AND NOT (id = ANY($1::uuid[]))
@@ -270,7 +270,16 @@ async function catalogo(client, campo, limite = null, excluir = []) {
       ${limite ? 'LIMIT ' + parseInt(limite) : ''}`,
     [excluir]
   )
-  return rows.map(p => ({ ...p, precio: Number(p.precio) || 0 }))
+  // `precio_antes` es SOLO vitrina: el precio de lista que el portal tacha al
+  // lado del real (migración 158). Se manda ya resuelto —null si no hay
+  // promoción de verdad— para que la pantalla no tenga que decidir si un
+  // "antes" menor o igual al precio es una oferta. Y jamás se cobra: el monto
+  // sale de `precio`, aquí abajo en `responder`.
+  return rows.map(p => ({
+    ...p,
+    precio: Number(p.precio) || 0,
+    precio_antes: Number(p.precio_antes) > (Number(p.precio) || 0) ? Number(p.precio_antes) : null,
+  }))
 }
 
 /**

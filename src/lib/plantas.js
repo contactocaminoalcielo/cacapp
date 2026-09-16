@@ -50,6 +50,11 @@ export async function guardarPlanta(planta) {
     descripcion: planta.descripcion?.trim() || null,
     imagen_url:  planta.imagen_url?.trim() || null,
     precio:      Number(planta.precio) || 0,
+    // Vitrina, no cobro (migración 158): es el precio de lista que el portal
+    // tacha al lado del real. Vacío o no mayor que el precio → NULL, así no
+    // queda un "antes" que no descuenta nada.
+    precio_antes: Number(planta.precio_antes) > (Number(planta.precio) || 0)
+      ? Number(planta.precio_antes) : null,
     elegible:    !!planta.elegible,
     adicional:   !!planta.adicional,
     orden:       parseInt(planta.orden) || 100,

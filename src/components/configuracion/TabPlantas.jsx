@@ -24,7 +24,7 @@ import { cargarPlantas, guardarPlanta, borrarPlanta, enviarAvisoPlanta,
 import { Plus, Pencil, Trash2, CheckCircle, Leaf, Send, AlertCircle, Upload, Loader2 } from 'lucide-react'
 
 const LBL = 'text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
-const VACIA = { nombre: '', descripcion: '', imagen_url: '', precio: 0, elegible: true, adicional: false, orden: 100, activo: true }
+const VACIA = { nombre: '', descripcion: '', imagen_url: '', precio: 0, precio_antes: '', elegible: true, adicional: false, orden: 100, activo: true }
 
 export default function TabPlantas() {
   return (
@@ -128,7 +128,16 @@ function Catalogo() {
                       {p.adicional && <span className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: '#EEF3FB', color: '#3B6FBF' }}>Extra</span>}
                     </div>
                   </Td>
-                  <Td>{Number(p.precio) > 0 ? fmt(p.precio) : <span className="text-gray-400">Incluida</span>}</Td>
+                  <Td>
+                    {Number(p.precio) > 0
+                      ? <>
+                          {fmt(p.precio)}
+                          {Number(p.precio_antes) > Number(p.precio) && (
+                            <span className="ml-1.5 text-[11px] text-gray-400">antes <s>{fmt(p.precio_antes)}</s></span>
+                          )}
+                        </>
+                      : <span className="text-gray-400">Incluida</span>}
+                  </Td>
                   <Td>{p.orden}</Td>
                   <Td>{p.activo
                     ? <span className="text-[11px] font-semibold text-green-700">Activa</span>
@@ -195,10 +204,24 @@ function Catalogo() {
             <div className="grid grid-cols-2 gap-3">
               <div><label className={LBL}>Precio del extra</label>
                 <Input type="number" min="0" value={sel.precio} onChange={e => setSel(p => ({ ...p, precio: e.target.value }))} />
-                <p className="text-[10px] text-gray-400 mt-1">$0 si va incluida en el plan.</p></div>
+                <p className="text-[10px] text-gray-400 mt-1">Lo que se cobra de verdad. $0 si va incluida en el plan.</p></div>
+              <div><label className={LBL}>Antes (tachado)</label>
+                <Input type="number" min="0" placeholder="Sin promoción"
+                  value={sel.precio_antes ?? ''} onChange={e => setSel(p => ({ ...p, precio_antes: e.target.value }))} />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Precio de lista. El portal lo tacha al lado del real y dice que el descuento es por el plan de compostaje.
+                  Vacío = sin promoción. Nunca se cobra.
+                </p></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div><label className={LBL}>Orden</label>
                 <Input type="number" value={sel.orden} onChange={e => setSel(p => ({ ...p, orden: e.target.value }))} />
                 <p className="text-[10px] text-gray-400 mt-1">Menor aparece primero.</p></div>
+              <div><label className={LBL}>Estado</label>
+                <Select value={sel.activo ? 'true' : 'false'} onChange={e => setSel(p => ({ ...p, activo: e.target.value === 'true' }))}>
+                  <option value="true">Activa</option>
+                  <option value="false">Inactiva (no se muestra)</option>
+                </Select></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={LBL}>¿Se puede elegir?</label>
@@ -212,11 +235,6 @@ function Catalogo() {
                   <option value="true">Sí — se vende con su precio</option>
                 </Select></div>
             </div>
-            <div><label className={LBL}>Estado</label>
-              <Select value={sel.activo ? 'true' : 'false'} onChange={e => setSel(p => ({ ...p, activo: e.target.value === 'true' }))}>
-                <option value="true">Activa</option>
-                <option value="false">Inactiva (no se muestra)</option>
-              </Select></div>
           </div>
         )}
       </Modal>
