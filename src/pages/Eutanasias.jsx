@@ -251,6 +251,7 @@ export default function Eutanasias() {
           fila={detalle}
           veterinarios={veterinarios}
           personal={personal}
+          personalId={personalData?.id}
           onClose={() => setDetalle(null)}
           onChanged={() => { cargar() }}
           confirm={confirm}
@@ -525,7 +526,7 @@ function CrearEutanasia({ onClose, onSaved, tarifas, veterinarios, personal, esp
 // ════════════════════════════════════════════════════════════════════════════
 // DETALLE / GESTIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function DetalleEutanasia({ fila, veterinarios, personal, onClose, onChanged, confirm, alert }) {
+function DetalleEutanasia({ fila, veterinarios, personal, personalId, onClose, onChanged, confirm, alert }) {
   const [e, setE]           = useState(null)        // registro completo de `eutanasias`
   const [serviciosVinc, setServiciosVinc] = useState([])
   const [saving, setSaving] = useState(false)
@@ -563,6 +564,35 @@ function DetalleEutanasia({ fila, veterinarios, personal, onClose, onChanged, co
       if (okMsg) await alert(okMsg, { title: 'Listo', variant: 'success' })
     } catch (err) {
       await alert(err.message || 'No se pudo actualizar', { title: 'Error', variant: 'danger' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Devolver al servicio lo que se le restó cuando se marcó que la cobró el
+  // doctor. Va por la RPC (migración 159) y no por un UPDATE suelto: la plata
+  // tiene que volver al servicio y recalcular su estado de pago en el mismo
+  // movimiento, o el servicio queda barato y la cartera deja de cobrarlo.
+  async function deshacerCobroVeterinario() {
+    const ok = await confirm(
+      'Se va a devolver el valor de la eutanasia al servicio y quedará otra vez por cobrar. ¿Seguro que el veterinario NO la cobró?',
+      { title: 'Devolver la eutanasia al servicio', variant: 'warning', confirmLabel: 'Sí, devolverla' })
+    if (!ok) return
+    setSaving(true)
+    try {
+      const { error } = await db.rpc('registrar_cobro_eutanasia', {
+        p_eutanasia_id: fila.id, p_cobrada_por: null, p_actor_id: personalId || null,
+      })
+      if (error) throw error
+      const { data } = await db.from('eutanasias').select('*').eq('id', fila.id).single()
+      if (data) {
+        setE(data)
+        setPago({ estado_pago: data.estado_pago, valor_pagado: data.valor_pagado ?? '', metodo_pago: data.metodo_pago || '' })
+      }
+      onChanged()
+      await alert('Listo: el valor volvió al servicio y la eutanasia quedó por cobrar.', { title: 'Devuelta', variant: 'success' })
+    } catch (err) {
+      await alert(err.message || 'No se pudo devolver', { title: 'Error', variant: 'danger' })
     } finally {
       setSaving(false)
     }
@@ -687,6 +717,33 @@ function DetalleEutanasia({ fila, veterinarios, personal, onClose, onChanged, co
               metodo_pago: pago.metodo_pago.trim() || null,
             }, 'Pago actualizado.')}>Guardar pago</Button>
         </div>
+
+        {/* Quién la cobró (migración 159). Cuando la cobra el doctor, su valor
+            SALE del servicio: esa plata es de él. Por eso el deshacer vive aquí
+            — si el técnico se equivoca de botón en la calle, sin este botón el
+            servicio queda con un precio más bajo y solo se arregla por SQL. */}
+        {e.cobrada_por && (
+          <div className="mt-3 rounded-xl px-3 py-2.5 flex items-center justify-between gap-3"
+            style={{ background: '#FFF1F2', border: '1px solid #FECDD3' }}>
+            <div className="text-[12px]" style={{ color: '#9F1239' }}>
+              <span className="font-bold">
+                {e.cobrada_por === 'VETERINARIO' ? '🕊️ La cobró el veterinario' : '🕊️ La cobró el técnico'}
+              </span>
+              <span className="block text-[11px] opacity-80">
+                {e.cobrada_por === 'VETERINARIO'
+                  ? (Number(e.descontada_del_servicio) > 0
+                      ? `${fmt(e.descontada_del_servicio)} salieron del valor del servicio.`
+                      : 'El valor no estaba dentro del servicio: no se descontó nada.')
+                  : 'Va cobrada dentro del recibo del servicio.'}
+              </span>
+            </div>
+            {e.cobrada_por === 'VETERINARIO' && (
+              <Button size="sm" variant="secondary" disabled={saving} onClick={deshacerCobroVeterinario}>
+                No la cobró — devolver al servicio
+              </Button>
+            )}
+          </div>
+        )}
       </Seccion>
 
       {/* Vínculo con servicio funerario */}

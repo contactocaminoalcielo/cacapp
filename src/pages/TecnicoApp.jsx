@@ -18,6 +18,7 @@ import { stashPut, stashDelete, stashGetByPrefix } from '@/lib/pendingUploads'
 import { compressImage } from '@/lib/imageUtils'
 import { conLimite } from '@/lib/esperas'
 import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
+import { desgloseReciboTecnico } from '@/lib/reciboDesglose'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import { orbitApi } from '@/lib/orbitApi'
 
@@ -545,8 +546,28 @@ function Checklist({ svc, fotoUrl, checked, onChange }) {
     { id: 'foto_ok',emoji: '📸', label: 'Foto de evidencia tomada', auto: !!fotoUrl },
     { id: 'rec_ok', emoji: '📦', label: 'Recordatorio básico entregado al cliente' },
   ]
+  // Este servicio lleva eutanasia DENTRO de su precio: hay que preguntar en el
+  // sitio si el doctor ya la cobró. No bloquea la recogida —la decisión con
+  // efecto sobre la plata se toma en el recibo, y ahí sí es obligatoria—, pero
+  // el técnico tiene que enterarse ANTES de despedirse de la familia.
+  const valorEutanasia = Number(svc?.valor_eutanasia) || 0
   return (
     <div className="mb-4">
+      {valorEutanasia > 0 && (
+        <div className="mb-3 rounded-xl px-3 py-2.5 flex items-start gap-2"
+          style={{ background: '#FFF1F2', border: '1.5px solid #FECDD3' }}>
+          <span className="text-[15px] leading-none mt-0.5">🕊️</span>
+          <div>
+            <div className="text-[12px] font-bold" style={{ color: '#9F1239' }}>
+              Este servicio incluye eutanasia — {fmt(valorEutanasia)}
+            </div>
+            <div className="text-[11px] leading-snug" style={{ color: '#9F1239', opacity: 0.85 }}>
+              Pregúntale a la familia si ya se la pagó al doctor. Al generar el recibo
+              vas a tener que decir quién la cobró.
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">Checklist antes de completar</div>
       <div className="space-y-2">
         {items.map(item => {
@@ -1859,7 +1880,7 @@ export default function TecnicoApp() {
     try {
       // ── 1. Servicios asignados (sin join cuarto_frio para evitar errores) ──
       const SELECT_SVC = `
-          id, estado, estado_pago, metodo_pago, valor_total, valor_pagado,
+          id, estado, estado_pago, metodo_pago, valor_total, valor_pagado, valor_eutanasia,
           mascota_id, fecha_ingreso,
           direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
           mascotas:mascota_id (
@@ -4436,7 +4457,7 @@ function ReciboTab({ tecnico }) {
     try {
       const { data, error } = await db.from('servicios')
         .select(`
-          id, plan_id, valor_pagado, estado_pago, tipo_acompanamiento,
+          id, plan_id, valor_pagado, estado_pago, tipo_acompanamiento, eutanasia_id,
           ${COLS_CONSISTENCIA_COMISION},
           mascotas:mascota_id (
             nombre, peso_kg, especie_id, sexo,
@@ -4460,12 +4481,22 @@ function ReciboTab({ tecnico }) {
         .eq('servicio_id', svc.id)
         .eq('origen', 'ADICIONAL')
         .gt('precio_cobrado', 0)
+      // Eutanasia compasiva de este servicio (migración 159). El técnico tiene
+      // que decir en el recibo si la cobra él o si ya la cobró el doctor; sin
+      // esto el precio del servicio la incluye y se termina cobrando dos veces.
+      let eutanasia = null
+      if (data?.eutanasia_id) {
+        const { data: eut } = await db.from('eutanasias')
+          .select('id, valor, estado_pago, cobrada_por, veterinario_id, veterinarios(nombre)')
+          .eq('id', data.eutanasia_id).maybeSingle()
+        eutanasia = eut || null
+      }
       // Reabrir el recibo con comprobante pendiente si lo hay; si no, el último guardado
       const conPendiente = item.recibos.filter(r =>
         (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(m =>
           METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl))
       setReciboExistente(conPendiente[conPendiente.length - 1] || item.recibos[item.recibos.length - 1] || null)
-      setSvcData({ ...data, peso_confirmado: cf?.peso_kg || null, adicionales: adics || [] })
+      setSvcData({ ...data, peso_confirmado: cf?.peso_kg || null, adicionales: adics || [], eutanasia })
     } catch (e) {
       setServicioSel(null); setSvcData(null)
       setListErr('No se pudo cargar el servicio: ' + (e.message || 'error de conexión'))
@@ -5245,11 +5276,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const montoExcluido = adicionales
     .filter(a => adicExcluidos.has(a.id))
     .reduce((s, a) => s + (parseFloat(a.precio_cobrado) || 0), 0)
-  const alternarAdicional = (id) => setAdicExcluidos(prev => {
-    const n = new Set(prev)
+  const alternarAdicional = (id) => {
+    const n = new Set(adicExcluidos)
     n.has(id) ? n.delete(id) : n.add(id)
-    return n
-  })
+    setAdicExcluidos(n)
+    // El monto a cobrar tiene que seguir a lo que quedó marcado (ver
+    // sincronizarPrellenado): si no, el panel dice "no se cobra aquí" y el medio
+    // de pago sigue con el valor completo — y el técnico lo cobra igual.
+    sincronizarPrellenado({
+      eutanasiaCobro,
+      adicionalesExcluidos: adicionales
+        .filter(a => n.has(a.id))
+        .reduce((t, a) => t + (parseFloat(a.precio_cobrado) || 0), 0),
+    })
+  }
   // Traza de lo que NO se cobró y por qué el importe no cuadra con el valor del
   // servicio. Sin esto, quien mire el recibo después no tiene forma de saberlo.
   const adicionalesNoCobrados = adicionales
@@ -5260,9 +5300,28 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       valor: parseFloat(a.precio_cobrado) || 0,
     }))
 
+  // ── Eutanasia: ¿la cobra el técnico o ya la cobró el doctor? ──────────────
+  // El valor de la eutanasia viaja DENTRO del precio del servicio, pero el
+  // doctor muchas veces le cobra la suya directo a la familia. Cuando eso pasa y
+  // nadie lo dice, el técnico cobra el total —doble cobro— o cobra de menos y el
+  // cuadre le marca ese faltante a él (medido en producción: 6 de 15 recibos).
+  // Por eso la decisión es OBLIGATORIA y sin valor por defecto: nadie cobra dos
+  // veces por inercia. Solo se ofrece cuando `valor_eutanasia` confirma que el
+  // monto está dentro del total (migración 159) y nadie la ha decidido aún.
+  const eutanasia          = svcData.eutanasia || null
+  const valorEutanasia     = Number(svcData.valor_eutanasia) || 0
+  const eutanasiaDecidida  = eutanasia?.cobrada_por || null
+  const eutanasiaPendiente = !!eutanasia && valorEutanasia > 0 && !eutanasiaDecidida && !reciboExistente
+  const [eutanasiaCobro, setEutanasiaCobro] = useState(null)   // null | 'TECNICO' | 'VETERINARIO'
+
   // ── Estado: declarados ANTES de useEffects para evitar TDZ en sus dependency arrays ──
-  const montoClienteDefault = Math.max(0, (aliadoFactMensual ? 0
-    : comisionFueDescontada ? precioOriginal : saldoPendiente) - montoExcluido)
+  // Una sola cuenta para todo el dinero del recibo (lib/reciboDesglose).
+  const montoClienteDefault = desgloseReciboTecnico({
+    precioOriginal, saldoPendiente, valorEutanasia,
+    eutanasiaCobro: eutanasiaPendiente ? eutanasiaCobro : null,
+    adicionalesExcluidos: montoExcluido,
+    comisionFueDescontada, aliadoFactMensual,
+  }).montoCliente
 
   // Campos del recibo que salen del SERVICIO (DB), no del teclado del técnico.
   // Si el coordinador cambia el plan o el precio DESPUÉS de que el técnico abrió
@@ -5367,6 +5426,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       if (draft.tipoRecibo)                   setTipoRecibo(draft.tipoRecibo)
       if (draft.pagoPendiente !== undefined)  setPagoPendiente(draft.pagoPendiente)
       if (Array.isArray(draft.adicExcluidos)) setAdicExcluidos(new Set(draft.adicExcluidos))
+      if (draft.eutanasiaCobro !== undefined)  setEutanasiaCobro(draft.eutanasiaCobro)
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -5377,12 +5437,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         form, mediosPago, tipoRecibo, pagoPendiente,
         // Sin esto, al volver de otra pestaña el importe seguía rebajado pero
         // las casillas salían todas marcadas: el técnico no entendía por qué.
-        adicExcluidos: [...adicExcluidos],
+        adicExcluidos: [...adicExcluidos], eutanasiaCobro,
         base: baseDelServicio(), montoDefault: montoClienteDefault,
       }))
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente])
+  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente, eutanasiaCobro])
 
   // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
   // El archivo quedó en IndexedDB (stashPut antes de subir); aquí se retoma
@@ -5461,17 +5521,44 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   }, [])
   // Comisión SOLO sobre el valor del plan, no sobre el total (transporte/adicionales/recargos)
   const comisionMonto = descuentoInmediatoVet ? Math.round(valorPlanBase * comisionPct / 100) : 0
-  // La vet de DESCUENTO_INMEDIATO paga el neto (precio − comisión) en su recibo.
-  // Lo que vale el servicio para la vet (NO se le resta lo desmarcado: esta
-  // variable alimenta la escritura de `valor_total` en el servicio y los
-  // recuadros de "valor del servicio").
-  const valorVet = descuentoInmediatoVet
-    ? Math.max(0, precioOriginal - comisionMonto)
-    : precioOriginal
-  // Lo que de verdad se cobra en ESTE recibo, ya sin los adicionales que paga
-  // el propietario. Es lo que se prellena como medio de pago y lo que sale como
-  // total en el PDF y en el WhatsApp.
-  const valorVetCobrar = Math.max(0, valorVet - montoExcluido)
+  // Todo el reparto del dinero sale de una sola cuenta, probada aparte
+  // (tests/recibo-desglose.test.mjs):
+  //   · precioServicio — lo que vale el servicio tras decidir la eutanasia. Si la
+  //     cobró el doctor, ese monto NO es de Camino y sale del servicio.
+  //   · valorRecibo    — lo que a ESTE técnico le tocaba cobrar. Va a
+  //     `recibos_tecnico.valor_total` y es contra lo que el cuadre lo mide.
+  //   · valorVet/valorVetCobrar — la vet de DESCUENTO_INMEDIATO paga el neto.
+  // Lo desmarcado NO se le descuenta al servicio: sigue vivo como saldo y se
+  // persigue en la cartera de Finanzas (misma frontera de la migración 143).
+  const desglose = desgloseReciboTecnico({
+    precioOriginal, saldoPendiente, valorEutanasia,
+    eutanasiaCobro: eutanasiaPendiente ? eutanasiaCobro : null,
+    adicionalesExcluidos: montoExcluido,
+    comisionMonto, descuentoInmediatoVet, comisionFueDescontada, aliadoFactMensual,
+  })
+  const precioServicio = desglose.precioServicio
+  const valorVet       = desglose.valorVet
+  const valorVetCobrar = desglose.valorVetCobrar
+  // Monto de la eutanasia que sale del servicio por haberla cobrado el doctor.
+  const montoEutanasiaFuera = desglose.fueraEutanasia
+
+  // Cuando el técnico cambia lo que va a cobrar, el monto prellenado lo sigue.
+  // Solo toca el medio ÚNICO y sin referencia ni comprobante: si ya repartió el
+  // pago o adjuntó un soporte, manda lo que él escribió.
+  function sincronizarPrellenado({ eutanasiaCobro: euCobro, adicionalesExcluidos: excl }) {
+    if (guardado || reciboExistente) return
+    const d = desgloseReciboTecnico({
+      precioOriginal, saldoPendiente, valorEutanasia,
+      eutanasiaCobro: eutanasiaPendiente ? euCobro : null,
+      adicionalesExcluidos: excl,
+      comisionMonto, descuentoInmediatoVet, comisionFueDescontada, aliadoFactMensual,
+    })
+    const monto = tipoRecibo === 'VETERINARIA' ? d.valorVetCobrar : d.montoCliente
+    setMediosPago(prev => (prev.length === 1 && !prev[0].referencia && !prev[0].comprobanteUrl)
+      ? [{ ...prev[0], monto }] : prev)
+  }
+  // Saldo que de verdad queda debiendo la familia (sin lo que pagó al doctor).
+  const saldoPendienteDoc   = Math.max(0, saldoPendiente - montoEutanasiaFuera)
 
   const [tipoFijado, setTipoFijado]   = useState(!!reciboExistente)
 
@@ -5686,7 +5773,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Cobro superior al valor del recibo — misma condición que valida la RPC
   // (tolerancia de $1 por redondeos). Se permite solo con motivo explícito
   // (migración 041). OJO: declarado DESPUÉS de esFacturacionMensual (TDZ).
-  const valorReciboNum = parseFloat(form.valor_servicio) || 0
+  // Base del sobrepago = lo que a este técnico le tocaba cobrar, EXACTAMENTE la
+  // misma cifra que viaja a la RPC como `p_valor_total`. Si las dos se separan,
+  // el técnico no ve la advertencia y el servidor le rechaza el guardado.
+  const valorReciboNum = desglose.valorRecibo
   const haySobrepago   = !pagoPendiente && !esFacturacionMensual
     && valorReciboNum > 0 && totalMedios > valorReciboNum + 1
   const sobrepagoDiff  = haySobrepago ? totalMedios - valorReciboNum : 0
@@ -5712,16 +5802,29 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       : null
     let novedadNota = null
     if (pagoPendiente) {
-      novedadNota = `Recibo generado con pago pendiente — ${fmt(svcData.valor_total || 0)}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`
+      novedadNota = `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`
     } else if (esFacturacionMensual) {
       const etiqueta = tipoRecibo === 'VETERINARIA' ? 'VET' : 'CLIENTE'
       novedadNota = comisionFueDescontada
-        ? `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
-        : `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
+        ? `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioServicio)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+        : `Recibo ${etiqueta} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioServicio)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
     } else if (sinComprobante.length > 0) {
       novedadNota = `Recibo ${form.numero_recibo} guardado con comprobante PENDIENTE (${sinComprobante.map(m => m.metodo).join(', ')}). El técnico puede reintentarlo desde el módulo Recibos.`
     }
     return { novedadPago, novedadNota }
+  }
+
+  // La eutanasia que SÍ cobró el técnico se marca DESPUÉS de guardar: así la
+  // RPC ya dejó el estado de pago del servicio y la eutanasia hereda el mismo
+  // (antes se quedaba en PENDIENTE para siempre — 17 de 19 en producción).
+  // Best-effort a propósito: aquí no se mueve plata, solo la etiqueta.
+  function marcarEutanasiaCobradaPorTecnico() {
+    if (!eutanasiaPendiente || eutanasiaCobro !== 'TECNICO') return
+    db.rpc('registrar_cobro_eutanasia', {
+      p_eutanasia_id: eutanasia.id,
+      p_cobrada_por:  'TECNICO',
+      p_actor_id:     tecnico?.id || null,
+    }).then(({ error }) => { if (error) console.warn('[eutanasia] no se pudo marcar:', error.message) })
   }
 
   // Sube el PDF del recibo al storage SIEMPRE que se guarda (antes solo se
@@ -5778,6 +5881,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       setErr(`Estás cobrando ${fmt(sobrepagoDiff)} más que el valor del recibo. Indica de qué es esa diferencia antes de guardar.`)
       return
     }
+    // La eutanasia no se puede dejar sin decidir: es la puerta que impide
+    // cobrarla dos veces o que el cuadre le marque el faltante al técnico.
+    if (eutanasiaPendiente && !eutanasiaCobro) {
+      setErr('Este servicio incluye eutanasia. Dinos si la cobras tú o si ya la cobró el doctor antes de guardar.')
+      return
+    }
     setErr('')
     setConfirmarGuardado(true)
   }
@@ -5799,6 +5908,25 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       // Corrección de comisión solo si el servicio quedó con comision_aliado=0 (previo al fix VIP)
       const comisionParaGuardar = (esFacturacionMensual && !comisionFueDescontada && comisionGuardada <= 0 && comisionManual > 0)
         ? comisionManual : null
+
+      // ── La eutanasia, ANTES del recibo ───────────────────────────────────
+      // Si la cobró el doctor, su valor sale del servicio: la RPC del recibo lee
+      // `valor_total` para decidir el estado de pago, así que esto tiene que
+      // estar escrito antes o el servicio quedaría PARCIAL debiendo una plata
+      // que ya no es nuestra. Es idempotente (no resta dos veces) y si falla NO
+      // se sigue: el monto del recibo depende de ella.
+      if (eutanasiaPendiente && eutanasiaCobro === 'VETERINARIO') {
+        const { error: eutErr } = await db.rpc('registrar_cobro_eutanasia', {
+          p_eutanasia_id: eutanasia.id,
+          p_cobrada_por:  'VETERINARIO',
+          p_actor_id:     tecnico?.id || null,
+        })
+        if (eutErr) {
+          setErr('No se pudo registrar que el doctor cobró la eutanasia: ' + (eutErr.message || 'error de conexión') + '. Intenta de nuevo.')
+          setGuardando(false)
+          return
+        }
+      }
 
       // Recibo de VETERINARIA con DESCUENTO_INMEDIATO registrado a domicilio
       // (comision_descontada=false, valor_total=bruto): al emitir el recibo VET la
@@ -5823,9 +5951,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_numero_recibo:          form.numero_recibo,
         p_fecha_emision:          hoyLocalISO(now),
         p_hora_emision:           horaActual,
-        p_valor_total:            form.valor_servicio,
+        p_valor_total:            desglose.valorRecibo,
         p_medios:                 medios,
-        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados },
+        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados, eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null, eutanasia_valor: valorEutanasia || null },
         p_pago_pendiente:         pagoPendiente,
         p_es_facturacion_mensual: esFacturacionMensual,
         p_actor_id:               tecnico?.id || null,
@@ -5870,6 +5998,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       setGuardado(true)
       setTipoFijado(true)
       limpiarIdemKey()
+      marcarEutanasiaCobradaPorTecnico()
       subirPdfReciboAlStorage()
       if (onGuardado) onGuardado(res.recibo_id)
     } catch (e) {
@@ -5901,12 +6030,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         tipo:            tipoRecibo,
         fecha_emision:   hoyLocalISO(now),
         hora_emision:    horaActual,
-        valor_total:     form.valor_servicio,
+        valor_total:     desglose.valorRecibo,
         valor_cobrado:   valorCobrado,
         medios_pago:     sinCobroAhora ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
         datos_form:      {
           ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual,
           adicionales_no_cobrados: adicionalesNoCobrados,
+          eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null,
+          eutanasia_valor: valorEutanasia || null,
           ...(haySobrepago ? { sobrepago_valor: sobrepagoDiff, sobrepago_motivo: sobrepagoMotivo.trim() } : {}),
         },
         estado:          'GUARDADO',
@@ -5919,7 +6050,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
-          descripcion:    `Recibo generado con pago pendiente — ${fmt(svcData.valor_total || 0)}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`,
+          descripcion:    `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`,
           registrado_por: tecnico?.id || null,
         })
       } else if (esFacturacionMensual) {
@@ -5931,8 +6062,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         // Con descuento aplicado (regla Animal City): el total a facturar ya es neto
         const etiquetaRec = tipoRecibo === 'VETERINARIA' ? 'VET' : 'CLIENTE'
         const descNovedad = comisionFueDescontada
-          ? `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioOriginal)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
-          : `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioOriginal)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
+          ? `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — Total neto ${fmt(valorVet)} (servicio ${fmt(precioServicio)} − comisión ${fmt(comisionMonto)}). Sin cobro al técnico: queda PENDIENTE para facturación mensual. No. ${form.numero_recibo}.`
+          : `Recibo ${etiquetaRec} generado — ${aliado?.nombre || 'aliado'} — ${fmt(precioServicio)}. Sin cobro al técnico: comisión ${fmt(comisionManual)} pendiente de facturación mensual. No. ${form.numero_recibo}.`
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
@@ -6002,6 +6133,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setGuardado(true)
     setTipoFijado(true)
     limpiarIdemKey()
+    marcarEutanasiaCobradaPorTecnico()
     subirPdfReciboAlStorage()
     if (onGuardado) onGuardado(data.id)
   }
@@ -6015,7 +6147,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     }
     if (!soloBlob) setGenerando(true)
     try {
-      const valorMostrar = tipo === 'VETERINARIA' ? valorVetCobrar : form.valor_servicio
+      const valorMostrar = tipo === 'VETERINARIA' ? valorVetCobrar : precioServicio
       const totalMostrar = tipo === 'VETERINARIA' ? totalMedios : form.total_recibido
       const mediosPagoTexto = mediosPago
         .filter(m => parseFloat(m.monto) > 0)
@@ -6134,7 +6266,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
           t('Precio bruto del servicio:', M + 3, y + lineH)
           pdf.setFont('helvetica', 'bold')
-          t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
+          t(fmt(precioServicio), W - M - 3, y + lineH, { align: 'right' })
 
           pdf.setFont('helvetica', 'normal'); pdf.setTextColor(180, 50, 0)
           t(`Comisión aliado (${comisionPct}% del plan ${fmt(valorPlanBase)}):`, M + 3, y + lineH * 2)
@@ -6158,7 +6290,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(80, 50, 0)
           t('Valor del servicio:', M + 3, y + lineH)
           pdf.setFont('helvetica', 'bold')
-          t(fmt(precioOriginal), W - M - 3, y + lineH, { align: 'right' })
+          t(fmt(precioServicio), W - M - 3, y + lineH, { align: 'right' })
 
           if (comisionPDF > 0) {
             pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(150, 80, 0)
@@ -6281,7 +6413,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         `📅 Fecha: ${form.fecha}`,
         `🐾 Mascota: ${form.mascota_nombre}`,
         `📦 Plan: ${form.servicio}`,
-        `💰 Valor del servicio: ${fmt(Number(form.valor_servicio))}`,
+        `💰 Valor del servicio: ${fmt(precioServicio)}`,
         ``,
         `Gracias por confiar en nosotros 🙏`,
         `_Camino al Cielo · contacto@caminoalcielo.com.co_`,
@@ -6304,10 +6436,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         `📦 Plan: ${form.servicio}`,
         ``,
         ...(descuentoInmediatoVet ? [
-          `💵 Precio bruto: ${fmt(precioOriginal)}`,
+          `💵 Precio bruto: ${fmt(precioServicio)}`,
           `🔄 Comisión (${comisionPct}%): -${fmt(comisionMonto)}`,
         ] : [
-          `💵 Valor del servicio: ${fmt(precioOriginal)}`,
+          `💵 Valor del servicio: ${fmt(precioServicio)}`,
           ...(comisionManual > 0 ? [`ℹ️ Comisión ${comisionManualPct}% (${fmt(comisionManual)}) — se gestiona por separado`] : []),
         ]),
         `✅ *Total a cobrar: ${fmt(valorVetCobrar)}*`,
@@ -6482,7 +6614,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       {!tipoFijado ? (
         <div className="flex gap-2 mb-3">
           {[
-            { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(form.valor_servicio)}` },
+            { key: 'CLIENTE',     label: '📄 Para el cliente',    desc: `Valor total: ${fmt(precioServicio)}` },
             ...(aliado ? [{ key: 'VETERINARIA', label: '🏥 Para veterinaria', desc: `Cobrar: ${fmt(valorVetCobrar)}` }] : []),
           ].map(op => (
             <button key={op.key} onClick={() => cambiarTipo(op.key)}
@@ -6504,6 +6636,72 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         </div>
       )}
 
+      {/* Eutanasia: la decisión que impide el doble cobro. Sin valor por
+          defecto y sin poder guardar hasta tocarla — el doctor cobra la suya
+          muy seguido y nadie se enteraba. */}
+      {eutanasiaPendiente && (
+        <div className="rounded-2xl mb-4 overflow-hidden"
+          style={{ border: `1.5px solid ${eutanasiaCobro ? '#FECDD3' : '#FDA4AF'}` }}>
+          <div className="px-4 py-2.5" style={{ background: '#FFF1F2' }}>
+            <div className="text-[12px] font-bold text-[#9F1239] mb-0.5">
+              🕊️ ¿Quién cobró la eutanasia? — {fmt(valorEutanasia)}
+            </div>
+            <div className="text-[10px] text-[#9F1239]/80 leading-snug">
+              {eutanasia?.veterinarios?.nombre ? `Doctor: ${eutanasia.veterinarios.nombre}. ` : ''}
+              Pregúntale a la familia. Si ya se la pagó al doctor, no la vuelvas a cobrar.
+            </div>
+          </div>
+          <div className="px-3 py-3 bg-white flex gap-2">
+            {[
+              { key: 'TECNICO',     titulo: 'La cobro yo',          pie: 'Va dentro de este recibo' },
+              { key: 'VETERINARIO', titulo: 'Ya la cobró el doctor', pie: 'Sale del valor a cobrar' },
+            ].map(op => {
+              const activo = eutanasiaCobro === op.key
+              return (
+                <button key={op.key} type="button"
+                  onClick={() => { setEutanasiaCobro(op.key); sincronizarPrellenado({ eutanasiaCobro: op.key, adicionalesExcluidos: montoExcluido }) }}
+                  className="flex-1 py-2.5 px-3 rounded-xl border-2 text-left transition-all active:scale-98"
+                  style={{
+                    borderColor: activo ? '#E11D48' : '#E5E7EB',
+                    background:  activo ? '#FFF1F2' : '#FAFAFA',
+                  }}>
+                  <div className="text-[12px] font-bold" style={{ color: activo ? '#9F1239' : '#374151' }}>
+                    {activo ? '✓ ' : ''}{op.titulo}
+                  </div>
+                  <div className="text-[10px] text-gray-400 mt-0.5">{op.pie}</div>
+                </button>
+              )
+            })}
+          </div>
+          {!eutanasiaCobro && (
+            <div className="px-4 py-2 text-[11px] font-semibold"
+              style={{ background: '#FFE4E6', color: '#9F1239' }}>
+              Elige una para poder guardar el recibo.
+            </div>
+          )}
+          {eutanasiaCobro === 'VETERINARIO' && (
+            <div className="px-4 py-2.5 flex items-center justify-between" style={{ background: '#FEF3C7' }}>
+              <span className="text-[11px] font-semibold text-[#92400E] leading-snug">
+                No la cobras tú<br />
+                <span className="font-normal text-[10px]">Sale del valor del servicio: esa plata es del doctor</span>
+              </span>
+              <span className="text-[14px] font-extrabold text-[#92400E] tabular-nums">−{fmt(valorEutanasia)}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Recibo reabierto o eutanasia ya resuelta: se muestra, no se re-decide. */}
+      {!eutanasiaPendiente && eutanasiaDecidida && valorEutanasia >= 0 && eutanasia && (
+        <div className="mb-4 px-4 py-2.5 rounded-xl text-[11px] font-semibold"
+          style={{ background: '#FFF1F2', border: '1.5px solid #FECDD3', color: '#9F1239' }}>
+          🕊️ Eutanasia {eutanasia.valor != null ? `(${fmt(eutanasia.valor)}) ` : ''}
+          {eutanasiaDecidida === 'VETERINARIO'
+            ? '— la cobró el doctor, ya salió del valor del servicio.'
+            : '— la cobró el técnico dentro de este servicio.'}
+        </div>
+      )}
+
       {/* Qué se cobra en ESTE recibo. Solo aparece si el servicio lleva
           adicionales vendidos aparte del plan: si no, no hay nada que marcar. */}
       {adicionales.length > 0 && (
@@ -6522,7 +6720,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                 <span className="block text-[10px] font-normal text-gray-400">Siempre va en el recibo</span>
               </span>
               <span className="text-[12px] font-bold text-gray-900 tabular-nums">
-                {fmt(Math.max(0, precioOriginal - adicionales.reduce((s, a) => s + (parseFloat(a.precio_cobrado) || 0), 0)))}
+                {fmt(Math.max(0, precioServicio - adicionales.reduce((s, a) => s + (parseFloat(a.precio_cobrado) || 0), 0)))}
               </span>
             </div>
             {adicionales.map(a => {
@@ -6569,7 +6767,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                 <div className="text-[11px] font-bold text-amber-800 mb-2">Desglose comisión del aliado</div>
                 <div className="flex justify-between text-[12px] mb-1">
                   <span className="text-amber-700">Precio bruto del servicio</span>
-                  <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
+                  <span className="font-bold text-gray-900">{fmt(precioServicio)}</span>
                 </div>
                 <div className="flex items-center justify-between text-[12px] mb-1">
                   <span className="text-amber-700">Comisión aliado <span className="text-amber-500">(sobre plan {fmt(valorPlanBase)})</span></span>
@@ -6600,7 +6798,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                 <div className="text-[11px] font-bold text-amber-800 mb-1">Recibo veterinaria / aliado</div>
                 <div className="flex justify-between text-[12px]">
                   <span className="text-amber-700">Valor del servicio</span>
-                  <span className="font-bold text-gray-900">{fmt(precioOriginal)}</span>
+                  <span className="font-bold text-gray-900">{fmt(precioServicio)}</span>
                 </div>
                 {comisionManual > 0 && (
                   <div className="text-[10px] text-amber-600 mt-1">
@@ -6653,7 +6851,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           <div style={{ marginBottom: '10px', border: '1.5px solid #FDE68A', borderRadius: '10px', overflow: 'hidden', background: '#FFFBEB' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px solid #FDE68A' }}>
               <span style={{ fontSize: '11px', color: '#92400E' }}>Precio del servicio</span>
-              <span style={{ fontSize: '13px', fontWeight: '700', color: '#0B1D4F' }}>{fmt(precioOriginal)}</span>
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#0B1D4F' }}>{fmt(precioServicio)}</span>
             </div>
             {/* DESCUENTO_INMEDIATO: muestra deducción; CREDITO/FACTURACION: muestra comisión informativa */}
             {descuentoInmediatoVet ? (
@@ -6677,7 +6875,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#FEF08A' }}>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: '#92400E' }}>Total a cobrar al aliado</span>
-                  <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(precioOriginal)}</span>
+                  <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(precioServicio)}</span>
                 </div>
               </>
             )}
@@ -6687,7 +6885,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           <div style={{ marginBottom: '10px' }}>
             <div style={{ border: '1.5px solid #C4A87A', borderRadius: '8px', padding: '8px 12px', textAlign: 'center', background: '#FFFDF8' }}>
               <div style={{ fontSize: '8px', fontWeight: '700', color: '#8C6C3C', textTransform: 'uppercase', marginBottom: '2px' }}>Valor del servicio</div>
-              <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(form.valor_servicio)}</div>
+              <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(precioServicio)}</div>
             </div>
             {/* Nota de comisión — solo visible cuando el servicio viene de solicitud de cliente con aliado */}
             {comisionManual > 0 && !comisionFueDescontada && aliado && (
@@ -6778,7 +6976,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             <div>
               <p className="text-[12px] font-bold text-amber-800">Pago pendiente — sin cobro en este momento</p>
               <p className="text-[11px] text-amber-700 mt-0.5">
-                El valor de <strong>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioOriginal : saldoPendiente)}</strong> quedará pendiente. El recibo se guarda como constancia del servicio.
+                El valor de <strong>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioServicio : saldoPendienteDoc)}</strong> quedará pendiente. El recibo se guarda como constancia del servicio.
               </p>
             </div>
           </div>
@@ -6790,7 +6988,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                 <CreditCard size={11} /> Medios de pago recibidos
               </div>
               <span className="text-[10px] text-gray-400">
-                Pendiente: <strong style={{ color: '#92400E' }}>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioOriginal : saldoPendiente)}</strong>
+                Pendiente: <strong style={{ color: '#92400E' }}>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioServicio : saldoPendienteDoc)}</strong>
               </span>
             </div>
             {/* Tip pago mixto */}
@@ -7111,7 +7309,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                   style={{ background: '#F9FAFB' }}>
                   <span className="text-gray-500">Valor del servicio</span>
                   <span className="font-bold text-gray-700">
-                    {fmt(tipoRecibo === 'VETERINARIA' ? valorVetCobrar : Number(form.valor_servicio) || 0)}
+                    {fmt(tipoRecibo === 'VETERINARIA' ? valorVetCobrar : precioServicio)}
                   </span>
                 </div>
 
