@@ -23,6 +23,8 @@ import { Ilustracion } from '@/components/portal/Botanica'
 import { ESTILOS_VIVERO, FondoVivero, Brota, useFuentesVivero,
          CAMPO, TINTA, MUSGO, SELVA, BROTE, HOJA, LINDE, MIEL } from '@/components/portal/Vivero'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
+import CasillaDatos from '@/components/CasillaDatos'
+import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 
 // La paleta y las ilustraciones viven en components/portal/Botanica.jsx: las
 // comparte con el portal de fotos.
@@ -184,6 +186,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const refEntrega  = useRef(null)
   const [senalado, setSenalado] = useState('')
   const [entrega,    setEntrega]    = useState(ENTREGA_VACIA)
+  const [autorizo,   setAutorizo]   = useState(false)
   const [editandoEntrega, setEditandoEntrega] = useState(true)
   const [entregaConfirmada, setEntregaConfirmada] = useState(false)
 
@@ -227,7 +230,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const hayExtras   = Object.keys(extras).length > 0
   // Teclear en el formulario ya vale como confirmación; mirar la tarjeta, no.
   const entregaLista = editandoEntrega ? nucleoOk(entrega) : entregaConfirmada
-  const puedeEnviar  = (yaEligio ? hayExtras : !!elegida) && entregaLista
+  const puedeEnviar  = (yaEligio ? hayExtras : !!elegida) && entregaLista && autorizo
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
   // Un botón apagado sin decir por qué es una pantalla que no se deja usar.
@@ -236,6 +239,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     : !entregaLista ? (editandoEntrega
         ? 'Faltan tus datos de entrega — toca aquí y te llevo'
         : 'Falta confirmar tus datos de entrega — toca aquí y te llevo')
+    : !autorizo ? 'Falta marcar la autorización de datos, aquí abajo'
     : null
 
   /**
@@ -275,6 +279,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     setEnviando(true); setError('')
     try {
       const r = await portalElegirPlanta(codigo, {
+        autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
         planta_id: yaEligio ? undefined : elegida,
         adicionales: Object.entries(extras).map(([planta_id, cantidad]) => ({ planta_id, cantidad })),
         // Se manda siempre, aunque no haya cambiado: el backend refresca
@@ -701,6 +706,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
               <span className="text-[17px] font-bold tabular-nums" style={{ color: MIEL }}>{pesos(totalExtras)}</span>
             </div>
           )}
+          <CasillaDatos className="mb-2.5" tono="portal" checked={autorizo} onChange={setAutorizo} />
           <Boton onClick={enviar} disabled={enviando} atenuado={!puedeEnviar}
                  aria-disabled={!puedeEnviar} aria-busy={enviando}>
             {enviando
