@@ -1148,9 +1148,52 @@ export default function Kanban() {
     await Promise.all(ids.map(id => marcarLeida(id)))
   }
   // Marca leída una sola alerta de inicio de ruta y la saca de la pila.
+  // OJO: esto es "visto SIN avisar". No escribe nada en `recogidas`, justo para
+  // que se pueda distinguir de un aviso real — antes el botón de WhatsApp y la
+  // ✕ llamaban a esta misma función y en los datos eran indistinguibles.
   async function descartarAlertaRuta(id) {
     setAlertasRuta(prev => prev.filter(n => n.id !== id))
     await marcarLeida(id)
+  }
+
+  // Sella que el coordinador SÍ le avisó al cliente por wa.me.
+  //
+  // Registra "se mandó", no "se recibió": wa.me abre WhatsApp y ahí se pierde la
+  // pista, no hay acuse de entrega como el de la Cloud API de las clínicas. Es la
+  // consecuencia de que los particulares no salgan por ninguna de las dos líneas
+  // (decisión de David, 2026-09-16: una plantilla abre ventana de 24 h e invita a
+  // la familia a responder en un canal que según el proceso no la atiende).
+  //
+  // Nunca lanza: el mensaje ya se está abriendo en WhatsApp y el coordinador no
+  // puede hacer nada con un error aquí. Si falla, queda como "sin avisar" — que
+  // es el lado seguro: se ve el pendiente y alguien puede repetirlo.
+  async function registrarAvisoCliente(notif, numero) {
+    descartarAlertaRuta(notif.id)
+    const servicioId = notif.servicio_id
+    if (!servicioId) return
+    try {
+      // Condicionado a NULL: dos coordinadores tocando el botón a la vez no
+      // pisan quién avisó primero, y el destino guardado sigue siendo el real.
+      await db.from('recogidas')
+        .update({
+          aviso_cliente_enviado_en: new Date().toISOString(),
+          aviso_cliente_destino:    String(numero || '').slice(0, 20) || null,
+          aviso_cliente_por:        personalData?.id || null,
+        })
+        .eq('servicio_id', servicioId)
+        .is('aviso_cliente_enviado_en', null)
+
+      const d = notif.datos || {}
+      await db.from('novedades_servicio').insert({
+        servicio_id:    servicioId,
+        tipo_novedad:   'NOTA',   // el CHECK de la columna solo admite NOTA aquí
+        descripcion:    `📲 Se le avisó al cliente (${numero}) que ${d.tecnico_nombre || 'el técnico'} recoge a ${d.mascota || 'la mascota'} sobre las ${d.hora_llegada || '(hora por confirmar)'}.`,
+        registrado_por: personalData?.id || null,
+      })
+      cargar()
+    } catch (e) {
+      console.error('[aviso-cliente] no se pudo registrar el aviso:', e?.message)
+    }
   }
 
   // El spinner de pantalla completa solo se muestra en la PRIMERA carga: las
@@ -1188,8 +1231,12 @@ export default function Kanban() {
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // hora_programada = llegada ESTIMADA al iniciar ruta;
           // hora_llegada    = llegada REAL sellada por el técnico al llegar al sitio
+          // `aviso_vet_enviado_en` y `aviso_cliente_enviado_en` vienen para poder
+          // pintar "cliente sin avisar" en la tarjeta: el pendiente no puede vivir
+          // solo en la notificación, que se auto-expira a los DIAS_EXPIRA_ALERTA y
+          // se llevaba consigo la única señal de que la familia nunca supo la hora.
           dbTodo(() => db.from('recogidas')
-            .select('servicio_id, hora_programada, hora_llegada, servicios!inner(fecha_ingreso)')
+            .select('servicio_id, hora_programada, hora_llegada, tipo_lugar, aviso_vet_enviado_en, aviso_cliente_enviado_en, servicios!inner(fecha_ingreso)')
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // Existe recibo generado (mismo criterio del gate de la app del técnico)
           dbTodo(() => db.from('recibos_tecnico')
@@ -1216,9 +1263,16 @@ export default function Kanban() {
         cfRows.forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
         const horaMap = {}
         const llegadaMap = {}
+        const avisoMap = {}   // { avisadoCliente, cubiertoPorVet } por servicio
         recogRows.forEach(r => {
           if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada
           if (r.hora_llegada)    llegadaMap[r.servicio_id] = r.hora_llegada
+          avisoMap[r.servicio_id] = {
+            avisadoCliente: !!r.aviso_cliente_enviado_en,
+            // Si el aviso automático a la clínica salió, no hay nada pendiente
+            // con el cliente: es el mismo mensaje y ya lo mandó Orbit.
+            cubiertoPorVet: !!r.aviso_vet_enviado_en,
+          }
         })
         // Si la consulta de recibos falló, tiene_recibo queda undefined para no
         // pintar todo el tablero en rojo por un error transitorio
@@ -1260,6 +1314,7 @@ export default function Kanban() {
             nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
             hora_recogida:   horaMap[s.servicio_id] || null,
             hora_llegada:    llegadaMap[s.servicio_id] || null,
+            aviso_cliente:   avisoMap[s.servicio_id] || null,
             tiene_recibo:    recibosOk ? conRecibo.has(s.servicio_id) : undefined,
             metodos_pago:    mediosMap[s.servicio_id]
               || (metodoReg && metodoReg !== 'PENDIENTE' ? [metodoReg] : []),
@@ -2384,7 +2439,7 @@ export default function Kanban() {
                 ) : waNum ? (
                   <a href={waLink(waNum, msg)}
                     target="_blank" rel="noreferrer"
-                    onClick={() => descartarAlertaRuta(n.id)}
+                    onClick={() => registrarAvisoCliente(n, waNum)}
                     className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-[13px] font-bold"
                     style={{ background: '#25D366', color: '#fff' }}>
                     <MessageCircle size={15} /> Avisar al cliente por WhatsApp
@@ -2865,6 +2920,17 @@ export default function Kanban() {
                           // Pendientes de la etapa + alerta por hora de recogida confirmada
                           const pend   = pendientesDe(s)
                           const enRecogida = ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
+                          // La familia no sabe a qué hora llega el técnico. Vive en la
+                          // tarjeta y NO en la notificación a propósito: la notificación se
+                          // auto-expira a los DIAS_EXPIRA_ALERTA y se llevaba con ella la
+                          // única señal de que el aviso nunca se mandó. Deja de estar
+                          // pendiente al llegar el técnico: ahí la familia ya lo vio.
+                          const clienteSinAvisar = enRecogida
+                            && !!s.hora_recogida                    // el técnico ya dio su hora
+                            && !s.hora_llegada                      // y todavía no llegó
+                            && !!s.aviso_cliente                    // hay fila de recogida
+                            && !s.aviso_cliente.avisadoCliente      // nadie tocó el botón
+                            && !s.aviso_cliente.cubiertoPorVet      // no lo cubrió el automático
                           // La cuenta regresiva es contra la hora ESTIMADA: en cuanto el técnico
                           // confirma su llegada real deja de correr (si no, la tarjeta se pinta
                           // roja por "vencida" con el técnico ya en el sitio).
@@ -2972,6 +3038,13 @@ export default function Kanban() {
                                   ) : (
                                     <>🕐 Recogida {String(s.hora_recogida).slice(0, 5)}</>
                                   )}
+                                </div>
+                              )}
+                              {clienteSinAvisar && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1"
+                                  style={{ background: '#FEF3C7', color: '#92400E' }}
+                                  title={`El técnico citó las ${String(s.hora_recogida).slice(0, 5)} y nadie le ha avisado al cliente. Usa el botón de la tarjeta de inicio de ruta, o el WhatsApp de aquí arriba.`}>
+                                  📲 Cliente sin avisar
                                 </div>
                               )}
                               {pend.length > 0 && (
