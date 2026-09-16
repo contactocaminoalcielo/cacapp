@@ -74,21 +74,30 @@ function entrarAVersionNueva(updateServiceWorker) {
 /**
  * Portales públicos: la versión nueva entra SOLA.
  *
- * El aviso de abajo NO se le muestra a una familia (`esRutaPublica` en
- * App.jsx), y sin ese botón nada mandaba nunca `SKIP_WAITING`: con
- * `registerType: 'prompt'` + `skipWaiting: false`, el worker nuevo se queda
- * esperando y **el portal sigue sirviendo el build viejo mientras quede
- * cualquier otra pestaña de Orbit abierta**. Así, un cambio del portal puede
- * ser invisible durante días sin un solo error — mordió el 16-sep-2026 con la
- * promoción de la 2ª planta.
+ * Quién sufre esto no es la familia, es la casa. Una familia que solo abre el
+ * portal **no tiene service worker** (nada lo registraba en estas rutas), así
+ * que su navegador pide el `index.html` a la red y siempre ve lo último. Pero
+ * el SW se registra por origen: cualquiera que entre a Orbit con sesión
+ * —David, coordinación, los técnicos— queda con uno instalado, y ESE mismo SW
+ * le sirve el portal desde la caché cuando abre el enlace de un cliente.
  *
- * Aquí no hay nada que "guardar antes de actualizar", así que se actualiza
- * solo. Con una condición: **solo si la persona no ha tocado nada todavía**.
- * Si ya escribió su dirección o eligió su planta, se queda en la versión que
- * abrió; recargarle la pantalla encima le borraría lo que llevaba.
+ * Ahí estaba el nudo: con `registerType: 'prompt'` + `skipWaiting: false` el
+ * worker nuevo espera a que alguien pulse "Actualizar", y ese aviso está
+ * oculto en los portales a propósito (`esRutaPublica` en App.jsx). Nada lo
+ * despertaba: el portal seguía mostrando el build viejo mientras quedara otra
+ * pestaña de Orbit abierta. Mordió el 16-sep-2026 con la promoción de la 2ª
+ * planta: desplegada, verificada en el servidor, e invisible en la pantalla de
+ * quien la pidió.
+ *
+ * 🪤 Aquí NO se usa `useRegisterSW`: ese hook REGISTRA el worker, y le pondría
+ * caché a la familia que hoy no tiene ninguna. Esto solo despierta al que ya
+ * está instalado; si no hay, no hace nada y la red ya trae lo último.
+ *
+ * Y solo mientras la persona **no haya tocado nada**. Si ya escribió su
+ * dirección o eligió su planta, se queda en la versión que abrió: recargarle
+ * la pantalla encima le borraría lo que llevaba.
  */
 export function AutoActualizaPublico() {
-  const { needRefresh: [necesitaRefresco], updateServiceWorker } = useRegisterSW()
   const intacto = useRef(true)
 
   useEffect(() => {
@@ -104,9 +113,39 @@ export function AutoActualizaPublico() {
   }, [])
 
   useEffect(() => {
-    if (!necesitaRefresco || !intacto.current) return
-    entrarAVersionNueva(updateServiceWorker)
-  }, [necesitaRefresco, updateServiceWorker])
+    // Sin SW controlando esta página no hay nada que despertar: el navegador
+    // ya está pidiendo el index.html a la red (`Cache-Control: no-store`).
+    if (!navigator.serviceWorker?.controller) return
+
+    let vivo = true
+    const entrar = worker => {
+      if (!vivo || !intacto.current || !worker) return
+      navigator.serviceWorker.addEventListener('controllerchange', recargarPagina, { once: true })
+      worker.postMessage({ type: 'SKIP_WAITING' })
+      // Plan B, igual que en el aviso interno: si el worker nuevo no toma el
+      // control, se borran SW y cachés y se recarga contra la red.
+      setTimeout(limpiarYRecargar, 3000)
+    }
+
+    navigator.serviceWorker.getRegistration()
+      .then(reg => {
+        if (!vivo || !reg) return
+        // Ya hay uno en espera (lo instaló otra pestaña): a activarlo.
+        if (reg.waiting) return entrar(reg.waiting)
+        // Si no, preguntar por una versión nueva y esperar a que instale.
+        reg.addEventListener('updatefound', () => {
+          const nuevo = reg.installing
+          if (!nuevo) return
+          nuevo.addEventListener('statechange', () => {
+            if (nuevo.state === 'installed') entrar(reg.waiting || nuevo)
+          })
+        })
+        reg.update().catch(() => { /* sin red: se queda con lo que tiene */ })
+      })
+      .catch(() => { /* navegador sin SW */ })
+
+    return () => { vivo = false }
+  }, [])
 
   return null
 }
