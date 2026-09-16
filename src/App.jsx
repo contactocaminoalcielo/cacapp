@@ -8,7 +8,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig, esRolValido } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
-import AvisoNuevaVersion from '@/components/AvisoNuevaVersion'
+import AvisoNuevaVersion, { AutoActualizaPublico } from '@/components/AvisoNuevaVersion'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
 const TecnicoApp       = lazy(() => import('@/pages/TecnicoApp'))
@@ -133,10 +133,17 @@ function AppRoutes({ rol }) {
 const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta']
 const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
 
-/** El aviso de versión nueva, solo donde hay alguien de la casa para atenderlo. */
+/**
+ * El AVISO de versión nueva, solo donde hay alguien de la casa para atenderlo.
+ *
+ * En los portales no desaparece la actualización: desaparece el botón. Allí
+ * entra sola (`AutoActualizaPublico`) mientras la persona no haya tocado nada.
+ * Devolver `null` a secas dejaba el portal clavado en el build viejo mientras
+ * hubiera otra pestaña de Orbit abierta, sin un solo error.
+ */
 function AvisoSoloInterno() {
   const { pathname } = useLocation()
-  if (esRutaPublica(pathname)) return null
+  if (esRutaPublica(pathname)) return <AutoActualizaPublico />
   return <AvisoNuevaVersion />
 }
 

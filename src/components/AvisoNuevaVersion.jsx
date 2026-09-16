@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
@@ -31,45 +31,94 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
  *    llega, hay `clientsClaim: true`) y, si en 3 s no llegó, plan B que borra
  *    SW + cachés y recarga.
  */
+// ─── Recarga, compartida por el aviso interno y el auto-refresco público ────
+// A nivel de módulo y no por componente: solo hay uno vivo a la vez, y así el
+// candado anti-doble-recarga vale para los dos.
+let recargando = false
+
+function recargarPagina() {
+  if (recargando) return
+  recargando = true
+  window.location.reload()
+}
+
+// Plan B: el SW nuevo nunca tomó el control. Sin SW ni cachés, el navegador
+// vuelve a pedir el index.html a la red y entra la versión nueva.
+async function limpiarYRecargar() {
+  if (recargando) return
+  // Sin red no hay versión nueva que traer y borrar la caché dejaría la app
+  // en blanco: mejor recargar a secas y que el SW viejo siga sirviendo.
+  if (navigator.onLine === false) return recargarPagina()
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations?.() ?? []
+    await Promise.all(regs.map(r => r.unregister()))
+    if ('caches' in window) {
+      const claves = await caches.keys()
+      await Promise.all(claves.map(k => caches.delete(k)))
+    }
+  } catch (_) { /* da igual: recargamos igual */ }
+  recargarPagina()
+}
+
+/** Manda SKIP_WAITING y recarga cuando el worker nuevo tome el control. */
+function entrarAVersionNueva(updateServiceWorker) {
+  try {
+    navigator.serviceWorker?.addEventListener('controllerchange', recargarPagina, { once: true })
+  } catch (_) { /* navegador sin SW: cae en el plan B */ }
+  try {
+    updateServiceWorker(true)   // manda SKIP_WAITING al worker en espera
+  } catch (_) { /* idem */ }
+  setTimeout(limpiarYRecargar, 3000)
+}
+
+/**
+ * Portales públicos: la versión nueva entra SOLA.
+ *
+ * El aviso de abajo NO se le muestra a una familia (`esRutaPublica` en
+ * App.jsx), y sin ese botón nada mandaba nunca `SKIP_WAITING`: con
+ * `registerType: 'prompt'` + `skipWaiting: false`, el worker nuevo se queda
+ * esperando y **el portal sigue sirviendo el build viejo mientras quede
+ * cualquier otra pestaña de Orbit abierta**. Así, un cambio del portal puede
+ * ser invisible durante días sin un solo error — mordió el 16-sep-2026 con la
+ * promoción de la 2ª planta.
+ *
+ * Aquí no hay nada que "guardar antes de actualizar", así que se actualiza
+ * solo. Con una condición: **solo si la persona no ha tocado nada todavía**.
+ * Si ya escribió su dirección o eligió su planta, se queda en la versión que
+ * abrió; recargarle la pantalla encima le borraría lo que llevaba.
+ */
+export function AutoActualizaPublico() {
+  const { needRefresh: [necesitaRefresco], updateServiceWorker } = useRegisterSW()
+  const intacto = useRef(true)
+
+  useEffect(() => {
+    const tocado = () => { intacto.current = false }
+    // `input` cubre lo que escribe; `pointerdown` cubre elegir planta o sumar
+    // un extra, que no escriben nada pero sí son trabajo de la persona.
+    window.addEventListener('input', tocado, { capture: true, passive: true })
+    window.addEventListener('pointerdown', tocado, { capture: true, passive: true })
+    return () => {
+      window.removeEventListener('input', tocado, { capture: true })
+      window.removeEventListener('pointerdown', tocado, { capture: true })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!necesitaRefresco || !intacto.current) return
+    entrarAVersionNueva(updateServiceWorker)
+  }, [necesitaRefresco, updateServiceWorker])
+
+  return null
+}
+
 export default function AvisoNuevaVersion() {
   const { needRefresh: [necesitaRefresco, setNecesitaRefresco], updateServiceWorker } = useRegisterSW()
   const [actualizando, setActualizando] = useState(false)
-  const yaRecargando = useRef(false)
 
-  const recargar = () => {
-    if (yaRecargando.current) return
-    yaRecargando.current = true
-    window.location.reload()
-  }
-
-  // Plan B: el SW nuevo nunca tomó el control. Sin SW ni cachés, el navegador
-  // vuelve a pedir el index.html a la red y entra la versión nueva.
-  const limpiarYRecargar = async () => {
-    if (yaRecargando.current) return
-    // Sin red no hay versión nueva que traer y borrar la caché dejaría la app
-    // en blanco: mejor recargar a secas y que el SW viejo siga sirviendo.
-    if (navigator.onLine === false) return recargar()
-    try {
-      const regs = await navigator.serviceWorker?.getRegistrations?.() ?? []
-      await Promise.all(regs.map(r => r.unregister()))
-      if ('caches' in window) {
-        const claves = await caches.keys()
-        await Promise.all(claves.map(k => caches.delete(k)))
-      }
-    } catch (_) { /* da igual: recargamos igual */ }
-    recargar()
-  }
-
-  const actualizar = async () => {
+  const actualizar = () => {
     if (actualizando) return
     setActualizando(true)
-    try {
-      navigator.serviceWorker?.addEventListener('controllerchange', recargar, { once: true })
-    } catch (_) { /* navegador sin SW: cae en el plan B */ }
-    try {
-      await updateServiceWorker(true)   // manda SKIP_WAITING al worker en espera
-    } catch (_) { /* idem */ }
-    setTimeout(limpiarYRecargar, 3000)
+    entrarAVersionNueva(updateServiceWorker)
   }
 
   // Entra y SALE por el mismo borde: el aviso llega desde arriba y se va por
