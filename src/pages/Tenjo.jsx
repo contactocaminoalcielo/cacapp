@@ -215,6 +215,10 @@ export default function Tenjo() {
   const [tab,               setTab]               = useState(arrancaEnJornada ? 'jornada' : 'planificacion')
   const [config,            setConfig]            = useState(CONFIG_DEFAULTS)
   const [candidatas,        setCandidatas]        = useState([]) // null = migración 003 sin aplicar
+  // Visitas que pidieron las familias y nadie ha validado (migr. 159). El
+  // conteo va en la pestaña porque si no, nadie entra a mirar: la familia ya
+  // recibió un "te confirmamos por WhatsApp" y está esperando.
+  const [visitasPedidas,    setVisitasPedidas]    = useState(0)
 
   const canPlan = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
   // Pestañas que puede ver cada rol. El PRODUCTOR queda limitado a Jornada y Operación.
@@ -305,6 +309,11 @@ export default function Tenjo() {
       // plazos se ven en Control y la ocupación en el mapa de Cubículos.
       // La tabla `seguimiento_compostaje` quedó sin uso (0/263 con planta_lista).
       setPersonal(per || [])
+
+      // Solicitudes de visita sin validar. Best-effort: si falta la migración
+      // 159 la consulta falla y el resto de la pantalla sigue viva.
+      db.from('visitas_tenjo').select('id', { count: 'exact', head: true }).eq('estado', 'SOLICITADA')
+        .then(({ count, error }) => setVisitasPedidas(error ? 0 : (count || 0)))
 
       // ── Planificación (Fase 1): config + candidatas desde v_candidatos_tenjo ──
       const cfg = await cargarConfigTenjo()
@@ -500,7 +509,11 @@ export default function Tenjo() {
             {tabsVisibles.includes('control') && <TabsTrigger value="control">📊 Control</TabsTrigger>}
             {tabsVisibles.includes('salidas') && <TabsTrigger value="salidas">🌿 Salidas</TabsTrigger>}
             {tabsVisibles.includes('cubiculos') && <TabsTrigger value="cubiculos">🗺️ Cubículos</TabsTrigger>}
-            {tabsVisibles.includes('visitas') && <TabsTrigger value="visitas">🚶 Visitas</TabsTrigger>}
+            {tabsVisibles.includes('visitas') && (
+              <TabsTrigger value="visitas">
+                🚶 Visitas{visitasPedidas > 0 ? ` (${visitasPedidas})` : ''}
+              </TabsTrigger>
+            )}
             {tabsVisibles.includes('operacion') && <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>}
           </TabsList>
 

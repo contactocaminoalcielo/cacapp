@@ -14,6 +14,8 @@ const ACCESO_TOTAL = {
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
     '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',
+    // Enciende y apaga los envíos automáticos: ADMIN/COORDINADOR y nadie más.
+    '/automatizaciones',
   ]),
 }
 

@@ -8,13 +8,14 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig, esRolValido } from '@/lib/roles'
 import AppShell from '@/components/layout/AppShell'
-import AvisoNuevaVersion from '@/components/AvisoNuevaVersion'
+import AvisoNuevaVersion, { AutoActualizaPublico } from '@/components/AvisoNuevaVersion'
 import { pageVariants, PAGE_TRANSITION } from '@/lib/motion'
 
 const TecnicoApp       = lazy(() => import('@/pages/TecnicoApp'))
 const Login            = lazy(() => import('@/pages/Login'))
 const FotosCliente     = lazy(() => import('@/pages/FotosCliente'))
 const PlantaCliente    = lazy(() => import('@/pages/PlantaCliente'))
+const VisitaCliente    = lazy(() => import('@/pages/VisitaCliente'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
 const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
 
@@ -43,6 +44,7 @@ const Whatsapp           = lazy(() => import('@/pages/Whatsapp'))
 const AgenteWhatsapp     = lazy(() => import('@/pages/AgenteWhatsapp'))
 const AgentesIA          = lazy(() => import('@/pages/AgentesIA'))
 const CostosIA           = lazy(() => import('@/pages/CostosIA'))
+const Automatizaciones   = lazy(() => import('@/pages/Automatizaciones'))
 const PlantillasWhatsapp = lazy(() => import('@/pages/PlantillasWhatsapp'))
 
 function FullScreenLoader() {
@@ -108,6 +110,7 @@ function AppRoutes({ rol }) {
             {routes.has('/agentes') && <Route path="/agentes" element={<AgentesIA />} />}
             {routes.has('/agentes') && <Route path="/agentes/:clave" element={<AgenteWhatsapp />} />}
             {routes.has('/costos-ia') && <Route path="/costos-ia" element={<CostosIA />} />}
+            {routes.has('/automatizaciones') && <Route path="/automatizaciones" element={<Automatizaciones />} />}
             {/* Los enlaces viejos siguen funcionando: hay marcadores del navegador
                 y enlaces pegados en chats apuntando a estas rutas. Redirigir es
                 gratis; un 404 en una pantalla que existía ayer, no. */}
@@ -130,13 +133,20 @@ function AppRoutes({ rol }) {
 // versión nueva de Orbit" se le estaba mostrando a familias en duelo dentro del
 // portal de la planta y del de fotos, con un botón que no significa nada para
 // ellas.
-const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta']
+const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita']
 const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
 
-/** El aviso de versión nueva, solo donde hay alguien de la casa para atenderlo. */
+/**
+ * El AVISO de versión nueva, solo donde hay alguien de la casa para atenderlo.
+ *
+ * En los portales no desaparece la actualización: desaparece el botón. Allí
+ * entra sola (`AutoActualizaPublico`) mientras la persona no haya tocado nada.
+ * Devolver `null` a secas dejaba el portal clavado en el build viejo mientras
+ * hubiera otra pestaña de Orbit abierta, sin un solo error.
+ */
 function AvisoSoloInterno() {
   const { pathname } = useLocation()
-  if (esRutaPublica(pathname)) return null
+  if (esRutaPublica(pathname)) return <AutoActualizaPublico />
   return <AvisoNuevaVersion />
 }
 
@@ -187,6 +197,20 @@ function InnerApp() {
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <PlantaCliente codigo={codigo} />
+      </Suspense>
+    )
+  }
+
+  // /visita        → pantalla de entrada (el cliente digita el código)
+  // /visita/CODIGO → visita a la planta desde el aviso de mitad de compostaje.
+  //                  Mismo código del portal de fotos: el cliente ya lo tiene.
+  if (location.pathname === '/visita' || location.pathname.startsWith('/visita/')) {
+    const codigo = location.pathname.startsWith('/visita/')
+      ? location.pathname.replace('/visita/', '')
+      : ''
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <VisitaCliente codigo={codigo} />
       </Suspense>
     )
   }

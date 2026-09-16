@@ -594,9 +594,18 @@ export function mensajeGrupoProceso({ fechaLarga, mascotas = [] } = {}) {
 // mismo principio del mapa de cubículos.
 
 export const VISITA_ESTADO_CFG = {
+  // La pide la familia desde el portal (migr. 159) y todavía no está validada
+  // contra la jornada: ámbar a propósito, es un pendiente de la casa.
+  SOLICITADA: { label: 'Pedida por la familia', bg: '#FEF3C7', text: '#92400E' },
   PROGRAMADA: { label: 'Programada', bg: '#DBEAFE', text: '#1E40AF' },
   REALIZADA:  { label: 'Realizada',  bg: '#D1FAE5', text: '#065F46' },
   CANCELADA:  { label: 'Cancelada',  bg: '#F3F4F6', text: '#6B7280' },
+}
+
+/** Franja pedida por la familia en el portal. La hora exacta la pone la casa. */
+export const FRANJA_VISITA = {
+  MANANA: { label: 'en la mañana', hora_sugerida: '09:00' },
+  TARDE:  { label: 'en la tarde',   hora_sugerida: '13:00' },
 }
 
 /** "14:30:00" (columna time) → "2:30 p. m." */
