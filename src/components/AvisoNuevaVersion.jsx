@@ -118,8 +118,10 @@ export function AutoActualizaPublico() {
     if (!navigator.serviceWorker?.controller) return
 
     let vivo = true
+    let yaEntre = false
     const entrar = worker => {
-      if (!vivo || !intacto.current || !worker) return
+      if (!vivo || yaEntre || !intacto.current || !worker) return
+      yaEntre = true
       navigator.serviceWorker.addEventListener('controllerchange', recargarPagina, { once: true })
       worker.postMessage({ type: 'SKIP_WAITING' })
       // Plan B, igual que en el aviso interno: si el worker nuevo no toma el
@@ -127,19 +129,26 @@ export function AutoActualizaPublico() {
       setTimeout(limpiarYRecargar, 3000)
     }
 
+    // 🪤 Un worker que TERMINA de instalar no avisa por su cuenta: hay que
+    // escucharle el `statechange`. Y el que ya venía instalando cuando esta
+    // pantalla montó tampoco dispara `updatefound` — ese evento ya pasó. Sin
+    // esto, el navegador se queda con la versión nueva instalada y en espera,
+    // que es justo el estado en el que nadie la activa. Cazado mirando
+    // `reg.installing` en producción, no leyendo el código.
+    const vigilar = (reg, worker) => {
+      if (!worker) return
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed') entrar(reg.waiting || worker)
+      })
+    }
+
     navigator.serviceWorker.getRegistration()
       .then(reg => {
         if (!vivo || !reg) return
         // Ya hay uno en espera (lo instaló otra pestaña): a activarlo.
         if (reg.waiting) return entrar(reg.waiting)
-        // Si no, preguntar por una versión nueva y esperar a que instale.
-        reg.addEventListener('updatefound', () => {
-          const nuevo = reg.installing
-          if (!nuevo) return
-          nuevo.addEventListener('statechange', () => {
-            if (nuevo.state === 'installed') entrar(reg.waiting || nuevo)
-          })
-        })
+        vigilar(reg, reg.installing)                       // el que ya venía en camino
+        reg.addEventListener('updatefound', () => vigilar(reg, reg.installing))
         reg.update().catch(() => { /* sin red: se queda con lo que tiene */ })
       })
       .catch(() => { /* navegador sin SW */ })
