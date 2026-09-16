@@ -106,6 +106,15 @@ export const ESTILOS_VIVERO = `
   .vv-entra { animation: vv-asomar 620ms cubic-bezier(0.16, 1, 0.3, 1) both; }
   @keyframes vv-asomar { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
 
+  /* "Está aquí": un halo que late dos veces cuando la pantalla lleva a alguien
+     hasta lo que le falta. Va en box-shadow y no en outline porque aquí envuelve
+     una sección entera, no una tarjeta (al revés que el foco de teclado). */
+  .vv-senala { animation: vv-senalar 1.5s ease-out 1; border-radius: 30px; }
+  @keyframes vv-senalar {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(88,169,122,0) }
+    22%, 62% { box-shadow: 0 0 0 7px rgba(88,169,122,0.26) }
+  }
+
   /* La luz del amanecer cruzando el invernadero: 72 s por pasada. Si se nota,
      está mal hecha. */
   .vv-luz { animation: vv-derivar 72s ease-in-out infinite alternate; }
@@ -116,7 +125,7 @@ export const ESTILOS_VIVERO = `
 
   @media (prefers-reduced-motion: reduce) {
     .vv-suave { transition-duration: 0.01ms !important; }
-    .vv-brota, .vv-entra, .vv-luz { animation: none !important; }
+    .vv-brota, .vv-entra, .vv-luz, .vv-senala { animation: none !important; }
     .vv-brota { clip-path: none; opacity: 1; transform: none }
   }
 `

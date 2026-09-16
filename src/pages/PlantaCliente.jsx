@@ -16,7 +16,7 @@
 // de elegir se parece a mirar plantas y no a llenar un formulario. Un ícono
 // genérico repetido en las dos tarjetas volvería intercambiable justo lo único
 // que la familia tiene que decidir.
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { portalPlanta, portalElegirPlanta } from '@/lib/plantas'
 import { Ilustracion } from '@/components/portal/Botanica'
@@ -57,13 +57,20 @@ const bonito = s => String(s || '')
 
 // ─── Piezas de la página ─────────────────────────────────────────────────────
 
-function Marco({ children }) {
+/**
+ * `doble` ensancha la columna SOLO en pantalla grande. En el celular —que es
+ * donde se abre casi siempre, porque el enlace llega por WhatsApp— no hay
+ * "al lado" posible: 390 px no parten en dos.
+ */
+function Marco({ children, doble = false }) {
   useFuentesVivero()
   return (
     <div className="vv-cuerpo min-h-screen w-full" style={{ color: TINTA }}>
       <style>{ESTILOS_VIVERO}</style>
       <FondoVivero />
-      <div className="mx-auto w-full max-w-[30rem] px-5">{children}</div>
+      <div className={`mx-auto w-full px-5 ${doble ? 'max-w-[30rem] lg:max-w-[62rem]' : 'max-w-[30rem]'}`}>
+        {children}
+      </div>
     </div>
   )
 }
@@ -77,15 +84,23 @@ function Firma() {
   )
 }
 
-/** Botón principal. 52px de alto: por encima del mínimo táctil de 44. */
-function Boton({ children, ...props }) {
+/**
+ * Botón principal. 52px de alto: por encima del mínimo táctil de 44.
+ *
+ * `atenuado` NO es `disabled`. Un botón apagado esconde el motivo por el que
+ * no se puede seguir, y eso fue exactamente lo que pasó: nadie veía que
+ * faltaban los datos de entrega. Este se puede tocar siempre; si algo falta,
+ * lleva la pantalla hasta lo que falta.
+ */
+function Boton({ children, atenuado = false, ...props }) {
   return (
     <button
       className="vv-foco vv-suave w-full min-h-[52px] rounded-full px-6 text-[15px] font-semibold
                  text-white transition-all duration-200 ease-out cursor-pointer
                  disabled:cursor-not-allowed disabled:opacity-45"
       style={{ background: `linear-gradient(180deg, #35895A 0%, ${BROTE} 100%)`,
-               boxShadow: '0 10px 24px -10px rgba(22,56,42,0.7)' }}
+               opacity: atenuado ? 0.62 : 1,
+               boxShadow: atenuado ? 'none' : '0 10px 24px -10px rgba(22,56,42,0.7)' }}
       {...props}
     >
       {children}
@@ -165,6 +180,9 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   // Entrega: `editando` abre el formulario; `confirmada` es el "sí, están bien"
   // explícito. Se mantienen separados porque teclear en el formulario ya vale
   // como confirmación, pero mirar una tarjeta de solo lectura no.
+  const refEleccion = useRef(null)
+  const refEntrega  = useRef(null)
+  const [senalado, setSenalado] = useState('')
   const [entrega,    setEntrega]    = useState(ENTREGA_VACIA)
   const [editandoEntrega, setEditandoEntrega] = useState(true)
   const [entregaConfirmada, setEntregaConfirmada] = useState(false)
@@ -216,9 +234,31 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   // Se nombra lo PRIMERO que falta, no todo a la vez.
   const pista = (!yaEligio && !elegida) ? 'Elige una planta para continuar'
     : !entregaLista ? (editandoEntrega
-        ? 'Completa dirección, quién recibe y teléfono para continuar'
-        : 'Confirma los datos de entrega para continuar')
+        ? 'Faltan tus datos de entrega — toca aquí y te llevo'
+        : 'Falta confirmar tus datos de entrega — toca aquí y te llevo')
     : null
+
+  /**
+   * Lleva la pantalla hasta lo primero que falta y lo señala un segundo.
+   *
+   * Nació de un reporte de David sobre su propia pantalla: «yo ni me fijé que
+   * abajo estaban los datos». Si al dueño se le pasa, a una familia también. Un
+   * botón apagado no resuelve eso — esconde el motivo justo cuando hace falta.
+   */
+  function irAloQueFalta() {
+    const falta = (!yaEligio && !elegida) ? 'eleccion' : 'entrega'
+    const nodo = falta === 'eleccion' ? refEleccion.current : refEntrega.current
+    if (!nodo) return
+    nodo.scrollIntoView({ behavior: quieto ? 'auto' : 'smooth', block: 'center' })
+    setSenalado(falta)
+    setTimeout(() => setSenalado(''), 1500)
+    // El foco solo si el formulario está abierto: en el móvil abre el teclado,
+    // y hacerlo sobre una tarjeta de solo lectura sería empujar sin razón.
+    if (falta === 'entrega' && editandoEntrega) {
+      const vacio = [...nodo.querySelectorAll('input')].find(i => i.required && !i.value.trim())
+      if (vacio) setTimeout(() => vacio.focus({ preventScroll: true }), quieto ? 0 : 450)
+    }
+  }
 
   function cambiarExtra(id, delta) {
     setExtras(p => {
@@ -231,6 +271,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
 
   async function enviar() {
     if (enviando) return
+    if (!puedeEnviar) return irAloQueFalta()
     setEnviando(true); setError('')
     try {
       const r = await portalElegirPlanta(codigo, {
@@ -379,14 +420,16 @@ export default function PlantaCliente({ codigo: codigoProp }) {
 
   // ── Formulario ─────────────────────────────────────────────────────────────
   return (
-    <Marco>
+    <Marco doble>
       <motion.div {...entra} className="pt-14" style={{ paddingBottom: '10.5rem' }}>
 
         {/* El nombre de la mascota es lo más grande de la pantalla: es de lo
             único que trata. El saludo va DENTRO de la frase y no como rótulo
             en mayúsculas encima — un "HOLA, MARÍA" tracked-out es adorno de
             plantilla, no información. */}
-        <header>
+        {/* La cabecera no se estira con la pantalla: un párrafo de 120 caracteres
+            por línea se lee peor que uno de 70, por mucho sitio que sobre. */}
+        <header className="lg:max-w-[38rem]">
           <Brota alinear="flex-start" className="mb-7">
             <Ilustracion nombre="rama" vivo tam={124} />
           </Brota>
@@ -406,226 +449,240 @@ export default function PlantaCliente({ codigo: codigoProp }) {
           )}
         </header>
 
-        {/* ── Elección de especie ── */}
-        {yaEligio ? (
-          <div className="vv-vidrio mt-10 rounded-[28px] px-4 py-4 flex items-center gap-3.5">
-            <Ilustracion nombre={datos?.eleccion?.planta_nombre} vivo tam={44} />
-            <p className="text-[14px] leading-relaxed" style={{ color: TINTA }}>
-              Ya elegiste <strong style={{ color: SELVA }}>{datos?.eleccion?.planta_nombre}</strong>.
-              Si necesitas cambiarla, escríbenos por WhatsApp.
-            </p>
-          </div>
-        ) : (
-          <fieldset className="border-0 p-0 m-0 mt-10">
-            <legend className="vv-titular text-[23px] leading-tight mb-4" style={{ color: SELVA }}>
-              ¿En cuál quieres que siga?
-            </legend>
-            <div className="space-y-3.5">
-              {opciones.map(p => {
-                const sel = elegida === p.id
-                return (
-                  <button key={p.id} type="button" onClick={() => setElegida(p.id)}
-                    aria-pressed={sel}
-                    className="vv-vidrio w-full text-left rounded-[28px] p-4 flex items-center gap-4
-                               cursor-pointer transition-all duration-300 ease-out vv-foco vv-suave"
-                    style={{
-                      border: `1.5px solid ${sel ? HOJA : 'rgba(255,255,255,0.85)'}`,
-                      // La elegida se LEVANTA del vidrio: es la respuesta al toque, no adorno.
-                      transform: sel ? 'translateY(-2px)' : 'none',
-                      boxShadow: sel
-                        ? '0 26px 44px -26px rgba(18,48,33,0.75), inset 0 0 0 3px rgba(88,169,122,0.16)'
-                        : '0 18px 40px -30px rgba(18,48,33,0.5)',
-                    }}>
-                    {p.imagen_url
-                      ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
-                             className="w-[68px] h-[88px] rounded-2xl object-cover shrink-0" />
-                      : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={68} /></div>}
-                    <div className="min-w-0 flex-1">
-                      <div className="vv-titular text-[21px] leading-tight" style={{ color: sel ? SELVA : TINTA }}>
-                        {p.nombre}
-                      </div>
-                      {p.descripcion && (
-                        <p className="text-[13px] leading-snug mt-1.5" style={{ color: MUSGO }}>{p.descripcion}</p>
-                      )}
-                      {/* El estado no depende solo del color */}
-                      <p className="text-[13px] font-semibold mt-2" style={{ color: sel ? BROTE : MUSGO }}>
-                        {sel ? 'Elegida' : 'Tocar para elegir'}
-                      </p>
-                    </div>
-                  </button>
-                )
-              })}
-              {!opciones.length && (
-                <p className="text-[14px] leading-relaxed" style={{ color: MUSGO }}>
-                  Estamos preparando las opciones. Escríbenos por WhatsApp y te ayudamos.
+        {/* En pantalla ancha, dos columnas. En el celular esto no parte
+            nada: manda el orden del DOM, y por eso la entrega va ANTES que
+            los extras — lo obligatorio primero, lo opcional después. */}
+        <div className="lg:grid lg:grid-cols-[1.02fr_0.98fr] lg:gap-12 lg:items-start">
+          <div ref={refEleccion} className={senalado === 'eleccion' ? 'vv-senala' : ''}>
+            {/* ── Elección de especie ── */}
+            {yaEligio ? (
+              <div className="vv-vidrio mt-10 rounded-[28px] px-4 py-4 flex items-center gap-3.5">
+                <Ilustracion nombre={datos?.eleccion?.planta_nombre} vivo tam={44} />
+                <p className="text-[14px] leading-relaxed" style={{ color: TINTA }}>
+                  Ya elegiste <strong style={{ color: SELVA }}>{datos?.eleccion?.planta_nombre}</strong>.
+                  Si necesitas cambiarla, escríbenos por WhatsApp.
                 </p>
-              )}
-            </div>
-          </fieldset>
-        )}
-
-        {/* ── Extras ya comprados ── */}
-        {!!comprados.length && (
-          <div className="vv-vidrio mt-8 rounded-[24px] p-4">
-            <p className="vv-titular text-[17px] mb-2" style={{ color: SELVA }}>Ya agregaste</p>
-            {comprados.map(x => (
-              <div key={x.planta_id} className="flex justify-between gap-3 text-[14px] py-0.5">
-                <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
-                <span className="tabular-nums" style={{ color: MUSGO }}>{pesos(x.total)}</span>
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* ── Extras disponibles ── */}
-        {!!disponibles.length && (
-          <section className="mt-10">
-            <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿Deseas algo más?</h2>
-            <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
-              Es opcional. Si eliges algo, lo coordinamos contigo en la entrega.
-            </p>
-            <div className="space-y-3.5">
-              {disponibles.map(p => {
-                const n = extras[p.id] || 0
-                return (
-                  <div key={p.id} className="vv-vidrio rounded-[28px] p-4 transition-all duration-300 ease-out"
-                    style={{
-                      border: `1.5px solid ${n > 0 ? HOJA : 'rgba(255,255,255,0.85)'}`,
-                      boxShadow: n > 0
-                        ? '0 26px 44px -26px rgba(18,48,33,0.7)'
-                        : '0 18px 40px -30px rgba(18,48,33,0.5)',
-                    }}>
-                    <div className="flex items-center gap-4">
-                      {p.imagen_url
-                        ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
-                               className="w-14 h-14 rounded-2xl object-cover shrink-0" />
-                        : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={n > 0} tam={52} /></div>}
-                      <div className="min-w-0 flex-1">
-                        <div className="vv-titular text-[17px] leading-tight" style={{ color: TINTA }}>{p.nombre}</div>
-                        {p.descripcion && (
-                          <p className="text-[13px] leading-snug mt-1" style={{ color: MUSGO }}>{p.descripcion}</p>
-                        )}
-                        {/* El precio real es el de la derecha. El tachado es el precio
-                            de lista del catálogo (`precio_antes`, migración 158): el
-                            backend solo lo manda cuando de verdad es mayor. Se escribe
-                            "antes" con todas sus letras porque un tachado a secas no
-                            se oye en un lector de pantalla. */}
-                        <div className="flex items-baseline gap-2 flex-wrap mt-1.5">
-                          <span className="text-[15px] font-bold tabular-nums" style={{ color: MIEL }}>
-                            {pesos(p.precio)}
-                          </span>
-                          {p.precio_antes > 0 && (
-                            <span className="text-[13px] tabular-nums" style={{ color: MUSGO }}>
-                              antes <s>{pesos(p.precio_antes)}</s>
-                            </span>
+            ) : (
+              <fieldset className="border-0 p-0 m-0 mt-10">
+                <legend className="vv-titular text-[23px] leading-tight mb-4" style={{ color: SELVA }}>
+                  ¿En cuál quieres que siga?
+                </legend>
+                <div className="space-y-3.5">
+                  {opciones.map(p => {
+                    const sel = elegida === p.id
+                    return (
+                      <button key={p.id} type="button" onClick={() => setElegida(p.id)}
+                        aria-pressed={sel}
+                        className="vv-vidrio w-full text-left rounded-[28px] p-4 flex items-center gap-4
+                                   cursor-pointer transition-all duration-300 ease-out vv-foco vv-suave"
+                        style={{
+                          border: `1.5px solid ${sel ? HOJA : 'rgba(255,255,255,0.85)'}`,
+                          // La elegida se LEVANTA del vidrio: es la respuesta al toque, no adorno.
+                          transform: sel ? 'translateY(-2px)' : 'none',
+                          boxShadow: sel
+                            ? '0 26px 44px -26px rgba(18,48,33,0.75), inset 0 0 0 3px rgba(88,169,122,0.16)'
+                            : '0 18px 40px -30px rgba(18,48,33,0.5)',
+                        }}>
+                        {p.imagen_url
+                          ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                                 className="w-[68px] h-[88px] rounded-2xl object-cover shrink-0" />
+                          : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={68} /></div>}
+                        <div className="min-w-0 flex-1">
+                          <div className="vv-titular text-[21px] leading-tight" style={{ color: sel ? SELVA : TINTA }}>
+                            {p.nombre}
+                          </div>
+                          {p.descripcion && (
+                            <p className="text-[13px] leading-snug mt-1.5" style={{ color: MUSGO }}>{p.descripcion}</p>
                           )}
-                        </div>
-                        {p.precio_antes > 0 && (
-                          <p className="text-[11.5px] font-semibold leading-snug mt-1" style={{ color: BROTE }}>
-                            Precio especial por tu plan de compostaje
+                          {/* El estado no depende solo del color */}
+                          <p className="text-[13px] font-semibold mt-2" style={{ color: sel ? BROTE : MUSGO }}>
+                            {sel ? 'Elegida' : 'Tocar para elegir'}
                           </p>
-                        )}
-                      </div>
-                    </div>
-                    {/* Controles de 44px: por debajo de eso el dedo falla */}
-                    <div className="flex items-center justify-end gap-2 mt-3">
-                      <button type="button" onClick={() => cambiarExtra(p.id, -1)} disabled={!n}
-                        aria-label={`Quitar una unidad de ${p.nombre}`}
-                        className="w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
-                                   transition-colors duration-200 vv-foco vv-suave
-                                   disabled:opacity-30 disabled:cursor-not-allowed"
-                        style={{ border: `1.5px solid ${LINDE}`, color: TINTA, background: CAMPO }}>
-                        <svg width="14" height="2" viewBox="0 0 14 2" aria-hidden="true">
-                          <rect width="14" height="2" rx="1" fill="currentColor" />
-                        </svg>
+                        </div>
                       </button>
-                      <span className="w-8 text-center text-[17px] font-bold tabular-nums"
-                            aria-live="polite" style={{ color: n > 0 ? SELVA : '#B3AB9C' }}>{n}</span>
-                      <button type="button" onClick={() => cambiarExtra(p.id, 1)}
-                        aria-label={`Agregar una unidad de ${p.nombre}`}
-                        className="w-11 h-11 rounded-full flex items-center justify-center text-white cursor-pointer
-                                   transition-transform duration-200 active:scale-95 vv-foco vv-suave"
-                        style={{ background: BROTE }}>
-                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-                          <path d="M7 0.8v12.4M0.8 7h12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
-                      </button>
-                    </div>
+                    )
+                  })}
+                  {!opciones.length && (
+                    <p className="text-[14px] leading-relaxed" style={{ color: MUSGO }}>
+                      Estamos preparando las opciones. Escríbenos por WhatsApp y te ayudamos.
+                    </p>
+                  )}
+                </div>
+              </fieldset>
+            )}
+
+          </div>
+
+          {/* Pegada al hacer scroll: en escritorio esta columna es más corta
+              que la primera y quedaría flotando en un vacío. */}
+          <div ref={refEntrega}
+               className={`lg:sticky lg:top-10 ${senalado === 'entrega' ? 'vv-senala' : ''}`}>
+            {/* ── Entrega ── */}
+            <section className="mt-10 lg:mt-0">
+              <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿A dónde la llevamos?</h2>
+
+              {!editandoEntrega ? (
+                <>
+                  <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
+                    Estos son los datos que nos dejaste. Confírmanos si siguen estando bien.
+                  </p>
+                  <div className="vv-vidrio rounded-[28px] p-4"
+                       style={{ border: `1.5px solid ${entregaConfirmada ? HOJA : 'rgba(255,255,255,0.85)'}` }}>
+                    <DatoEntrega etiqueta="Dirección" valor={entrega.direccion} />
+                    {(entrega.barrio || entrega.localidad) &&
+                      <DatoEntrega etiqueta="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
+                    <DatoEntrega etiqueta="Quién recibe" valor={entrega.recibe} />
+                    <DatoEntrega etiqueta="Teléfono" valor={[entrega.telefono, entrega.telefono_adicional].filter(Boolean).join(' · ')} />
+                    {entrega.horarios && <DatoEntrega etiqueta="Horarios" valor={entrega.horarios} />}
                   </div>
-                )
-              })}
-            </div>
-          </section>
-        )}
+                  <div className="flex gap-2.5 mt-3.5">
+                    <button type="button" onClick={() => setEntregaConfirmada(true)}
+                      aria-pressed={entregaConfirmada}
+                      className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
+                                 transition-all duration-200 ease-out vv-foco vv-suave"
+                      style={entregaConfirmada
+                        ? { background: BROTE, color: '#FFFFFF', border: `1.5px solid ${BROTE}` }
+                        : { background: 'rgba(255,255,255,0.72)', color: SELVA, border: `1.5px solid ${LINDE}` }}>
+                      {entregaConfirmada ? 'Datos confirmados' : 'Sí, están bien'}
+                    </button>
+                    <button type="button"
+                      onClick={() => { setEditandoEntrega(true); setEntregaConfirmada(false) }}
+                      className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
+                                 transition-all duration-200 ease-out vv-foco vv-suave"
+                      style={{ background: 'rgba(255,255,255,0.45)', color: TINTA, border: `1.5px solid ${LINDE}` }}>
+                      Cambiaron
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
+                    Para poder llevarte a {mascota} necesitamos saber dónde y con quién dejarla.
+                  </p>
+                  <div className="vv-vidrio rounded-[28px] p-4 space-y-3.5">
+                    <CampoEntrega campo="direccion" label="Dirección" requerido value={entrega.direccion}
+                      onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <CampoEntrega campo="barrio" label="Barrio" value={entrega.barrio}
+                        onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
+                      <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
+                    </div>
+                    <CampoEntrega campo="recibe" label="¿Quién recibe?" requerido value={entrega.recibe}
+                      onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <CampoEntrega campo="telefono" label="Teléfono" requerido value={entrega.telefono}
+                        onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
+                      <CampoEntrega campo="telefono_adicional" label="Otro teléfono" value={entrega.telefono_adicional}
+                        onChange={v => setE('telefono_adicional', v)} placeholder="Opcional" inputMode="tel" />
+                    </div>
+                    <CampoEntrega campo="horarios" label="Horarios en que hay alguien" value={entrega.horarios}
+                      onChange={v => setE('horarios', v)} placeholder="Ej.: entre semana después de las 5 p. m." />
+                    <p className="text-[12px] leading-relaxed" style={{ color: MUSGO }}>
+                      Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora
+                      exacta</strong>; te avisaremos cuando vayamos en camino.
+                    </p>
+                  </div>
+                </>
+              )}
+            </section>
 
-        {/* ── Entrega ── */}
-        <section className="mt-10">
-          <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿A dónde la llevamos?</h2>
+            {/* ── Extras ya comprados ── */}
+            {!!comprados.length && (
+              <div className="vv-vidrio mt-8 rounded-[24px] p-4">
+                <p className="vv-titular text-[17px] mb-2" style={{ color: SELVA }}>Ya agregaste</p>
+                {comprados.map(x => (
+                  <div key={x.planta_id} className="flex justify-between gap-3 text-[14px] py-0.5">
+                    <span style={{ color: TINTA }}>{x.cantidad} × {x.nombre}</span>
+                    <span className="tabular-nums" style={{ color: MUSGO }}>{pesos(x.total)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
-          {!editandoEntrega ? (
-            <>
-              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
-                Estos son los datos que nos dejaste. Confírmanos si siguen estando bien.
-              </p>
-              <div className="vv-vidrio rounded-[28px] p-4"
-                   style={{ border: `1.5px solid ${entregaConfirmada ? HOJA : 'rgba(255,255,255,0.85)'}` }}>
-                <DatoEntrega etiqueta="Dirección" valor={entrega.direccion} />
-                {(entrega.barrio || entrega.localidad) &&
-                  <DatoEntrega etiqueta="Barrio / localidad" valor={[entrega.barrio, entrega.localidad].filter(Boolean).join(' · ')} />}
-                <DatoEntrega etiqueta="Quién recibe" valor={entrega.recibe} />
-                <DatoEntrega etiqueta="Teléfono" valor={[entrega.telefono, entrega.telefono_adicional].filter(Boolean).join(' · ')} />
-                {entrega.horarios && <DatoEntrega etiqueta="Horarios" valor={entrega.horarios} />}
-              </div>
-              <div className="flex gap-2.5 mt-3.5">
-                <button type="button" onClick={() => setEntregaConfirmada(true)}
-                  aria-pressed={entregaConfirmada}
-                  className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
-                             transition-all duration-200 ease-out vv-foco vv-suave"
-                  style={entregaConfirmada
-                    ? { background: BROTE, color: '#FFFFFF', border: `1.5px solid ${BROTE}` }
-                    : { background: 'rgba(255,255,255,0.72)', color: SELVA, border: `1.5px solid ${LINDE}` }}>
-                  {entregaConfirmada ? 'Datos confirmados' : 'Sí, están bien'}
-                </button>
-                <button type="button"
-                  onClick={() => { setEditandoEntrega(true); setEntregaConfirmada(false) }}
-                  className="flex-1 min-h-[48px] rounded-full px-4 text-[14px] font-semibold cursor-pointer
-                             transition-all duration-200 ease-out vv-foco vv-suave"
-                  style={{ background: 'rgba(255,255,255,0.45)', color: TINTA, border: `1.5px solid ${LINDE}` }}>
-                  Cambiaron
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
-                Para poder llevarte a {mascota} necesitamos saber dónde y con quién dejarla.
-              </p>
-              <div className="vv-vidrio rounded-[28px] p-4 space-y-3.5">
-                <CampoEntrega campo="direccion" label="Dirección" requerido value={entrega.direccion}
-                  onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
-                <div className="grid grid-cols-2 gap-3">
-                  <CampoEntrega campo="barrio" label="Barrio" value={entrega.barrio}
-                    onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
-                  <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
-                </div>
-                <CampoEntrega campo="recibe" label="¿Quién recibe?" requerido value={entrega.recibe}
-                  onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
-                <div className="grid grid-cols-2 gap-3">
-                  <CampoEntrega campo="telefono" label="Teléfono" requerido value={entrega.telefono}
-                    onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
-                  <CampoEntrega campo="telefono_adicional" label="Otro teléfono" value={entrega.telefono_adicional}
-                    onChange={v => setE('telefono_adicional', v)} placeholder="Opcional" inputMode="tel" />
-                </div>
-                <CampoEntrega campo="horarios" label="Horarios en que hay alguien" value={entrega.horarios}
-                  onChange={v => setE('horarios', v)} placeholder="Ej.: entre semana después de las 5 p. m." />
-                <p className="text-[12px] leading-relaxed" style={{ color: MUSGO }}>
-                  Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora
-                  exacta</strong>; te avisaremos cuando vayamos en camino.
+            {/* ── Extras disponibles ── */}
+            {!!disponibles.length && (
+              <section className="mt-10">
+                <h2 className="vv-titular text-[23px]" style={{ color: SELVA }}>¿Deseas algo más?</h2>
+                <p className="text-[13px] leading-relaxed mt-1.5 mb-4" style={{ color: MUSGO }}>
+                  Es opcional. Si eliges algo, lo coordinamos contigo en la entrega.
                 </p>
-              </div>
-            </>
-          )}
-        </section>
+                <div className="space-y-3.5">
+                  {disponibles.map(p => {
+                    const n = extras[p.id] || 0
+                    return (
+                      <div key={p.id} className="vv-vidrio rounded-[28px] p-4 transition-all duration-300 ease-out"
+                        style={{
+                          border: `1.5px solid ${n > 0 ? HOJA : 'rgba(255,255,255,0.85)'}`,
+                          boxShadow: n > 0
+                            ? '0 26px 44px -26px rgba(18,48,33,0.7)'
+                            : '0 18px 40px -30px rgba(18,48,33,0.5)',
+                        }}>
+                        <div className="flex items-center gap-4">
+                          {p.imagen_url
+                            ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                                   className="w-14 h-14 rounded-2xl object-cover shrink-0" />
+                            : <div className="shrink-0"><Ilustracion nombre={p.nombre} vivo={n > 0} tam={52} /></div>}
+                          <div className="min-w-0 flex-1">
+                            <div className="vv-titular text-[17px] leading-tight" style={{ color: TINTA }}>{p.nombre}</div>
+                            {p.descripcion && (
+                              <p className="text-[13px] leading-snug mt-1" style={{ color: MUSGO }}>{p.descripcion}</p>
+                            )}
+                            {/* El precio real es el de la derecha. El tachado es el precio
+                                de lista del catálogo (`precio_antes`, migración 158): el
+                                backend solo lo manda cuando de verdad es mayor. Se escribe
+                                "antes" con todas sus letras porque un tachado a secas no
+                                se oye en un lector de pantalla. */}
+                            <div className="flex items-baseline gap-2 flex-wrap mt-1.5">
+                              <span className="text-[15px] font-bold tabular-nums" style={{ color: MIEL }}>
+                                {pesos(p.precio)}
+                              </span>
+                              {p.precio_antes > 0 && (
+                                <span className="text-[13px] tabular-nums" style={{ color: MUSGO }}>
+                                  antes <s>{pesos(p.precio_antes)}</s>
+                                </span>
+                              )}
+                            </div>
+                            {p.precio_antes > 0 && (
+                              <p className="text-[11.5px] font-semibold leading-snug mt-1" style={{ color: BROTE }}>
+                                Precio especial por tu plan de compostaje
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {/* Controles de 44px: por debajo de eso el dedo falla */}
+                        <div className="flex items-center justify-end gap-2 mt-3">
+                          <button type="button" onClick={() => cambiarExtra(p.id, -1)} disabled={!n}
+                            aria-label={`Quitar una unidad de ${p.nombre}`}
+                            className="w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
+                                       transition-colors duration-200 vv-foco vv-suave
+                                       disabled:opacity-30 disabled:cursor-not-allowed"
+                            style={{ border: `1.5px solid ${LINDE}`, color: TINTA, background: CAMPO }}>
+                            <svg width="14" height="2" viewBox="0 0 14 2" aria-hidden="true">
+                              <rect width="14" height="2" rx="1" fill="currentColor" />
+                            </svg>
+                          </button>
+                          <span className="w-8 text-center text-[17px] font-bold tabular-nums"
+                                aria-live="polite" style={{ color: n > 0 ? SELVA : '#B3AB9C' }}>{n}</span>
+                          <button type="button" onClick={() => cambiarExtra(p.id, 1)}
+                            aria-label={`Agregar una unidad de ${p.nombre}`}
+                            className="w-11 h-11 rounded-full flex items-center justify-center text-white cursor-pointer
+                                       transition-transform duration-200 active:scale-95 vv-foco vv-suave"
+                            style={{ background: BROTE }}>
+                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                              <path d="M7 0.8v12.4M0.8 7h12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            )}
+
+          </div>
+        </div>
 
         {error && (
           <p role="alert" className="text-[13px] mt-6 text-center" style={{ color: '#A33A2A' }}>{error}</p>
@@ -644,13 +701,19 @@ export default function PlantaCliente({ codigo: codigoProp }) {
               <span className="text-[17px] font-bold tabular-nums" style={{ color: MIEL }}>{pesos(totalExtras)}</span>
             </div>
           )}
-          <Boton onClick={enviar} disabled={!puedeEnviar || enviando} aria-busy={enviando}>
+          <Boton onClick={enviar} disabled={enviando} atenuado={!puedeEnviar}
+                 aria-disabled={!puedeEnviar} aria-busy={enviando}>
             {enviando
               ? 'Enviando…'
               : (yaEligio ? 'Agregar a mi entrega' : 'Confirmar mi elección')}
           </Boton>
           {!puedeEnviar && !enviando && pista && (
-            <p className="text-[12px] text-center mt-2.5" style={{ color: MUSGO }}>{pista}</p>
+            <button type="button" onClick={irAloQueFalta}
+              className="vv-foco w-full text-[12.5px] text-center mt-2.5 underline decoration-dotted
+                         underline-offset-4 cursor-pointer"
+              style={{ color: MUSGO }}>
+              {pista}
+            </button>
           )}
         </div>
       </div>
