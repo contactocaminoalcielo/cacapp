@@ -541,7 +541,13 @@ export default function Kanban() {
   const [groupsOpen, setGroupsOpen]       = useState({}) // `${col}-${tierKey}` → bool
 
   // ── Alertas inicio ruta ───────────────────────────────────────────────────
-  const [alertasRuta, setAlertasRuta]     = useState([])   // notificaciones TECNICO_INICIO_RUTA pendientes (toasts en esquina)
+  const [alertasRuta, setAlertasRuta]     = useState([])   // notificaciones TECNICO_INICIO_RUTA pendientes (modal bloqueante centrado)
+  // Ids ya despachados en esta sesión (avisados o vistos). `marcarLeida` es
+  // asíncrono y el sondeo de cada 20 s puede traer una foto anterior a esa
+  // escritura: sin este filtro el modal —que ahora BLOQUEA— reaparecería justo
+  // cuando el coordinador vuelve de WhatsApp, que es exactamente lo que no debe
+  // pasar. Es solo de memoria: al recargar manda lo que diga la base.
+  const alertasRutaVistasRef = useRef(new Set())
 
   // ── Franja de fotos pendientes: plegable ──────────────────────────────────
   // Con muchos servicios sin fotos la franja crecía a varias filas de pastillas
@@ -1133,7 +1139,8 @@ export default function Kanban() {
       if (viejas.length) await Promise.all(viejas.map(n => marcarLeida(n.id)))
       const viejasIds = new Set(viejas.map(n => n.id))
       const vigentes  = notifs.filter(n => !viejasIds.has(n.id))
-      setAlertasRuta(vigentes.filter(n => n.tipo === 'TECNICO_INICIO_RUTA'))
+      setAlertasRuta(vigentes.filter(n =>
+        n.tipo === 'TECNICO_INICIO_RUTA' && !alertasRutaVistasRef.current.has(n.id)))
       setAlertasDeclinas(vigentes.filter(n => ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo)))
     }
     verificar()
@@ -1144,6 +1151,7 @@ export default function Kanban() {
   // Marca leídas todas las alertas de inicio de ruta mostradas (botón "limpiar").
   async function limpiarAlertasRuta() {
     const ids = alertasRuta.map(n => n.id)
+    ids.forEach(id => alertasRutaVistasRef.current.add(id))
     setAlertasRuta([])
     await Promise.all(ids.map(id => marcarLeida(id)))
   }
@@ -1152,6 +1160,7 @@ export default function Kanban() {
   // que se pueda distinguir de un aviso real — antes el botón de WhatsApp y la
   // ✕ llamaban a esta misma función y en los datos eran indistinguibles.
   async function descartarAlertaRuta(id) {
+    alertasRutaVistasRef.current.add(id)
     setAlertasRuta(prev => prev.filter(n => n.id !== id))
     await marcarLeida(id)
   }
@@ -2396,11 +2405,27 @@ export default function Kanban() {
 
   return (
     <>
-    {/* ── ALERTAS INICIO RUTA — toasts apilados en esquina (no bloquean) ── */}
+    {/* ── ALERTAS INICIO RUTA — modal centrado que SÍ bloquea ───────────── */}
+    {/* Bloquea a propósito (decisión de David, 2026-09-16): es una tarea con hora,
+        no un aviso de paso — el técnico ya va en camino y la familia todavía no
+        sabe a qué hora llega. Se manda el WhatsApp, la tarjeta se va y no vuelve
+        a salir.
+
+        NO se cierra con Esc ni haciendo clic en el fondo, aunque sea lo normal en
+        un modal: aquí cerrar no es "cerrar", es escribir en los datos "visto SIN
+        avisar" (`descartarAlertaRuta`), y un Esc de reflejo dejaría a la familia
+        sin el aviso y sin rastro de que faltó. La ✕ de cada tarjeta sigue siendo
+        esa salida, pero deliberada.
+
+        Se usan las mismas clases de `ui/dialog` (.cac-overlay/.cac-modal) para que
+        se vea igual que el resto de modales, con `data-state="open"` a mano porque
+        esto no pasa por Radix — y no pasa por Radix justamente para no heredar su
+        cierre con Esc y con clic fuera. Solo anima la ENTRADA (ver index.css). */}
     {alertasRuta.length > 0 && (
-      <div className="fixed bottom-4 right-4 z-[60] w-80 max-w-[calc(100vw-2rem)] flex flex-col gap-2 pointer-events-none">
+      <div className="cac-overlay fixed inset-0 z-[60] bg-[#0B1D4F]/35 backdrop-blur-[5px] flex items-center justify-center p-4" data-state="open">
+        <div className="w-80 max-w-full max-h-[85vh] overflow-y-auto flex flex-col gap-2">
         {alertasRuta.length > 1 && (
-          <div className="flex items-center justify-between bg-white/95 backdrop-blur rounded-xl shadow border border-gray-100 px-3 py-2 pointer-events-auto">
+          <div className="flex items-center justify-between bg-white/95 backdrop-blur rounded-xl shadow border border-gray-100 px-3 py-2">
             <span className="text-[11px] font-bold text-gray-600">{alertasRuta.length} inicios de ruta</span>
             <button onClick={limpiarAlertasRuta}
               className="text-[11px] font-semibold text-gray-500 hover:text-gray-800 transition-colors">
@@ -2417,7 +2442,8 @@ export default function Kanban() {
           const waNum = yaAvisoVet ? '' : (d.wa_cliente || d.wa_aliado || '')
           const msg   = generarMsgRuta(n)
           return (
-            <div key={n.id} className="bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden pointer-events-auto">
+            <div key={n.id} data-state="open"
+              className="cac-modal bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
               <div className="px-4 py-3 border-b flex items-start gap-2" style={{ background: '#EEF3FB', borderColor: '#C5D8F5' }}>
                 <span className="text-lg leading-none">🚗</span>
                 <div className="flex-1 min-w-0">
@@ -2453,6 +2479,7 @@ export default function Kanban() {
             </div>
           )
         })}
+        </div>
       </div>
     )}
     <div className="flex flex-col flex-1 min-h-0">
