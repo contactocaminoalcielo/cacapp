@@ -155,7 +155,11 @@ export function Ilustracion({ nombre, vivo = false, tam = 72 }) {
 // tarjetas — uno pisaría al otro y quien navega con teclado se quedaría sin
 // saber dónde está. Con `outline` no compiten, y escrito a mano no depende de
 // cómo se comporte `outline-2` en esta versión de Tailwind.
-const ESTILOS = `
+//
+// Se EXPORTA: quien lo pinta es el <style> del marco de PlantaCliente. Vivió
+// suelto aquí y la página quedó en blanco para las familias — esto no es un
+// detalle interno del archivo.
+export const ESTILOS = `
   .cac-foco:focus-visible { outline: 2px solid ${HONDO}; outline-offset: 3px; }
   @media (prefers-reduced-motion: reduce) {
     .cac-suave { transition-duration: 0.01ms !important; }

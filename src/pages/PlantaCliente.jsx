@@ -19,7 +19,7 @@
 import { useState, useEffect } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { portalPlanta, portalElegirPlanta } from '@/lib/plantas'
-import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE, ORO } from '@/components/portal/Botanica'
+import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE, ORO } from '@/components/portal/Botanica'
 
 // La paleta y las ilustraciones viven en components/portal/Botanica.jsx: las
 // comparte con el portal de fotos.
