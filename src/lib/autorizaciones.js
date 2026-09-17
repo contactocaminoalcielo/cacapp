@@ -19,24 +19,27 @@ export async function registrarAutorizacion({
   origen, medio, titular = {}, servicioId = null, clienteId = null,
   solicitudId = null, aliadoId = null, declaradaPor = null, notas = null,
 }) {
-  const t = v => {
+  // Los topes son los mismos que la migración 162 exige en la base: recortar
+  // aquí evita que un correo larguísimo tumbe el formulario con un error de
+  // constraint que la familia no puede entender ni arreglar.
+  const t = (v, max = 200) => {
     const s = String(v ?? '').trim()
-    return s || null
+    return s ? s.slice(0, max) : null
   }
   const { error } = await db.from('autorizaciones_datos').insert({
     origen,
     medio,
     politica_version:  VERSION,
     titular_nombre:    t([titular.nombre, titular.apellido].filter(Boolean).join(' ')),
-    titular_documento: t(titular.documento),
-    titular_telefono:  t(titular.telefono),
+    titular_documento: t(titular.documento, 60),
+    titular_telefono:  t(titular.telefono, 60),
     titular_email:     t(titular.email),
     servicio_id:       servicioId,
     cliente_id:        clienteId,
     solicitud_id:      solicitudId,
     aliado_id:         aliadoId,
     declarada_por:     declaradaPor,
-    notas:             t(notas),
+    notas:             t(notas, 2000),
   })
   if (error) throw new Error(error.message || 'No se pudo registrar la autorización')
 }

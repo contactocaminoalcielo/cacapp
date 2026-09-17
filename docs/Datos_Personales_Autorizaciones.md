@@ -115,6 +115,45 @@ antes de publicarla. En un documento no la leería nadie en ese instante.
 casilla opcional. La tabla ya está lista: `finalidades` es un arreglo, así que
 sería otro elemento y no otra tabla.
 
+## Seguridad de la tabla (migración 162)
+
+La 161 dejó a `anon` con INSERT libre. Revisado el 17-sep-2026 y cerrado:
+
+- **`anon` solo puede escribir lo del portal `/solicitud`**: `origen`
+  `SOLICITUD_CLIENTE`, `medio` `PORTAL_WEB`, `accion` `AUTORIZA`, y **todos los
+  ids en NULL**. Antes podía escribir una fila diciendo que un coordinador
+  declaró la autorización, o colgarla del `servicio_id` de otra familia. Nadie
+  gana nada con eso, pero envenena lo único que la tabla existe para sostener.
+- **`authenticated` solo puede escribir el registro interno**
+  (`REGISTRO_INTERNO` + `DECLARADA_POR_PERSONAL`), así que una sesión del equipo
+  no puede fabricar una autorización que parezca marcada por la familia.
+- **Topes de largo** en cada columna de texto y en `finalidades`. Sin ellos,
+  cualquiera con la llave pública —que va en el bundle— podía dejar filas de
+  megabytes. `src/lib/autorizaciones.js` recorta con los mismos topes para que
+  un correo larguísimo no tumbe el formulario con un error de constraint.
+- `anon` **no puede leer** nada: no tiene GRANT de SELECT.
+
+Probado contra producción dentro de una transacción con ROLLBACK: el INSERT
+legítimo del portal pasa, y los cuatro intentos —firmar como personal, colgarse
+de un servicio ajeno, leer la tabla y meter 5.000 caracteres— quedan bloqueados.
+
+### La IP: `x-forwarded-for` no servía
+
+nginx la arma con `$proxy_add_x_forwarded_for`, que **añade** la IP real a lo
+que el cliente haya mandado. El código tomaba el primer valor, o sea el que
+escribe quien llama: cualquiera podía firmar su autorización con la IP que
+quisiera. Ahora se usa `x-real-ip` —que nginx pone desde el socket— y del
+`x-forwarded-for` solo el último valor.
+
+Además se valida el formato. La columna es `inet`, así que una cabecera con
+basura (`X-Forwarded-For: pwned`) reventaba el INSERT **y con él toda la
+petición de la familia**: no era solo un dato sucio, era una caída.
+
+⚠️ Las autorizaciones de `/solicitud` **no llevan IP**, a propósito: ese portal
+escribe directo a la base como `anon` y una IP puesta por el navegador no prueba
+nada. Si algún día se quiere esa prueba, hay que mover ese guardado al backend,
+como los otros portales.
+
 ## Lo que quedó pendiente
 
 - **Registro Nacional de Bases de Datos (RNBD) de la SIC.** Verificar si la

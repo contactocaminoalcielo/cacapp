@@ -9,12 +9,33 @@
 // Solo se inserta. Nunca se actualiza ni se borra: una revocación es otra fila
 // con accion='REVOCA'.
 
-/** IP real detrás de nginx, y el navegador. Los dos son prueba, no adorno. */
+// Una IP sirve como prueba solo si el que la manda no puede escribirla.
+const IP_VALIDA = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f:]{2,45})$/i
+const ipLimpia = v => {
+  const s = String(v || '').trim().replace(/^::ffff:/i, '')
+  return s && s.length <= 45 && IP_VALIDA.test(s) ? s : null
+}
+
+/**
+ * IP real detrás de nginx, y el navegador. Los dos son prueba, no adorno.
+ *
+ * 🩸 `x-forwarded-for` NO sirve para esto: nginx la arma con
+ * `$proxy_add_x_forwarded_for`, que AÑADE la IP real a lo que el cliente haya
+ * mandado. O sea que el primer valor lo escribe quien llama, y tomarlo dejaba
+ * que cualquiera firmara su autorización con la IP que quisiera. `x-real-ip` la
+ * pone nginx desde el socket y no se puede falsificar; del `x-forwarded-for`
+ * solo vale el ÚLTIMO valor, que es el que agregó nginx.
+ *
+ * Y se valida el formato: la columna es `inet`, así que una cabecera con basura
+ * reventaba el INSERT y con él toda la petición de la familia.
+ */
 export function contextoPeticion(req) {
-  const reenviada = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim()
-  const ip = reenviada || req?.socket?.remoteAddress || null
+  const cadena = String(req?.headers?.['x-forwarded-for'] || '').split(',')
+  const ip = ipLimpia(req?.headers?.['x-real-ip'])
+    || ipLimpia(cadena[cadena.length - 1])
+    || ipLimpia(req?.socket?.remoteAddress)
   const ua = String(req?.headers?.['user-agent'] || '').slice(0, 500) || null
-  return { ip: ip || null, userAgent: ua }
+  return { ip, userAgent: ua }
 }
 
 /**

@@ -15,7 +15,7 @@
 export const URL_POLITICA = '/#/privacidad'
 
 export const VERSION = '1.1'
-export const VIGENTE_DESDE = '2026-09-17'
+export const VIGENTE_DESDE = '2026-06-09'
 
 export const RESPONSABLE = {
   razon:     'MARTEN´S INVERSIONES S.A.S',
