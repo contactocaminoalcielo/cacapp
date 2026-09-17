@@ -20,16 +20,46 @@ la causa raíz del bucle).
 ### Módulo 2 — Recibos (tab Recibos, `ReciboTab`)
 - **Fuente de verdad: la DB, nunca el estado temporal de la recogida.**
 - Lista servicios del técnico con `estado IN ESTADOS_RECOGIDO`
-  (`EN_CUARTO_FRIO, EN_PROCESO, EN_PRODUCCION, LISTO, EN_ENTREGA, ENTREGADO`, límite 60)
+  (`EN_CUARTO_FRIO, EN_PROCESO, EN_PRODUCCION, LISTO, EN_ENTREGA, ENTREGADO`, límite 500)
   y hace merge client-side con `recibos_tecnico` (query separado — el join inverso falla en silencio).
-- Estado derivado por servicio (`estadoReciboDe(recibos)`):
+
+#### Ventana de carga (2026-09-17)
+- Arranca en los **últimos `DIAS_RECIBOS_RECIENTES` = 45 días** (`pisoRecibos()`), no en
+  `FECHA_CORTE`. Cargar todo desde el corte eran cientos de servicios con sus joins más tres
+  consultas en lotes (`recibos_tecnico`, `cuadre_items`, `recibo_comprobantes`) en cada apertura.
+- El piso se calcula en hora **local**: `fecha_ingreso` es DATE y restar sobre `toISOString()`
+  corre el piso un día después de las 7 p.m. en Bogotá.
+- Lo anterior se alcanza por dos puertas explícitas, y la pantalla dice siempre qué ventana muestra:
+  1. el filtro de fechas ("Todo" vuelve al corte);
+  2. **"Buscar en todo el historial"** (`buscarHistorial()`): consulta la DB por el término —
+     nombre de mascota (`mascotas!inner` + `ilike`) y `numero_recibo`—, con y sin tildes,
+     y pinta lo hallado en su propia sección *Del historial*.
+- `hidratarRecibos(svcs, tecnicoId)` vive fuera del componente: la lista y la búsqueda
+  **tienen que clasificar con la misma regla**, o el mismo servicio sale archivado en una
+  y pendiente en la otra.
+
+- Estado derivado por servicio (`estadoReciboDe(recibos, { conPrueba, cuadrado })`):
 
 | Estado | Condición |
 |---|---|
 | `PENDIENTE_RECIBO` | sin filas en `recibos_tecnico` |
-| `PENDIENTE_COMPROBANTE` | algún recibo tiene medio digital (`TRANSFERENCIA/NEQUI/DAVIPLATA/TARJETA`) con monto > 0 y sin `comprobanteUrl` |
+| `PENDIENTE_COMPROBANTE` | algún recibo tiene medio digital (`TRANSFERENCIA/NEQUI/DAVIPLATA/TARJETA`) con monto > 0 y sin `comprobanteUrl`, **y** no hay `conPrueba` ni `cuadrado` |
 | `PAGO_PENDIENTE` | `datos_form.pago_pendiente = true` |
 | `COMPLETO` | resto |
+
+Las dos salidas que el jsonb del recibo no ve:
+- `conPrueba` — comprobante subido por la oficina; cuelga del **servicio** con `recibo_id` NULL.
+- `cuadrado` — el servicio entró en un `cuadre_items` cuyo `cuadres_tecnico.estado = 'CERRADO'`
+  **y del propio técnico** (no de otro que también lo tocó).
+
+#### Archivado (2026-09-17)
+Un servicio se archiva —sección *Archivados · ya cuadrados*, la última y colapsada— solo si se
+cumplen **las tres**: `estadoRecibo === 'COMPLETO'` **y** saldo `= 0` **y** cuadre CERRADO.
+
+⚠️ Archivado **≠** "recibo completo". Un recibo COMPLETO puede tener saldo vivo cuando el valor
+subió después de cobrar (adicional vendido aparte, recálculo por peso): ese sigue arriba,
+mostrando su "Por cobrar". Y COMPLETO tampoco significa que el técnico ya entregó la plata —
+eso solo lo dice el cuadre cerrado.
 
 - **Estado derivado** del jsonb por compatibilidad; la fuente de verdad nueva son
   las tablas formales (ver "Modelo formal" abajo). No se agregaron estados a `servicios.estado`.
