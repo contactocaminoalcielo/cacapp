@@ -622,6 +622,11 @@ export default function Kanban() {
   const [guardando, setGuardando]         = useState(false)
   const [mensajeros, setMensajeros]       = useState([])
   const [tecnicos, setTecnicos]           = useState([])
+  // id → "Juan P." para poner el nombre del técnico en la tarjeta sin pedirle
+  // nada más a la DB (`v_kanban` solo trae `tecnico_id`). Incluye a los
+  // INACTIVOS a propósito: un servicio viejo puede apuntar a alguien que ya no
+  // está y la tarjeta igual tiene que decir quién lo recogió.
+  const [personalNombres, setPersonalNombres] = useState({})
   const [mensajeroId, setMensajeroId]     = useState('')
   const [modalEntrega, setModalEntrega]   = useState(null) // servicioId para modal entrega
 
@@ -1118,12 +1123,23 @@ export default function Kanban() {
       setAliados(a.data || [])
       setTarifasTransporte(t.data || [])
     })
-    db.from('personal').select('id,nombre,apellido,rol_principal_id,tipo_vehiculo,whatsapp')
-      .eq('activo', true).order('nombre')
+    // Se traen TODOS (también los inactivos) y se filtra aquí: los desplegables
+    // de asignación siguen ofreciendo solo gente activa, pero el nombre de un
+    // técnico que ya se fue se puede seguir resolviendo en las tarjetas viejas.
+    db.from('personal').select('id,nombre,apellido,rol_principal_id,tipo_vehiculo,whatsapp,activo')
+      .order('nombre')
       .then(({ data }) => {
         const all = data || []
-        setTecnicos(all.filter(p => p.rol_principal_id === 2))
-        setMensajeros(all.filter(p => p.rol_principal_id === 3))
+        setTecnicos(all.filter(p => p.activo && p.rol_principal_id === 2))
+        setMensajeros(all.filter(p => p.activo && p.rol_principal_id === 3))
+        // Primer nombre + inicial del apellido: `nombre` guarda los dos nombres
+        // ("Giovanni Alexander") y entero no cabe en el chip. La inicial es lo
+        // que separa a los dos Jorge —Castillo y Galvis— que están activos.
+        setPersonalNombres(Object.fromEntries(all.map(p => {
+          const pila = String(p.nombre || '').trim().split(/\s+/)[0] || ''
+          const ini  = String(p.apellido || '').trim().charAt(0)
+          return [p.id, ini ? `${pila} ${ini}.` : pila]
+        })))
       })
     db.from('recordatorios').select('id,nombre,precio_base,categoria')
       .eq('activo', true).order('nombre')
@@ -3017,6 +3033,12 @@ export default function Kanban() {
                           const puedeContactar = (esVistaProd || esAdmin) && col === 'EN_CUARTO_FRIO' && s.cliente_wa
                           const puedeNotifTec  = !esVistaProd && col === 'INGRESADO' && !!s.tecnico_id
                           const sinTecnico     = !esVistaProd && ['INGRESADO','EN_RECOGIDA'].includes(col) && !s.tecnico_id
+                          // Quién recoge (o recogió) a esta mascota. Se muestra en
+                          // toda la fila del tablero, no solo en la recogida: más
+                          // adelante la pregunta sigue siendo "¿quién la trajo?".
+                          // Si el id no resuelve —personal borrado— no se inventa
+                          // nada: la tarjeta calla en vez de mentir.
+                          const tecnicoNombre  = !esVistaProd && s.tecnico_id ? (personalNombres[s.tecnico_id] || null) : null
                           // Pendientes de la etapa + alerta por hora de recogida confirmada
                           const pend   = pendientesDe(s)
                           // Se muestran aparte del contador genérico: "2 pendientes"
@@ -3184,6 +3206,14 @@ export default function Kanban() {
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-amber-100 text-amber-700"
                                   title="Este servicio tiene un recordatorio adicional agregado">
                                   <Gift size={9} /> Tiene adicional
+                                </div>
+                              )}
+                              {tecnicoNombre && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 max-w-full"
+                                  style={{ background: '#E0E7FF', color: '#3730A3' }}
+                                  title="Técnico asignado a la recogida">
+                                  <User size={9} className="flex-shrink-0" />
+                                  <span className="truncate">{tecnicoNombre}</span>
                                 </div>
                               )}
                               {sinTecnico && (
