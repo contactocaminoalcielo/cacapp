@@ -661,7 +661,7 @@ export default function Kanban() {
   const [addingRec,    setAddingRec]    = useState(false)
   const [addRecPagado,      setAddRecPagado]      = useState(false)
   const [addRecMetodo,      setAddRecMetodo]      = useState('TRANSFERENCIA')
-  const [addRecComprobante, setAddRecComprobante] = useState(null)
+  const [addRecComprobantes, setAddRecComprobantes] = useState([])   // File[]: un cobro puede llegar partido
   // ── Quitar ítem / ajuste por adicional no tomado ──────────────────────────
   const [itemAQuitar, setItemAQuitar] = useState(null)  // fila servicio_recordatorios, o {} para ajuste manual
   const [quitarMonto, setQuitarMonto] = useState('')
@@ -1366,7 +1366,7 @@ export default function Kanban() {
     setEditNotas(s.notas || ''); setEditComisionAliado('')
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
     setAddRecId(''); setAddRecQty(1)
-    setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobante(null)
+    setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
     setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
 
@@ -1696,11 +1696,20 @@ export default function Kanban() {
 
     setAddingRec(true)
     try {
-      // Si pagó, subir el comprobante PRIMERO (si lo adjuntaron): si falla la
-      // subida no se toca nada y el usuario corrige y reintenta.
-      let comprobante = null
-      if (pagado && addRecComprobante)
-        comprobante = await subirComprobantePago(selected.servicio_id, addRecComprobante)
+      // Si pagó, subir los comprobantes PRIMERO (si los adjuntaron): si falla
+      // uno no se toca nada —se borran los que ya subieron para no dejar
+      // huérfanos— y el usuario corrige y reintenta.
+      const comprobantes = []
+      if (pagado) {
+        try {
+          for (const f of addRecComprobantes)
+            comprobantes.push(await subirComprobantePago(selected.servicio_id, f))
+        } catch (e) {
+          for (const c of comprobantes)
+            await db.storage.from(c.bucket).remove([c.storage_path])
+          throw e
+        }
+      }
 
       // Insertar ítem adicional (guardamos el precio cobrado para que sea
       // removible después con el monto correcto prellenado)
@@ -1735,18 +1744,20 @@ export default function Kanban() {
         .eq('id', selected.servicio_id)
       if (svErr) throw svErr
 
-      // Registrar el comprobante (no crítico: el cobro ya quedó). Si falla,
+      // Registrar los comprobantes (no crítico: el cobro ya quedó). Si falla,
       // se avisa pero no se revierte nada.
       let avisoComprobante = null
-      if (comprobante) {
-        const { error: ce } = await db.from('recibo_comprobantes').insert({
-          servicio_id:  selected.servicio_id,
-          bucket:       comprobante.bucket,
-          storage_path: comprobante.storage_path,
-          mime_type:    comprobante.mime_type,
-          estado:       'APROBADO',
-          uploaded_by:  personalData?.id || null,
-        })
+      if (comprobantes.length) {
+        const { error: ce } = await db.from('recibo_comprobantes').insert(
+          comprobantes.map(c => ({
+            servicio_id:  selected.servicio_id,
+            bucket:       c.bucket,
+            storage_path: c.storage_path,
+            mime_type:    c.mime_type,
+            estado:       'APROBADO',
+            uploaded_by:  personalData?.id || null,
+          }))
+        )
         if (ce) avisoComprobante = ce.message
       }
 
@@ -1756,7 +1767,7 @@ export default function Kanban() {
         tipo_novedad:   pagado ? 'PAGO_RECIBIDO' : 'NOTA',
         descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. ` +
                         (pagado
-                          ? `Pagado (${addRecMetodo})${comprobante ? ', comprobante adjunto' : ''}.`
+                          ? `Pagado (${addRecMetodo})${comprobantes.length ? (comprobantes.length > 1 ? `, ${comprobantes.length} comprobantes adjuntos` : ', comprobante adjunto') : ''}.`
                           : 'Pendiente de cobro en entrega.'),
         valor_ajuste:   subtotal,
         registrado_por: personalData?.id || null,
@@ -1782,9 +1793,9 @@ export default function Kanban() {
       setSelected(prev => ({ ...prev, ...upd }))
       setEditEstadoPago(nuevoEstadoPago)
       setAddRecId(''); setAddRecQty(1)
-      setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobante(null)
+      setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
       if (avisoComprobante)
-        await showAlert('El adicional y el pago quedaron registrados, pero el comprobante no se pudo guardar: ' + avisoComprobante + '\n\nVuelve a adjuntarlo desde Finanzas.', { title: 'Comprobante no guardado', variant: 'warning' })
+        await showAlert('El adicional y el pago quedaron registrados, pero ' + (comprobantes.length > 1 ? 'los comprobantes no se pudieron guardar: ' : 'el comprobante no se pudo guardar: ') + avisoComprobante + '\n\nVuelve a adjuntarlo desde la ficha del servicio.', { title: 'Comprobante no guardado', variant: 'warning' })
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
     } finally {
@@ -4050,7 +4061,7 @@ export default function Kanban() {
                 <div className="flex gap-2">
                   <Select
                     value={addRecId}
-                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1); setAddRecPagado(false); setAddRecComprobante(null) }}
+                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1); setAddRecPagado(false); setAddRecComprobantes([]) }}
                     className="flex-1 text-[12px]"
                   >
                     <option value="">Seleccionar ítem…</option>
@@ -4081,37 +4092,48 @@ export default function Kanban() {
                             <input
                               type="checkbox"
                               checked={addRecPagado}
-                              onChange={e => { setAddRecPagado(e.target.checked); if (!e.target.checked) setAddRecComprobante(null) }}
+                              onChange={e => { setAddRecPagado(e.target.checked); if (!e.target.checked) setAddRecComprobantes([]) }}
                               className="accent-[#D97706]"
                             />
                             El cliente ya pagó este adicional
                           </label>
+                          {/* El cobro puede llegar partido (dos transferencias,
+                              dos pantallazos): los adjuntos se acumulan y el
+                              recuadro se queda para agregar más. Cada uno entra
+                              como su propia fila en `recibo_comprobantes`. */}
                           {addRecPagado && (
-                            <div className="flex gap-2 items-center">
-                              <Select
-                                value={addRecMetodo}
-                                onChange={e => setAddRecMetodo(e.target.value)}
-                                className="text-[11px] w-36"
-                              >
-                                {['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO'].map(m => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </Select>
-                              {addRecComprobante ? (
-                                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border bg-white min-w-0 flex-1" style={{ borderColor: '#FDE68A' }}>
+                            <div className="space-y-1.5">
+                              <div className="flex gap-2 items-center">
+                                <Select
+                                  value={addRecMetodo}
+                                  onChange={e => setAddRecMetodo(e.target.value)}
+                                  className="text-[11px] w-36"
+                                >
+                                  {['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO'].map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                  ))}
+                                </Select>
+                                <label className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed cursor-pointer text-[11px] font-semibold text-amber-700 hover:bg-amber-50 transition-colors flex-1" style={{ borderColor: '#FBBF24' }}>
+                                  <Paperclip size={12} /> {addRecComprobantes.length ? 'Agregar más comprobantes' : 'Comprobante'}
+                                  {/* Se limpia el input para poder volver a elegir el mismo archivo. */}
+                                  <input type="file" accept="image/*,application/pdf" multiple className="hidden"
+                                    onChange={e => {
+                                      const nuevos = Array.from(e.target.files || [])
+                                      e.target.value = ''
+                                      if (nuevos.length) setAddRecComprobantes(prev => [...prev, ...nuevos])
+                                    }} />
+                                </label>
+                              </div>
+                              {addRecComprobantes.map((f, i) => (
+                                <div key={`${f.name}-${i}`} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border bg-white min-w-0" style={{ borderColor: '#FDE68A' }}>
                                   <FileText size={12} className="text-amber-600 flex-shrink-0" />
-                                  <span className="text-[11px] text-gray-700 truncate flex-1">{addRecComprobante.name}</span>
-                                  <button type="button" onClick={() => setAddRecComprobante(null)} className="text-gray-400 hover:text-red-500 flex-shrink-0" title="Quitar">
+                                  <span className="text-[11px] text-gray-700 truncate flex-1">{f.name}</span>
+                                  <button type="button" onClick={() => setAddRecComprobantes(prev => prev.filter((_, j) => j !== i))}
+                                    className="text-gray-400 hover:text-red-500 flex-shrink-0" title="Quitar">
                                     <X size={12} />
                                   </button>
                                 </div>
-                              ) : (
-                                <label className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed cursor-pointer text-[11px] font-semibold text-amber-700 hover:bg-amber-50 transition-colors flex-1" style={{ borderColor: '#FBBF24' }}>
-                                  <Paperclip size={12} /> Comprobante
-                                  <input type="file" accept="image/*,application/pdf" className="hidden"
-                                    onChange={e => setAddRecComprobante(e.target.files?.[0] || null)} />
-                                </label>
-                              )}
+                              ))}
                             </div>
                           )}
                         </>
