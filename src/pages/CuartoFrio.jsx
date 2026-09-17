@@ -12,6 +12,7 @@ import { FECHA_CORTE } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { petEmoji, fmt, waLink, hoyLocalISO } from '@/lib/utils'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
+import { comparadorDeRangos } from '@/lib/precios'
 import {
   Snowflake, RefreshCw, Edit2, ClipboardList, Scale, Package,
   History, ChevronDown, ChevronUp, Plus, Trash2, Thermometer,
@@ -138,6 +139,23 @@ function ReporteCard({ reporte, defaultOpen = false }) {
 }
 
 // ─── LogMovimientos ───────────────────────────────────────────────────────────
+// Etiqueta de una mascota cuya báscula la dejó en otra banda de peso que la
+// del registro: lo que se cobró corresponde a otro rango y hay que recategorizar.
+// Distinta de `RecatBadges`, que marca lo YA recategorizado; ésta marca lo que
+// falta por hacer, y por eso va en rojo.
+function RecatPendienteBadge({ bandas, size = 'sm' }) {
+  if (!bandas) return null
+  const px = size === 'xs' ? 'text-[9px] px-1.5 py-0.5' : 'text-[10px] px-2 py-0.5'
+  return (
+    <span
+      title={`Registrada en el rango ${bandas.registrado} y la báscula la deja en ${bandas.bascula}. Hay que recategorizar el precio.`}
+      className={`${px} font-bold rounded-full whitespace-nowrap cursor-help inline-flex items-center gap-1 border`}
+      style={{ background: '#FEE2E2', color: '#991B1B', borderColor: '#FCA5A5' }}>
+      ⚖ Pendiente por recategorizar por peso
+    </span>
+  )
+}
+
 function LogMovimientos({ movimientos }) {
   const [open, setOpen] = useState(false)
   if (!movimientos.length) return null
@@ -184,7 +202,7 @@ function LogMovimientos({ movimientos }) {
 }
 
 // ─── DetalleModal ─────────────────────────────────────────────────────────────
-function DetalleModal({ registro: r, onClose, onEdit, movimientos }) {
+function DetalleModal({ registro: r, onClose, onEdit, movimientos, bandas = null }) {
   const m            = r.servicios?.mascotas
   const c            = m?.clientes
   const p            = r.servicios?.planes
@@ -232,6 +250,21 @@ function DetalleModal({ registro: r, onClose, onEdit, movimientos }) {
         </div>
 
         {/* Grid de datos */}
+        {bandas && (
+          <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-3 border"
+            style={{ background: '#FEF2F2', borderColor: '#FCA5A5' }}>
+            <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" style={{ color: '#DC2626' }} />
+            <div className="text-[12px]" style={{ color: '#991B1B' }}>
+              <div className="font-bold">Pendiente por recategorizar por peso</div>
+              <div className="mt-0.5 leading-snug">
+                Registrada con <strong>{m?.peso_kg} kg</strong> (rango {bandas.registrado}) y la
+                báscula la deja en <strong>{r.peso_kg} kg</strong> (rango {bandas.bascula}).
+                El precio cobrado corresponde al rango anterior.
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           {[
             { label: 'Plan',         value: p?.nombre || '—',                                           sub: p?.codigo },
@@ -484,6 +517,7 @@ export default function CuartoFrio() {
   const canEdit = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
 
   const [registros,   setRegistros]   = useState([])
+  const [recatPeso,   setRecatPeso]   = useState({})  // cuarto_frio.id → bandas que no coinciden
   const [reportes,    setReportes]    = useState([])
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState(null)
@@ -517,6 +551,7 @@ export default function CuartoFrio() {
       const [{ data, error: err }, { data: rep }] = await Promise.all([
         db.from('cuarto_frio')
           .select(`*, registrador:registrado_por(nombre,apellido), servicios!inner(
+            plan_id,
             mascotas(nombre,peso_kg,especie_id,especies(nombre),clientes(nombre,apellido,whatsapp)),
             aliados:aliado_origen_id(vip),
             planes(nombre,codigo,tipo_proceso),
@@ -533,6 +568,29 @@ export default function CuartoFrio() {
       ])
       if (err) throw err
       setRegistros(data || [])
+
+      // ── Pendientes por recategorizar por peso ────────────────────────────
+      // La báscula del cuarto frío dejó a la mascota en una BANDA distinta a la
+      // del peso con el que está registrada: lo que se le cobró corresponde a
+      // otro rango. Se compara la banda, no el precio: dos pesos distintos
+      // dentro de la misma banda facturan igual y no son una recategorización.
+      //
+      // Si cualquiera de las dos bandas no se puede resolver (plan sin filas en
+      // `planes_precios`, peso ausente) NO se marca: una alerta roja inventada
+      // manda a corregir algo que quizá está bien.
+      try {
+        const rango = await comparadorDeRangos()
+        const mapa = {}
+        for (const r of (data || [])) {
+          const svc = r.servicios, m = svc?.mascotas
+          const deBascula    = rango(svc?.plan_id, r.peso_kg,   m?.especie_id)
+          const deRegistrado = rango(svc?.plan_id, m?.peso_kg,  m?.especie_id)
+          if (deBascula && deRegistrado && deBascula !== deRegistrado) {
+            mapa[r.id] = { bascula: deBascula, registrado: deRegistrado }
+          }
+        }
+        setRecatPeso(mapa)
+      } catch (_) { /* sin catálogo no se inventa alerta */ }
       setReportes(rep || [])
     } catch (e) {
       // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
@@ -833,9 +891,11 @@ export default function CuartoFrio() {
                         const m = r.servicios?.mascotas
                         const c = m?.clientes
                         const e = ESTADO_CF[r.estado] || {}
+                        const recat = recatPeso[r.id]
                         return (
                           <div key={r.id}
                             className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors"
+                            style={recat ? { background: '#FEF2F2', boxShadow: 'inset 3px 0 0 #DC2626' } : undefined}
                             onClick={() => verDetalle(r)}>
                             <span className="text-xl leading-none">{petEmoji(m?.especies?.nombre)}</span>
                             <div className="flex-1 min-w-0">
@@ -844,6 +904,7 @@ export default function CuartoFrio() {
                                 {esAliadoVip(r.servicios) && <VipStar size={12} />}
                               </div>
                               <div className="text-[10px] text-gray-400 truncate">{c?.nombre} {c?.apellido}</div>
+                              {recat && <div className="mt-1"><RecatPendienteBadge bandas={recat} size="xs" /></div>}
                             </div>
                             <div className="flex items-center gap-1.5 flex-shrink-0">
                               {r.peso_kg && <span className="text-[10px] font-mono text-gray-500">{r.peso_kg}kg</span>}
@@ -904,12 +965,16 @@ export default function CuartoFrio() {
                   const c = m?.clientes
                   const p = r.servicios?.planes
                   const e = ESTADO_CF[r.estado] || {}
+                  const recat = recatPeso[r.id]
                   return (
                     <tr key={r.id}
                       className="hover:bg-gray-50/70 cursor-pointer transition-colors"
                       style={{
                         borderBottom: i < registrosFiltrados.length - 1 ? '1px solid #F9FAFB' : 'none',
-                        background: esAliadoVip(r.servicios) ? VIP_ORO.bg : undefined,
+                        // El rojo de "hay que recategorizar" gana sobre el oro del
+                        // VIP: uno es decoración, el otro es plata mal cobrada.
+                        background: recat ? '#FEF2F2' : esAliadoVip(r.servicios) ? VIP_ORO.bg : undefined,
+                        boxShadow: recat ? 'inset 3px 0 0 #DC2626' : undefined,
                       }}
                       onClick={() => verDetalle(r)}>
                       <td className="px-4 py-3">
@@ -918,6 +983,7 @@ export default function CuartoFrio() {
                           <span className="font-semibold text-gray-900 text-[13px]">{m?.nombre || '—'}</span>
                           {esAliadoVip(r.servicios) && <VipStar size={12} />}
                         </div>
+                        {recat && <div className="mt-1"><RecatPendienteBadge bandas={recat} size="xs" /></div>}
                       </td>
                       <td className="px-4 py-3 text-[12px] text-gray-600">{c?.nombre} {c?.apellido}</td>
                       <td className="px-4 py-3 text-[12px] text-gray-500">{p?.nombre}</td>
@@ -928,10 +994,15 @@ export default function CuartoFrio() {
                       </td>
                       <td className="px-4 py-3 text-[12px]">
                         {r.peso_kg
-                          ? <span className="font-semibold text-blue-700">{r.peso_kg} kg ✓</span>
+                          ? <span className={recat ? 'font-bold text-red-700' : 'font-semibold text-blue-700'}>{r.peso_kg} kg ✓</span>
                           : m?.peso_kg
                             ? <span className="text-amber-600">{m.peso_kg} kg ~</span>
                             : <span className="text-gray-300">—</span>}
+                        {recat && (
+                          <div className="text-[10px] text-red-600 font-semibold mt-0.5 whitespace-nowrap">
+                            {recat.registrado} → {recat.bascula}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-[12px] text-gray-500">{nombreTecnico(r)}</td>
                       <td className="px-4 py-3">
@@ -1017,6 +1088,7 @@ export default function CuartoFrio() {
       {detalle && (
         <DetalleModal
           registro={detalle}
+          bandas={recatPeso[detalle.id] || null}
           onClose={() => { setDetalle(null); setMovimientos([]) }}
           onEdit={canEdit ? r => { setDetalle(null); abrirEdicion(r) } : null}
           movimientos={movimientos}

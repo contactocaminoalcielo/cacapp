@@ -50,6 +50,64 @@ function cargarTarifasEspecie() {
 export function invalidarTarifasEspecie() { promesaEspecies = null }
 
 /**
+ * El catálogo de bandas de peso (`planes_precios`). Se lee una vez por sesión
+ * como el de especies: son pocas filas y comparar rangos se hace en bucle por
+ * mascota —68 en cuarto frío hoy—, así que pedirlo por fila serían cientos de
+ * consultas para responder algo que cabe en memoria.
+ */
+let promesaRangos = null
+function cargarRangosPeso() {
+  if (!promesaRangos) {
+    promesaRangos = db.from('planes_precios')
+      .select('plan_id, rango_nombre, peso_min_gr, peso_max_gr')
+      .then(({ data, error }) => {
+        if (error || !data) { promesaRangos = null; return null }
+        return data
+      })
+      .catch(() => { promesaRangos = null; return null })
+  }
+  return promesaRangos
+}
+
+/** Olvida las bandas cacheadas (tras editar precios en Configuración). */
+export function invalidarRangosPeso() { promesaRangos = null }
+
+/**
+ * Devuelve un comparador SÍNCRONO de rangos, ya con los dos catálogos cargados.
+ *
+ * Se entrega así —una llamada `await` y después N comparaciones en memoria—
+ * porque quien lo usa recorre una lista entera de mascotas: resolver el rango
+ * consultando la DB por mascota convertiría una pantalla en 136 peticiones.
+ *
+ * `rango(planId, pesoKg, especieId)` → nombre del rango o `null` si no se puede
+ * resolver (plan sin bandas, peso ausente). **Nunca inventa**: quien compara
+ * dos `null` no debe concluir que cambió de rango, sino que no sabe.
+ */
+export async function comparadorDeRangos() {
+  const [filas, tarifas] = await Promise.all([cargarRangosPeso(), cargarTarifasEspecie()])
+  return function rango(planId, pesoKgRaw, especieIdRaw) {
+    if (!filas || !planId) return null
+    const pesoKg = parseFloat(pesoKgRaw) || 0
+    if (pesoKg <= 0) return null
+    const pesoG     = Math.round(pesoKg * 1000)
+    const especieId = parseInt(especieIdRaw) || 0
+    // Mismo orden de decisión que `calcularPrecioPara`, y a propósito: si las
+    // dos divergen, la etiqueta diría "cambió de rango" para un peso que
+    // factura igual, o se callaría cuando sí cambió.
+    const usaFelino = tarifas
+      ? tarifas.get(String(especieId)) === 'FELINO'
+      : (especieId === 2 || especieId === 3)
+    const delPlan = filas.filter(f => String(f.plan_id) === String(planId))
+    if (delPlan.length === 0) return null
+    if (pesoG < 1000)  return delPlan.some(f => f.rango_nombre === 'PETIT')  ? 'PETIT'  : null
+    if (usaFelino)     return delPlan.some(f => f.rango_nombre === 'FELINO') ? 'FELINO' : null
+    const banda = delPlan.find(f =>
+      f.rango_nombre !== 'FELINO' && f.peso_min_gr <= pesoG && f.peso_max_gr >= pesoG)
+    return banda ? banda.rango_nombre : null
+  }
+}
+
+/**
  * Cuántos servicios llevaba el aliado en el mes ANTES de éste. Es el número que
  * ubica el tramo de volumen en `config_comisiones`.
  *
