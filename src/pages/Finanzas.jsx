@@ -162,7 +162,7 @@ export default function Finanzas() {
 
   // ── State modal pago ────────────────────────────────────────────────────────
   const [pagoModal,    setPagoModal]    = useState(null)   // null | servicio
-  const [pagoComprobante, setPagoComprobante] = useState(null)   // File adjunto al registrar pago
+  const [pagoComprobantes, setPagoComprobantes] = useState([])   // File[] adjuntos al registrar pago (un pago puede llegar partido)
   const [comprobantesSet, setComprobantesSet] = useState(() => new Set()) // servicio_ids con comprobante
   const [valorAbono,   setValorAbono]   = useState('')
   const [metodoPago,   setMetodoPago]   = useState('EFECTIVO')
@@ -1663,7 +1663,7 @@ export default function Finanzas() {
     setMetodoPago(svc.metodo_pago || 'EFECTIVO')
     setPagoNotas('')
     setPagoError('')
-    setPagoComprobante(null)
+    setPagoComprobantes([])
   }
 
   function cerrarPagoModal() {
@@ -1673,7 +1673,7 @@ export default function Finanzas() {
     setPagoNotas('')
     setPagoError('')
     setPagoSaving(false)
-    setPagoComprobante(null)
+    setPagoComprobantes([])
   }
 
   // ── Modal pago — guardar ────────────────────────────────────────────────────
@@ -1690,10 +1690,18 @@ export default function Finanzas() {
     setPagoSaving(true)
     setPagoError('')
     try {
-      // 1. Subir el comprobante PRIMERO (si lo adjuntaron). Si falla, no tocamos el
-      //    pago: el usuario corrige y reintenta sin haber movido dinero.
-      let comprobante = null
-      if (pagoComprobante) comprobante = await subirComprobantePago(pagoModal.id, pagoComprobante)
+      // 1. Subir los comprobantes PRIMERO (si los adjuntaron). Si uno falla, no
+      //    tocamos el pago y se borran los que ya habían subido: el usuario
+      //    corrige y reintenta sin haber movido dinero ni dejar huérfanos.
+      const comprobantes = []
+      try {
+        for (const f of pagoComprobantes)
+          comprobantes.push(await subirComprobantePago(pagoModal.id, f))
+      } catch (e) {
+        for (const c of comprobantes)
+          await db.storage.from(c.bucket).remove([c.storage_path])
+        throw e
+      }
 
       // 2. Registrar el pago.
       const nuevo_pagado = (pagoModal.valor_pagado || 0) + abono
@@ -1709,18 +1717,20 @@ export default function Finanzas() {
         .eq('id', pagoModal.id)
       if (error) throw error
 
-      // 3. Registrar el comprobante (no crítico: el pago ya quedó). Si falla, se
-      //    avisa pero NO se revierte el pago.
+      // 3. Registrar los comprobantes (no crítico: el pago ya quedó). Si falla,
+      //    se avisa pero NO se revierte el pago.
       let avisoComprobante = null
-      if (comprobante) {
-        const { error: ce } = await db.from('recibo_comprobantes').insert({
-          servicio_id:  pagoModal.id,
-          bucket:       comprobante.bucket,
-          storage_path: comprobante.storage_path,
-          mime_type:    comprobante.mime_type,
-          estado:       'APROBADO',
-          uploaded_by:  personalData?.id || null,
-        })
+      if (comprobantes.length) {
+        const { error: ce } = await db.from('recibo_comprobantes').insert(
+          comprobantes.map(c => ({
+            servicio_id:  pagoModal.id,
+            bucket:       c.bucket,
+            storage_path: c.storage_path,
+            mime_type:    c.mime_type,
+            estado:       'APROBADO',
+            uploaded_by:  personalData?.id || null,
+          }))
+        )
         if (ce) avisoComprobante = ce.message
       }
 
@@ -1730,7 +1740,7 @@ export default function Finanzas() {
       if (historialServicios !== null) cargarHistorialServicios(true)
       if (noCobrados !== null) cargarNoCobrados()
       if (avisoComprobante)
-        await showAlert('El pago se registró, pero el comprobante no se pudo guardar: ' + avisoComprobante + '\n\nVuelve a adjuntarlo desde el pago.', { title: 'Comprobante no guardado', variant: 'warning' })
+        await showAlert('El pago se registró, pero ' + (comprobantes.length > 1 ? 'los comprobantes no se pudieron guardar: ' : 'el comprobante no se pudo guardar: ') + avisoComprobante + '\n\nVuelve a adjuntarlo desde la ficha del servicio.', { title: 'Comprobante no guardado', variant: 'warning' })
     } catch (err) {
       setPagoError('Error al registrar el pago: ' + (err.message || err))
     } finally {
@@ -3431,24 +3441,40 @@ export default function Finanzas() {
                   />
                 </div>
 
+                {/* Un mismo abono puede llegar partido (dos transferencias, dos
+                    pantallazos): se acumulan archivos y el recuadro sigue ahí
+                    para agregar más. Cada uno queda como su propia fila en
+                    `recibo_comprobantes`. */}
                 <div>
                   <label className="block text-[12px] font-semibold text-gray-700 mb-1">
-                    Comprobante de pago <span className="font-normal text-gray-400">(opcional)</span>
+                    Comprobantes de pago <span className="font-normal text-gray-400">(opcional)</span>
+                    {pagoComprobantes.length > 0 && (
+                      <span className="ml-1 font-normal text-gray-400">· {pagoComprobantes.length}</span>
+                    )}
                   </label>
-                  {pagoComprobante ? (
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl border bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
-                      <FileText size={14} className="text-[#1A5CD8] flex-shrink-0" />
-                      <span className="text-[12px] text-gray-700 truncate flex-1">{pagoComprobante.name}</span>
-                      <button type="button" onClick={() => setPagoComprobante(null)} className="text-gray-400 hover:text-red-500" title="Quitar"><X size={14} /></button>
+                  {pagoComprobantes.length > 0 && (
+                    <div className="space-y-1.5 mb-2">
+                      {pagoComprobantes.map((f, i) => (
+                        <div key={`${f.name}-${i}`} className="flex items-center gap-2 px-3 py-2 rounded-xl border bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.2)' }}>
+                          <FileText size={14} className="text-[#1A5CD8] flex-shrink-0" />
+                          <span className="text-[12px] text-gray-700 truncate flex-1">{f.name}</span>
+                          <button type="button" onClick={() => setPagoComprobantes(prev => prev.filter((_, j) => j !== i))}
+                            className="text-gray-400 hover:text-red-500" title="Quitar"><X size={14} /></button>
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed cursor-pointer text-[12px] font-semibold text-gray-500 hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.25)' }}>
-                      <Paperclip size={14} /> Adjuntar imagen o PDF
-                      <input type="file" accept="image/*,application/pdf" className="hidden"
-                        onChange={e => { setPagoComprobante(e.target.files?.[0] || null); setPagoError('') }} />
-                    </label>
                   )}
-                  <p className="text-[11px] text-gray-400 mt-1">Imagen o PDF, máx. 8 MB.</p>
+                  <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed cursor-pointer text-[12px] font-semibold text-gray-500 hover:bg-gray-50 transition-colors" style={{ borderColor: 'rgba(30,80,40,0.25)' }}>
+                    <Paperclip size={14} /> {pagoComprobantes.length ? 'Agregar más comprobantes' : 'Adjuntar imagen o PDF'}
+                    {/* Se limpia el input para poder volver a elegir el mismo archivo. */}
+                    <input type="file" accept="image/*,application/pdf" multiple className="hidden"
+                      onChange={e => {
+                        const nuevos = Array.from(e.target.files || [])
+                        e.target.value = ''
+                        if (nuevos.length) { setPagoComprobantes(prev => [...prev, ...nuevos]); setPagoError('') }
+                      }} />
+                  </label>
+                  <p className="text-[11px] text-gray-400 mt-1">Imagen o PDF, máx. 8 MB cada uno · puedes elegir varios.</p>
                 </div>
 
                 {pagoError && (

@@ -20,7 +20,7 @@ export default function RecibosServicio({ servicioId, onCambio }) {
   const [compsOpen, setCompsOpen]       = useState(false)
   const [compsLoading, setCompsLoading] = useState(false)
   const [compsError, setCompsError]     = useState('')
-  const [subiendo, setSubiendo]         = useState(false)
+  const [subiendo, setSubiendo]         = useState('')     // '' = quieto; si no, el texto del progreso
   const [subirError, setSubirError]     = useState('')
   const [corrigiendo, setCorrigiendo] = useState(null)   // recibo_id con el panel abierto
   const [motivo, setMotivo]            = useState('')
@@ -86,37 +86,53 @@ export default function RecibosServicio({ servicioId, onCambio }) {
   // los recibos del tecnico. `recibo_id` queda NULL a proposito (migracion 018):
   // el comprobante se ata al servicio y no interfiere con el "comprobante
   // activo" del recibo del tecnico.
-  async function subirComprobante(file) {
-    setSubiendo(true); setSubirError('')
-    try {
-      const subido = await subirComprobantePago(servicioId, file)
-      const { data: creado, error } = await db.from('recibo_comprobantes').insert({
-        servicio_id:  servicioId,
-        bucket:       subido.bucket,
-        storage_path: subido.storage_path,
-        mime_type:    subido.mime_type,
-        estado:       'APROBADO',
-        uploaded_by:  personalData?.id || null,
-      }).select('id, bucket, storage_path, mime_type, estado').single()
-      // Si la fila no queda, el archivo huerfano no le sirve a nadie: se borra.
-      if (error) {
-        await db.storage.from(subido.bucket).remove([subido.storage_path])
-        throw error
+  // Un pago puede llegar partido (dos transferencias, dos pantallazos): se
+  // aceptan VARIOS archivos de una y se suben en serie. Un archivo que falle
+  // —tipo, tamaño, red— no tumba a los demás: los buenos quedan y al final se
+  // listan los que no pasaron, por nombre.
+  async function subirComprobantes(files) {
+    if (!files.length) return
+    setSubirError('')
+    const fallos = []
+    let subidos  = 0
+    for (const [i, file] of files.entries()) {
+      setSubiendo(files.length > 1 ? `Subiendo ${i + 1} de ${files.length}…` : 'Subiendo comprobante…')
+      try {
+        const subido = await subirComprobantePago(servicioId, file)
+        const { data: creado, error } = await db.from('recibo_comprobantes').insert({
+          servicio_id:  servicioId,
+          bucket:       subido.bucket,
+          storage_path: subido.storage_path,
+          mime_type:    subido.mime_type,
+          estado:       'APROBADO',
+          uploaded_by:  personalData?.id || null,
+        }).select('id, bucket, storage_path, mime_type, estado').single()
+        // Si la fila no queda, el archivo huerfano no le sirve a nadie: se borra.
+        if (error) {
+          await db.storage.from(subido.bucket).remove([subido.storage_path])
+          throw error
+        }
+        const { data: signed } = await db.storage.from(creado.bucket || 'evidencias')
+          .createSignedUrl(creado.storage_path, 300)
+        setComps(prev => [...(prev || []), { ...creado, url: signed?.signedUrl || '' }])
+        subidos++
+      } catch (e) {
+        fallos.push(`${file.name}: ${parsearErrorDB(e)}`)
       }
-      const { data: signed } = await db.storage.from(creado.bucket || 'evidencias')
-        .createSignedUrl(creado.storage_path, 300)
-      setComps(prev => [...(prev || []), { ...creado, url: signed?.signedUrl || '' }])
-      // Rastro para la trazabilidad del servicio (best-effort, no bloquea).
+    }
+    setSubiendo('')
+    if (fallos.length) setSubirError(fallos.join(' · '))
+    // Rastro para la trazabilidad del servicio: uno por tanda, no por archivo
+    // (best-effort, no bloquea ni pisa el error de los que fallaron).
+    if (subidos) {
       await db.from('novedades_servicio').insert({
         servicio_id:    servicioId,
         tipo_novedad:   'NOTA',
-        descripcion:    'Comprobante de pago adjuntado desde la ficha del servicio.',
+        descripcion:    subidos === 1
+          ? 'Comprobante de pago adjuntado desde la ficha del servicio.'
+          : `${subidos} comprobantes de pago adjuntados desde la ficha del servicio.`,
         registrado_por: personalData?.id || null,
       })
-    } catch (e) {
-      setSubirError(parsearErrorDB(e))
-    } finally {
-      setSubiendo(false)
     }
   }
 
@@ -418,13 +434,15 @@ export default function RecibosServicio({ servicioId, onCambio }) {
                 className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-dashed px-3 py-2 text-[11px] font-bold transition-colors ${subiendo ? 'cursor-wait bg-gray-100 text-gray-400' : 'cursor-pointer bg-white hover:bg-blue-50'}`}
                 style={{ borderColor: '#BFDBFE', color: subiendo ? undefined : '#1E40AF' }}
                 title="Subir el comprobante de un pago ya registrado">
-                <Paperclip size={12} /> {subiendo ? 'Subiendo comprobante…' : 'Adjuntar comprobante'}
-                <input type="file" accept="image/*,application/pdf" disabled={subiendo} className="sr-only"
-                  onChange={async e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) await subirComprobante(f) }} />
+                <Paperclip size={12} /> {subiendo || (comps?.length ? 'Agregar más comprobantes' : 'Adjuntar comprobante')}
+                {/* `multiple` + reset del input: se pueden elegir varios de una y
+                    repetir la tanda con el mismo archivo si hizo falta. */}
+                <input type="file" accept="image/*,application/pdf" multiple disabled={!!subiendo} className="sr-only"
+                  onChange={async e => { const fs = Array.from(e.target.files || []); e.target.value = ''; if (fs.length) await subirComprobantes(fs) }} />
               </label>
               {subirError
                 ? <div className="flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[10px] text-red-700"><AlertCircle size={11} className="mt-0.5 shrink-0" /> {subirError}</div>
-                : <p className="text-[9px] text-gray-400 text-center">Imagen o PDF · máximo 8 MB.</p>}
+                : <p className="text-[9px] text-gray-400 text-center">Imagen o PDF · máximo 8 MB cada uno · puedes elegir varios.</p>}
             </>
           )}
         </div>
