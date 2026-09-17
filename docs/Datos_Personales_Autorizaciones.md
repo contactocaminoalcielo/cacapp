@@ -90,14 +90,33 @@ portales sin la autorización. Por eso el orden de despliegue importa:
 **migración → frontend → backend**. Al revés, una familia con el build viejo
 queda bloqueada.
 
+## Publicación de memoriales en redes: sin casilla, por decisión
+
+Orbit publica los memoriales en Instagram (`digitales-ig.js`) y a mano en
+YouTube. Esa foto la entrega la familia para que le hagamos su recordatorio, no
+para publicarla, así que es una finalidad distinta.
+
+**David decidió el 17-sep-2026 no poner una casilla**, para no agregarle un paso
+a la publicación. En su lugar, la política declara la finalidad (versión 1.1) y
+la regla es:
+
+> A redes solo va **la mascota**. Si en la pieza aparece una persona, o se
+> identifica al dueño, no se publica.
+
+Con esa regla lo publicado deja de ser dato personal asociable a alguien por
+quien lo ve, que es lo que sostiene la decisión. La política también dice que
+basta pedirlo para que no se publique, o para retirarlo si ya está.
+
+La regla vive **donde se toma la decisión**: una línea bajo el memorial APROBADO
+en la pantalla de Digitales, que es el único momento en que alguien mira la pieza
+antes de publicarla. En un documento no la leería nadie en ese instante.
+
+⚠️ Si algún día se quiere publicar piezas con personas, ahí sí hace falta la
+casilla opcional. La tabla ya está lista: `finalidades` es un arreglo, así que
+sería otro elemento y no otra tabla.
+
 ## Lo que quedó pendiente
 
-- **Publicación de memoriales en Instagram y YouTube.** Hoy se publican piezas
-  con la foto que manda la familia y **esta política no lo cubre**: se decidió
-  el 16-sep-2026 tratarlo aparte. Para una finalidad que no es necesaria para
-  prestar el servicio, la ley pide una autorización separada y opcional. La
-  tabla ya está preparada: `finalidades` es un arreglo, así que esa casilla
-  futura es otro elemento y no otra tabla.
 - **Registro Nacional de Bases de Datos (RNBD) de la SIC.** Verificar si la
   sociedad supera el umbral de activos que obliga a registrarse.
 - **Canal formal de PQR de habeas data.** Hoy es el correo y el WhatsApp de la

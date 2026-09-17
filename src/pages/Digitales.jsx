@@ -791,7 +791,8 @@ function ServicioCard({
                       </Button>
                     )}
                     {mem.estado === 'APROBADO' && igConfigurado && (
-                      <Button size="sm" onClick={() => onPublicarIG(mem.id)} disabled={busy[mem.id]}>
+                      <Button size="sm" onClick={() => onPublicarIG(mem.id)} disabled={busy[mem.id]}
+                        title="Solo se publica la mascota: si en la pieza aparece una persona, no va a redes.">
                         {busy[mem.id] ? <Loader2 className="animate-spin" size={15} /> : <Instagram size={15} />} Publicar en Instagram
                       </Button>
                     )}
@@ -818,6 +819,15 @@ function ServicioCard({
                       </Button>
                     )}
                   </div>
+                  {mem.estado === 'APROBADO' && (
+                    // La política dice que a redes solo va la mascota. Quien
+                    // aprueba es el único que mira la pieza antes de publicarla,
+                    // así que la regla se recuerda aquí y no en un documento que
+                    // nadie va a abrir en ese momento.
+                    <p className="text-[11.5px] text-gray-500 leading-relaxed">
+                      A redes solo va la mascota: si en la pieza aparece una persona, no se publica.
+                    </p>
+                  )}
                   {['APROBADO', 'PUBLICADO'].includes(mem.estado) && (
                     <div className="flex gap-2">
                       <Input

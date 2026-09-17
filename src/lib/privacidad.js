@@ -14,8 +14,8 @@
 // termina en el login en vez de en la política que iba a leer.
 export const URL_POLITICA = '/#/privacidad'
 
-export const VERSION = '1.0'
-export const VIGENTE_DESDE = '2026-09-16'
+export const VERSION = '1.1'
+export const VIGENTE_DESDE = '2026-09-17'
 
 export const RESPONSABLE = {
   razon:     'MARTEN´S INVERSIONES S.A.S',
@@ -112,6 +112,19 @@ export const SECCIONES = [
       'según la Superintendencia de Industria y Comercio. Algunos de nuestros Encargados están en ' +
       'Estados Unidos; al autorizar esta política usted autoriza esa transferencia internacional, que ' +
       'en todo caso se hace bajo contrato y solo para las finalidades aquí descritas.',
+    ],
+  },
+  {
+    t: 'Publicación de los memoriales',
+    p: [
+      'Con la fotografía que usted nos envía elaboramos el memorial de su mascota. Esas piezas ' +
+      'pueden publicarse en nuestras redes sociales como parte de nuestra labor de divulgación y ' +
+      'acompañamiento a otras familias.',
+      'Solo publicamos piezas en las que aparece la mascota. No publicamos fotografías en las que ' +
+      'aparezcan personas, ni el nombre, el teléfono ni ningún otro dato que lo identifique a usted.',
+      'Si usted prefiere que la de su mascota no se publique, basta con decírnoslo por cualquiera de ' +
+      'nuestros canales, antes o después: si ya estaba publicada, la retiramos. No tiene que dar ' +
+      'ninguna razón y su servicio y sus recordatorios no cambian en nada.',
     ],
   },
   {
