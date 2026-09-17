@@ -237,7 +237,13 @@ export async function renderReciboPDF(r, { abrir = false } = {}) {
     t('MEDIOS DE PAGO', M, y); y += 4.5
     r.medios.forEach(mp => {
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(60, 60, 60)
-      t(String(mp.metodo || '').toUpperCase() + (mp.referencia ? ` · Ref. ${mp.referencia}` : ''), M, y)
+      // El cruce de comisión (migración 166) es un medio más del recibo, pero
+      // "CRUCE_COMISION" no le dice nada a la veterinaria que lo recibe.
+      const metodo = String(mp.metodo || '').toUpperCase()
+      const etiqueta = metodo === 'CRUCE_COMISION'
+        ? 'COMISION PENDIENTE PAGADA AL ALIADO'
+        : metodo
+      t(etiqueta + (mp.referencia ? ` · ${metodo === 'CRUCE_COMISION' ? '' : 'Ref. '}${mp.referencia}` : ''), M, y)
       pdf.setFont('helvetica', 'bold'); pdf.setTextColor(31, 90, 50)
       t(fmt(Number(mp.monto) || 0), W - M, y, { align: 'right' })
       y += 5

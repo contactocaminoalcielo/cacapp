@@ -72,6 +72,56 @@ eso solo lo dice el cuadre cerrado.
 - **Estado derivado** del jsonb por compatibilidad; la fuente de verdad nueva son
   las tablas formales (ver "Modelo formal" abajo). No se agregaron estados a `servicios.estado`.
 
+## Pagarle a la vet una comisión vieja dentro del recibo (2026-09-17, migr. 166)
+
+Pedido de David: algunas veterinarias, al pagar el servicio del día, piden que de una vez se
+les abone la comisión de un servicio **anterior** que quedó sin pagar.
+
+- **Dónde**: solo en el recibo de **VETERINARIA**, y solo si el aliado NO es de facturación
+  mensual (ahí el técnico no recoge nada). Es **opcional**: si la vet no lo pide, no se toca.
+- **Qué lista**: servicios de ESE aliado con `comision_aliado > 0`, `comision_descontada = false`
+  y `comision_aliado > comision_pagada`. Se muestran con mascota, fecha y monto.
+- **Tope**: lo marcado nunca supera lo que la vet paga hoy. Si no cabe, se cruza hasta donde
+  alcance y **el resto sigue pendiente** (la pantalla lo dice: "quedan $X pendientes").
+
+### 🩸 Por qué NO se registra como "recogió menos"
+Sería lo natural y está mal por partida doble:
+- `servicios.valor_pagado` quedaría corto ⇒ el servicio del día aparecería **PARCIAL** con un
+  saldo que nadie debe, vivo para siempre en la cartera.
+- El cuadre compara `valor_a_recoger` (= `servicios.valor_total`) contra la suma de los medios
+  del recibo ⇒ le marcaría al técnico un **faltante** por el valor de la comisión.
+
+Por eso el cruce entra como un **medio de pago propio, `CRUCE_COMISION`**, que arma la RPC
+(el front nunca lo manda como medio): suma en lo recogido, pero no es efectivo del técnico ni
+dinero que le entró a la empresa.
+
+| Dónde | Qué pasa con el cruce |
+|---|---|
+| `servicios.valor_pagado` del servicio de hoy | **suma** → queda COMPLETO |
+| `cuadre_items.efectivo` | no suma (el técnico entrega solo lo que recibió) |
+| `cuadre_items.digital` | **no suma** (a la empresa no le entró) |
+| `cuadre_items.cruce_comision` | columna propia; `total_cobrado = efectivo + digital + cruce` |
+| `servicios.comision_pagada` del servicio VIEJO | **sube** → deja de estar pendiente |
+| `comisiones_aliados` | una fila `estado=PAGADA`, `via=CRUCE_RECIBO`, con `recibo_id` |
+| `novedades_servicio` del servicio VIEJO | NOTA con el número del recibo |
+
+Todo ocurre **dentro de la misma transacción** de `guardar_recibo_tecnico`
+(`p_comisiones_pagadas`, array de `{servicio_id, monto}`). La RPC valida que la comisión esté
+viva, que sea **de la misma veterinaria** y que el cruce no supere el saldo del servicio del día
+(`CRUCE_INVALIDO`, `CRUCE_EXCEDE_PENDIENTE`, `CRUCE_EXCEDE_COBRO`).
+
+⚠️ **El respaldo legacy no sabe cruzar**: si la RPC falla con comisiones marcadas, el recibo
+**no se guarda** y la pantalla pide desmarcarlas y avisar a coordinación. Guardar por legacy
+dejaría la comisión pendiente y el servicio PARCIAL.
+
+⚠️ **No se toca `comision_descontada`**: esa bandera significa "el `valor_total` guardado ya
+viene neto". Moverla cambiaría la plata del servicio (el cuadre le vuelve a sumar la comisión
+al total a cobrar). Lo pagado vive en `comision_pagada`.
+
+Se ve después en: el PDF y el WhatsApp del recibo (es el comprobante de la vet), **Finanzas ›
+Comisiones** (estado *Pagada* + fecha, recibo y lo que quede pendiente) y la fila del cuadre
+("incluye $X de comisión pagada a la vet").
+
 ## Reglas del comprobante (ReciboForm)
 1. El comprobante **NO bloquea** guardar el recibo: se guarda igual y queda
    "Comprobante pendiente. Puedes reintentarlo." + novedad `NOTA` visible al coordinador.

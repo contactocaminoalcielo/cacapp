@@ -381,11 +381,17 @@ function TabComisiones({ desde, hasta }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
 
+  // ⚠️ Esta consulta pedía `fecha_generada` y sumaba `monto`: ninguna de las dos
+  // existe en `comisiones_aliados` (son `fecha_generacion` y `valor_comision`).
+  // Nunca se notó porque la tabla estaba vacía; desde la migración 166 se llena.
   useEffect(() => {
-    let q = db.from('comisiones_aliados').select('*, aliados(nombre,vip)').order('fecha_generada', { ascending: false })
-    if (desde) q = q.gte('fecha_generada', desde)
-    if (hasta) q = q.lte('fecha_generada', hasta)
-    q.then(({ data: d }) => { setData(d || []); setLoading(false) })
+    let q = db.from('comisiones_aliados').select('*, aliados(nombre,vip)').order('fecha_generacion', { ascending: false })
+    if (desde) q = q.gte('fecha_generacion', desde)
+    if (hasta) q = q.lte('fecha_generacion', hasta)
+    q.then(({ data: d, error }) => {
+      if (error) console.error('[Reportes] comisiones:', error.message)
+      setData(d || []); setLoading(false)
+    })
   }, [desde, hasta])
 
   if (loading) return <div className="text-center py-8 text-ink3">Cargando...</div>
@@ -394,7 +400,7 @@ function TabComisiones({ desde, hasta }) {
   data.forEach(c => {
     const nombre = c.aliados?.nombre || 'Desconocido'
     if (!porAliado[nombre]) porAliado[nombre] = { total: 0, count: 0, vip: c.aliados?.vip }
-    porAliado[nombre].total += c.monto || 0
+    porAliado[nombre].total += Number(c.valor_comision) || 0
     porAliado[nombre].count++
   })
   const barData = Object.entries(porAliado).map(([name, d]) => ({ name, total: d.total })).sort((a, b) => b.total - a.total).slice(0, 8)

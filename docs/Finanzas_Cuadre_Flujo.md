@@ -116,6 +116,30 @@ GENERAR CUADRE (técnico + rango)
 
 ---
 
+## 1 bis. El cruce de comisión (migración 166, 2026-09-17)
+
+Cuando el técnico le paga a la veterinaria una comisión vieja dentro del recibo, esa plata
+**no entra**: se cruza contra el cobro del día. En la fila del cuadre queda así:
+
+```
+total_cobrado = efectivo + digital + cruce_comision
+```
+
+- **`efectivo`** — lo único que el técnico tiene en la mano y debe entregar. El cruce NO suma
+  aquí, así que "dinero a entregar" sigue siendo exacto.
+- **`digital`** — lo que entró directo a la empresa. El cruce **tampoco** suma aquí: a la
+  empresa no le entró, se le abonó a la vet.
+- **`cruce_comision`** — columna propia. La tabla lo muestra bajo *Recogido* ("incluye $X de
+  comisión pagada a la vet") para que `efectivo + digital` no parezca un error de cuentas.
+- **Diferencia**: cero. `valor_a_recoger` se cubre entre lo cobrado y el cruce, así que el
+  técnico no sale con un faltante por una plata que nunca se quedó.
+- **Reclasificar medios** (el lápiz de *Cambiar método*) reparte solo la plata real: el cruce
+  se preserva y no se puede volver efectivo (`set_cuadre_item_medios`).
+
+Detalle del flujo y de las validaciones: `docs/Orbit_Context/MODULES/TECNICO_RECIBOS.md`.
+
+---
+
 ## 2. Detalle por etapa
 
 ### A. Qué filas entran al cuadre

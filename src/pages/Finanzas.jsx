@@ -57,6 +57,11 @@ const COLS_CUADRE = [
   { key: 'lejania',     label: 'Lejanía' },
   { key: 'accion',      label: 'Acción', fija: true },
 ]
+// Medios del recibo que NO son plata que alguien recibió: el cruce de comisión
+// (migración 166) es una comisión vieja que se le abonó a la veterinaria dentro
+// del cobro. Suma como recogido, pero no es efectivo del técnico ni dinero que
+// le entró a la empresa, y por eso no se le pide comprobante ni se reclasifica.
+const ES_MEDIO_NO_PLATA = ['CRUCE_COMISION']
 const CUADRE_COLS_LS = 'orbit_cuadre_cols_ocultas'
 
 // Chips de filtro rápido por estado del ítem (OR entre los activos).
@@ -150,6 +155,10 @@ export default function Finanzas() {
   const [resumenLoading, setResumenLoading] = useState(false)
   const [servicios, setServicios] = useState([])   // cartera enriquecida (carga inicial)
   const [comisionesServicios, setComisionesServicios] = useState(null) // null = sin cargar
+  // Libro de comisiones pagadas (migración 166): { servicio_id: [pagos] }. Dice
+  // QUIÉN pagó cada comisión y en qué recibo — sin esto, una comisión que el
+  // técnico pagó en la calle se vería aquí igual que una que nadie tocó.
+  const [comisionesPagos, setComisionesPagos] = useState({})
   const [comisionesLoading, setComisionesLoading] = useState(false)
   const [historialServicios, setHistorialServicios] = useState(null) // null = sin cargar
   const [historialServiciosLoading, setHistorialServiciosLoading] = useState(false)
@@ -216,7 +225,7 @@ export default function Finanzas() {
   const [noCobLoading,  setNoCobLoading]  = useState(false)
 
   // Selects separados para que la entrada al modulo no arrastre datos pesados.
-  const SERVICIO_SELECT = 'id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, descuento_adicional, descuento_adicional_motivo, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id'
+  const SERVICIO_SELECT = 'id, fecha_ingreso, valor_total, valor_pagado, estado_pago, metodo_pago, canal_entrada, estado, comision_aliado, comision_descontada, comision_pagada, descuento_adicional, descuento_adicional_motivo, mascota_id, aliado_origen_id, plan_id, notas, tecnico_id'
   const RESUMEN_SELECT  = 'id, valor_total, valor_pagado, estado_pago, canal_entrada, comision_aliado, comision_descontada, descuento_adicional, aliado_origen_id'
   const HISTORIAL_PAGE_SIZE = 100
 
@@ -368,6 +377,16 @@ export default function Finanzas() {
       if (error) throw error
       const { enriched } = await enriquecerServicios(data || [])
       setComisionesServicios(enriched)
+      // Los pagos de esas comisiones, en el mismo viaje (dbIn parte la lista:
+      // con muchos uuids la URL revienta con 414).
+      const pagos = await dbIn(
+        'comisiones_aliados',
+        'id, servicio_id, valor_comision, fecha_liquidacion, via, notas, recibo_id, servicio_recibo_id, pagado_por',
+        'servicio_id', enriched.map(s => s.id),
+        q => q.order('fecha_liquidacion', { ascending: false }))
+      const porServicio = {}
+      for (const p of pagos || []) (porServicio[p.servicio_id] ||= []).push(p)
+      setComisionesPagos(porServicio)
     } catch (err) {
       console.error('[Finanzas] Error cargando comisiones:', err)
       setComisionesServicios([])
@@ -1239,8 +1258,11 @@ export default function Finanzas() {
   // empresa. ADMIN o COORDINADOR, solo BORRADOR, motivo obligatorio (migración 062).
   async function guardarMediosItem(item, { medios, motivo }) {
     const suma = medios.reduce((a, m) => a + (Number(m.monto) || 0), 0)
-    const total = Number(item.total_cobrado)
-      || (Number(item.efectivo) || 0) + (Number(item.digital) || 0)
+    // Sin restar el cruce, reclasificar una fila que pagó comisiones exigiría
+    // repartir una plata que nunca entró y el guardado quedaría bloqueado.
+    const cruce = Number(item.cruce_comision) || 0
+    const total = (Number(item.total_cobrado)
+      || (Number(item.efectivo) || 0) + (Number(item.digital) || 0) + cruce) - cruce
     if (Math.round(suma) !== Math.round(total)) {
       await showAlert(`Los medios suman ${fmt(suma)} pero la fila tiene recogido ${fmt(total)}. Para cambiar el total usa "Modificar valor recogido".`, { title: 'No cuadra el total' })
       return false
@@ -1258,6 +1280,7 @@ export default function Finanzas() {
         medios_pago_original: data.medios_pago_original,
         efectivo: data.efectivo,
         digital: data.digital,
+        cruce_comision: data.cruce_comision ?? item.cruce_comision ?? 0,
         total_cobrado: data.total_cobrado,
         medios_editado_en: data.medios_editado_en,
         medios_editado_por: personalData?.id || null,
@@ -1609,43 +1632,60 @@ export default function Finanzas() {
   }
 
   // ── Liquidar comisiones de un aliado ────────────────────────────────────────
+  // ⚠️ Hasta la migración 166 esta función NO podía funcionar: insertaba UNA fila
+  // en `comisiones_aliados` sin `servicio_id`, que es NOT NULL — reventaba con
+  // 23502 DESPUÉS de haber marcado los servicios. La tabla tenía 0 filas.
+  // Ahora liquida servicio por servicio y NO toca `comision_descontada`: esa
+  // bandera significa "el valor_total guardado ya viene neto" y moverla cambiaría
+  // la plata del servicio (el cuadre le vuelve a sumar la comisión al total a
+  // cobrar). Lo que se paga se registra en `comision_pagada`.
   async function liquidarAliado(aliadoId) {
     const grupo = comisionesPorAliado.find(g => g.aliado.id_aliado === aliadoId)
     if (!grupo) return
-    const pendientes = grupo.servicios.filter(s => !s.comision_descontada)
+    const pendienteDe = s => Math.max(0, (s.comision_aliado || 0) - (Number(s.comision_pagada) || 0))
+    const pendientes = grupo.servicios.filter(s => !s.comision_descontada && pendienteDe(s) > 0)
     if (!pendientes.length) {
       await showAlert('No hay comisiones pendientes para este aliado.', { title: 'Aviso', variant: 'warning' })
       return
     }
-    if (!await confirm(`¿Liquidar ${pendientes.length} comisión(es) pendiente(s) de ${grupo.aliado.nombre}?`, { title: 'Liquidar comisiones', variant: 'warning', confirmLabel: 'Liquidar' })) return
+    const totalPendiente = pendientes.reduce((a, s) => a + pendienteDe(s), 0)
+    if (!await confirm(
+      `Se marcarán como PAGADAS ${pendientes.length} comisión(es) de ${grupo.aliado.nombre} por ${fmt(totalPendiente)}. `
+      + 'Hazlo solo si ya se le pagaron: dejarán de aparecer como pendientes, también para el técnico en la calle.',
+      { title: 'Liquidar comisiones', variant: 'warning', confirmLabel: 'Liquidar' })) return
 
     setLiquidandoAliado(aliadoId)
     try {
-      // 1. Marcar como descontadas en servicios
-      const { error: e1 } = await db
-        .from('servicios')
-        .update({ comision_descontada: true })
-        .in('id', pendientes.map(s => s.id))
-      if (e1) throw e1
-
-      // 2. Crear registro en comisiones_aliados
-      const totalPendiente = pendientes.reduce((a, s) => a + (s.comision_aliado || 0), 0)
       const modalidad = grupo.aliado.modalidad_comision
       const estadoComision =
         modalidad === 'CREDITO_ACUMULADO'    ? 'ACUMULADA'  :
         modalidad === 'FACTURACION_MENSUAL'  ? 'FACTURADA'  : 'PAGADA'
 
+      // 1. El libro: una fila POR SERVICIO (servicio_id es NOT NULL).
       const { error: e2 } = await db
         .from('comisiones_aliados')
-        .insert({
-          aliado_id:        aliadoId,
-          valor_comision:   totalPendiente,
-          modalidad_pago:   modalidad,
-          estado:           estadoComision,
-          fecha_generacion: today(),
-          notas:            `Liquidación de ${pendientes.length} servicio${pendientes.length !== 1 ? 's' : ''}`,
-        })
+        .insert(pendientes.map(s => ({
+          aliado_id:         aliadoId,
+          servicio_id:       s.id,
+          valor_comision:    pendienteDe(s),
+          modalidad_pago:    modalidad,
+          estado:            estadoComision,
+          fecha_generacion:  today(),
+          fecha_liquidacion: today(),
+          via:               'LIQUIDACION',
+          pagado_por:        personalData?.id || null,
+          notas:             `Liquidada desde Finanzas › Comisiones (${pendientes.length} servicio${pendientes.length !== 1 ? 's' : ''}).`,
+        })))
       if (e2) throw e2
+
+      // 2. Lo pagado queda en el servicio, que es de donde sale "pendiente".
+      for (const s of pendientes) {
+        const { error: e1 } = await db
+          .from('servicios')
+          .update({ comision_pagada: (Number(s.comision_pagada) || 0) + pendienteDe(s) })
+          .eq('id', s.id)
+        if (e1) throw e1
+      }
 
       await Promise.all([cargar(), cargarComisiones(true)])
     } catch (err) {
@@ -2080,9 +2120,15 @@ export default function Finanzas() {
                     comisionesPorAliado.map(({ aliado, servicios: svcAliado }) => {
                       const totalGenerado  = svcAliado.reduce((a, s) => a + (s.comision_aliado || 0), 0)
                       const totalDescontado = svcAliado.filter(s => s.comision_descontada).reduce((a, s) => a + (s.comision_aliado || 0), 0)
-                      const totalPendiente = totalGenerado - totalDescontado
+                      // Lo que se le PAGÓ aparte (cruzado en un recibo del técnico
+                      // o liquidado aquí) no sigue pendiente (migración 166).
+                      const totalPagado = svcAliado
+                        .filter(s => !s.comision_descontada)
+                        .reduce((a, s) => a + Math.min(Number(s.comision_pagada) || 0, s.comision_aliado || 0), 0)
+                      const totalPendiente = Math.max(0, totalGenerado - totalDescontado - totalPagado)
                       const isExpanded = expandedAliados.has(aliado.id_aliado)
-                      const pendientes = svcAliado.filter(s => !s.comision_descontada)
+                      const pendienteDe = s => Math.max(0, (s.comision_aliado || 0) - (Number(s.comision_pagada) || 0))
+                      const pendientes = svcAliado.filter(s => !s.comision_descontada && pendienteDe(s) > 0)
                       const estaLiquidando = liquidandoAliado === aliado.id_aliado
 
                       return (
@@ -2107,6 +2153,11 @@ export default function Finanzas() {
                                 <span className="text-[#16a34a]">
                                   Descontado: <span className="font-semibold">{fmt(totalDescontado)}</span>
                                 </span>
+                                {totalPagado > 0 && (
+                                  <span className="text-[#4338CA]" title="Comisiones que ya se le pagaron aparte (cruzadas en un recibo o liquidadas aquí)">
+                                    Pagado: <span className="font-semibold">{fmt(totalPagado)}</span>
+                                  </span>
+                                )}
                                 <span className={totalPendiente > 0 ? 'text-[#d97706] font-bold' : 'text-gray-400'}>
                                   Pendiente: <span className="font-semibold">{fmt(totalPendiente)}</span>
                                 </span>
@@ -2135,7 +2186,7 @@ export default function Finanzas() {
                               <table className="w-full min-w-[500px]">
                                 <thead style={{ background: '#FAFAFA' }}>
                                   <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.06)' }}>
-                                    {['Fecha', 'Mascota', 'Tipo', 'Valor servicio', 'Comisión', 'Estado pago', 'Descontada'].map(h => (
+                                    {['Fecha', 'Mascota', 'Tipo', 'Valor servicio', 'Comisión', 'Estado pago', 'Estado de la comisión'].map(h => (
                                       <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide px-4 py-2">{h}</th>
                                     ))}
                                   </tr>
@@ -2160,14 +2211,39 @@ export default function Finanzas() {
                                           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${
                                             s.comision_descontada
                                               ? 'bg-[#F0FDF4] text-[#166534] border-[#bbf7d0]'
-                                              : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                                              : pendienteDe(s) <= 0
+                                                ? 'bg-[#EEF2FF] text-[#3730A3] border-[#C7D2FE]'
+                                                : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                                           }`}
                                         >
                                           {s.comision_descontada
                                             ? <><Check size={11} /> Descontada</>
-                                            : <><X size={11} /> Pendiente</>
+                                            : pendienteDe(s) <= 0
+                                              ? <><Check size={11} /> Pagada</>
+                                              : <><X size={11} /> Pendiente</>
                                           }
                                         </button>
+                                        {/* Qué le pasó a esta comisión fuera del descuento: el técnico
+                                            se la pagó a la vet dentro de un recibo, o se liquidó aquí.
+                                            Es lo que David pidió ver "en el apartado de comisiones". */}
+                                        {!s.comision_descontada && (Number(s.comision_pagada) || 0) > 0 && (
+                                          <div className="mt-1 text-[10px] leading-snug text-[#4338CA] max-w-[260px]">
+                                            {(comisionesPagos[s.id] || []).map(p => (
+                                              <div key={p.id}>
+                                                ✓ {fmt(p.valor_comision)} · {fmtFecha(p.fecha_liquidacion)}
+                                                {p.notas ? ` — ${p.notas}` : ''}
+                                              </div>
+                                            ))}
+                                            {(comisionesPagos[s.id] || []).length === 0 && (
+                                              <div>✓ Pagada {fmt(s.comision_pagada)}</div>
+                                            )}
+                                            {pendienteDe(s) > 0 && (
+                                              <div className="text-[#d97706] font-bold">
+                                                Quedan {fmt(pendienteDe(s))} pendientes
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}
@@ -2877,6 +2953,14 @@ export default function Finanzas() {
                                         editado{it.valor_recogido_original != null ? ` · original ${fmt(it.valor_recogido_original)}` : ''}
                                       </div>
                                     )}
+                                    {/* Sin esta línea, efectivo + digital no suman lo recogido
+                                        y parece un error de cuentas (migración 166). */}
+                                    {Number(it.cruce_comision) > 0 && (
+                                      <div className="text-[9px] font-bold text-[#4338CA] mt-0.5"
+                                        title="Comisión pendiente que se le pagó a la veterinaria dentro de este recibo: no es plata que el técnico recibiera">
+                                        incluye {fmt(it.cruce_comision)} de comisión pagada a la vet
+                                      </div>
+                                    )}
                                   </td>
                                   )}
                                   {verCol('diferencia') && (
@@ -2916,7 +3000,7 @@ export default function Finanzas() {
                                       <div className="flex flex-col gap-1">
                                         <span className="text-gray-600 font-medium tabular-nums">{fmt(it.digital)}</span>
                                         <div className="flex flex-wrap gap-1">
-                                          {(it.medios_pago || []).filter(m => String(m.metodo).toUpperCase() !== 'EFECTIVO' && Number(m.monto) > 0).map((m, i) => (
+                                          {(it.medios_pago || []).filter(m => !ES_MEDIO_NO_PLATA.includes(String(m.metodo).toUpperCase()) && String(m.metodo).toUpperCase() !== 'EFECTIVO' && Number(m.monto) > 0).map((m, i) => (
                                             <button key={i} onClick={() => setComprobanteItem(it)} title="Ver o subir comprobante de pago"
                                               className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#EFF6FF] text-[#1E40AF] hover:bg-[#DBEAFE] inline-flex items-center gap-0.5 transition-colors">
                                               <FileText size={9} /> {m.metodo}
@@ -4014,7 +4098,10 @@ function ComprobanteModal({ item, editable = false, actorId = null, onClose }) {
     } finally { setQuitando(null) }
   }
 
-  const digitales = (item.medios_pago || []).filter(mp => String(mp.metodo).toUpperCase() !== 'EFECTIVO' && Number(mp.monto) > 0)
+  // El cruce de comisión no es un pago digital: no tiene comprobante que pedir.
+  const digitales = (item.medios_pago || []).filter(mp =>
+    !ES_MEDIO_NO_PLATA.includes(String(mp.metodo).toUpperCase())
+    && String(mp.metodo).toUpperCase() !== 'EFECTIVO' && Number(mp.monto) > 0)
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-10 overflow-y-auto"
@@ -4304,10 +4391,17 @@ function ValorRecogidoModal({ item, onClose, onSave }) {
 // El recibo no se toca; la corrección vive en el cuadre con motivo (migración 060).
 const METODOS_MEDIO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
 function MediosItemModal({ item, onClose, onSave }) {
-  const total = Number(item.total_cobrado)
-    || (Number(item.efectivo) || 0) + (Number(item.digital) || 0)
+  // El cruce de comisión queda FUERA de lo que se reparte: no es un medio de
+  // pago, es una comisión vieja que se le abonó a la vet. Si entrara aquí, el
+  // coordinador podría volverlo efectivo que el técnico nunca tuvo en la mano.
+  const cruce = Number(item.cruce_comision) || 0
+  const total = (Number(item.total_cobrado)
+    || (Number(item.efectivo) || 0) + (Number(item.digital) || 0) + cruce) - cruce
   const inicial = () => {
-    const src = Array.isArray(item.medios_pago) ? item.medios_pago.filter(m => Number(m.monto) > 0) : []
+    const src = Array.isArray(item.medios_pago)
+      ? item.medios_pago.filter(m => Number(m.monto) > 0
+          && !ES_MEDIO_NO_PLATA.includes(String(m.metodo || '').toUpperCase()))
+      : []
     if (src.length) return src.map(m => ({ metodo: String(m.metodo || 'EFECTIVO').toUpperCase(), monto: String(Math.round(Number(m.monto) || 0)) }))
     const filas = []
     if (Number(item.efectivo) > 0) filas.push({ metodo: 'EFECTIVO', monto: String(Math.round(Number(item.efectivo))) })
@@ -4343,6 +4437,11 @@ function MediosItemModal({ item, onClose, onSave }) {
           <div>
             <div className="text-[13px] font-bold text-gray-900">{item.mascota_nombre || 'Mascota'}</div>
             <div className="text-[11px] text-gray-500">Total recogido (fijo): <strong>{fmt(total)}</strong> · el recibo del cliente no cambia</div>
+          {cruce > 0 && (
+            <div className="text-[11px] text-[#4338CA] mt-0.5">
+              Aparte: <strong>{fmt(cruce)}</strong> de comisión pendiente que se le pagó a la veterinaria (no se reclasifica).
+            </div>
+          )}
           </div>
 
           <div className="rounded-xl bg-[#EFF6FF] border border-[#DBEAFE] px-3 py-2 text-[11px] text-[#1E40AF] leading-snug">
