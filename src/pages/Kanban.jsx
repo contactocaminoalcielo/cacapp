@@ -28,7 +28,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, History, PawPrint, Zap, Star,
+  ImageUp, History, PawPrint, Zap, Star, ClipboardList,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import ResumenEntrega from '@/components/servicio/ResumenEntrega'
@@ -561,6 +561,16 @@ export default function Kanban() {
   const [fechaHasta, setFechaHasta]       = useState('')
   const [filtroRec, setFiltroRec]         = useState('')   // id de recordatorio (solo tablero producción)
   const [filtroRecEstado, setFiltroRecEstado] = useState('') // estado de ese recordatorio; '' = cualquiera
+  // ── Filtros traídos de Gestión → Historial ────────────────────────────────
+  // Mismos criterios y mismas palabras que allá, para que el tablero y el
+  // historial no filtren distinto con la misma etiqueta. Viven plegados: la
+  // barra ya iba llena y el tablero necesita el alto para las columnas.
+  const [filtrosOpen,   setFiltrosOpen]   = useState(false)
+  const [filtroPago,    setFiltroPago]    = useState('')   // estado_pago
+  const [filtroAliado,  setFiltroAliado]  = useState('')   // nombre del aliado; '__none__' = particulares
+  const [filtroTecnico, setFiltroTecnico] = useState('')   // personal.id
+  const [filtroUsuario, setFiltroUsuario] = useState('')   // registrado_por; '__none__' = sin registrar
+  const [filtroEspecie, setFiltroEspecie] = useState('')   // nombre de la especie
   const [soloAdicional, setSoloAdicional] = useState(false) // solo servicios con recordatorio ADICIONAL
   // Solo los compostajes que la familia pidió recibir ANTICIPADOS: son los
   // únicos que hay que producir mientras la mascota sigue en el cubículo. El
@@ -642,6 +652,7 @@ export default function Kanban() {
   const [obsCancelar,    setObsCancelar]    = useState('')
   const [cancelando,     setCancelando]     = useState(false)
   const [cancelInfo,     setCancelInfo]     = useState(null) // motivo/fecha/usuario de un servicio ya cancelado
+  const [bitacora,       setBitacora]       = useState(null) // revisión + ajuste que dejó el técnico sobre esta mascota
   const [editTecnicoId, setEditTecnicoId] = useState('')
   const [editEstadoPago, setEditEstadoPago] = useState('')
   const [editNotas, setEditNotas]         = useState('')
@@ -1328,7 +1339,10 @@ export default function Kanban() {
         // un mismo recordatorio. Todas las lecturas paginadas tienen orden único.
         const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows] = await Promise.all([
           dbTodo(() => db.from('servicios')
-            .select('id, metodo_pago, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
+            // `registrado_por` viaja aquí y no en `v_kanban`: la vista no lo
+            // expone y esta consulta ya recorre los mismos servicios, así que
+            // el filtro "Registró" no cuesta ni una consulta más.
+            .select('id, metodo_pago, registrado_por, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .gte('fecha_ingreso', FECHA_CORTE).order('id')),
           cargarItemsKanban(ids),
           // Nevera solo mientras hay custodia física (fecha_salida IS NULL)
@@ -1367,11 +1381,13 @@ export default function Kanban() {
         const mapa = {}
         const pesos = {}
         const metodoRegistro = {}
+        const registradoPor = {}
         ;(tels || []).forEach(t => {
           const c = t.mascotas?.clientes
           if (c) mapa[t.id] = c
           pesos[t.id] = t.mascotas?.peso_kg ?? null
           metodoRegistro[t.id] = t.metodo_pago || null
+          registradoPor[t.id] = t.registrado_por || null
         })
         // Nevera: solo los servicios con fila vigente en cuarto_frio quedan en el
         // mapa (null = fila sin nevera → pendiente real; ausente = sin custodia)
@@ -1435,6 +1451,7 @@ export default function Kanban() {
           return {
             ...base,
             mascota_peso_kg: pesos[s.servicio_id] ?? null,
+            registrado_por:  registradoPor[s.servicio_id] ?? null,
             tiene_adicional: conAdicional.has(s.servicio_id),
             items_rec:       itemsPorSvc[s.servicio_id] || [],
             nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
@@ -1496,6 +1513,7 @@ export default function Kanban() {
     setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
     setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
+    setBitacora(null)
 
     // Si está cancelado, traer la trazabilidad en query aparte (defensivo: si
     // las columnas de cancelación aún no existen en DB, el detalle normal no se rompe)
@@ -1542,6 +1560,42 @@ export default function Kanban() {
     setNovedades(novs || [])
     setNuevoComentario('')
     setEditPlanId(svcFull?.plan_id || '')
+
+    // ── Bitácora del técnico sobre ESTA mascota ──────────────────────────
+    // Dos tablas distintas a propósito (migración 164): la REVISIÓN es el
+    // sí/no obligatorio al guardar el recibo, y el AJUSTE es lo que el técnico
+    // propone cuando no coincide, con su nota. Hasta ahora esto solo se veía
+    // dentro de la app del técnico y en Finanzas › Cuadre —filtrado por el
+    // técnico de ese cuadre—, así que desde el servicio no había forma de leerlo.
+    // Va fuera del Promise.all de arriba: es información de apoyo y un fallo
+    // suyo no puede dejar la tarjeta sin abrir.
+    //
+    // Se leen como LISTA, no con `.maybeSingle()`: el unique es por
+    // (servicio_id, tecnico_id), así que un servicio que toquen dos personas
+    // —uno recoge, otro entrega— tiene dos filas, y `maybeSingle()` fallaría
+    // justo cuando hay MÁS que contar. Hoy no pasa en ningún servicio, pero el
+    // esquema lo permite y el fallo sería mudo.
+    Promise.all([
+      db.from('bitacora_revisiones_tecnico')
+        .select('tecnico_id, coincide, visto_cobrado, visto_efectivo, visto_digital, visto_transporte, created_at, updated_at, personal:tecnico_id(nombre, apellido)')
+        .eq('servicio_id', s.servicio_id).order('created_at'),
+      db.from('bitacora_ajustes_tecnico')
+        .select('tecnico_id, cobrado_sugerido, medios_sugeridos, reconocido_sugerido, nota, created_at, personal:tecnico_id(nombre, apellido)')
+        .eq('servicio_id', s.servicio_id).order('created_at'),
+    ])
+      .then(([r, a]) => {
+        const revs = r?.data || [], ajs = a?.data || []
+        // Una entrada por persona: su revisión y, si lo hizo, su ajuste.
+        const porTecnico = new Map()
+        for (const x of revs) porTecnico.set(String(x.tecnico_id), { revision: x, ajuste: null })
+        for (const x of ajs) {
+          const k = String(x.tecnico_id)
+          if (porTecnico.has(k)) porTecnico.get(k).ajuste = x
+          else porTecnico.set(k, { revision: null, ajuste: x })
+        }
+        setBitacora([...porTecnico.values()])
+      })
+      .catch(() => setBitacora(null))
 
     if (svcFull?.mascota_id) {
       db.from('mascotas').select('peso_kg, especie_id')
@@ -4099,6 +4153,94 @@ export default function Kanban() {
 
                 {/* ── Recibos guardados: cuál afecta Finanzas + comprobantes ── */}
                 <RecibosServicio servicioId={selected.servicio_id} onCambio={cargar} />
+
+                {/* ── Lo que el técnico dejó dicho sobre ESTA mascota ──────────
+                    Va pegado a los recibos porque es su lectura: al guardar el
+                    recibo se le muestra lo que quedó registrado y responde si
+                    coincide. Vivía solo en su app y en Finanzas › Cuadre, donde
+                    hay que saber de antemano qué técnico fue. */}
+                {bitacora?.length > 0 && bitacora.map((entrada, idxBit) => {
+                  const { revision: rev, ajuste: aj } = entrada
+                  const quien = p2 => p2 ? `${p2.nombre || ''} ${p2.apellido || ''}`.trim() : 'el técnico'
+                  const cuando = ts => ts ? new Date(ts).toLocaleDateString('es-CO',
+                    { day: '2-digit', month: 'short', year: 'numeric' }) : null
+                  // `coincide` es NOT NULL en DB, así que basta el booleano.
+                  const ok = rev?.coincide === true
+                  return (
+                    <div key={idxBit} className="rounded-xl p-3 space-y-2"
+                      style={{ background: ok ? '#F0FDF4' : '#FFF7ED',
+                               border: `1px solid ${ok ? '#BBF7D0' : '#FED7AA'}` }}>
+                      <div className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+                        style={{ color: ok ? '#15803D' : '#9A3412' }}>
+                        <ClipboardList size={10} /> Bitácora del técnico
+                      </div>
+
+                      {rev && (
+                        <div className="text-[12px] font-semibold" style={{ color: ok ? '#166534' : '#9A3412' }}>
+                          {/* Las revisiones anteriores al 17-sep son el backfill de la
+                              migración 164: se derivaron de un ajuste existente, no de
+                              alguien contestando en pantalla. Decir "dijo que no
+                              coincide" de esas sería ponerle palabras en la boca; con
+                              ajuste se dice lo que de verdad consta. */}
+                          {ok ? '✓ Revisó y dijo que todo coincide'
+                              : aj ? '✗ No coincide — dejó un ajuste'
+                                   : '✗ Revisó y dijo que no coincide'}
+                          <span className="font-normal text-gray-500 text-[11px]">
+                            {' — '}{quien(rev.personal)}
+                            {cuando(rev.updated_at || rev.created_at) ? ` · ${cuando(rev.updated_at || rev.created_at)}` : ''}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Lo que tenía EN PANTALLA al responder. No es lo que hay
+                          hoy en el servicio: es la foto de ese momento, y por eso
+                          sirve para explicar una diferencia que apareció después. */}
+                      {rev && [rev.visto_cobrado, rev.visto_efectivo, rev.visto_digital, rev.visto_transporte]
+                        .some(v => v != null) && (
+                        <div className="rounded-lg bg-white border px-2.5 py-2" style={{ borderColor: '#E5E7EB' }}>
+                          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Lo que vio en pantalla</div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+                            {rev.visto_cobrado    != null && <div><span className="text-gray-400">Cobrado:</span> <span className="font-semibold">{fmt(rev.visto_cobrado)}</span></div>}
+                            {rev.visto_efectivo   != null && <div><span className="text-gray-400">Efectivo:</span> <span className="font-semibold">{fmt(rev.visto_efectivo)}</span></div>}
+                            {rev.visto_digital    != null && <div><span className="text-gray-400">Digital:</span> <span className="font-semibold">{fmt(rev.visto_digital)}</span></div>}
+                            {rev.visto_transporte != null && <div><span className="text-gray-400">Transporte:</span> <span className="font-semibold">{fmt(rev.visto_transporte)}</span></div>}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* El ajuste es capa sombra: NO tocó el servicio ni el
+                          cuadre. Decirlo aquí evita que alguien lo lea como un
+                          valor ya aplicado. */}
+                      {aj && (
+                        <div className="rounded-lg bg-white border px-2.5 py-2 space-y-1.5" style={{ borderColor: '#FED7AA' }}>
+                          <div className="text-[9px] font-bold uppercase tracking-wider" style={{ color: '#9A3412' }}>
+                            Lo que propone — no está aplicado
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+                            {aj.cobrado_sugerido    != null && <div><span className="text-gray-400">Cobrado:</span> <span className="font-semibold">{fmt(aj.cobrado_sugerido)}</span></div>}
+                            {aj.reconocido_sugerido != null && <div><span className="text-gray-400">A reconocerle:</span> <span className="font-semibold">{fmt(aj.reconocido_sugerido)}</span></div>}
+                          </div>
+                          {aj.medios_sugeridos && (
+                            <div className="text-[11px] text-gray-600">
+                              <span className="text-gray-400">Medios:</span>{' '}
+                              {Array.isArray(aj.medios_sugeridos)
+                                ? aj.medios_sugeridos.map(m => `${m.metodo || m} ${m.monto != null ? fmt(m.monto) : ''}`.trim()).join(' · ')
+                                : String(aj.medios_sugeridos)}
+                            </div>
+                          )}
+                          {aj.nota && (
+                            <div className="text-[12px] text-gray-800 bg-orange-50 rounded-lg px-2.5 py-1.5 border" style={{ borderColor: '#FED7AA' }}>
+                              "{aj.nota}"
+                            </div>
+                          )}
+                          <div className="text-[10px] text-gray-400">
+                            {quien(aj.personal)}{cuando(aj.created_at) ? ` · ${cuando(aj.created_at)}` : ''}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
 
                 <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><Pencil size={10} /> Notas</div>
