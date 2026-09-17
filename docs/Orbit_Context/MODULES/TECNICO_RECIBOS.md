@@ -52,6 +52,14 @@ Las dos salidas que el jsonb del recibo no ve:
 - `cuadrado` — el servicio entró en un `cuadre_items` cuyo `cuadres_tecnico.estado = 'CERRADO'`
   **y del propio técnico** (no de otro que también lo tocó).
 
+#### Badge del menú (2026-09-17)
+El tab llevaba `count: 0`. Ahora cuenta **servicios recogidos sin fila en `recibos_tecnico`**,
+con el mismo criterio y la misma ventana que la pestaña (`pisoRecibos()`), porque un badge que
+cuente distinto de lo que se ve manda a una pantalla que dice "al día".
+Por eso **no descuenta los cuadrados**: la pestaña los sigue listando en "Por generar recibo".
+Pide solo ids (sin joins), lee con `dbTodo` y `ReciboTab` lo refresca por `onCount` solo cuando
+no hay filtro de fechas puesto.
+
 #### Archivado (2026-09-17)
 Un servicio se archiva —sección *Archivados · ya cuadrados*, la última y colapsada— solo si se
 cumplen **las tres**: `estadoRecibo === 'COMPLETO'` **y** saldo `= 0` **y** cuadre CERRADO.
