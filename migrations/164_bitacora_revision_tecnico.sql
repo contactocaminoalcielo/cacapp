@@ -21,10 +21,10 @@
 -- Esta tabla NO mueve dinero: no toca servicios, recibos_tecnico ni cuadre_items.
 --
 -- Aditiva, idempotente, reversible. No pisa datos.
--- Aplicar en VPS (Contabo):
---   ssh -i ~/.ssh/orbit_deploy root@13.140.139.61
---   cd /opt/supabase/docker && \
---   docker compose exec -T db psql -U postgres -d postgres --pset pager=off -f - < 164_bitacora_revision_tecnico.sql
+-- Aplicar en VPS (Contabo) — el archivo se PIPEA desde local; no vive en el VPS:
+--   cat migrations/164_bitacora_revision_tecnico.sql | \
+--     ssh -i ~/.ssh/orbit_deploy -o BatchMode=yes root@13.140.139.61 \
+--     "docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -"
 -- ============================================================================
 
 BEGIN;
