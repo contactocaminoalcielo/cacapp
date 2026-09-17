@@ -517,10 +517,16 @@ export default function Kanban() {
   // valor_transporte = 0, lo que abría dos huecos: no se le cobraba al cliente la
   // recogida fuera de Bogotá y —más grave— aunque el coordinador subiera el total
   // a mano, el cuadre saca de `valor_transporte` lo que se le RECONOCE al técnico,
-  // así que el viaje no se le pagaba. Se precarga desde la tarifa y queda editable.
+  // así que el viaje no se le pagaba.
+  // El valor NO se precarga: el coordinador elige qué tarifa aplica y en qué
+  // vehículo, igual que en Registro. Precargarlo escondía dos decisiones suyas —
+  // una ciudad puede tener más de una tarifa (`Soacha` y `Soacha compartir`) y el
+  // vehículo lo decide él, no el perfil del técnico, que todavía puede cambiar.
   const [tarifasTransporte, setTarifasTransporte] = useState([])
   const [convTransporte,    setConvTransporte]    = useState('')
-  const convTransporteTocado = useRef(false)
+  const [convTarifaCiudad,  setConvTarifaCiudad]  = useState('')   // fila de tarifas_transporte elegida ('' = Bogotá, sin recargo)
+  const [convVehiculo,      setConvVehiculo]      = useState('')   // '' = sin elegir · MOTO | CAMIONETA | NO_COBRAR
+  const convTarifaTocada     = useRef(false)
   const [convirtiendo,   setConvirtiendo]   = useState(false)
   const [planesKanban,   setPlanesKanban]   = useState([])
   const [especiesKanban, setEspeciesKanban] = useState([])
@@ -758,20 +764,44 @@ export default function Kanban() {
   const convCiudad    = convEsVet
     ? (convAliado?.ciudad || convForm.ciudad || 'Bogotá')
     : (convForm.ciudad || convForm.cliente_ciudad || 'Bogotá')
-  const convTarifa    = tarifasTransporte.find(t => normCiudad(t.ciudad) === normCiudad(convCiudad)) || null
-  // El vehículo sale del perfil del técnico asignado (igual que el cuadre). Sin
-  // técnico todavía, se sugiere la de moto: es la menor, y subirla es más fácil
-  // de justificar que devolverle plata al cliente.
-  const convVehiculo  = ([...tecnicos, ...mensajeros].find(p => p.id === convForm.tecnico_id)?.tipo_vehiculo) || 'MOTO'
-  const convTarifaSug = convTarifa
-    ? (convVehiculo === 'MOTO' ? (convTarifa.tarifa_moto || 0) : (convTarifa.tarifa_camioneta || 0))
-    : 0
+  const esBogota      = c => normCiudad(c).startsWith('bogota')
+  // La tarifa que casa con la ciudad de la recogida: solo es la SUGERENCIA que
+  // deja marcado el selector al abrir. Una ciudad puede tener varias tarifas
+  // (`Soacha` / `Soacha compartir`), así que la última palabra es del selector.
+  const convTarifaAuto = tarifasTransporte.find(t => normCiudad(t.ciudad) === normCiudad(convCiudad)) || null
+  const convTarifa     = tarifasTransporte.find(t => t.ciudad === convTarifaCiudad) || null
+  // Fuera de Bogotá y sin ninguna tarifa que case: hay que avisarlo, o el
+  // servicio se guarda sin cobrar transporte y nadie se entera (bug de 10-ago).
+  const convCiudadSinTarifa = !esBogota(convCiudad) && !convTarifaAuto
+  // El vehículo del técnico asignado NO decide nada: solo se enseña como pista,
+  // porque al convertir muchas veces todavía no hay técnico y puede cambiar.
+  const convVehiculoTecnico = ([...tecnicos, ...mensajeros].find(p => p.id === convForm.tecnico_id)?.tipo_vehiculo) || ''
+  const tarifaDeVehiculo = (t, v) => (!t || !v || v === 'NO_COBRAR')
+    ? 0
+    : Number(v === 'MOTO' ? t.tarifa_moto : t.tarifa_camioneta) || 0
 
-  // Mientras el coordinador no toque el campo, sigue a la ciudad y al vehículo.
+  // Elegir tarifa o vehículo recalcula el cobro; el campo vuelve a seguir la
+  // elección aunque antes se hubiera escrito un monto a mano.
+  // Mientras el coordinador no elija a mano, el selector sigue a la ciudad de la
+  // recogida (que puede cambiar al editar la dirección o el aliado). Al cambiar
+  // de tarifa se borra también lo ya elegido: dejar el monto de la ciudad
+  // anterior sería justo el valor asignado a espaldas suyas que hay que evitar.
   useEffect(() => {
-    if (!selSolicitud || convTransporteTocado.current) return
-    setConvTransporte(convTarifaSug > 0 ? String(convTarifaSug) : '')
-  }, [selSolicitud, convTarifaSug])
+    if (!selSolicitud || convTarifaTocada.current) return
+    setConvTarifaCiudad(convTarifaAuto?.ciudad || '')
+    setConvVehiculo(''); setConvTransporte('')
+  }, [selSolicitud, convTarifaAuto?.ciudad]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function elegirTarifaTransporte(ciudadTarifa) {
+    convTarifaTocada.current = true
+    setConvTarifaCiudad(ciudadTarifa)
+    const t = tarifasTransporte.find(x => x.ciudad === ciudadTarifa) || null
+    setConvTransporte(t && convVehiculo ? String(tarifaDeVehiculo(t, convVehiculo)) : '')
+  }
+  function elegirVehiculoTransporte(v) {
+    setConvVehiculo(v)
+    setConvTransporte(String(tarifaDeVehiculo(convTarifa, v)))
+  }
 
   async function calcularPrecioPara(planId, pesoKgRaw, especieIdRaw) {
     const pesoKg = parseFloat(pesoKgRaw) || 0
@@ -840,8 +870,10 @@ export default function Kanban() {
     // Consultar datos completos del aliado si el cliente seleccionó una vet registrada
     let aliado = null
     setComisionSol(0); setComisionSolPct(0); setAliadoSolData(null); setPagoEnVet(false)
-    // El transporte vuelve a seguir la ciudad hasta que alguien lo toque a mano
-    convTransporteTocado.current = false; setConvTransporte('')
+    // Transporte en blanco: la tarifa vuelve a seguir la ciudad y el vehículo
+    // queda SIN elegir — el valor solo aparece cuando el coordinador lo decide.
+    setConvTransporte('')
+    convTarifaTocada.current = false; setConvTarifaCiudad(''); setConvVehiculo('')
     if (s.aliado_id) {
       const { data } = await db.from('aliados')
         .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision')
@@ -985,6 +1017,17 @@ export default function Kanban() {
         return
       }
 
+      // Hay tarifa de transporte en juego y nadie dijo en qué vehículo: sin esto
+      // el servicio se guardaría en $0 y el técnico no cobraría el viaje (el
+      // cuadre lo lee de `valor_transporte`, no del total). "No cobrar" es una
+      // respuesta válida — lo que no vale es no responder.
+      if (convTarifa && !convVehiculo) {
+        await showAlert(
+          `La recogida cobra tarifa de ${convTarifa.ciudad}. Elige en qué vehículo se recoge, o marca "No cobrar".`,
+          { title: 'Falta el transporte' })
+        return
+      }
+
       const esVeterinaria = convForm.tipo_recogida === 'veterinaria'
       const puntoRecogida = esVeterinaria ? 'CLINICA_ALIADA' : 'DOMICILIO'
       const aliadoActual = aliadoPorId(selSolicitud.aliado_id)
@@ -1027,6 +1070,12 @@ export default function Kanban() {
       const notasServicio = [
         selSolicitud.aliado_nombre_otro ? `Veterinaria indicada por cliente: ${selSolicitud.aliado_nombre_otro}` : '',
         convForm.hora_aproximada ? `Hora aprox. recogida: ${convForm.hora_aproximada}` : '',
+        // Qué tarifa se aplicó y en qué vehículo — igual que en Registro. Sin esto
+        // el `valor_transporte` es un número suelto que nadie puede explicar
+        // después, y menos si la ciudad tenía dos tarifas posibles.
+        (convTarifa && transporteNum > 0)
+          ? `Recargo transporte ${String(convVehiculo).toLowerCase()} ${convTarifa.ciudad}: ${fmt(transporteNum)}`
+          : '',
       ].filter(Boolean).join('. ') || null
       const planSeleccionado = planPorId(convForm.plan_id)
       const esIndividual  = ['CREMACION_INDIVIDUAL','COMPOSTAJE_INDIVIDUAL'].includes(planSeleccionado?.tipo_proceso)
@@ -4653,36 +4702,97 @@ export default function Kanban() {
                     técnico (el cuadre lo lee de `valor_transporte`). Se precarga
                     desde la tarifa de la ciudad y el coordinador puede ajustarlo
                     o dejarlo en 0 si ya le prometió un precio al cliente. */}
-                {convTarifa && (
-                  <div className="col-span-2">
-                    <div className="rounded-xl p-3 space-y-2" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-bold text-amber-800">
-                            🚚 Recogida en {convTarifa.ciudad} — transporte
-                          </p>
-                          <p className="text-[10px] text-amber-600 mt-0.5">
-                            Tarifa {convVehiculo.toLowerCase()}: {fmt(convTarifaSug)}
-                            {convForm.tecnico_id ? '' : ' (aún sin técnico asignado, se asume moto)'}.
-                            Se suma al plan y se le reconoce al técnico en su cuadre. Déjalo en 0 si no lo vas a cobrar.
-                          </p>
+                <div className="col-span-2">
+                  <div className="rounded-xl p-3 space-y-2.5" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                    <p className="text-[11px] font-bold text-amber-800">
+                      🚚 Transporte de la recogida — {convCiudad || 'sin ciudad'}
+                    </p>
+
+                    {/* Qué tarifa se cobra. Una ciudad puede tener más de una
+                        (`Soacha` y `Soacha compartir`): antes se enganchaba
+                        siempre la primera que casara y no había cómo cambiarla. */}
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-700">Tarifa</label>
+                      <select className={SOL_INP} value={convTarifaCiudad}
+                        onChange={e => elegirTarifaTransporte(e.target.value)}>
+                        <option value="">Bogotá — sin recargo</option>
+                        {tarifasTransporte.map(t => (
+                          <option key={t.ciudad} value={t.ciudad}>{t.ciudad}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* La ciudad de la recogida no casa con ninguna tarifa y no es
+                        Bogotá: sin este aviso se guardaba en $0 en silencio. */}
+                    {convCiudadSinTarifa && !convTarifaCiudad && (
+                      <p className="text-[10px] leading-snug px-2 py-1.5 rounded-lg"
+                        style={{ background: '#FEF2F2', color: '#991B1B' }}>
+                        ⚠️ "{convCiudad}" no tiene tarifa propia. Si la recogida es fuera de Bogotá,
+                        elige arriba el municipio; si no aparece, hay que crear su tarifa en Configuración.
+                      </p>
+                    )}
+
+                    {/* En qué vehículo. Nada viene marcado: el valor aparece
+                        cuando el coordinador elige, no antes. */}
+                    {convTarifa && (
+                      <div>
+                        <label className="text-[10px] font-bold text-amber-700">¿En qué vehículo se recoge?</label>
+                        <div className="flex gap-2 mt-1">
+                          {['MOTO', 'CAMIONETA'].map(v => (
+                            <button key={v} type="button"
+                              className={`flex-1 py-2 text-[12px] font-semibold rounded-lg border-2 transition-all ${
+                                convVehiculo === v
+                                  ? 'border-amber-500 bg-amber-100 text-amber-800'
+                                  : 'border-amber-200 bg-white text-gray-500 hover:border-amber-300'
+                              }`}
+                              onClick={() => elegirVehiculoTransporte(v)}>
+                              {v === 'MOTO' ? '🏍 Moto' : '🚙 Camioneta'}
+                              <span className="ml-1 text-[10px]">+{fmt(tarifaDeVehiculo(convTarifa, v))}</span>
+                            </button>
+                          ))}
+                          <button type="button"
+                            className={`px-3 py-2 text-[12px] font-semibold rounded-lg border-2 transition-all ${
+                              convVehiculo === 'NO_COBRAR'
+                                ? 'border-gray-400 bg-gray-100 text-gray-700'
+                                : 'border-amber-200 bg-white text-gray-500 hover:border-amber-300'
+                            }`}
+                            onClick={() => elegirVehiculoTransporte('NO_COBRAR')}>
+                            No cobrar
+                          </button>
                         </div>
+                        {convVehiculoTecnico && convVehiculoTecnico !== convVehiculo && convVehiculo !== 'NO_COBRAR' && (
+                          <p className="text-[10px] text-amber-600 mt-1">
+                            El técnico asignado tiene registrada {convVehiculoTecnico.toLowerCase()}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* El monto queda editable para el caso de siempre: ya se le
+                        prometió otro precio al cliente. */}
+                    {convTarifa && convVehiculo && convVehiculo !== 'NO_COBRAR' && (
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[10px] text-amber-600 flex-1 leading-snug">
+                          Se suma al plan y es lo que se le reconoce al técnico en su cuadre.
+                          Ajústalo si ya le prometiste otro precio al cliente.
+                        </p>
                         <input type="number" min="0"
                           className="w-28 px-3 py-2 text-[13px] font-bold text-amber-800 bg-white border border-amber-300 rounded-lg outline-none focus:border-amber-500 text-right"
                           value={convTransporte}
-                          onChange={e => { convTransporteTocado.current = true; setConvTransporte(e.target.value) }}
+                          onChange={e => setConvTransporte(e.target.value)}
                         />
                       </div>
-                      {(parseFloat(cf.valor_total) || 0) > 0 && (
-                        <p className="text-[10px] text-amber-700">
-                          Plan {fmt(parseFloat(cf.valor_total) || 0)} + transporte {fmt(parseFloat(convTransporte) || 0)} ={' '}
-                          <b>{fmt((parseFloat(cf.valor_total) || 0) + (parseFloat(convTransporte) || 0))}</b>
-                          {comisionSol > 0 ? ' (antes de la comisión)' : ''}
-                        </p>
-                      )}
-                    </div>
+                    )}
+
+                    {convTarifa && convVehiculo && (parseFloat(cf.valor_total) || 0) > 0 && (
+                      <p className="text-[10px] text-amber-700">
+                        Plan {fmt(parseFloat(cf.valor_total) || 0)} + transporte {fmt(parseFloat(convTransporte) || 0)} ={' '}
+                        <b>{fmt((parseFloat(cf.valor_total) || 0) + (parseFloat(convTransporte) || 0))}</b>
+                        {comisionSol > 0 ? ' (antes de la comisión)' : ''}
+                      </p>
+                    )}
                   </div>
-                )}
+                </div>
 
                 {/* Comisión aliado — solo visible si hay aliado en la solicitud */}
                 {selSolicitud?.aliado_id && (
