@@ -1793,6 +1793,9 @@ export default function TecnicoApp() {
   const TABS_VALIDOS = ['recogidas', 'entregas', 'cuarto_frio', 'recibo', 'comprobantes', 'mis_cuadres']
   const [tab, setTab] = useState(() => {
     try {
+      // Una bitácora sin responder gana sobre la pestaña guardada: cerrar la app
+      // no sirve para saltarse la pregunta del recibo.
+      if (leerBitacoraPendiente()) return 'recibo'
       const t = localStorage.getItem('tecnico_ui_tab')
       return TABS_VALIDOS.includes(t) ? t : 'recogidas'
     } catch (_) { return 'recogidas' }
@@ -3129,7 +3132,14 @@ export default function TecnicoApp() {
           {TABS.map(({ key, label, Icon, count, color }) => {
             const activo = tab === key
             return (
-              <button key={key} onClick={() => setTab(key)}
+              <button key={key}
+                onClick={() => {
+                  // Bitácora sin responder: la barra no lleva a ningún lado.
+                  // El técnico puede correr la pregunta para entregar el recibo,
+                  // pero no dejar la mascota sin responder y seguir a lo otro.
+                  if (key !== 'recibo' && leerBitacoraPendiente()) { setTab('recibo'); return }
+                  setTab(key)
+                }}
                 aria-label={label}
                 aria-current={activo ? 'page' : undefined}
                 className="flex-1 py-3 flex flex-col items-center justify-center gap-0.5 relative"
@@ -3492,6 +3502,158 @@ function CuadresList({ tecnico }) {
   )
 }
 
+// ─── REVISIÓN DE BITÁCORA — el técnico responde por cada mascota ───────────
+// Al guardar el recibo se marca el servicio como "bitácora pendiente" y esa
+// marca vive en localStorage, no en memoria: si Android mata la PWA (pasa al
+// abrir cámara/galería) el técnico vuelve a la misma pantalla con la pregunta
+// puesta, en vez de escaparse por un reinicio.
+const BITACORA_PEND_KEY = 'tecnico_bitacora_pendiente'   // servicio_id con la pregunta abierta
+const BITACORA_COLA_KEY = 'tecnico_bitacora_cola'        // respuestas que no alcanzaron a subir
+
+function leerBitacoraPendiente() {
+  try { return localStorage.getItem(BITACORA_PEND_KEY) || '' } catch (_) { return '' }
+}
+function marcarBitacoraPendiente(servicioId) {
+  try { localStorage.setItem(BITACORA_PEND_KEY, servicioId) } catch (_) { /* privado/incógnito */ }
+}
+function limpiarBitacoraPendiente() {
+  try { localStorage.removeItem(BITACORA_PEND_KEY) } catch (_) { /* privado/incógnito */ }
+}
+
+// Si la respuesta no sube (se cayó la señal en la calle), no se pierde ni deja
+// al técnico encerrado: se guarda acá y se reintenta sola al abrir la Bitácora.
+function encolarRevision(payload) {
+  try {
+    const cola = JSON.parse(localStorage.getItem(BITACORA_COLA_KEY) || '[]')
+    const sinEsta = cola.filter(x => x.p_servicio_id !== payload.p_servicio_id)
+    localStorage.setItem(BITACORA_COLA_KEY, JSON.stringify([...sinEsta, payload]))
+  } catch (_) { /* privado/incógnito */ }
+}
+async function vaciarColaRevisiones() {
+  let cola = []
+  try { cola = JSON.parse(localStorage.getItem(BITACORA_COLA_KEY) || '[]') } catch (_) { return 0 }
+  if (!Array.isArray(cola) || !cola.length) return 0
+  const quedan = []
+  for (const payload of cola) {
+    try {
+      const { error } = await db.rpc('confirmar_bitacora_tecnico', payload)
+      if (error) quedan.push(payload)
+    } catch (_) { quedan.push(payload) }
+  }
+  try { localStorage.setItem(BITACORA_COLA_KEY, JSON.stringify(quedan)) } catch (_) {}
+  return cola.length - quedan.length
+}
+
+// La pregunta en sí. `bloqueante` = salida de la pantalla del recibo cerrada:
+// no se cierra con clic afuera ni tiene X, hay que responder una de las dos.
+function RevisionBitacoraSheet({ datos, tecnico, bloqueante = true, onRevisado, onAjustar, onPosponer }) {
+  const [saving, setSaving] = useState(false)
+  const [err,    setErr]    = useState('')
+  const intentosRef = useRef(0)
+
+  const digital = datos.digital != null ? datos.digital : (Number(datos.cobrado) || 0) - (Number(datos.efectivo) || 0)
+
+  async function confirmar() {
+    setErr(''); setSaving(true)
+    const payload = {
+      p_servicio_id:      datos.servicioId,
+      p_tecnico_id:       tecnico?.id || null,
+      p_coincide:         true,
+      p_recibo_id:        datos.reciboId || null,
+      p_visto_cobrado:    Number(datos.cobrado) || 0,
+      p_visto_efectivo:   Number(datos.efectivo) || 0,
+      p_visto_digital:    Number(digital) || 0,
+      p_visto_transporte: datos.transporte != null ? Number(datos.transporte) : null,
+    }
+    try {
+      const { error } = await db.rpc('confirmar_bitacora_tecnico', payload)
+      if (error) throw error
+      onRevisado({ encolado: false })
+    } catch (e) {
+      intentosRef.current += 1
+      // Segundo fallo seguido: ya no es un tropiezo, es que no hay señal. La
+      // respuesta queda guardada en el teléfono y el técnico sigue trabajando.
+      if (intentosRef.current >= 2) {
+        encolarRevision(payload)
+        onRevisado({ encolado: true })
+        return
+      }
+      setErr(e.message || 'No se pudo guardar. Intenta de nuevo.')
+      setSaving(false)
+    }
+  }
+
+  const Linea = ({ label, val, fuerte }) => (
+    <div className="flex justify-between items-baseline">
+      <span className={`text-[12px] ${fuerte ? 'text-gray-600 font-semibold' : 'text-gray-400'}`}>{label}</span>
+      <span className={`tabular-nums ${fuerte ? 'text-[15px] font-extrabold text-gray-900' : 'text-[13px] font-semibold text-gray-700'}`}>{val}</span>
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-[85] flex flex-col justify-end" style={{ background: 'rgba(11,29,79,0.62)' }}>
+      <div className="bg-white rounded-t-3xl px-6 pt-5 pb-8 max-h-[92vh] overflow-y-auto">
+        {!bloqueante && <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4" />}
+
+        <div className="text-center mb-1">
+          <div className="text-[10px] font-bold uppercase tracking-wide" style={{ color: '#D97706' }}>
+            📒 Tu bitácora · falta esta mascota
+          </div>
+          <p className="font-extrabold text-gray-900 text-lg mt-1 leading-tight">{datos.mascota || '—'}</p>
+          <p className="text-[11px] text-gray-500">{[datos.ciudad, datos.plan].filter(Boolean).join(' · ') || '—'}</p>
+        </div>
+
+        <div className="rounded-2xl px-4 py-3 my-4 space-y-1.5" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Lo que quedó registrado</div>
+          <Linea label="Total recibido" val={fmt(Number(datos.cobrado) || 0)} fuerte />
+          <Linea label="Efectivo" val={fmt(Number(datos.efectivo) || 0)} />
+          <Linea label="Digital"  val={fmt(Number(digital) || 0)} />
+          {datos.transporte != null && <Linea label="Transporte" val={fmt(Number(datos.transporte) || 0)} />}
+        </div>
+
+        <p className="text-[13px] text-gray-600 text-center leading-snug mb-3">
+          ¿Es exactamente lo que recibiste por <strong>{datos.mascota || 'esta mascota'}</strong>?
+        </p>
+
+        {err && (
+          <div className="rounded-xl px-3 py-2 mb-3 text-[12px] font-semibold"
+            style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
+            {err}
+          </div>
+        )}
+
+        <button onClick={confirmar} disabled={saving}
+          className="w-full py-3.5 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+          style={{ background: '#16A34A', color: '#fff' }}>
+          <Check size={18} /> {saving ? 'Guardando…' : 'Todo coincide'}
+        </button>
+
+        <button onClick={onAjustar} disabled={saving}
+          className="w-full mt-2 py-3.5 rounded-2xl text-[15px] font-bold disabled:opacity-60"
+          style={{ background: '#FEF3C7', color: '#92400E' }}>
+          ✎ No coincide — ajustar
+        </button>
+
+        {/* El cliente está enfrente esperando su recibo: la pregunta se puede
+            correr un momento para entregarlo, pero la pantalla no se cierra
+            hasta responderla. */}
+        {onPosponer && (
+          <button onClick={onPosponer} disabled={saving}
+            className="w-full mt-2 py-2.5 rounded-2xl text-[13px] font-semibold text-gray-500 disabled:opacity-60">
+            Primero entrego el recibo →
+          </button>
+        )}
+
+        <p className="text-[10px] text-gray-400 text-center mt-3 leading-snug">
+          {datos.transporte == null ? 'El transporte se define en el cuadre. ' : ''}
+          Queda en tu bitácora, con la fecha y lo que estabas viendo.
+          {bloqueante ? ' Sin responder no puedes salir del recibo.' : ''}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // ─── MI BITÁCORA — la planilla del técnico, automática (solo lectura) ────────
 // Igual a la planilla de papel: día a día qué recogió, a qué hora, cuánto
 // cobró y por qué medio, qué quedó sin cobrar y qué le reconoce el cuadre.
@@ -3532,6 +3694,10 @@ function BitacoraTab({ tecnico }) {
     if (!tecnico?.id) { setDias([]); return }
     const miCarga = ++cargaRef.current
     setDias(null); setError('')
+    // Respuestas que se quedaron sin señal en la calle: este es el momento de
+    // subirlas, antes de leer, para que la pantalla no las muestre como si no
+    // se hubieran dado.
+    await vaciarColaRevisiones()
     try {
       // Piso siempre en el corte (9-jun); "Todo" (rango vacío) baja hasta ahí.
       const dFloor = desde && desde > FECHA_CORTE ? desde : FECHA_CORTE
@@ -3549,7 +3715,7 @@ function BitacoraTab({ tecnico }) {
       // 2. Detalle de servicios + recibos + reconocimientos del cuadre +
       //    ajustes sugeridos por el técnico (capa sombra) + candado por cierre
       const sinError = r => { if (r.error) throw r.error; return r.data }
-      const [svcs, recibos, cItems, ajustes, lockRows] = await Promise.all([
+      const [svcs, recibos, cItems, ajustes, lockRows, revisiones] = await Promise.all([
         // El corte también recorta los ids que entraron por `recogidas` (arriba):
         // un servicio previo al corte no aparece en el cuadre aunque su recogida sí caiga en el mes.
         enLotes(ids, lote => db.from('servicios')
@@ -3568,11 +3734,19 @@ function BitacoraTab({ tecnico }) {
         enLotes(ids, lote => db.from('cuadre_items')
           .select('servicio_id, cuadre:cuadre_id(estado, tecnico_id)')
           .in('servicio_id', lote).then(sinError)),
+        // Lo que el técnico ya respondió al generar el recibo (migración 164).
+        // Sin `sinError` a propósito: si el frontend sale antes que la migración,
+        // la planilla entera no puede dejar de verse por una marca de adorno.
+        enLotes(ids, lote => db.from('bitacora_revisiones_tecnico')
+          .select('servicio_id, coincide')
+          .eq('tecnico_id', tecnico.id).in('servicio_id', lote).then(r => r.data || [])),
       ])
       if (miCarga !== cargaRef.current) return   // el usuario ya cambió de mes
 
       const ajusteMap = {}
       for (const a of (ajustes || [])) ajusteMap[a.servicio_id] = a
+      const revisionMap = {}
+      for (const r of (revisiones || [])) revisionMap[r.servicio_id] = r
       const lockedSet = new Set(
         (lockRows || [])
           .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
@@ -3619,6 +3793,9 @@ function BitacoraTab({ tecnico }) {
           ganado:   gi ? (Number(gi.transporte_reconocido) || 0) + (Number(gi.recargo_aplicado) || 0) + (Number(gi.pago_servicio) || 0) : null,
           ajuste:   ajusteMap[s.id] || null,   // sugerencia del técnico (capa sombra)
           locked:   lockedSet.has(s.id),        // ya cerrado → no editable
+          // ¿Ya respondió por esta mascota al generar el recibo? (migración 164)
+          revisada: !!revisionMap[s.id],
+          coincide: revisionMap[s.id]?.coincide === true,
         }
       })
       const porDia = {}
@@ -3744,6 +3921,9 @@ function BitacoraTab({ tecnico }) {
                       <td className="px-2.5 py-2 font-mono text-[11px] text-gray-400">{f.hora || '—'}</td>
                       <td className="px-2.5 py-2 font-bold text-gray-900 whitespace-nowrap">
                         {f.mascota}
+                        {f.revisada && f.coincide && (
+                          <span className="ml-1 text-[10px] font-bold text-green-600" title="Revisaste esta mascota: dijiste que coincide">✓</span>
+                        )}
                         {f.cancelado && <span className="ml-1 text-[9px] font-bold text-red-500">CANC</span>}
                       </td>
                       <td className="px-2.5 py-2 text-gray-500 whitespace-nowrap">{f.ciudad || '—'}</td>
@@ -3805,6 +3985,10 @@ function BitacoraTab({ tecnico }) {
                         <div className="flex items-center gap-2 min-w-0">
                           {f.hora && <span className="text-[11px] font-mono text-gray-400 flex-shrink-0">{f.hora}</span>}
                           <span className="text-[13px] font-bold text-gray-900 truncate">{f.mascota}</span>
+                          {/* Respondiste que lo registrado coincide (migr. 164) */}
+                          {f.revisada && f.coincide && (
+                            <span className="text-[10px] font-bold text-green-600 flex-shrink-0" title="Revisaste esta mascota: dijiste que coincide">✓</span>
+                          )}
                           {f.cancelado && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-600 flex-shrink-0">CANC</span>}
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -4747,16 +4931,25 @@ function ReciboTab({ tecnico, onCount }) {
   // exactamente donde iba sin navegar de nuevo.
   useEffect(() => {
     if (restauradoRef.current || servicioSel || cargando) return
-    restauradoRef.current = true
     try {
-      const id = localStorage.getItem('tecnico_recibo_sel')
-      if (!id) return
+      // Si quedó una bitácora sin responder, esa manda: es la puerta que el
+      // técnico no puede saltarse cerrando la app.
+      const pendiente = leerBitacoraPendiente()
+      const id = pendiente || localStorage.getItem('tecnico_recibo_sel')
+      if (!id) { restauradoRef.current = true; return }
       const item = [...items, ...hallazgos].find(i => i.svc.id === id)
-      if (item) seleccionar(item)
-      else localStorage.removeItem('tecnico_recibo_sel')
-    } catch (_) {}
+      if (item) { restauradoRef.current = true; seleccionar(item); return }
+      // No está en la ventana cargada. Si la lista ni siquiera cargó (sin señal
+      // en la calle) no se concluye nada: se reintenta cuando cargue de verdad.
+      // Borrar la marca acá dejaría la bitácora sin responder y sin quien la
+      // pida; dejarla apuntando al vacío trabaría la barra de pestañas.
+      if (listErr) return
+      restauradoRef.current = true
+      localStorage.removeItem('tecnico_recibo_sel')
+      if (pendiente) limpiarBitacoraPendiente()
+    } catch (_) { restauradoRef.current = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, cargando])
+  }, [items, cargando, listErr])
 
   if (!servicioSel || !svcData) {
     const q         = normalizar(busqueda.trim())
@@ -5773,6 +5966,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       : [{ metodo: 'EFECTIVO', monto: montoClienteDefault, referencia: '', comprobanteUrl: '', subiendoComprobante: false }]
   )
   const [guardado, setGuardado]         = useState(!!reciboExistente)
+  // Bitácora de esta mascota: al guardar el recibo queda pendiente de responder
+  // y hasta que no se responda no se sale de la pantalla. Arranca leyendo la
+  // marca guardada: si la PWA se reinició con la pregunta abierta, sigue abierta.
+  const [bitacoraPend,     setBitacoraPend]     = useState(() => leerBitacoraPendiente() === servicioSel?.id)
+  // La hoja se abre sola, pero se puede correr un momento para entregarle el
+  // recibo al cliente: lo que NO se puede es salir de la pantalla sin responder.
+  const [bitacoraHoja,     setBitacoraHoja]     = useState(() => leerBitacoraPendiente() === servicioSel?.id)
+  const [ajusteBitacora,   setAjusteBitacora]   = useState(false)  // modal de ajuste abierto desde la pregunta
+  const [ajusteExistente,  setAjusteExistente]  = useState(null)   // anotación previa de esta mascota, si la hay
+  const [bitacoraEncolada, setBitacoraEncolada] = useState(false)  // se respondió sin señal: sube sola después
   const [pagoPendiente, setPagoPendiente] = useState(reciboExistente?.datos_form?.pago_pendiente || false)
   // Motivo cuando el técnico cobra MÁS que el valor del recibo (obligatorio
   // para guardar en ese caso; la RPC lo exige — migración 041)
@@ -6399,6 +6602,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       setGuardado(true)
       setTipoFijado(true)
       limpiarIdemKey()
+      abrirBitacoraDeEsteRecibo()
       marcarEutanasiaCobradaPorTecnico()
       subirPdfReciboAlStorage()
       if (onGuardado) onGuardado(res.recibo_id)
@@ -6534,6 +6738,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     setGuardado(true)
     setTipoFijado(true)
     limpiarIdemKey()
+    abrirBitacoraDeEsteRecibo()
     marcarEutanasiaCobradaPorTecnico()
     subirPdfReciboAlStorage()
     if (onGuardado) onGuardado(data.id)
@@ -6782,8 +6987,63 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     }
   }
 
-  // Cierra el recibo (vuelve a la tarjeta de recogida)
-  function cerrar() { if (onVolver) onVolver() }
+  // ── Bitácora de la mascota: se abre sola al guardar el recibo ─────────────
+  // Una sola vez por mascota: si además se genera el recibo de la veterinaria
+  // (segundo guardado del mismo servicio), no se vuelve a preguntar lo mismo.
+  const bitacoraListaRef = useRef(false)
+  function abrirBitacoraDeEsteRecibo() {
+    if (bitacoraListaRef.current) return
+    if (!servicioSel?.id) return
+    marcarBitacoraPendiente(servicioSel.id)
+    setBitacoraPend(true)
+    setBitacoraHoja(true)
+  }
+  // Si esta mascota YA tenía una anotación del técnico, el modal tiene que
+  // abrirse con ella: si arrancara vacío, guardar pisaría en silencio la nota
+  // que ya estaba puesta sobre esa misma plata.
+  async function abrirAjusteBitacora() {
+    try {
+      const { data } = await db.from('bitacora_ajustes_tecnico')
+        .select('servicio_id, cobrado_sugerido, medios_sugeridos, reconocido_sugerido, nota')
+        .eq('servicio_id', servicioSel.id).eq('tecnico_id', tecnico?.id || '').maybeSingle()
+      setAjusteExistente(data || null)
+    } catch (_) { setAjusteExistente(null) }
+    setAjusteBitacora(true)
+  }
+  function cerrarBitacora({ encolado } = {}) {
+    bitacoraListaRef.current = true
+    limpiarBitacoraPendiente()
+    setBitacoraPend(false)
+    setBitacoraHoja(false)
+    setAjusteBitacora(false)
+    if (encolado) setBitacoraEncolada(true)
+  }
+  // Lo que el técnico tiene que confirmar: lo que quedó registrado en ESTE
+  // recibo. El transporte no existe todavía (lo define el cuadre) → va en null
+  // y la hoja no lo muestra, en vez de enseñar un cero que no es cierto.
+  const datosBitacora = {
+    servicioId: servicioSel?.id,
+    reciboId:   reciboId || null,
+    mascota:    svcData?.mascotas?.nombre || form.mascota_nombre || '—',
+    ciudad:     svcData?.aliados?.nombre || null,
+    plan:       svcData?.planes?.nombre || form.servicio || null,
+    cobrado:    (pagoPendiente || esFacturacionMensual) ? 0 : totalMedios,
+    efectivo:   (pagoPendiente || esFacturacionMensual) ? 0 : mediosPago
+      .filter(m => String(m.metodo).toUpperCase() === 'EFECTIVO')
+      .reduce((a, m) => a + (parseFloat(m.monto) || 0), 0),
+    transporte: null,
+  }
+
+  // Cierra el recibo (vuelve a la tarjeta de recogida). La bitácora de la
+  // mascota es la única puerta: si está sin responder, vuelve a abrirse.
+  function cerrar() {
+    if (bitacoraPend) {
+      setBitacoraHoja(true)
+      setErr('Responde la bitácora de esta mascota antes de salir.')
+      return
+    }
+    if (onVolver) onVolver()
+  }
 
   // `saltarGuardaVet` lo pone SOLO el botón de confirmación del modal de abajo,
   // cuando el técnico ya respondió que el número es el de la clínica.
@@ -7652,6 +7912,38 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           </div>
         )}
 
+        {/* Bitácora corrida para entregar el recibo: queda a la vista y con el
+            botón para responderla — la salida sigue cerrada hasta entonces. */}
+        {bitacoraPend && !bitacoraHoja && (
+          <button onClick={() => setBitacoraHoja(true)}
+            className="w-full flex items-center gap-2 px-4 py-3 rounded-2xl text-left active:scale-[0.99] transition-transform"
+            style={{ background: '#FEF3C7', border: '1.5px solid #FCD34D' }}>
+            <span className="text-base flex-shrink-0">📒</span>
+            <span className="flex-1">
+              <span className="block text-[12px] font-bold" style={{ color: '#92400E' }}>
+                Falta tu bitácora de {datosBitacora.mascota}
+              </span>
+              <span className="block text-[11px]" style={{ color: '#B45309' }}>
+                Responde si lo cobrado coincide — sin eso no puedes salir del recibo.
+              </span>
+            </span>
+            <span className="text-[12px] font-bold flex-shrink-0" style={{ color: '#92400E' }}>Responder →</span>
+          </button>
+        )}
+
+        {/* La respuesta de la bitácora no alcanzó a subir (sin señal): quedó
+            guardada en el teléfono y sube sola al abrir la pestaña Bitácora. */}
+        {bitacoraEncolada && (
+          <div className="flex items-start gap-2 px-4 py-3 rounded-2xl"
+            style={{ background: '#FEF3C7', border: '1.5px solid #FDE68A' }}>
+            <span className="text-base flex-shrink-0">📶</span>
+            <p className="text-[11px] leading-snug" style={{ color: '#92400E' }}>
+              <b>Tu respuesta quedó guardada en el teléfono.</b> Se sube sola cuando
+              vuelva la señal — ábrele la pestaña 📒 Bitácora más tarde para confirmarlo.
+            </p>
+          </div>
+        )}
+
         {/* El recibo existe en DB aunque falte el comprobante — se puede reintentar */}
         {guardado && !esFacturacionMensual && !pagoPendiente && comprobantesPendientes.length > 0 && (
           <div className="flex items-start gap-2 px-4 py-3 rounded-2xl"
@@ -7938,6 +8230,40 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           </div>
         )
       })()}
+
+      {/* ── Bitácora de la mascota — obligatoria al generar el recibo ────────
+          Se abre sola apenas el recibo queda guardado y tapa la pantalla
+          entera (incluida la barra de pestañas): el técnico responde acá
+          mismo, con la plata todavía en la mano, y no días después cuando ya
+          no se acuerda. Si dice que no coincide, cae en el mismo modal de
+          ajuste de la pestaña Bitácora — no hay dos formas de anotar lo mismo. */}
+      {bitacoraPend && bitacoraHoja && !ajusteBitacora && (
+        <RevisionBitacoraSheet
+          datos={datosBitacora}
+          tecnico={tecnico}
+          onRevisado={cerrarBitacora}
+          onAjustar={abrirAjusteBitacora}
+          onPosponer={() => setBitacoraHoja(false)}
+        />
+      )}
+      {bitacoraPend && ajusteBitacora && (
+        <AjusteModal
+          fila={{
+            servicioId: datosBitacora.servicioId,
+            mascota:    datosBitacora.mascota,
+            ciudad:     datosBitacora.ciudad,
+            plan:       datosBitacora.plan,
+            cobrado:    datosBitacora.cobrado,
+            efectivo:   datosBitacora.efectivo,
+            ganado:     datosBitacora.transporte,
+            ajuste:     ajusteExistente,
+            locked:     false,
+          }}
+          tecnico={tecnico}
+          onClose={() => setAjusteBitacora(false)}
+          onSaved={() => cerrarBitacora({ encolado: false })}
+        />
+      )}
     </div>
   )
 }

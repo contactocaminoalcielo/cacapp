@@ -283,6 +283,33 @@ Fuentes: `servicios`/`recogidas` del técnico + `recibos_tecnico` (conteo único
 regla 027) + `cuadre_items`; consultas en lotes de ≤80 ids (regla 414).
 No captura nada nuevo: reemplaza la planilla mostrándole al técnico sus propios datos.
 
+El lápiz ✎ de cada fila abre el **ajuste** (`bitacora_ajustes_tecnico`, migración
+033): una sugerencia del técnico —cuánto cobró, cómo lo repartió, cuánto cree que
+se le debe reconocer— con nota obligatoria. Es capa sombra: no toca servicios,
+recibos ni cuadre_items; gerencia la ve al lado del valor real.
+
+### L.1 Revisión obligatoria al generar el recibo (migración 164)
+Al guardar un recibo, el técnico **no puede salir de esa pantalla** sin responder
+por esa mascota: se le muestra lo que quedó registrado (total, efectivo, digital)
+y responde **«Todo coincide»** o **«No coincide — ajustar»** (que abre el mismo
+modal de ajuste de arriba). La respuesta vive en `bitacora_revisiones_tecnico`,
+aparte de los ajustes, con `coincide` y el snapshot `visto_*` de lo que tenía en
+pantalla al responder.
+
+- **Por qué una tabla aparte**: si cada recibo obligara a dejar un ajuste, el
+  aviso de gerencia («el técnico anota N sugerencias») pasaría a marcar todos los
+  servicios y dejaría de señalar algo. Un ajuste guardado también escribe acá su
+  revisión (`coincide = false`), venga de la pantalla del recibo o de la Bitácora.
+- **Qué frena y qué no**: el PDF y el envío por WhatsApp siguen disponibles —el
+  cliente está enfrente esperando—; lo que se cierra es volver a la lista y
+  cambiar de pestaña. La marca vive en `localStorage`, así que cerrar la PWA
+  devuelve al técnico a la misma pregunta.
+- **Sin señal**: tras dos intentos fallidos la respuesta se guarda en el teléfono
+  y se reintenta sola al abrir la pestaña Bitácora. Nunca deja al técnico
+  encerrado en la pantalla.
+- En la planilla, un ✓ verde junto a la mascota indica que ya la revisó y dijo
+  que coincide.
+
 ---
 
 ## 3. Notas técnicas
