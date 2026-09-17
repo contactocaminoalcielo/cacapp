@@ -18,6 +18,7 @@ import { aplicarRecalculoPorPeso, comisionInconsistente, COLS_CONSISTENCIA_COMIS
 import { edadALaFecha } from '@/lib/afiliaciones'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, trazaValor } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
+import TabAutorizaciones from '@/components/gestion/TabAutorizaciones'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import FichaServicio from '@/components/servicio/FichaServicio'
@@ -1993,6 +1994,7 @@ export default function Gestion() {
             <TabsTrigger value="aliados">Aliados</TabsTrigger>
             <TabsTrigger value="personal">Personal</TabsTrigger>
             <TabsTrigger value="planes">Planes</TabsTrigger>
+            <TabsTrigger value="autorizaciones">Autorizaciones</TabsTrigger>
           </TabsList>
           <TabsContent value="historial"><TabHistorialServicios canEdit={canEdit} /></TabsContent>
           <TabsContent value="clientes"><TabClientes isAdmin={isAdmin} /></TabsContent>
@@ -2000,6 +2002,7 @@ export default function Gestion() {
           <TabsContent value="aliados"><TabAliados isAdmin={isAdmin} canEdit={canEdit} /></TabsContent>
           <TabsContent value="personal"><TabPersonal isAdmin={isAdmin} /></TabsContent>
           <TabsContent value="planes"><TabServicios canEdit={canEdit} /></TabsContent>
+          <TabsContent value="autorizaciones"><TabAutorizaciones /></TabsContent>
         </Tabs>
       </div>
     </div>

@@ -178,6 +178,27 @@ Probado en producción tras recargar: la app carga, el backend responde, una
 autorización legítima del portal entra con 201, y a la petición número 12 de una
 ráfaga nginx contesta 429.
 
+## Dónde se consultan (Gestión → Autorizaciones)
+
+`src/components/gestion/TabAutorizaciones.jsx`, pestaña nueva en Gestión. Antes
+esto solo se podía mirar por SSH y psql: si una familia pregunta qué permiso
+tenemos para tener sus datos, o llega un requerimiento, la respuesta la tiene que
+poder dar coordinación sin entrar al servidor.
+
+Busca por nombre, teléfono, documento o correo, y muestra cuándo autorizó, dónde
+la dio, si la marcó el titular o la declaró alguien, y **qué versión** aceptó.
+
+**No hay editar ni borrar, y no los va a haber.** Revocar escribe otra fila que
+apunta a la revocada (`revoca_id`, migración 163) y la original queda marcada:
+hay que poder probar las dos cosas, que autorizó y que después lo retiró. Una
+autorización no se puede revocar dos veces — índice único parcial.
+
+La política RLS de `authenticated` permite exactamente dos cosas: el
+consentimiento del registro interno, y una revocación que apunte a una
+autorización existente. Probado contra producción con ROLLBACK: la revocación
+legítima pasa; revocarla dos veces, fabricar una que parezca marcada por la
+familia desde el portal, y colgar una revocación de la nada, los tres rebotan.
+
 ## Lo que quedó pendiente
 
 - **Registro Nacional de Bases de Datos (RNBD) de la SIC.** Verificar si la
