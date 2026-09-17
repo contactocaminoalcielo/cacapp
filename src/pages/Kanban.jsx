@@ -643,6 +643,9 @@ export default function Kanban() {
   // INACTIVOS a propósito: un servicio viejo puede apuntar a alguien que ya no
   // está y la tarjeta igual tiene que decir quién lo recogió.
   const [personalNombres, setPersonalNombres] = useState({})
+  // Gente activa, con el nombre completo, para los desplegables de "Técnico" y
+  // "Registró" — los mismos que ofrece Gestión → Historial.
+  const [personalActivo, setPersonalActivo] = useState([])
   const [mensajeroId, setMensajeroId]     = useState('')
   const [modalEntrega, setModalEntrega]   = useState(null) // servicioId para modal entrega
 
@@ -1192,6 +1195,7 @@ export default function Kanban() {
         const all = data || []
         setTecnicos(all.filter(p => p.activo && p.rol_principal_id === 2))
         setMensajeros(all.filter(p => p.activo && p.rol_principal_id === 3))
+        setPersonalActivo(all.filter(p => p.activo))
         // Primer nombre + inicial del apellido: `nombre` guarda los dos nombres
         // ("Giovanni Alexander") y entero no cabe en el chip. La inicial es lo
         // que separa a los dos Jorge —Castillo y Galvis— que están activos.
@@ -2409,6 +2413,30 @@ export default function Kanban() {
 
   // ── Computed ──────────────────────────────────────────────────────────────
   const planesUnicos = [...new Set(servicios.map(s => s.plan).filter(Boolean))].sort()
+  // Opciones de los filtros del Historial: se arman con lo que REALMENTE hay en
+  // el tablero, no con el catálogo entero — un desplegable con 250 aliados de
+  // los que 240 no tienen ninguna mascota aquí no ayuda a nadie.
+  const aliadosUnicos  = [...new Set(servicios.map(s => s.aliado_origen).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'es'))
+  const especiesUnicas = [...new Set(servicios.map(s => s.especie).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'es'))
+  const nombreCompleto = p => `${p.nombre || ''} ${p.apellido || ''}`.trim()
+  // Nombre de un id de personal. Si ya no está activo cae al nombre corto del
+  // mapa, que incluye a los inactivos: un servicio viejo puede apuntar a
+  // alguien que se fue y su filtro no puede quedar sin etiqueta.
+  const etiquetaPersonal = id => {
+    const p = personalActivo.find(x => String(x.id) === String(id))
+    return p ? nombreCompleto(p) : (personalNombres[id] || 'Sin identificar')
+  }
+  const opcionesPersonal = campo => [...new Set(servicios.map(s => s[campo]).filter(Boolean))]
+    .map(id => ({ id: String(id), label: etiquetaPersonal(id) }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'es'))
+  const tecnicosUnicos = opcionesPersonal('tecnico_id')
+  const registranUnicos = opcionesPersonal('registrado_por')
+  const filtrosHistActivos = [filtroPago, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie].filter(Boolean).length
+  function limpiarFiltrosHist() {
+    setFiltroPago(''); setFiltroAliado(''); setFiltroTecnico(''); setFiltroUsuario(''); setFiltroEspecie('')
+  }
 
   // Recordatorios presentes en los servicios cargados (nombres desde recListOpts)
   // Días hábiles que promete cada plan (8 los más, 20 el eco-grupal, 3 el Ángel):
@@ -2435,6 +2463,17 @@ export default function Kanban() {
     if (fechaHasta && (!s.fecha_ingreso || s.fecha_ingreso > fechaHasta)) return false
     if (filtroEstado !== 'todos' && s.estado !== filtroEstado) return false
     if (filtroPlanes.length && !filtroPlanes.includes(s.plan)) return false
+    // ── Filtros del Historial ────────────────────────────────────────────────
+    // Mismo criterio que Gestión → Historial, columna por columna. El aliado y
+    // la especie se comparan por NOMBRE porque es lo que expone `v_kanban`
+    // (`aliado_origen`, `especie`); el técnico y quien registró, por id.
+    if (filtroPago && s.estado_pago !== filtroPago) return false
+    if (filtroAliado === '__none__' ? !!s.aliado_origen
+      : filtroAliado && s.aliado_origen !== filtroAliado) return false
+    if (filtroTecnico && String(s.tecnico_id || '') !== filtroTecnico) return false
+    if (filtroUsuario === '__none__' ? !!s.registrado_por
+      : filtroUsuario && String(s.registrado_por || '') !== filtroUsuario) return false
+    if (filtroEspecie && s.especie !== filtroEspecie) return false
     // Solo los que llevan un recordatorio ADICIONAL (mismo criterio del badge de
     // la tarjeta: ítem con origen ADICIONAL y no removido)
     if (soloAdicional && !s.tiene_adicional) return false
@@ -2490,6 +2529,16 @@ export default function Kanban() {
     if (soloConImagenes && !s.fecha_imagenes_recibidas)           setSoloConImagenes(false)
     if (soloAnticipados && !esCompostajeAnticipado(s))            setSoloAnticipados(false)
     if (soloVip && !esAliadoVip(s))                               setSoloVip(false)
+    // Los filtros del Historial esconden igual que los de siempre: si el
+    // servicio no los cumple, se apagan para que la tarjeta no desaparezca al
+    // cerrar el detalle.
+    if (filtroPago && s.estado_pago !== filtroPago)               setFiltroPago('')
+    if (filtroAliado && (filtroAliado === '__none__' ? !!s.aliado_origen : s.aliado_origen !== filtroAliado))
+      setFiltroAliado('')
+    if (filtroTecnico && String(s.tecnico_id || '') !== filtroTecnico)   setFiltroTecnico('')
+    if (filtroUsuario && (filtroUsuario === '__none__' ? !!s.registrado_por : String(s.registrado_por || '') !== filtroUsuario))
+      setFiltroUsuario('')
+    if (filtroEspecie && s.especie !== filtroEspecie)             setFiltroEspecie('')
     abrirModal(s)
   }
 
@@ -2948,6 +2997,19 @@ export default function Kanban() {
             VIP
           </button>
 
+          {/* Puerta a los filtros del Historial. Plegados por defecto: son cinco
+              desplegables y la barra ya iba llena, pero el contador del botón
+              delata que hay filtros puestos aunque la fila esté cerrada. */}
+          <button
+            onClick={() => setFiltrosOpen(v => !v)}
+            title="Pago, aliado, técnico, quién registró y especie — los mismos filtros de Gestión → Historial"
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${filtrosHistActivos ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
+            style={filtrosHistActivos ? { background: '#1A5CD8' } : {}}
+          >
+            {filtrosOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            Filtros{filtrosHistActivos ? ` · ${filtrosHistActivos}` : ''}
+          </button>
+
           <div className="ml-auto flex items-center gap-2">
             <span className="text-[12px] text-gray-400 font-medium hidden sm:block">{filtrados.length} servicio{filtrados.length !== 1 ? 's' : ''}</span>
             <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
@@ -2956,6 +3018,45 @@ export default function Kanban() {
             </div>
           </div>
         </div>
+
+        {/* ── Filtros del Historial (plegables) ─────────────────────────────
+            Mismos criterios y mismas palabras que Gestión → Historial. Las
+            listas se arman con lo que hay en el tablero, no con el catálogo
+            entero. */}
+        {filtrosOpen && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={filtroPago} onChange={e => setFiltroPago(e.target.value)} className="h-9 text-[12px] w-36">
+              <option value="">Todo pago</option>
+              <option value="PENDIENTE">Pendiente</option>
+              <option value="PARCIAL">Parcial</option>
+              <option value="COMPLETO">Completo</option>
+            </Select>
+            <Select value={filtroAliado} onChange={e => setFiltroAliado(e.target.value)} className="h-9 text-[12px] w-52">
+              <option value="">Todos los aliados</option>
+              <option value="__none__">— Particulares (sin aliado) —</option>
+              {aliadosUnicos.map(a => <option key={a} value={a}>{a}</option>)}
+            </Select>
+            <Select value={filtroTecnico} onChange={e => setFiltroTecnico(e.target.value)} className="h-9 text-[12px] w-44">
+              <option value="">Todos los técnicos</option>
+              {tecnicosUnicos.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </Select>
+            <Select value={filtroUsuario} onChange={e => setFiltroUsuario(e.target.value)} className="h-9 text-[12px] w-48">
+              <option value="">Registrado por (todos)</option>
+              {registranUnicos.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+              <option value="__none__">— Sin registrar —</option>
+            </Select>
+            <Select value={filtroEspecie} onChange={e => setFiltroEspecie(e.target.value)} className="h-9 text-[12px] w-40">
+              <option value="">Todas las especies</option>
+              {especiesUnicas.map(e => <option key={e} value={e}>{e}</option>)}
+            </Select>
+            {filtrosHistActivos > 0 && (
+              <button onClick={limpiarFiltrosHist}
+                className="text-[11px] font-semibold text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors">
+                × Limpiar filtros
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── KANBAN VIEW ─────────────────────────────────────────────────── */}
         {vista === 'kanban' && (
