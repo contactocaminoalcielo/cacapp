@@ -30,6 +30,7 @@ const Produccion         = lazy(() => import('@/pages/Produccion'))
 const SeguimientoImagenes = lazy(() => import('@/pages/SeguimientoImagenes'))
 const Gestion            = lazy(() => import('@/pages/Gestion'))
 const Nps                = lazy(() => import('@/pages/Nps'))
+const Pqr                = lazy(() => import('@/pages/Pqr'))
 const Reportes           = lazy(() => import('@/pages/Reportes'))
 const Presequiales       = lazy(() => import('@/pages/Presequiales'))
 const Configuracion      = lazy(() => import('@/pages/Configuracion'))
@@ -95,6 +96,7 @@ function AppRoutes({ rol }) {
             {routes.has('/imagenes')     && <Route path="/imagenes"     element={<SeguimientoImagenes />} />}
             {routes.has('/gestion')      && <Route path="/gestion"      element={<Gestion />} />}
             {routes.has('/nps')          && <Route path="/nps"          element={<Nps />} />}
+            {routes.has('/pqr')          && <Route path="/pqr"          element={<Pqr />} />}
             {routes.has('/reportes')     && <Route path="/reportes"     element={<Reportes />} />}
             {routes.has('/presequiales') && <Route path="/presequiales" element={<Presequiales />} />}
             {routes.has('/configuracion')   && <Route path="/configuracion"   element={<Configuracion />} />}

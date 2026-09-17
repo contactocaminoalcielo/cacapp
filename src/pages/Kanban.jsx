@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import BitacoraTecnico from '@/components/servicio/BitacoraTecnico'
+import PqrServicio, { metaTipoPqr } from '@/components/servicio/PqrServicio'
 import ResumenEntrega from '@/components/servicio/ResumenEntrega'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
@@ -581,6 +582,7 @@ export default function Kanban() {
   // pinta la tarjeta de dorado: `esAliadoVip` entiende las formas de v_kanban).
   const [soloVip, setSoloVip] = useState(false)
   const [soloConImagenes, setSoloConImagenes] = useState(false) // solo las familias que ya mandaron las fotos
+  const [soloPqr, setSoloPqr] = useState(false)                 // solo las mascotas con alguna PQR registrada
   const [sortField, setSortField]         = useState('fecha_ingreso')
   const [sortDir, setSortDir]             = useState('desc')
   const [soloHoy, setSoloHoy]             = useState(true) // mostrar solo la operación que ingresó hoy
@@ -1341,7 +1343,7 @@ export default function Kanban() {
       if (ids.length) {
         // El resumen conserva todos los estados/tipos, sin bajar cada copia de
         // un mismo recordatorio. Todas las lecturas paginadas tienen orden único.
-        const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows] = await Promise.all([
+        const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows, pqrRows] = await Promise.all([
           dbTodo(() => db.from('servicios')
             // `registrado_por` viaja aquí y no en `v_kanban`: la vista no lo
             // expone y esta consulta ya recorre los mismos servicios, así que
@@ -1381,6 +1383,14 @@ export default function Kanban() {
             .select('servicio_id, metodo, servicios!inner(fecha_ingreso)')
             .gt('monto', 0)
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
+          // PQR registradas sobre cada servicio (migr. 167): la tarjeta solo
+          // necesita saber CUÁNTAS y de qué tipo; el texto se lee al abrirla.
+          // Si la consulta falla —tabla aún sin migrar en un entorno— se
+          // devuelve null y el tablero sigue igual, sin chips.
+          dbTodo(() => db.from('pqrs')
+            .select('servicio_id, tipo, servicios!inner(fecha_ingreso)')
+            .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id'))
+            .catch(() => null),
         ])
         const mapa = {}
         const pesos = {}
@@ -1433,6 +1443,15 @@ export default function Kanban() {
           const met = String(r.metodo || '').toUpperCase()
           if (met && !arr.includes(met)) arr.push(met)
         })
+        // PQR por servicio: cuántas y el tipo de la última, que es lo que pinta
+        // el chip. Con `pqrRows` en null (consulta caída) el mapa queda vacío y
+        // ninguna tarjeta miente diciendo que no hay PQR: simplemente no habla.
+        const pqrMap = {}
+        ;(pqrRows || []).forEach(p => {
+          const e = pqrMap[p.servicio_id] || (pqrMap[p.servicio_id] = { n: 0, tipo: null })
+          e.n += 1
+          e.tipo = p.tipo   // el orden de la consulta deja arriba la más vieja; gana la última
+        })
         const conAdicional = new Set(items.filter(i => i.origen === 'ADICIONAL').map(i => i.servicio_id))
         // Ítems de recordatorio por servicio (sin NA) — alimenta el filtro por recordatorio
         const itemsPorSvc = {}
@@ -1456,6 +1475,8 @@ export default function Kanban() {
             ...base,
             mascota_peso_kg: pesos[s.servicio_id] ?? null,
             registrado_por:  registradoPor[s.servicio_id] ?? null,
+            pqr_n:           pqrMap[s.servicio_id]?.n ?? 0,
+            pqr_tipo:        pqrMap[s.servicio_id]?.tipo ?? null,
             tiene_adicional: conAdicional.has(s.servicio_id),
             items_rec:       itemsPorSvc[s.servicio_id] || [],
             nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
@@ -2444,6 +2465,8 @@ export default function Kanban() {
     // (`servicios.fecha_imagenes_recibidas`), no el estado: el badge de la
     // tarjeta solo la pinta en EN_PROCESO, pero el filtro sirve en toda columna.
     if (soloConImagenes && !s.fecha_imagenes_recibidas) return false
+    // Solo las mascotas de las que alguien dijo algo (migr. 167)
+    if (soloPqr && !(s.pqr_n > 0)) return false
     // Solo los compostajes que se producen YA porque la familia los pidió
     // anticipados (el resto no se toca hasta que la mascota salga del cubículo)
     if (soloAnticipados && !esCompostajeAnticipado(s)) return false
@@ -2490,6 +2513,7 @@ export default function Kanban() {
     if (filtroPlanes.length && !filtroPlanes.includes(s.plan))    setFiltroPlanes([])
     if (soloAdicional && !s.tiene_adicional)                      setSoloAdicional(false)
     if (soloConImagenes && !s.fecha_imagenes_recibidas)           setSoloConImagenes(false)
+    if (soloPqr && !(s.pqr_n > 0))                                setSoloPqr(false)
     if (soloAnticipados && !esCompostajeAnticipado(s))            setSoloAnticipados(false)
     if (soloVip && !esAliadoVip(s))                               setSoloVip(false)
     // Los filtros del Historial esconden igual que los de siempre: si el
@@ -2929,6 +2953,20 @@ export default function Kanban() {
           >
             <Images size={13} />
             Con imágenes
+          </button>
+
+          {/* Solo las mascotas de las que alguien dijo algo: cualquier PQR
+              registrada, del tipo que sea (migr. 167). */}
+          <button
+            onClick={() => setSoloPqr(v => !v)}
+            title={soloPqr
+              ? 'Mostrando solo las mascotas con alguna PQR — clic para ver todas'
+              : 'Mostrar solo las mascotas con alguna PQR registrada'}
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloPqr ? 'text-white border-transparent shadow-sm' : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'}`}
+            style={soloPqr ? { background: '#9F1239' } : {}}
+          >
+            <MessageSquare size={13} />
+            Con PQR
           </button>
 
           {/* Solo los compostajes que la familia pidió ANTICIPADOS: lo que hay
@@ -3373,6 +3411,14 @@ export default function Kanban() {
                                 <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 bg-amber-100 text-amber-700"
                                   title="Este servicio tiene un recordatorio adicional agregado">
                                   <Gift size={9} /> Tiene adicional
+                                </div>
+                              )}
+                              {s.pqr_n > 0 && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1"
+                                  style={{ background: metaTipoPqr(s.pqr_tipo).bg, color: metaTipoPqr(s.pqr_tipo).color }}
+                                  title={`Esta mascota tiene ${s.pqr_n} PQR registrada${s.pqr_n > 1 ? 's' : ''}. Ábrela para leerlas.`}>
+                                  <MessageSquare size={9} />
+                                  {s.pqr_n > 1 ? `${s.pqr_n} PQR` : metaTipoPqr(s.pqr_tipo).label}
                                 </div>
                               )}
                               {tecnicoNombre && (
@@ -4223,6 +4269,12 @@ export default function Kanban() {
                     muestra lo registrado y responde si coincide. Compartido con la
                     ficha de Gestión para que las dos pantallas no se desvíen. */}
                 <BitacoraTecnico servicioId={selected.servicio_id} />
+
+                {/* Lo que la familia dijo sobre ESTA mascota. Se registra aquí
+                    porque es aquí donde el coordinador está cuando le llaman.
+                    `cargar` refresca el tablero para que el chip de la tarjeta
+                    aparezca sin recargar la pantalla. */}
+                <PqrServicio servicioId={selected.servicio_id} onCambio={cargar} />
 
                 <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><Pencil size={10} /> Notas</div>

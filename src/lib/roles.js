@@ -10,7 +10,7 @@ const ACCESO_TOTAL = {
   redirectTo: '/',
   routes: new Set([
     '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
-    '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps',
+    '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps', '/pqr',
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
     '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',
