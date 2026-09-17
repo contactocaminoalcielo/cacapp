@@ -1,4 +1,5 @@
 import { fmt } from '@/lib/utils'
+import { db } from '@/lib/supabase'
 
 const EMPRESA = {
   nombre:    'Camino al Cielo',
@@ -36,9 +37,33 @@ async function resolverFirma(firma) {
   } catch (_) { return null }   // sin firma el certificado sale con la línea en blanco
 }
 
+// Plantas del compostaje: la especie que eligió la familia en el portal y los
+// extras que compró ahí mismo (migración 149). Se consulta ACÁ y no en cada
+// pantalla porque el certificado se genera desde tres sitios distintos —el
+// tablero, la ficha del servicio y la app del mensajero— y los tres tienen que
+// imprimir lo mismo.
+// Nunca tumba el certificado: si la consulta falla, sale sin la sección.
+async function cargarPlantas(servicioId) {
+  if (!servicioId) return { eleccion: null, extras: [] }
+  try {
+    const [rEleccion, rExtras] = await Promise.all([
+      db.from('planta_elecciones')
+        .select('estado, planta_nombre, fecha_eleccion, plantas:planta_id ( nombre )')
+        .eq('servicio_id', servicioId).maybeSingle(),
+      db.from('planta_adicionales')
+        .select('nombre, cantidad, precio_unitario, total')
+        .eq('servicio_id', servicioId).order('created_at'),
+    ])
+    return { eleccion: rEleccion?.data || null, extras: rExtras?.data || [] }
+  } catch (_) {
+    return { eleccion: null, extras: [] }
+  }
+}
+
 // Genera y descarga el certificado de entrega
 export async function generarCertificadoEntrega({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
   const firmaImg = await resolverFirma(firmaDataUrl || entrega?.foto_firma_url)
+  const { eleccion: plantaEleccion, extras: plantasExtra } = await cargarPlantas(svc?.id)
   const { default: jsPDF } = await import('jspdf')
   const pdf = new jsPDF('p', 'mm', 'a4')
   const W = 210, H = 297, M = 15, CW = W - M * 2
@@ -206,6 +231,40 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
     }
   }
 
+  // ── Plantas del compostaje ────────────────────────────────────────────────
+  // Al cumplirse el compostaje la familia elige su especie en el portal y puede
+  // comprar más (migración 149). Lo que se entrega también son plantas, así que
+  // tienen que quedar escritas acá: sin esto el certificado decía que se
+  // entregaron los recordatorios del plan y callaba las plantas.
+  if (plantaEleccion || plantasExtra.length) {
+    sec('PLANTAS DEL COMPOSTAJE')
+    const especie = plantaEleccion?.planta_nombre || plantaEleccion?.plantas?.nombre || null
+    const fechaEleccion = plantaEleccion?.fecha_eleccion
+      ? new Date(plantaEleccion.fecha_eleccion).toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
+      : '—'
+    fila2(
+      'Especie elegida por la familia', especie || 'Sin elegir',
+      'Fecha de elección',              especie ? fechaEleccion : '—',
+    )
+    if (plantasExtra.length) {
+      espacio(8)
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(140, 140, 140)
+      t('PLANTAS ADICIONALES', M, y)
+      y += 4.8
+      plantasExtra.forEach(p => {
+        espacio(6)
+        const cant = Number(p.cantidad) || 1
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(25, 25, 25)
+        t(`${p.nombre}${cant > 1 ? `   ×${cant}` : ''}`, M + 2, y)
+        pdf.setFont('helvetica', 'bold'); pdf.setTextColor(60, 60, 60)
+        t(fmt(Number(p.total) || 0), W - M - 2, y, { align: 'right' })
+        y += 5
+      })
+      y += 1
+    }
+    hr()
+  }
+
   // ── Adicionales por cobrar en la entrega ──────────────────────────────────
   // Un certificado de ENTREGA no es un recibo: no informa cuánto vale el plan
   // ni cuánto se ha pagado. Lo único que se cobra al recibir son los
@@ -216,20 +275,72 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   // `precio_cobrado` que ya se ve en otras vistas), topada al saldo real del
   // servicio: si el adicional ya se pagó, el saldo es 0 y la sección no aparece
   // (nunca cobra más de lo que realmente se debe).
+  // Las plantas extra son dinero igual que un recordatorio adicional: el backend
+  // las suma a `servicios.valor_total` al comprarlas (migración 149). Antes no
+  // entraban en este bloque —solo se miraba `servicio_recordatorios`—, así que
+  // una planta comprada engordaba el saldo y el mensajero no sabía cobrarla.
   const saldoServicio = Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0))
-  const totalAdicionales = (items || [])
-    .filter(i => i.origen === 'ADICIONAL' && i.estado !== 'NA')
-    .reduce((s, i) => s + (Number(i.precio_cobrado ?? i.subtotal) || 0), 0)
+  const lineasCobro = [
+    ...(items || [])
+      .filter(i => i.origen === 'ADICIONAL' && i.estado !== 'NA')
+      .map(i => ({
+        nombre: i.recordatorios?.nombre || i.nombre || 'Adicional',
+        valor:  Number(i.precio_cobrado ?? i.subtotal) || 0,
+      })),
+    ...plantasExtra.map(p => ({
+      nombre: `Planta adicional: ${p.nombre}${(Number(p.cantidad) || 1) > 1 ? `  ×${p.cantidad}` : ''}`,
+      valor:  Number(p.total) || 0,
+    })),
+  ].filter(l => l.valor > 0)
+  const totalAdicionales = lineasCobro.reduce((s, l) => s + l.valor, 0)
   const saldo = Math.min(totalAdicionales, saldoServicio)
+
   if (saldo > 0) {
-    espacio(14)
+    // Se topa al saldo real del servicio: nunca se cobra más de lo que se debe.
+    const hayTope  = saldo < totalAdicionales
+    const conTotal = lineasCobro.length > 1
+    const boxH = 11 + lineasCobro.length * 5 + (conTotal ? 5 : 0) + 10 + (hayTope ? 5 : 0)
+    espacio(boxH + 4)
+    const y0 = y
     pdf.setDrawColor(196, 168, 122); pdf.setLineWidth(0.4)
-    pdf.setFillColor(255, 253, 248); pdf.rect(M, y, CW, 11, 'FD')
+    pdf.setFillColor(255, 253, 248); pdf.rect(M, y0, CW, boxH, 'FD')
+
+    y = y0 + 6
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(140, 110, 60)
-    t('ADICIONALES POR COBRAR EN LA ENTREGA', M + 4, y + 7)
+    t('ADICIONALES POR COBRAR EN LA ENTREGA', M + 5, y)
+    y += 5.5
+
+    // Detalle: qué es cada peso que se está cobrando en la puerta.
+    lineasCobro.forEach(l => {
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(60, 50, 35)
+      t(pdf.splitTextToSize(l.nombre, CW - 50)[0], M + 5, y)
+      t(fmt(l.valor), W - M - 5, y, { align: 'right' })
+      y += 5
+    })
+
+    pdf.setDrawColor(224, 210, 186); pdf.setLineWidth(0.25)
+    pdf.line(M + 5, y - 2.2, W - M - 5, y - 2.2)
+
+    if (conTotal) {
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(120, 100, 70)
+      t('Suma de adicionales', M + 5, y + 1.8)
+      t(fmt(totalAdicionales), W - M - 5, y + 1.8, { align: 'right' })
+      y += 5
+    }
+
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(140, 110, 60)
+    t('TOTAL A COBRAR', M + 5, y + 3)
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(192, 48, 48)
-    t(fmt(saldo), W - M - 4, y + 7.6, { align: 'right' })
-    y += 14
+    t(fmt(saldo), W - M - 5, y + 3.6, { align: 'right' })
+    y += 9
+
+    if (hayTope) {
+      pdf.setFont('helvetica', 'italic'); pdf.setFontSize(6.5); pdf.setTextColor(140, 120, 90)
+      t('El servicio ya tiene abonos aplicados: se cobra solo el saldo pendiente.', M + 5, y + 1)
+    }
+    // El cursor sale del alto reservado, no de la suma de los pasos: así una
+    // línea larga no puede empujar el texto fuera de la caja.
+    y = y0 + boxH + 4
   }
 
   if (entrega?.notas) {
