@@ -69,7 +69,7 @@ export default function Privacidad() {
               Versión {VERSION}
             </span>
             <span className="text-[12px]" style={{ color: '#7B93C4' }}>
-              Vigente desde el {fechaLarga(VIGENTE_DESDE)}
+              Publicada el {fechaLarga(VIGENTE_DESDE)} · Orbit opera desde el 9 de junio de 2026
             </span>
           </div>
 
@@ -175,7 +175,7 @@ export default function Privacidad() {
           </div>
           <p className="mt-4 pt-4 border-t border-gray-100 text-[11.5px] text-gray-400 leading-relaxed">
             Ley 1581 de 2012 · Decreto 1377 de 2013, compilado en el Decreto 1074 de 2015 ·
-            Versión {VERSION}, vigente desde el {fechaLarga(VIGENTE_DESDE)}.
+            Versión {VERSION}, publicada el {fechaLarga(VIGENTE_DESDE)}.
           </p>
         </footer>
       </main>

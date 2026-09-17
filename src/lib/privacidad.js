@@ -15,7 +15,7 @@
 export const URL_POLITICA = '/#/privacidad'
 
 export const VERSION = '1.1'
-export const VIGENTE_DESDE = '2026-06-09'
+export const VIGENTE_DESDE = '2026-09-17'
 
 export const RESPONSABLE = {
   razon:     'MARTEN´S INVERSIONES S.A.S',
@@ -179,10 +179,12 @@ export const SECCIONES = [
   {
     t: 'Vigencia y cambios',
     p: [
-      `Esta política rige desde el ${VIGENTE_DESDE} y corresponde a la versión ${VERSION}. Si la ` +
+      `Esta política corresponde a la versión ${VERSION} y rige desde su publicación. Si la ` +
       'cambiamos de forma sustancial, se lo informaremos por los canales habituales antes de que ' +
       'empiece a aplicar. Las bases de datos se conservan mientras se mantengan las finalidades aquí ' +
       'descritas.',
+      'Camino al Cielo trata datos personales a través de su sistema Orbit desde el 9 de junio de ' +
+      '2026. Esta política recoge por escrito ese tratamiento, que es el mismo que se describe aquí.',
     ],
   },
 ]
