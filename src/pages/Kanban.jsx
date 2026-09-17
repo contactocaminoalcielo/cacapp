@@ -194,8 +194,41 @@ function pendientesDe(s) {
       p.push('Sin nevera registrada en cuarto frío')
     if (s.alerta_fotos_pendientes)
       p.push('Fotos del cliente sin recibir (más de 3 días hábiles)')
+
+    for (const t of pendientesTecnico(s)) p.push(t.largo)
   }
   return p
+}
+
+/**
+ * Lo que quedó pendiente del paso del TÉCNICO. Devuelve las dos redacciones —
+ * `largo` para la lista de pendientes, `corto` para el chip de la tarjeta—
+ * desde un solo sitio: si divergieran, la tarjeta diría una cosa y el modal otra.
+ */
+function pendientesTecnico(s) {
+  const t = []
+  // El recordatorio básico se lo lleva la familia EN LA RECOGIDA: si no salió
+  // entonces, hay que hacérselo llegar aparte. El técnico lo declara en su
+  // recibo (`datos_form.entrega_rec_basicos`); el ítem del checklist de la
+  // recogida NO sirve para esto porque no se guarda en ninguna parte.
+  //
+  // Se excluyen los planes GRUPAL y ESPECIAL (ECO_GRUPAL, DESAMPARADO, ANGEL):
+  // no entregan recordatorio básico en el sitio, y el técnico hace bien en no
+  // marcarlo. Sin este filtro la alerta se encendería en 604 de 658 servicios
+  // y nadie volvería a mirarla.
+  if (s.sin_rec_basico && !['grupal', 'especial'].includes(s.plan_categoria)) {
+    t.push({ corto: 'Sin recordatorio básico',
+             largo: 'El técnico no entregó el recordatorio básico' })
+  }
+  // Huella, mechón, cápsula…: los recoge el técnico en el sitio y al cerrar la
+  // recogida deberían pasar a EN_PROCESO. Los que siguen PENDIENTE con el
+  // servicio ya recogido es que nunca llegaron —o nadie los registró.
+  if (s.falta_recoger?.length) {
+    const lista = s.falta_recoger.join(', ')
+    t.push({ corto: `Falta entregar: ${lista}`,
+             largo: `El técnico no ha entregado: ${lista}` })
+  }
+  return t
 }
 
 // ── Dropdown de planes con selección múltiple ────────────────────────────────
@@ -1228,7 +1261,7 @@ export default function Kanban() {
       if (ids.length) {
         // El resumen conserva todos los estados/tipos, sin bajar cada copia de
         // un mismo recordatorio. Todas las lecturas paginadas tienen orden único.
-        const [tels, items, cfRows, recogRows, recibosRows, mediosRows] = await Promise.all([
+        const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows] = await Promise.all([
           dbTodo(() => db.from('servicios')
             .select('id, metodo_pago, mascotas(peso_kg, clientes(whatsapp, telefono, telefono2))')
             .gte('fecha_ingreso', FECHA_CORTE).order('id')),
@@ -1247,10 +1280,19 @@ export default function Kanban() {
           dbTodo(() => db.from('recogidas')
             .select('servicio_id, hora_programada, hora_llegada, tipo_lugar, aviso_vet_enviado_en, aviso_cliente_enviado_en, servicios!inner(fecha_ingreso)')
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
-          // Existe recibo generado (mismo criterio del gate de la app del técnico)
+          // Existe recibo generado (mismo criterio del gate de la app del técnico).
+          // `datos_form->>entrega_rec_basicos` se PROYECTA en el servidor: el jsonb
+          // completo pesa 556 bytes de media y son 1.322 recibos — bajarlo entero
+          // serían ~735 KB en cada refresco del tablero para leer un booleano.
+          // Llega como texto ('true'/'false'), no como booleano: `->>` devuelve text.
           dbTodo(() => db.from('recibos_tecnico')
-            .select('servicio_id, servicios!inner(fecha_ingreso)')
+            .select('servicio_id, rec_basicos:datos_form->>entrega_rec_basicos, servicios!inner(fecha_ingreso)')
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
+          // Catálogo de lo que recoge el TÉCNICO en el sitio (huella, mechón,
+          // cápsula…): 5 filas. Sirve para saber cuáles de los ítems pendientes
+          // eran tarea suya y poder nombrarlos en la tarjeta.
+          db.from('recordatorios').select('id, nombre').eq('recolecta_tecnico', true)
+            .then(({ data, error }) => (error ? null : (data || []))),
           // Medios de pago reales cobrados en el recibo (EFECTIVO/NEQUI/…)
           dbTodo(() => db.from('recibo_medios_pago')
             .select('servicio_id, metodo, servicios!inner(fecha_ingreso)')
@@ -1290,6 +1332,16 @@ export default function Kanban() {
         // error en vez de dejar el tablero entero en rojo por `tiene_recibo`.
         const recibosOk  = true
         const conRecibo  = new Set(recibosRows.map(r => r.servicio_id))
+        // El técnico dijo explícitamente que NO entregó el recordatorio básico.
+        // `->>` devuelve TEXTO: comparar contra el booleano `false` nunca daría.
+        const sinRecBasico = new Set(
+          recibosRows.filter(r => String(r.rec_basicos) === 'false').map(r => r.servicio_id))
+        // Ítems que el técnico debía recoger en el sitio. Si el catálogo falló,
+        // `recolectaCat` es null y no se marca nada: mismo criterio que
+        // `tiene_recibo`, un fallo transitorio no puede pintar el tablero en rojo.
+        const nombreRecolecta = recolectaCat
+          ? new Map(recolectaCat.map(r => [String(r.id), r.nombre]))
+          : null
         const mediosMap  = {}
         mediosRows.forEach(r => {
           const arr = mediosMap[r.servicio_id] || (mediosMap[r.servicio_id] = [])
@@ -1325,6 +1377,16 @@ export default function Kanban() {
             hora_llegada:    llegadaMap[s.servicio_id] || null,
             aviso_cliente:   avisoMap[s.servicio_id] || null,
             tiene_recibo:    recibosOk ? conRecibo.has(s.servicio_id) : undefined,
+            // Solo cuenta como pendiente si YA hay recibo: sin recibo, el
+            // pendiente es el recibo, y decir las dos cosas es ruido.
+            sin_rec_basico:  conRecibo.has(s.servicio_id) && sinRecBasico.has(s.servicio_id),
+            // Lo que el técnico debía recoger y sigue sin registrarse. Se
+            // nombran: "faltan 2 ítems" no dice qué buscar en la bodega.
+            falta_recoger:   nombreRecolecta
+              ? (itemsPorSvc[s.servicio_id] || [])
+                  .filter(i => i.estado === 'PENDIENTE' && nombreRecolecta.has(String(i.recordatorio_id)))
+                  .map(i => nombreRecolecta.get(String(i.recordatorio_id)))
+              : [],
             metodos_pago:    mediosMap[s.servicio_id]
               || (metodoReg && metodoReg !== 'PENDIENTE' ? [metodoReg] : []),
           }
@@ -2957,6 +3019,10 @@ export default function Kanban() {
                           const sinTecnico     = !esVistaProd && ['INGRESADO','EN_RECOGIDA'].includes(col) && !s.tecnico_id
                           // Pendientes de la etapa + alerta por hora de recogida confirmada
                           const pend   = pendientesDe(s)
+                          // Se muestran aparte del contador genérico: "2 pendientes"
+                          // obliga a pasar el mouse, y lo que falta del técnico hay
+                          // que poder leerlo sin abrir ni apuntar a la tarjeta.
+                          const pendTec = pendientesTecnico(s)
                           const enRecogida = ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
                           // La familia no sabe a qué hora llega el técnico. Vive en la
                           // tarjeta y NO en la notificación a propósito: la notificación se
@@ -3092,6 +3158,14 @@ export default function Kanban() {
                                   {pend.length} pendiente{pend.length > 1 ? 's' : ''}
                                 </div>
                               )}
+                              {pendTec.map(t => (
+                                <div key={t.corto} title={t.largo}
+                                  className="inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 max-w-full"
+                                  style={{ background: '#FFEDD5', color: '#9A3412' }}>
+                                  <span className="flex-shrink-0">📦</span>
+                                  <span className="truncate">{t.corto}</span>
+                                </div>
+                              ))}
                               {al && (
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
                                   title={explicaLimite(s, diasDelPlan(s))}>
