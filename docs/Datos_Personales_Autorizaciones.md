@@ -154,6 +154,30 @@ escribe directo a la base como `anon` y una IP puesta por el navegador no prueba
 nada. Si algún día se quiere esa prueba, hay que mover ese guardado al backend,
 como los otros portales.
 
+## La capa de nginx (17-sep-2026)
+
+Esto NO está en el repo, vive en el VPS. Respaldos en `/root/respaldo_*.conf`.
+
+- **`/etc/nginx/conf.d/00_cloudflare_realip.conf`** (nuevo): `set_real_ip_from`
+  con los rangos de Cloudflare + `real_ip_header CF-Connecting-IP`. Sin esto,
+  todo lo que Cloudflare proxea llegaba con la IP de Cloudflare: **los límites
+  por IP contaban a todos los visitantes como uno solo**, y la IP que
+  guardábamos como prueba no era la de nadie. Solo se cree la cabecera cuando la
+  conexión viene de Cloudflare, así que quien golpee la IP del servidor directo
+  no puede inventársela.
+- **`orbit_autorizaciones`** (zona nueva, 20 POST/min por IP, ráfaga 10) sobre
+  `location = /rest/v1/autorizaciones_datos`. Es la ruta que escribe `anon`
+  desde `/solicitud` y también el registro interno, así que el tope deja
+  trabajar a una persona —una autorización por servicio registrado— y corta un
+  bucle.
+
+Ya existían: `orbit_solicitudes` (2 POST/min en `/rest/v1/solicitudes_servicio`)
+y `portal_pub` (30 POST/min en `/api/portal/`).
+
+Probado en producción tras recargar: la app carga, el backend responde, una
+autorización legítima del portal entra con 201, y a la petición número 12 de una
+ráfaga nginx contesta 429.
+
 ## Lo que quedó pendiente
 
 - **Registro Nacional de Bases de Datos (RNBD) de la SIC.** Verificar si la
