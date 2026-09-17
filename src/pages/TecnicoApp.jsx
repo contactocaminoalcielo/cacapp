@@ -2358,9 +2358,68 @@ export default function TecnicoApp() {
     await cargar()
   }
 
+  // A quién hay que avisarle cuando algo se tuerce: la CLÍNICA si la recogida es
+  // en una veterinaria, el PROPIETARIO si es a domicilio. Misma regla que el
+  // aviso de la hora, para que el coordinador no tenga que adivinar el número ni
+  // acabe escribiéndole al dueño de una mascota que está en una clínica.
+  function destinatarioNovedad(svc) {
+    const recogida  = svc.recogidas?.[0]
+    const esClinica = recogida?.tipo_lugar === 'CLINICA_ALIADA'
+    const waCliente = svc.mascotas?.clientes?.whatsapp || null
+    return {
+      tipo_lugar:  recogida?.tipo_lugar || null,
+      es_clinica:  esClinica,
+      destino:     esClinica ? 'VETERINARIA' : 'PROPIETARIO',
+      nombre:      esClinica ? (recogida?.contacto_nombre || 'la veterinaria')
+                             : `${svc.mascotas?.clientes?.nombre || ''} ${svc.mascotas?.clientes?.apellido || ''}`.trim(),
+      wa_cliente:  esClinica ? null : waCliente,
+      wa_aliado:   esClinica ? (recogida?.contacto_telefono || waCliente) : null,
+    }
+  }
+
+  // Deja la novedad ANOTADA en la recogida, no solo en una notificación.
+  //
+  // 🩸 Las notificaciones se auto-expiran a los DIAS_EXPIRA_ALERTA y se llevan
+  // consigo la única señal de que nadie avisó — la misma lección que ya costó el
+  // aviso de la hora de recogida. Estas columnas (migración 165) son el pendiente
+  // que el tablero puede volver a preguntar mañana.
+  //
+  // `novedad_avisada_*` se limpia a propósito: una novedad nueva es un aviso
+  // nuevo, y heredar el "ya avisado" del problema anterior dejaría a la familia
+  // sin saber lo de HOY.
+  async function marcarNovedadEnRecogida(svc, tipo, motivo) {
+    const { error } = await db.from('recogidas').update({
+      novedad_tipo:            tipo,
+      novedad_motivo:          (motivo || '').slice(0, 500) || null,
+      novedad_reportada_en:    new Date().toISOString(),
+      novedad_reportada_por:   tecnico?.id || null,
+      novedad_avisada_en:      null,
+      novedad_avisada_destino: null,
+      novedad_avisada_por:     null,
+      novedad_avisada_via:     null,
+      novedad_avisada_nota:    null,
+    }).eq('servicio_id', svc.id)
+    // No bloquea el reporte: lo urgente es que coordinación se entere. Si esto
+    // falla queda la notificación y la novedad, que es el lado seguro.
+    if (error) console.error('[novedad-ruta] no se pudo marcar en recogidas:', error.message)
+  }
+
   async function declinarRecogida(svc, motivo) {
     const coords = await getCoordinadores()
     const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+    const dest = destinatarioNovedad(svc)
+
+    await marcarNovedadEnRecogida(svc, 'DECLINA', motivo)
+
+    // Hasta la migración 165 esto NO dejaba novedad: 18 declinaciones entre mayo
+    // y julio de las que no queda constancia en la ficha del servicio.
+    await db.from('novedades_servicio').insert({
+      servicio_id:    svc.id,
+      tipo_novedad:   'NOTA',
+      descripcion:    `🚫 ${tecnico?.nombre || 'El técnico'} no puede aceptar la recogida de ${mascotaNombre}.${motivo ? ` Motivo: ${motivo}.` : ''} Pendiente avisarle a ${dest.destino === 'VETERINARIA' ? 'la veterinaria' : 'el propietario'} y reasignar.`,
+      registrado_por: tecnico?.id || null,
+    }).then(({ error: e }) => { if (e) console.error('[declina] novedad:', e.message) })
+
     await Promise.all(coords.map(c => crearNotificacion({
       para_personal_id: c.id,
       de_personal_id:   tecnico?.id,
@@ -2368,12 +2427,20 @@ export default function TecnicoApp() {
       titulo:           `${tecnico?.nombre} no puede aceptar`,
       mensaje:          `No puede recoger a ${mascotaNombre}. ${motivo ? `Motivo: ${motivo}` : ''} Reasignar técnico.`,
       servicio_id:      svc.id,
-      datos:            { motivo },
+      datos:            {
+        motivo,
+        mascota:        mascotaNombre,
+        tecnico_nombre: `${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim(),
+        ...dest,
+      },
     })))
   }
 
   async function reportarProblemaRuta(svc, motivo) {
     const mascotaNombre = svc.mascotas?.nombre || 'la mascota'
+    // El destinatario se resuelve ANTES de limpiar el técnico de la recogida:
+    // después de eso `svc` sigue en memoria, pero mejor no depender de ello.
+    const dest = destinatarioNovedad(svc)
 
     // 1. Revertir a INGRESADO y limpiar técnico asignado
     await db.from('servicios').update({
@@ -2382,11 +2449,15 @@ export default function TecnicoApp() {
     }).eq('id', svc.id)
     await db.from('recogidas').update({ tecnico_id: null }).eq('servicio_id', svc.id)
 
-    // 2. Registrar novedad en el servicio
+    // 2. Dejar el pendiente anotado en la recogida (migración 165) y la novedad
+    //    en el servicio. Lo primero es lo que el tablero vuelve a preguntar
+    //    mañana; la notificación de abajo se expira sola.
+    await marcarNovedadEnRecogida(svc, 'PROBLEMA_RUTA', motivo)
+
     await db.from('novedades_servicio').insert({
       servicio_id:    svc.id,
       tipo_novedad:   'NOTA',
-      descripcion:    `⚠️ Problema en ruta reportado por ${tecnico?.nombre || 'el técnico'}. ${motivo ? `Motivo: ${motivo}` : ''} Servicio devuelto a INGRESADO para reasignación.`,
+      descripcion:    `⚠️ Problema en ruta reportado por ${tecnico?.nombre || 'el técnico'}. ${motivo ? `Motivo: ${motivo}` : ''} Servicio devuelto a INGRESADO para reasignación. Pendiente avisarle a ${dest.destino === 'VETERINARIA' ? 'la veterinaria' : 'el propietario'}.`,
       registrado_por: tecnico?.id || null,
     })
 
@@ -2399,7 +2470,12 @@ export default function TecnicoApp() {
       titulo:           `⚠️ Problema en ruta — ${tecnico?.nombre}`,
       mensaje:          `No puede completar la recogida de ${mascotaNombre}. ${motivo ? `Motivo: ${motivo}` : ''} Reasignar urgente.`,
       servicio_id:      svc.id,
-      datos:            { motivo, mascota: mascotaNombre },
+      datos:            {
+        motivo,
+        mascota:        mascotaNombre,
+        tecnico_nombre: `${tecnico?.nombre || ''} ${tecnico?.apellido || ''}`.trim(),
+        ...dest,
+      },
     })))
 
     await cargar()
@@ -5977,6 +6053,18 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [ajusteExistente,  setAjusteExistente]  = useState(null)   // anotación previa de esta mascota, si la hay
   const [bitacoraEncolada, setBitacoraEncolada] = useState(false)  // se respondió sin señal: sube sola después
   const [pagoPendiente, setPagoPendiente] = useState(reciboExistente?.datos_form?.pago_pendiente || false)
+  // Comisiones viejas de la veterinaria marcadas para pagarle en este recibo
+  // (migración 166). Los estados viven aquí arriba, con los demás: el efecto que
+  // guarda el borrador los lleva en su lista de dependencias y esa lista se
+  // evalúa donde está escrita — declararlos más abajo deja la pantalla en blanco
+  // por TDZ, sin error de compilación que lo avise.
+  const [comisPend, setComisPend] = useState(null)          // null = sin cargar
+  const [comisSel,  setComisSel]  = useState(() => new Set())
+  // Lo que se cruzó de verdad, congelado al guardar: después del guardado la
+  // lista de pendientes ya no se consulta y el PDF/WhatsApp siguen necesitándolo.
+  const [crucesAplicadas, setCrucesAplicadas] = useState(
+    () => reciboExistente?.datos_form?.comisiones_cruzadas || []
+  )
   // Motivo cuando el técnico cobra MÁS que el valor del recibo (obligatorio
   // para guardar en ese caso; la RPC lo exige — migración 041)
   const [sobrepagoMotivo, setSobrepagoMotivo] = useState(reciboExistente?.datos_form?.sobrepago_motivo || '')
@@ -6026,6 +6114,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       if (draft.tipoRecibo)                   setTipoRecibo(draft.tipoRecibo)
       if (draft.pagoPendiente !== undefined)  setPagoPendiente(draft.pagoPendiente)
       if (Array.isArray(draft.adicExcluidos)) setAdicExcluidos(new Set(draft.adicExcluidos))
+      if (Array.isArray(draft.comisSel))      setComisSel(new Set(draft.comisSel))
       if (draft.eutanasiaCobro !== undefined)  setEutanasiaCobro(draft.eutanasiaCobro)
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6038,11 +6127,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         // Sin esto, al volver de otra pestaña el importe seguía rebajado pero
         // las casillas salían todas marcadas: el técnico no entendía por qué.
         adicExcluidos: [...adicExcluidos], eutanasiaCobro,
+        // Las comisiones marcadas también: si no, al volver de otra pestaña el
+        // importe seguía rebajado y las casillas salían todas sin marcar.
+        comisSel: [...comisSel],
         base: baseDelServicio(), montoDefault: montoClienteDefault,
       }))
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente, eutanasiaCobro])
+  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente, eutanasiaCobro, comisSel])
 
   // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
   // El archivo quedó en IndexedDB (stashPut antes de subir); aquí se retoma
@@ -6142,6 +6234,66 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Monto de la eutanasia que sale del servicio por haberla cobrado el doctor.
   const montoEutanasiaFuera = desglose.fueraEutanasia
 
+  // ── Comisiones viejas de esta veterinaria (migración 166) ─────────────────
+  // Algunas vets piden, al pagar el servicio del día, que de una vez se les
+  // abone la comisión de un servicio ANTERIOR que quedó sin pagar. Es OPCIONAL
+  // y solo aparece en el recibo de VETERINARIA: es ella la que está pagando.
+  //
+  // Lo marcado NO se le resta al servicio de hoy: viaja como un medio de pago
+  // propio (`CRUCE_COMISION`, lo arma la RPC). Si se registrara como "recogió
+  // menos", el servicio quedaría PARCIAL con un saldo que nadie debe y el cuadre
+  // le marcaría al técnico un faltante por esa misma plata.
+  const puedeCruzarComision = tipoRecibo === 'VETERINARIA' && !!aliado
+    && !aliadoFactMensual && !pagoPendiente && !guardado && !reciboExistente
+
+  useEffect(() => {
+    if (!puedeCruzarComision || comisPend !== null) return
+    let vivo = true
+    ;(async () => {
+      // Pendiente = comisión registrada menos lo que ya se le pagó, y solo
+      // cuando NO se descontó al registrar el servicio (ahí la vet ya la cobró).
+      const { data, error } = await db.from('servicios')
+        .select('id, fecha_ingreso, comision_aliado, comision_pagada, mascotas(nombre)')
+        .eq('aliado_origen_id', aliado.id_aliado)
+        .eq('comision_descontada', false)
+        .gt('comision_aliado', 0)
+        .neq('estado', 'CANCELADO')
+        .neq('id', servicioSel.id)
+        .order('fecha_ingreso', { ascending: true })
+        .limit(50)
+      if (!vivo) return
+      if (error) { console.warn('[recibo] comisiones pendientes:', error.message); setComisPend([]); return }
+      setComisPend((data || [])
+        .map(s => ({
+          id:        s.id,
+          mascota:   s.mascotas?.nombre || 'Mascota',
+          fecha:     s.fecha_ingreso,
+          pendiente: Math.max(0, Math.round((Number(s.comision_aliado) || 0) - (Number(s.comision_pagada) || 0))),
+        }))
+        .filter(c => c.pendiente > 0))
+    })()
+    return () => { vivo = false }
+  }, [puedeCruzarComision]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tope: nunca se cruza más de lo que la vet paga hoy. Si la comisión no cabe,
+  // se cruza hasta donde alcance y el resto sigue pendiente (decisión de David).
+  const cruces = []
+  if (puedeCruzarComision && comisPend) {
+    let resta = valorVetCobrar
+    for (const c of comisPend) {
+      if (!comisSel.has(c.id) || resta <= 0) continue
+      const monto = Math.min(c.pendiente, resta)
+      if (monto <= 0) continue
+      cruces.push({ ...c, monto, parcial: monto < c.pendiente })
+      resta -= monto
+    }
+  }
+  // Lo que se muestra: en edición, lo marcado; ya guardado, lo que quedó escrito.
+  const crucesVisibles = (guardado || reciboExistente) ? crucesAplicadas : cruces
+  const cruceTotal = crucesVisibles.reduce((s, c) => s + (Number(c.monto) || 0), 0)
+  // Lo que la veterinaria entrega de verdad hoy.
+  const montoVetPrellenado = Math.max(0, valorVetCobrar - cruceTotal)
+
   // Cuando el técnico cambia lo que va a cobrar, el monto prellenado lo sigue.
   // Solo toca el medio ÚNICO y sin referencia ni comprobante: si ya repartió el
   // pago o adjuntó un soporte, manda lo que él escribió.
@@ -6153,7 +6305,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       adicionalesExcluidos: excl,
       comisionMonto, descuentoInmediatoVet, comisionFueDescontada, aliadoFactMensual,
     })
-    const monto = tipoRecibo === 'VETERINARIA' ? d.valorVetCobrar : d.montoCliente
+    // La vet paga lo suyo MENOS las comisiones viejas que se le estén cruzando.
+    const monto = tipoRecibo === 'VETERINARIA'
+      ? Math.max(0, d.valorVetCobrar - cruceTotal)
+      : d.montoCliente
     setMediosPago(prev => (prev.length === 1 && !prev[0].referencia && !prev[0].comprobanteUrl)
       ? [{ ...prev[0], monto }] : prev)
   }
@@ -6232,17 +6387,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   function cambiarTipo(nuevoTipo) {
     if (nuevoTipo === tipoRecibo) return
     setTipoRecibo(nuevoTipo)
-    const monto = nuevoTipo === 'VETERINARIA' ? valorVetCobrar : montoClienteDefault
+    const monto = nuevoTipo === 'VETERINARIA' ? montoVetPrellenado : montoClienteDefault
     setMediosPago(prev => prev.length === 1 ? [{ ...prev[0], monto }] : prev)
   }
 
   // En recibo de veterinaria el monto a cobrar es el neto (valorVet); si el técnico
   // ajusta la comisión %, el medio único sigue ese valor. No toca recibos ya
   // guardados ni pagos divididos (más de un medio).
+  // `cruceTotal` va en las dependencias porque marcar una comisión vieja baja lo
+  // que la vet entrega hoy: sin eso el panel decía "recibes 160.000" y el medio
+  // de pago se quedaba en 200.000 — y el técnico lo cobraba así.
   useEffect(() => {
     if (guardado || reciboExistente || tipoRecibo !== 'VETERINARIA') return
-    setMediosPago(prev => prev.length === 1 ? [{ ...prev[0], monto: valorVetCobrar }] : prev)
-  }, [valorVetCobrar, tipoRecibo, guardado]) // eslint-disable-line react-hooks/exhaustive-deps
+    setMediosPago(prev => prev.length === 1 ? [{ ...prev[0], monto: montoVetPrellenado }] : prev)
+  }, [valorVetCobrar, cruceTotal, tipoRecibo, guardado]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clave de idempotencia estable por borrador: sobrevive a reinicios
   // (localStorage) y a doble-click (mismo valor) → la RPC no duplica el recibo
@@ -6401,8 +6559,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       if (m.comprobanteUrl) txt += ` ✅comprobante`
       return txt
     }).join(' | ')
-    const novedadPago = (!pagoPendiente && !esFacturacionMensual && totalMedios > 0)
-      ? `Técnico recibió ${fmt(totalMedios)} — ${detallePagos}`
+    // El cruce de comisiones se nombra en la novedad del cobro: quien lea la
+    // ficha después tiene que entender por qué entró menos plata que el valor.
+    const detalleCruce = cruces.length
+      ? ` | Comisión pendiente pagada a ${aliado?.nombre || 'la veterinaria'}: `
+        + cruces.map(c => `${c.mascota} ${fmt(c.monto)}`).join(', ')
+      : ''
+    const novedadPago = (!pagoPendiente && !esFacturacionMensual && (totalMedios > 0 || cruceTotal > 0))
+      ? `Técnico recibió ${fmt(totalMedios)} — ${detallePagos}${detalleCruce}`
       : null
     let novedadNota = null
     if (pagoPendiente) {
@@ -6547,6 +6711,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         } catch (_) { /* best-effort: el recibo se guarda igual */ }
       }
 
+      // Lo que se va a cruzar queda congelado: después de guardar, la lista de
+      // comisiones pendientes ya no se consulta y el PDF/WhatsApp la necesitan.
+      setCrucesAplicadas(cruces)
+
       // ── Camino transaccional e idempotente (RPC) ──────────────────────────
       const { data: rpcData, error: rpcErr } = await db.rpc('guardar_recibo_tecnico', {
         p_servicio_id:            servicioSel.id,
@@ -6557,7 +6725,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_hora_emision:           horaActual,
         p_valor_total:            desglose.valorRecibo,
         p_medios:                 medios,
-        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados, eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null, eutanasia_valor: valorEutanasia || null },
+        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados, eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null, eutanasia_valor: valorEutanasia || null, comisiones_cruzadas: cruces },
         p_pago_pendiente:         pagoPendiente,
         p_es_facturacion_mensual: esFacturacionMensual,
         p_actor_id:               tecnico?.id || null,
@@ -6566,10 +6734,28 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_novedad_pago:           novedadPago,
         p_novedad_nota:           novedadNota,
         p_sobrepago_motivo:       haySobrepago ? sobrepagoMotivo.trim() : null,
+        // Comisiones viejas que la vet pidió cobrar hoy (migr. 166). La RPC las
+        // valida contra lo que de verdad está pendiente y arma el medio del cruce.
+        p_comisiones_pagadas:     cruces.length
+          ? cruces.map(c => ({ servicio_id: c.id, monto: c.monto }))
+          : null,
       })
 
       if (rpcErr) {
         const msg = String(rpcErr.message || '')
+        // El respaldo legacy NO sabe cruzar comisiones: guardaría el recibo con
+        // lo que la vet entregó y la comisión seguiría pendiente — el servicio
+        // quedaría PARCIAL y el cuadre le cobraría la diferencia al técnico. Con
+        // comisiones marcadas se detiene y se dice qué hacer.
+        if (cruces.length > 0) {
+          const detalle =
+            /CRUCE_EXCEDE_COBRO/.test(msg)     ? 'Las comisiones marcadas suman más de lo que la veterinaria paga hoy. Desmarca alguna.'
+            : /CRUCE_EXCEDE_PENDIENTE/.test(msg) ? 'Una de las comisiones ya se había pagado, total o en parte. Vuelve a abrir el recibo para ver lo que queda pendiente.'
+            : /CRUCE_INVALIDO|CRUCE_SIN_ALIADO/.test(msg) ? 'Esa comisión ya no está pendiente con esta veterinaria.'
+            : 'Desmarca las comisiones, guarda el recibo del servicio y avísale al coordinador.'
+          setErr('No se pudo pagar la comisión pendiente. ' + detalle + ' (' + (msg || 'error de conexión') + ')')
+          return
+        }
         // La función aún no está desplegada (despliegue gradual) → respaldo legacy
         if (rpcErr.code === 'PGRST202' || /could not find the function|does not exist|schema cache/i.test(msg)) {
           await guardarReciboLegacy(sinComprobante)
@@ -6909,6 +7095,35 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           t(fmt(valorVet), W - M - 3, y + lineH * (rows + 1) + 1, { align: 'right' })
           y += lineH * (rows + 1) + 8
         }
+
+        // Comisiones viejas pagadas dentro de este cobro (migr. 166). Va en el
+        // PDF porque este recibo ES el comprobante de la veterinaria de que se
+        // le pagó; sin esta línea solo le queda la palabra del técnico.
+        if (crucesVisibles.length > 0) {
+          const filas = crucesVisibles.length + 1
+          pdf.setFillColor(238, 242, 255); pdf.rect(M, y, CW, lineH * filas + 4, 'F')
+          pdf.setDrawColor(199, 210, 254); pdf.setLineWidth(0.3)
+          pdf.rect(M, y, CW, lineH * filas + 4, 'D')
+
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(55, 48, 163)
+          t('Comisiones pendientes pagadas en este recibo:', M + 3, y + lineH)
+
+          let fy = y + lineH
+          for (const c of crucesVisibles) {
+            fy += lineH
+            pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(67, 56, 202)
+            t(`${c.mascota}${c.fecha ? ` (${c.fecha})` : ''}`, M + 3, fy)
+            pdf.setFont('helvetica', 'bold'); pdf.setTextColor(180, 50, 0)
+            t(`– ${fmt(c.monto)}`, W - M - 3, fy, { align: 'right' })
+          }
+          y += lineH * filas + 6
+
+          pdf.setFillColor(224, 231, 255); pdf.rect(M, y, CW, lineH + 3, 'F')
+          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9.5); pdf.setTextColor(49, 46, 129)
+          t('RECIBIDO DE LA VETERINARIA:', M + 3, y + lineH)
+          t(fmt(Math.max(0, valorVetCobrar - cruceTotal)), W - M - 3, y + lineH, { align: 'right' })
+          y += lineH + 8
+        }
       } else {
         // Recibo cliente: valor del servicio + nota de comisión si viene de solicitud con aliado
         drawBox('Valor del servicio', valorMostrar, M, y)
@@ -7129,6 +7344,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           ...(comisionManual > 0 ? [`ℹ️ Comisión ${comisionManualPct}% (${fmt(comisionManual)}) — se gestiona por separado`] : []),
         ]),
         `✅ *Total a cobrar: ${fmt(valorVetCobrar)}*`,
+        // Las comisiones viejas que se les pagaron en este cobro (migr. 166):
+        // es la constancia que la veterinaria pidió, así que va en el mensaje.
+        ...(crucesVisibles.length > 0 ? [
+          ``,
+          `🤝 *Comisiones pendientes pagadas en este recibo:*`,
+          ...crucesVisibles.map(c => `• ${c.mascota}: -${fmt(c.monto)}`),
+          `💙 *Recibido de la veterinaria: ${fmt(Math.max(0, valorVetCobrar - cruceTotal))}*`,
+        ] : []),
         ``,
         `Medios de pago recibidos:\n${mediosTxt}`,
         ``,
@@ -7512,6 +7735,89 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         </div>
       )}
 
+      {/* ── Comisiones viejas que la vet pide que le paguen hoy (migr. 166) ──
+          Opcional: solo se marca si la veterinaria lo pide. Lo marcado se le
+          descuenta de lo que paga hoy y queda pagado en el sistema — no es una
+          nota suelta: baja la comisión pendiente de esa mascota. */}
+      {tipoRecibo === 'VETERINARIA' && aliado
+        && (crucesVisibles.length > 0 || (puedeCruzarComision && (comisPend || []).length > 0)) && (
+        <div className="rounded-2xl mb-4 overflow-hidden" style={{ border: '1.5px solid #C7D2FE' }}>
+          <div className="px-4 py-2.5" style={{ background: '#EEF2FF' }}>
+            <div className="text-[12px] font-bold text-[#3730A3]">
+              🤝 Comisiones pendientes de {aliado.nombre}
+            </div>
+            <div className="text-[10px] text-[#4338CA] opacity-80 leading-snug mt-0.5">
+              {puedeCruzarComision
+                ? 'Opcional. Márcalas SOLO si la veterinaria pide que se le paguen ahora: se le descuentan de lo que paga hoy.'
+                : 'Se le pagaron dentro de este recibo.'}
+            </div>
+          </div>
+
+          <div className="bg-white divide-y" style={{ borderColor: '#EEF2FF' }}>
+            {(puedeCruzarComision ? (comisPend || []) : crucesVisibles).map(c => {
+              const marcada = puedeCruzarComision ? comisSel.has(c.id) : true
+              const cruce   = crucesVisibles.find(x => x.id === c.id)
+              const fechaTxt = c.fecha
+                ? parseDate(c.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
+                : ''
+              return (
+                <button key={c.id} type="button"
+                  disabled={!puedeCruzarComision}
+                  onClick={() => setComisSel(prev => {
+                    const n = new Set(prev)
+                    n.has(c.id) ? n.delete(c.id) : n.add(c.id)
+                    return n
+                  })}
+                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left active:bg-[#F8FAFF] disabled:opacity-100">
+                  <span className="w-4 h-4 rounded-[5px] border-2 flex items-center justify-center flex-shrink-0"
+                    style={{
+                      borderColor: marcada ? '#4F46E5' : '#CBD5E1',
+                      background:  marcada ? '#4F46E5' : '#fff',
+                    }}>
+                    {marcada && <Check size={11} color="#fff" strokeWidth={3} />}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[12px] font-semibold text-gray-900 truncate">{c.mascota}</span>
+                    <span className="block text-[10px] text-gray-400">{fechaTxt}</span>
+                  </span>
+                  <span className="text-[13px] font-bold tabular-nums flex-shrink-0"
+                    style={{ color: marcada ? '#3730A3' : '#6B7280' }}>
+                    {fmt(cruce ? cruce.monto : (c.pendiente ?? c.monto))}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Una comisión más grande que el cobro del día se cruza a medias: el
+              resto sigue pendiente y hay que decirlo aquí, no en el cuadre. */}
+          {crucesVisibles.filter(c => c.parcial).map(c => (
+            <div key={`p-${c.id}`} className="px-4 py-2 text-[10px] leading-snug"
+              style={{ background: '#FEF3C7', color: '#92400E' }}>
+              De {c.mascota} solo alcanza a cruzarse {fmt(c.monto)}: quedan{' '}
+              <b>{fmt(Math.max(0, (c.pendiente || 0) - c.monto))}</b> pendientes para la próxima vez.
+            </div>
+          ))}
+
+          {cruceTotal > 0 && (
+            <div className="px-4 py-2.5" style={{ background: '#E0E7FF' }}>
+              <div className="flex justify-between text-[12px] mb-1">
+                <span className="text-[#3730A3]">Total a cobrar</span>
+                <span className="font-bold text-gray-900 tabular-nums">{fmt(valorVetCobrar)}</span>
+              </div>
+              <div className="flex justify-between text-[12px] mb-1">
+                <span className="text-[#3730A3]">Comisiones pendientes pagadas</span>
+                <span className="font-bold text-red-600 tabular-nums">– {fmt(cruceTotal)}</span>
+              </div>
+              <div className="flex justify-between text-[13px] pt-1 border-t" style={{ borderColor: '#C7D2FE' }}>
+                <span className="font-bold text-[#312E81]">Recibes de la veterinaria</span>
+                <span className="font-extrabold text-[#312E81] tabular-nums">{fmt(Math.max(0, valorVetCobrar - cruceTotal))}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Datos recibo preview */}
       <div style={{
         background: '#ffffff', padding: '16px', borderRadius: '16px',
@@ -7578,6 +7884,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                   <span style={{ fontSize: '16px', fontWeight: '800', color: '#92400E' }}>{fmt(precioServicio)}</span>
                 </div>
               </>
+            )}
+            {/* La constancia de que se le pagó su comisión vieja va en el recibo
+                que se queda la veterinaria: es su comprobante (migr. 166). */}
+            {crucesVisibles.map(c => (
+              <div key={`pv-${c.id}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderTop: '1px solid #FDE68A', background: '#EEF2FF' }}>
+                <span style={{ fontSize: '10px', color: '#3730A3' }}>Comisión pendiente pagada — {c.mascota}</span>
+                <span style={{ fontSize: '12px', fontWeight: '700', color: '#DC2626' }}>– {fmt(c.monto)}</span>
+              </div>
+            ))}
+            {cruceTotal > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#E0E7FF' }}>
+                <span style={{ fontSize: '12px', fontWeight: '700', color: '#312E81' }}>Recibido de la veterinaria</span>
+                <span style={{ fontSize: '16px', fontWeight: '800', color: '#312E81' }}>{fmt(Math.max(0, valorVetCobrar - cruceTotal))}</span>
+              </div>
             )}
           </div>
         ) : (
@@ -8120,6 +8440,28 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                     {fmt(tipoRecibo === 'VETERINARIA' ? valorVetCobrar : precioServicio)}
                   </span>
                 </div>
+
+                {/* El cruce de comisiones cambia lo que la vet entrega hoy: tiene
+                    que leerse ANTES de guardar, que es cuando todavía se corrige. */}
+                {cruceTotal > 0 && (
+                  <div className="px-3 py-2.5 rounded-xl text-[12px]"
+                    style={{ background: '#EEF2FF', border: '1.5px solid #C7D2FE' }}>
+                    <div className="font-bold text-[#3730A3] mb-1">
+                      Le pagas comisiones pendientes a {aliado?.nombre || 'la veterinaria'}
+                    </div>
+                    {crucesVisibles.map(c => (
+                      <div key={`cf-${c.id}`} className="flex justify-between text-[11px] text-[#4338CA]">
+                        <span className="truncate mr-2">{c.mascota}</span>
+                        <span className="font-semibold tabular-nums">– {fmt(c.monto)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-[12px] font-extrabold text-[#312E81] mt-1 pt-1 border-t"
+                      style={{ borderColor: '#C7D2FE' }}>
+                      <span>Recibes de la veterinaria</span>
+                      <span className="tabular-nums">{fmt(Math.max(0, valorVetCobrar - cruceTotal))}</span>
+                    </div>
+                  </div>
+                )}
 
                 {sinCobroAhora ? (
                   <div className="px-4 py-4 rounded-2xl text-center"

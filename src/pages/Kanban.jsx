@@ -199,6 +199,13 @@ function pendientesDe(s) {
 
     for (const t of pendientesTecnico(s)) p.push(t.largo)
   }
+  // Fuera del bloque de arriba a propósito: una novedad de ruta pasa ANTES del
+  // cuarto frío —el servicio vuelve a INGRESADO— y ahí `idx` todavía no llega.
+  if (s.novedad_pend) {
+    p.push(s.novedad_pend.tipo === 'PROBLEMA_RUTA'
+      ? 'El técnico reportó un problema en ruta y nadie le ha avisado a la familia'
+      : 'El técnico no pudo aceptar y nadie le ha avisado a la familia')
+  }
   return p
 }
 
@@ -714,6 +721,11 @@ export default function Kanban() {
   const [mascotaParaPlan, setMascotaParaPlan] = useState(null) // { peso_kg, especie_id }
   // ── Alertas técnico declina ───────────────────────────────────────────────
   const [alertasDeclinas, setAlertasDeclinas] = useState([])
+  // Novedades del técnico (declina / problema en ruta) que todavía no se le han
+  // avisado a la familia: modal bloqueante, igual que el inicio de ruta.
+  const [novedadNota, setNovedadNota]         = useState({})   // notif.id → texto del "avisé por otra vía"
+  const [novedadAbierta, setNovedadAbierta]   = useState({})   // notif.id → campo de nota desplegado
+  const novedadVistasRef                      = useRef(new Set())
   // ── Agregar recordatorio adicional ───────────────────────────────────────
   const [recListOpts,  setRecListOpts]  = useState([]) // {id,nombre,precio_base,categoria}
   const [addRecId,     setAddRecId]     = useState('')
@@ -1256,7 +1268,9 @@ export default function Kanban() {
       const vigentes  = notifs.filter(n => !viejasIds.has(n.id))
       setAlertasRuta(vigentes.filter(n =>
         n.tipo === 'TECNICO_INICIO_RUTA' && !alertasRutaVistasRef.current.has(n.id)))
-      setAlertasDeclinas(vigentes.filter(n => ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo)))
+      setAlertasDeclinas(vigentes.filter(n =>
+        ['TECNICO_DECLINA', 'TECNICO_PROBLEMA_RUTA'].includes(n.tipo)
+        && !novedadVistasRef.current.has(n.id)))
     }
     verificar()
     const iv = setInterval(verificar, 20_000)
@@ -1278,6 +1292,90 @@ export default function Kanban() {
     alertasRutaVistasRef.current.add(id)
     setAlertasRuta(prev => prev.filter(n => n.id !== id))
     await marcarLeida(id)
+  }
+
+  // ── Novedad del técnico: sellar que la familia YA lo sabe ────────────────
+  // Escribe en `recogidas.novedad_avisada_*` (migración 165), no solo en la
+  // notificación: la notificación se expira sola a los DIAS_EXPIRA_ALERTA y se
+  // llevaría consigo la única señal de que faltó avisar.
+  //
+  // `via` distingue el WhatsApp de la llamada o del "el técnico ya habló con
+  // ellos": sin eso los dos casos quedan iguales en los datos y nadie puede
+  // saber después si de verdad salió un mensaje.
+  async function registrarAvisoNovedad(notif, { via, numero = '', nota = '' }) {
+    novedadVistasRef.current.add(notif.id)
+    setAlertasDeclinas(prev => prev.filter(a => a.id !== notif.id))
+    await marcarLeida(notif.id)
+
+    const servicioId = notif.servicio_id
+    if (!servicioId) return
+    const d = notif.datos || {}
+    const aQuien = d.destino === 'VETERINARIA' ? 'la veterinaria' : 'el propietario'
+    try {
+      // Condicionado a NULL: dos coordinadores a la vez no se pisan, y el
+      // destino que queda guardado es el de quien avisó primero.
+      await db.from('recogidas')
+        .update({
+          novedad_avisada_en:      new Date().toISOString(),
+          novedad_avisada_destino: String(numero || '').slice(0, 20) || null,
+          novedad_avisada_por:     personalData?.id || null,
+          novedad_avisada_via:     via,
+          novedad_avisada_nota:    (nota || '').slice(0, 500) || null,
+        })
+        .eq('servicio_id', servicioId)
+        .is('novedad_avisada_en', null)
+
+      await db.from('novedades_servicio').insert({
+        servicio_id:    servicioId,
+        tipo_novedad:   'NOTA',   // el CHECK de la columna solo admite NOTA aquí
+        descripcion:    via === 'WHATSAPP'
+          ? `📲 Se le avisó a ${aQuien} (${numero}) que ${d.tecnico_nombre || 'el técnico'} tuvo una novedad con ${d.mascota || 'la mascota'}${d.motivo ? `: ${d.motivo}` : ''}.`
+          : `📞 Se le avisó a ${aQuien} por otra vía sobre la novedad con ${d.mascota || 'la mascota'}. ${nota}`,
+        registrado_por: personalData?.id || null,
+      })
+      cargar()
+    } catch (e) {
+      // El mensaje ya se está abriendo en WhatsApp y aquí no hay nada que el
+      // coordinador pueda hacer. Si falla queda como "sin avisar", que es el
+      // lado seguro: el pendiente sigue viéndose y alguien puede repetirlo.
+      console.error('[novedad-ruta] no se pudo sellar el aviso:', e?.message)
+    }
+  }
+
+  // ✕ del modal: "visto SIN avisar". No escribe en `recogidas` a propósito, para
+  // que se distinga de un aviso real — el pendiente sigue vivo en la tarjeta.
+  function descartarAlertaNovedad(id) {
+    novedadVistasRef.current.add(id)
+    setAlertasDeclinas(prev => prev.filter(a => a.id !== id))
+    marcarLeida(id)
+  }
+
+  // El texto que se le manda. Dice QUÉ pasó y que se está reasignando, sin
+  // prometer una hora nueva: nadie la sabe todavía y prometerla de más es peor
+  // que no decirla.
+  function generarMsgNovedad(notif) {
+    const d       = notif.datos || {}
+    const mascota = d.mascota || 'su mascota'
+    const esVet   = d.destino === 'VETERINARIA'
+    const saludo  = esVet
+      ? `Hola, les escribimos de Camino al Cielo.`
+      : `Hola, esperamos que te encuentres bien.`
+    const cuerpo  = esVet
+      ? `Queremos informarles que se nos presentó una novedad con el técnico asignado para la recolección de *${mascota}*, por lo que se va a presentar un retraso.`
+      : `Queremos contarte que se nos presentó una novedad con el técnico asignado para la recolección de *${mascota}*, por lo que vamos a tener un retraso.`
+    return [
+      saludo,
+      ``,
+      cuerpo,
+      `Ya estamos asignando a otro compañero y te confirmamos la nueva hora lo antes posible.`,
+      ``,
+      esVet
+        ? `Agradecemos su comprensión. Cualquier inquietud, quedamos atentos.`
+        : `Lamentamos la demora en un momento tan difícil y te agradecemos la paciencia. Cualquier inquietud, quedamos atentos.`,
+      ``,
+      `Con cariño,`,
+      `Equipo Camino al Cielo 🤍🐾`,
+    ].join('\n')
   }
 
   // Sella que el coordinador SÍ le avisó al cliente por wa.me.
@@ -1363,7 +1461,7 @@ export default function Kanban() {
           // solo en la notificación, que se auto-expira a los DIAS_EXPIRA_ALERTA y
           // se llevaba consigo la única señal de que la familia nunca supo la hora.
           dbTodo(() => db.from('recogidas')
-            .select('servicio_id, hora_programada, hora_llegada, tipo_lugar, aviso_vet_enviado_en, aviso_cliente_enviado_en, servicios!inner(fecha_ingreso)')
+            .select('servicio_id, hora_programada, hora_llegada, tipo_lugar, aviso_vet_enviado_en, aviso_cliente_enviado_en, novedad_tipo, novedad_motivo, novedad_reportada_en, novedad_avisada_en, servicios!inner(fecha_ingreso)')
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id')),
           // Existe recibo generado (mismo criterio del gate de la app del técnico).
           // `datos_form->>entrega_rec_basicos` se PROYECTA en el servidor: el jsonb
@@ -1409,6 +1507,20 @@ export default function Kanban() {
         cfRows.forEach(r => { neveraMap[r.servicio_id] = r.nevera_codigo || null })
         const horaMap = {}
         const llegadaMap = {}
+        // Novedad del técnico SIN avisar a la familia (migración 165). Vive en
+        // la tarjeta y no en la notificación a propósito: la notificación se
+        // auto-expira a los DIAS_EXPIRA_ALERTA y se llevaría con ella la única
+        // señal de que nadie avisó. Misma lección que el aviso de la hora.
+        const novedadMap = {}
+        ;(recogRows || []).forEach(r => {
+          if (r.novedad_reportada_en && !r.novedad_avisada_en) {
+            novedadMap[r.servicio_id] = {
+              tipo:   r.novedad_tipo,
+              motivo: r.novedad_motivo,
+              desde:  r.novedad_reportada_en,
+            }
+          }
+        })
         const avisoMap = {}   // { avisadoCliente, cubiertoPorVet } por servicio
         recogRows.forEach(r => {
           if (r.hora_programada) horaMap[r.servicio_id] = r.hora_programada
@@ -1483,6 +1595,7 @@ export default function Kanban() {
             hora_recogida:   horaMap[s.servicio_id] || null,
             hora_llegada:    llegadaMap[s.servicio_id] || null,
             aviso_cliente:   avisoMap[s.servicio_id] || null,
+            novedad_pend:    novedadMap[s.servicio_id] || null,
             tiene_recibo:    recibosOk ? conRecibo.has(s.servicio_id) : undefined,
             // Solo cuenta como pendiente si YA hay recibo: sin recibo, el
             // pendiente es el recibo, y decir las dos cosas es ruido.
@@ -2710,6 +2823,106 @@ export default function Kanban() {
         </div>
       </div>
     )}
+    {/* ── NOVEDAD DEL TÉCNICO — modal centrado que SÍ bloquea ───────────── */}
+    {/* Pedido de David (2026-09-17). Mismo trato que el inicio de ruta y por la
+        misma razón: hay una familia esperando a una hora y el técnico ya no va.
+        Antes esto solo salía en el banner plegable "Reasignación urgente", que
+        sirve para reasignar y no ofrece ningún número al que avisar.
+
+        No se cierra con Esc ni con clic en el fondo: cerrar aquí no es "cerrar",
+        es dejar a la familia sin enterarse. La ✕ sigue siendo la salida, pero
+        deliberada, y deja el pendiente vivo en la tarjeta. */}
+    {alertasDeclinas.length > 0 && (
+      <div className="cac-overlay fixed inset-0 z-[60] bg-[#0B1D4F]/35 backdrop-blur-[5px] flex items-center justify-center p-4" data-state="open">
+        <div className="w-80 max-w-full max-h-[85vh] overflow-y-auto flex flex-col gap-2">
+          {alertasDeclinas.map(n => {
+            const d       = n.datos || {}
+            const esProb  = n.tipo === 'TECNICO_PROBLEMA_RUTA'
+            const esVet   = d.destino === 'VETERINARIA'
+            // El número lo eligió el técnico al reportar: clínica si la recogida
+            // es en veterinaria, propietario si es a domicilio.
+            const waNum   = (esVet ? d.wa_aliado : d.wa_cliente) || ''
+            const abierta = !!novedadAbierta[n.id]
+            const nota    = novedadNota[n.id] || ''
+            return (
+              <div key={n.id} data-state="open"
+                className="cac-modal bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
+                <div className="px-4 py-3 border-b flex items-start gap-2"
+                  style={{ background: esProb ? '#FFF7ED' : '#FEF2F2',
+                           borderColor: esProb ? '#FED7AA' : '#FECACA' }}>
+                  <span className="text-lg leading-none">{esProb ? '⚠️' : '🚫'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 text-[13px] leading-tight">{n.titulo}</p>
+                    <p className="text-[11px] text-gray-500">{n.mensaje}</p>
+                  </div>
+                  <button onClick={() => descartarAlertaNovedad(n.id)}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-white/60 transition-colors flex-shrink-0"
+                    title="Marcar visto sin avisar — el pendiente sigue en la tarjeta">
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <div className="px-4 py-3 space-y-2">
+                  {/* Decir a quién hay que avisarle, con nombre: el coordinador
+                      no tiene por qué recordar si esa mascota está en clínica. */}
+                  <p className="text-[11px] rounded-lg px-3 py-2"
+                    style={{ background: '#EEF3FB', color: '#1E3A8A' }}>
+                    Hay que avisarle a <strong>{esVet ? 'la veterinaria' : 'el propietario'}</strong>
+                    {d.nombre ? <> — {d.nombre}</> : null}.
+                  </p>
+
+                  {waNum ? (
+                    <a href={waLink(waNum, generarMsgNovedad(n))}
+                      target="_blank" rel="noreferrer"
+                      onClick={() => registrarAvisoNovedad(n, { via: 'WHATSAPP', numero: waNum })}
+                      className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-[13px] font-bold"
+                      style={{ background: '#25D366', color: '#fff' }}>
+                      <MessageCircle size={15} /> Avisar por WhatsApp
+                    </a>
+                  ) : (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                      ⚠️ No hay número de WhatsApp registrado. Avisa por otra vía y déjalo dicho abajo.
+                    </p>
+                  )}
+
+                  {/* Escape con nota. Existe porque sin él un servicio sin número
+                      quedaría trabado para siempre; y lleva nota obligatoria para
+                      que no sea un "descartar" disfrazado. */}
+                  {!abierta ? (
+                    <button onClick={() => setNovedadAbierta(p2 => ({ ...p2, [n.id]: true }))}
+                      className="w-full py-2 rounded-xl text-[12px] font-semibold text-gray-600 hover:bg-gray-50 border border-dashed"
+                      style={{ borderColor: '#D1D5DB' }}>
+                      Ya avisé por otra vía
+                    </button>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <textarea rows={2} value={nota} autoFocus
+                        onChange={e => setNovedadNota(p2 => ({ ...p2, [n.id]: e.target.value }))}
+                        placeholder="¿Cómo le avisaste? (llamada, el técnico habló con ellos…)"
+                        className="w-full text-[12px] border rounded-lg px-2.5 py-2 resize-none outline-none focus:ring-2 focus:ring-blue-100"
+                        style={{ borderColor: '#E5E7EB' }} />
+                      <div className="flex gap-1.5">
+                        <button onClick={() => setNovedadAbierta(p2 => ({ ...p2, [n.id]: false }))}
+                          className="flex-1 py-2 rounded-xl text-[12px] font-semibold text-gray-500 hover:bg-gray-50">
+                          Cancelar
+                        </button>
+                        <button
+                          disabled={nota.trim().length < 3}
+                          onClick={() => registrarAvisoNovedad(n, { via: 'OTRA', nota: nota.trim() })}
+                          className="flex-1 py-2 rounded-xl text-[12px] font-bold text-white disabled:opacity-40"
+                          style={{ background: '#1A5CD8' }}>
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )}
     <div className="flex flex-col flex-1 min-h-0">
       <Topbar actions={
         <button className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors" onClick={cargar} title="Actualizar">
@@ -3369,6 +3582,16 @@ export default function Kanban() {
                                   ) : (
                                     <>🕐 Recogida {String(s.hora_recogida).slice(0, 5)}</>
                                   )}
+                                </div>
+                              )}
+                              {/* El técnico reportó una novedad y a la familia
+                                  todavía no le han dicho nada. Sobrevive a la
+                                  notificación: sale de `recogidas` (migr. 165). */}
+                              {s.novedad_pend && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1"
+                                  style={{ background: '#FEE2E2', color: '#991B1B' }}
+                                  title={`${s.novedad_pend.tipo === 'PROBLEMA_RUTA' ? 'El técnico reportó un problema en ruta' : 'El técnico no pudo aceptar el servicio'}${s.novedad_pend.motivo ? `: ${s.novedad_pend.motivo}` : ''}. Nadie le ha avisado todavía a la familia ni a la clínica.`}>
+                                  ⚠️ Novedad sin avisar
                                 </div>
                               )}
                               {clienteSinAvisar && (
