@@ -1817,6 +1817,7 @@ export default function TecnicoApp() {
   const [entHasta, setEntHasta]   = useState('')
   const [busquedaEntrega, setBusquedaEntrega] = useState('')
   const [compPend, setCompPend]   = useState(0)   // comprobantes pendientes (badge)
+  const [recibosPend, setRecibosPend] = useState(0) // recogidas sin recibo generado (badge)
   const [cuadresPend, setCuadresPend] = useState(0) // cuadres BORRADOR sin firmar (badge + aviso)
   const [sinCuadrar, setSinCuadrar] = useState(null) // servicios acumulados sin cuadrar (RPC 071)
   const [alertaCuadrar, setAlertaCuadrar] = useState(false) // modal al entrar
@@ -2074,6 +2075,42 @@ export default function TecnicoApp() {
           ).length
         }
         setCompPend(n)
+      } catch (_) { /* badge best-effort */ }
+
+      // ── 6b. Badge de recibos por generar ──
+      // La pestaña Recibos era la única del menú sin contador (`count: 0`): lo
+      // único que de verdad exige acción del técnico —una mascota recogida sin
+      // su recibo— era justo lo que no se anunciaba.
+      //
+      // MISMO CRITERIO Y MISMA VENTANA que la pestaña (`pisoRecibos()`), o el
+      // badge manda a una pantalla que ya está al día — el error que hubo que
+      // corregir en Comprobantes. Por eso tampoco descuenta los cuadrados: la
+      // pestaña los sigue mostrando en "Por generar recibo", y un badge que
+      // cuente distinto de lo que se ve es peor que no tener badge.
+      //
+      // Barato a propósito: pide SOLO ids (sin joins de mascota/plan), que es
+      // lo que separa este conteo de recargar la pestaña entera. Medido el
+      // 17-sep: 96-161 servicios por técnico en la ventana, 0-2 sin recibo.
+      try {
+        // `dbTodo` y no `.select()` a secas: el servidor recorta en 1000 filas sin
+        // avisar, y un badge recortado diría "al día" mintiendo. Hoy la ventana
+        // deja 96-161 filas —lejísimos del tope— pero el día que alguien suba
+        // DIAS_RECIBOS_RECIENTES el recorte no daría la cara.
+        const svcVentana = await dbTodo(() => db.from('servicios')
+          .select('id')
+          .eq('tecnico_id', tecnico.id)
+          .in('estado', ESTADOS_RECOGIDO)
+          .gte('fecha_ingreso', pisoRecibos(''))
+          .order('id'))
+        const idsVentana = (svcVentana || []).map(s2 => s2.id)
+        if (idsVentana.length === 0) setRecibosPend(0)
+        else {
+          const conRecibo = new Set(
+            (await dbIn('recibos_tecnico', 'servicio_id', 'servicio_id', idsVentana))
+              .map(r => r.servicio_id)
+          )
+          setRecibosPend(idsVentana.filter(id => !conRecibo.has(id)).length)
+        }
       } catch (_) { /* badge best-effort */ }
 
       // ── 7. Cuadres BORRADOR pendientes de la firma del técnico ──
@@ -2701,7 +2738,7 @@ export default function TecnicoApp() {
   // Orden = flujo real del técnico: recoger → recibo → comprobante → cuarto frío → entregar
   const TABS_TODOS = [
     { key: 'recogidas',   label: 'Recogidas', Icon: Truck,     count: recogidas.length,      color: '#1A5CD8' },
-    { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: 0,                    color: '#7C3AED' },
+    { key: 'recibo',      label: 'Recibos',   Icon: CreditCard, count: recibosPend,           color: '#7C3AED' },
     { key: 'comprobantes', label: 'Comprob.',  Icon: Receipt,   count: compPend,             color: '#EA580C' },
     { key: 'cuarto_frio', label: 'C. Frío',   Icon: Snowflake, count: pendientesCF.length + (sinReporteHoy ? 1 : 0), color: '#0E7490' },
     { key: 'entregas',    label: 'Entregas',  Icon: Package,   count: entregas.length + disponibles.length, color: '#1A5CD8' },
@@ -3077,7 +3114,7 @@ export default function TecnicoApp() {
             />
           </div>
         ) : tab === 'recibo' ? (
-          <ReciboTab tecnico={tecnico} />
+          <ReciboTab tecnico={tecnico} onCount={setRecibosPend} />
         ) : tab === 'comprobantes' ? (
           <ComprobanteTab tecnico={tecnico} onCount={setCompPend} />
         ) : tab === 'mis_cuadres' ? (
@@ -4509,7 +4546,7 @@ async function hidratarRecibos(svcs, tecnicoId) {
   })
 }
 
-function ReciboTab({ tecnico }) {
+function ReciboTab({ tecnico, onCount }) {
   // El módulo Recibos es independiente del flujo de recogida: consulta la DB
   // directamente (servicios ya recogidos del técnico + sus recibos guardados)
   const [items, setItems]             = useState([])
@@ -4555,11 +4592,19 @@ function ReciboTab({ tecnico }) {
         .order('fecha_ingreso', { ascending: false })
         .limit(500)
       if (error) throw error
-      setItems(await hidratarRecibos(svcs, tecnico.id))
+      const lista = await hidratarRecibos(svcs, tecnico.id)
+      setItems(lista)
+      // Refrescar el badge del menú con lo que la pestaña acaba de ver — pero
+      // SOLO sin filtro de fechas puesto. Con un rango propio el técnico está
+      // consultando, no trabajando: dejar que ese rango reescriba el contador
+      // haría que el badge saltara según lo último que alguien miró.
+      if (onCount && !desde && !hasta) {
+        onCount(lista.filter(i => i.estadoRecibo === 'PENDIENTE_RECIBO').length)
+      }
     } catch (e) {
       setListErr(e.message || 'Error al cargar la lista de recibos')
     } finally { setCargando(false) }
-  }, [tecnico?.id, desde, hasta])
+  }, [tecnico?.id, desde, hasta, onCount])
 
   useEffect(() => { cargarLista() }, [cargarLista])
 
