@@ -121,6 +121,12 @@ async function enviarPlantillaMetaDirecta({
     cabecera,
     personalId,
     agenteId,
+    // La línea viaja EXPLÍCITA, no solo el agente. Con `agenteId` a secas,
+    // `contexto()` cae en `phone_number_ids[0]`: hoy cada agente tiene una sola
+    // línea y acierta por casualidad, pero el día que a uno se le sume la
+    // segunda, el documento saldría por la otra sin dar un solo error.
+    // Ver memory/bandeja_enviar_plantilla.md — ese bug ya nos costó 17 días.
+    linea: fromNumberId,
   })
   if (!r?.body?.ok) {
     throw new Error(`Meta ${r?.status || 502}: ${r?.body?.error || 'No se pudo enviar la plantilla'}`)

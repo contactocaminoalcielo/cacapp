@@ -69,6 +69,7 @@ import {
   detalleCampana, accionCampana, borrarCampana, arrancarCampanas,
 } from './whatsapp-campanas.js'
 import { enviarDocumentoOperativo, transporteWhatsAppOperativo } from './whatsapp.js'
+import { lineaDePublico, PUBLICOS_WA } from './linea-wa.js'
 import {
   listarStock, listarMovimientos, verificarSaldos,
   registrarMovimiento, revertirMovimiento, importarCatalogo,
@@ -251,6 +252,22 @@ app.post('/whatsapp/operativo/documento', requireAuth, async (req, res) => {
     if (!['RECIBO', 'CERTIFICADO', 'DOCUMENTO'].includes(tipoDocumento)) {
       return res.status(400).json({ ok: false, error: 'Tipo de documento inválido' })
     }
+
+    // A QUIÉN se le manda decide POR DÓNDE sale. Un recibo de veterinaria va a
+    // la clínica y tiene que salir por la línea de veterinarias; el del
+    // propietario, por la de familias. Hasta hoy TODO salía por la de familias
+    // (medido el 17-sep: 97 recibos -VET en 30 días, los 97 por la 315).
+    //
+    // El navegador manda el PÚBLICO, no la línea: qué número le corresponde a
+    // cada público es cosa del servidor, y así un cliente viejo —o manipulado—
+    // no puede escoger emisor. Sin `publico` se asume CLIENTE, que es lo que
+    // hacían todos los llamadores hasta ahora (certificados incluidos).
+    const publico = String(req.body?.publico || 'CLIENTE').toUpperCase()
+    if (!PUBLICOS_WA.includes(publico)) {
+      return res.status(400).json({ ok: false, error: `Público inválido: ${publico}` })
+    }
+    const fromNumberId = await lineaDePublico(pool, publico)
+
     const envio = await enviarDocumentoOperativo({
       telefono: req.body?.telefono,
       nombre: req.body?.nombre,
@@ -260,6 +277,7 @@ app.post('/whatsapp/operativo/documento', requireAuth, async (req, res) => {
       tipoDocumento,
       referencia: req.body?.referencia,
       mascota: req.body?.mascota,
+      fromNumberId,
       personalId: req.personal.id,
     })
     res.json({ ok: true, transporte: transporteWhatsAppOperativo(), ...envio })

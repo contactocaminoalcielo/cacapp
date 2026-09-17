@@ -6473,6 +6473,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }
 
       // 3. Enviar por el transporte operativo de Orbit.
+      // `publico` decide la LÍNEA emisora: el recibo de la clínica sale por la
+      // línea de veterinarias y el del propietario por la de familias. Va el
+      // público y no el número de línea — esa correspondencia la resuelve el
+      // servidor contra `agente_wa`.
       await enviarWhatsApp({
         telefono:    waDestino,
         nombre:      nombreDestino,
@@ -6482,8 +6486,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         tipoDocumento: 'RECIBO',
         referencia: `${form.numero_recibo}${tipoRecibo === 'VETERINARIA' ? '-VET' : ''}`,
         mascota: form.mascota_nombre,
+        publico: tipoRecibo === 'VETERINARIA' ? 'VETERINARIA' : 'CLIENTE',
       })
-      alert(`Recibo enviado por WhatsApp${pdfUrl ? ' con PDF adjunto' : ''} a ${waDestino} desde la línea oficial.`)
+      alert(
+        `Recibo enviado por WhatsApp${pdfUrl ? ' con PDF adjunto' : ''} a ${waDestino} ` +
+        `desde la línea de ${tipoRecibo === 'VETERINARIA' ? 'veterinarias' : 'familias'}.`
+      )
     } catch (e) {
       setErr('Error al enviar: ' + (e.message || e))
     } finally {

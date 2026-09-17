@@ -5,15 +5,22 @@ import { orbitApi } from '@/lib/orbitApi'
 // ─── Enviar mensaje WhatsApp con adjunto (URL pública al PDF) ────────────────
 // La línea emisora ya NO se manda desde el cliente: la fija el servidor. Se acepta y se
 // ignora `fromNumber` para no romper a los llamadores viejos.
+//
+// `publico` dice A QUIÉN se le escribe — 'CLIENTE' (la familia) o 'VETERINARIA'
+// (la clínica) — y con eso el servidor escoge la línea: la de familias o la de
+// veterinarias. Se manda el público y NO la línea a propósito: qué número le
+// corresponde a cada destinatario es una decisión del servidor, no algo que el
+// navegador pueda elegir. Sin `publico` se asume CLIENTE, que es por donde
+// salían todos los documentos hasta el 17-sep-2026.
 export async function enviarWhatsApp({
   telefono, nombre, mensaje, pdfUrl, pdfFilename,
-  tipoDocumento = 'DOCUMENTO', referencia = '', mascota = '',
+  tipoDocumento = 'DOCUMENTO', referencia = '', mascota = '', publico = 'CLIENTE',
 }) {
   const { messageId } = await orbitApi('/whatsapp/operativo/documento', {
     method: 'POST',
     body: {
       telefono, nombre, mensaje, pdfUrl, pdfFilename,
-      tipoDocumento, referencia, mascota,
+      tipoDocumento, referencia, mascota, publico,
     },
   })
   return messageId
