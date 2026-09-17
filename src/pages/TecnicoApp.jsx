@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { useLecturaSerial } from '@/lib/useLecturaSerial'
-import { db, dbIn } from '@/lib/supabase'
+import { db, dbIn, dbTodo } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -2039,14 +2039,40 @@ export default function TecnicoApp() {
       setEntregas(nuevasE)
 
       // ── 6. Badge de comprobantes pendientes (recibos con pago digital sin comprobante) ──
+      // Mismo criterio que la pestaña, o el badge manda a una pantalla que ya
+      // está al día: que falte el `comprobanteUrl` en el jsonb NO significa que
+      // falte la prueba —la oficina la sube colgada del SERVICIO, con
+      // `recibo_id` NULL— ni que siga siendo tarea suya si el servicio ya se
+      // cuadró y cerró con él.
       try {
         const { data: recs } = await db.from('recibos_tecnico')
-          .select('medios_pago').eq('tecnico_id', tecnico.id)
+          .select('id, servicio_id, medios_pago, servicios!inner(fecha_ingreso, estado)')
+          .eq('tecnico_id', tecnico.id)
+          .gte('servicios.fecha_ingreso', FECHA_CORTE)
           .order('created_at', { ascending: false }).limit(300)
-        const n = (recs || []).filter(r =>
+        const candidatos = (recs || []).filter(r =>
+          r.servicios?.estado !== 'CANCELADO' &&
           Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
             METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
-        ).length
+        )
+        const idsSvc = [...new Set(candidatos.map(r => r.servicio_id).filter(Boolean))]
+        let n = candidatos.length
+        if (idsSvc.length) {
+          const porSvc = {}, porRec = {}
+          for (const c of await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
+            q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))) {
+            if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
+            if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
+          }
+          const cuadrados = new Set(
+            (await dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc))
+              .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnico.id)
+              .map(ci => ci.servicio_id)
+          )
+          n = candidatos.filter(r =>
+            (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0) && !cuadrados.has(r.servicio_id)
+          ).length
+        }
         setCompPend(n)
       } catch (_) { /* badge best-effort */ }
 
@@ -4281,9 +4307,14 @@ const ESTADOS_RECOGIDO = ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION', 'LIST
 
 // Deriva el estado del recibo de un servicio desde sus filas en recibos_tecnico.
 // La fuente de verdad es SIEMPRE la DB — nunca el estado en memoria de la recogida.
-function estadoReciboDe(recibos) {
+// `conPrueba` / `cuadrado` son las DOS salidas que el jsonb del recibo no ve:
+// el comprobante que subió la oficina (cuelga del SERVICIO, con `recibo_id`
+// NULL) y el servicio ya cuadrado y CERRADO con este técnico. Sin ellas, el
+// chip naranja "Comprobante pendiente" le seguía pidiendo algo que ya estaba
+// resuelto — el mismo falso pendiente que inflaba la pestaña Comprobantes.
+function estadoReciboDe(recibos, { conPrueba = false, cuadrado = false } = {}) {
   if (!recibos || recibos.length === 0) return 'PENDIENTE_RECIBO'
-  const comprobantePendiente = recibos.some(r =>
+  const comprobantePendiente = !conPrueba && !cuadrado && recibos.some(r =>
     (Array.isArray(r.medios_pago) ? r.medios_pago : []).some(m =>
       METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl
     )
@@ -4423,6 +4454,8 @@ function ReciboTab({ tecnico }) {
       if (error) throw error
       const ids = (svcs || []).map(s => s.id)
       const porSvc = {}
+      const cuadrados = new Set()
+      const conPrueba = new Set()
       if (ids.length) {
         // Query separado + merge client-side (el join inverso falla en silencio).
         // EN LOTES: con cientos de ids la URL de .in() pasa de ~4 KB y el upstream
@@ -4436,12 +4469,56 @@ function ReciboTab({ tecnico }) {
         recs.forEach(r => {
           ;(porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
         })
+        // Servicios ya cuadrados y CERRADOS: la plata de ese servicio ya se
+        // entregó y el cuadre no se puede volver a tocar. Es la ÚNICA señal
+        // honesta de "esto ya no es asunto del técnico" — misma regla que el
+        // candado de la bitácora. En lotes por el 414 de .in() con cientos de
+        // ids; si falla, no se archiva nada (se ve de más, nunca de menos).
+        try {
+          const lockRows = await dbIn(
+            'cuadre_items',
+            'servicio_id, cuadre:cuadre_id(estado, tecnico_id)',
+            'servicio_id', ids,
+          )
+          lockRows
+            .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
+            .forEach(r => cuadrados.add(r.servicio_id))
+        } catch (_) { /* sin candado: el servicio sigue visible */ }
+        // Comprobantes que el recibo del técnico NO ve: los que sube la oficina
+        // cuelgan del SERVICIO con `recibo_id` NULL. Hay prueba "por otra vía"
+        // cuando el servicio tiene más comprobantes activos que los atados a
+        // sus propios recibos — mismo criterio que la pestaña Comprobantes,
+        // para que las dos pantallas no se contradigan.
+        try {
+          const porRecibo = {}, porServicio = {}
+          for (const c of await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', ids,
+            q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))) {
+            if (c.servicio_id) porServicio[c.servicio_id] = (porServicio[c.servicio_id] || 0) + 1
+            if (c.recibo_id)   porRecibo[c.recibo_id]     = (porRecibo[c.recibo_id]     || 0) + 1
+          }
+          for (const sid of ids) {
+            const propios = (porSvc[sid] || []).reduce((n, r) => n + (porRecibo[r.id] || 0), 0)
+            if ((porServicio[sid] || 0) > propios) conPrueba.add(sid)
+          }
+        } catch (_) { /* sin esto el chip se ve de más, nunca de menos */ }
       }
-      setItems((svcs || []).map(svc => ({
-        svc,
-        recibos: porSvc[svc.id] || [],
-        estadoRecibo: estadoReciboDe(porSvc[svc.id]),
-      })))
+      setItems((svcs || []).map(svc => {
+        const estadoRecibo = estadoReciboDe(porSvc[svc.id], {
+          conPrueba: conPrueba.has(svc.id),
+          cuadrado:  cuadrados.has(svc.id),
+        })
+        const saldo = Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0))
+        return {
+          svc,
+          recibos: porSvc[svc.id] || [],
+          estadoRecibo,
+          // Archivado ≠ "recibo completo". Un recibo COMPLETO puede tener saldo
+          // vivo (el valor subió después de cobrar: adicional vendido aparte,
+          // recálculo por peso) o estar sin cuadrar. Se archiva solo cuando las
+          // tres cosas se cumplen: recibo hecho, nada por cobrar y cuadre cerrado.
+          archivado: estadoRecibo === 'COMPLETO' && saldo <= 0 && cuadrados.has(svc.id),
+        }
+      }))
     } catch (e) {
       setListErr(e.message || 'Error al cargar la lista de recibos')
     } finally { setCargando(false) }
@@ -4533,6 +4610,10 @@ function ReciboTab({ tecnico }) {
       { key: 'PENDIENTE_RECIBO',      color: '#D97706', emoji: '📄', titulo: 'Por generar recibo' },
       { key: 'PAGO_PENDIENTE',        color: '#854D0E', emoji: '💤', titulo: 'Pago pendiente' },
       { key: 'COMPLETO',              color: '#16A34A', emoji: '✅', titulo: 'Recibo completo' },
+      // Cerrados: recibo hecho, sin saldo y cuadre CERRADO. Siguen cargados (la
+      // búsqueda es en memoria y tiene que encontrarlos por No. de recibo) pero
+      // salen del camino: la sección va de última y arranca colapsada.
+      { key: 'ARCHIVADO',             color: '#6B7280', emoji: '🗃️', titulo: 'Archivados · ya cuadrados' },
     ]
     const hayPendientes = items.some(i =>
       ['PENDIENTE_RECIBO', 'PENDIENTE_COMPROBANTE'].includes(i.estadoRecibo))
@@ -4594,7 +4675,7 @@ function ReciboTab({ tecnico }) {
             {/* Secciones colapsables por estado; con búsqueda activa se despliegan solas */}
             {GRUPOS.map(g => (
               <SeccionRecibos key={g.key} color={g.color} emoji={g.emoji} titulo={g.titulo}
-                lista={filtrados.filter(i => i.estadoRecibo === g.key)}
+                lista={filtrados.filter(i => g.key === 'ARCHIVADO' ? i.archivado : (i.estadoRecibo === g.key && !i.archivado))}
                 abierta={q ? true : !!abiertas[g.key]}
                 onToggle={() => setAbiertas(prev => ({ ...prev, [g.key]: !prev[g.key] }))}
                 onSeleccionar={seleccionar}
@@ -4768,12 +4849,28 @@ function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo =
   )
 }
 
-// Tarjeta de un recibo que YA tiene comprobante. Dos caminos distintos, y la
+// Por qué un recibo dejó de ser tarea del técnico. El chip lo dice con
+// palabras suyas: "ya resuelto" sin explicar por qué obliga a preguntar.
+const MOTIVO_RESUELTO = {
+  SUBIDO:   { texto: 'Subido',            color: '#15803D', bg: '#DCFCE7' },
+  OFICINA:  { texto: 'Lo subió la oficina', color: '#1D4ED8', bg: '#DBEAFE' },
+  PAGADO:   { texto: 'Ya lo pagaron',     color: '#0F766E', bg: '#CCFBF1' },
+  CUADRADO: { texto: 'Ya cuadrado',       color: '#6D28D9', bg: '#EDE9FE' },
+}
+
+// Tarjeta de un recibo que ya no es tarea del técnico. Tres caminos, y la
 // diferencia importa: "Cambiar" REEMPLAZA (marca el viejo RECHAZADO, porque se
-// subió el equivocado), mientras que "Agregar otro" SUMA una prueba más sin
-// tocar la anterior — el caso de un pago en dos partes o de un segundo soporte.
+// subió el equivocado), "Agregar otro" SUMA una prueba más sin tocar la
+// anterior — el caso de un pago en dos partes o de un segundo soporte— y, si
+// salió de la lista sin que haya ninguna prueba (ya cuadrado, o el cobro lo
+// registró la oficina), queda el camino normal de subir una, por si la tiene.
 function TarjetaComprobanteSubido({ item, onPersistir }) {
   const [agregando, setAgregando] = useState(false)
+  const motivo      = MOTIVO_RESUELTO[item.motivo] || MOTIVO_RESUELTO.SUBIDO
+  // "Prueba propia" = la que esta pantalla puede reemplazar. La de la oficina
+  // cuelga del servicio, no de este recibo: no se toca desde acá.
+  const pruebaPropia = !!item.yaUrl || item.nComps > 0
+  const hayAlguna    = pruebaPropia || item.motivo === 'OFICINA'
   return (
     <div className="bg-white rounded-2xl p-3 border border-gray-100 mb-2 shadow-sm">
       <div className="flex items-center gap-3">
@@ -4783,18 +4880,20 @@ function TarjetaComprobanteSubido({ item, onPersistir }) {
           <div className="text-[10px] text-gray-400">No. {item.numero}</div>
           <div className="text-[10px] text-gray-500 truncate">
             {item.pagoPendiente
-              ? 'Quedo en pagar despues - comprobante enviado'
+              ? 'Quedo en pagar despues'
               : `${item.metodos.join(', ')} - ${fmt(item.monto)}`}
           </div>
         </div>
-        <span className="text-[11px] font-bold text-green-700 flex items-center gap-1 flex-shrink-0">
-          <Check size={12} /> {item.nComps > 1 ? `${item.nComps} subidos` : 'Subido'}
+        <span className="text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 flex-shrink-0"
+          style={{ background: motivo.bg, color: motivo.color }}>
+          {item.motivo === 'SUBIDO' && <Check size={11} />}
+          {item.motivo === 'SUBIDO' && item.nComps > 1 ? `${item.nComps} subidos` : motivo.texto}
         </span>
       </div>
 
       {/* Un PAGO PENDIENTE no tiene "comprobante anterior" que reemplazar: su
           único camino es sumar otro. */}
-      {!item.pagoPendiente && (
+      {pruebaPropia && !item.pagoPendiente && (
         <ComprobanteUploader
           servicioId={item.svcId}
           stashId={`${item.reciboId}_reemplazo`}
@@ -4804,7 +4903,25 @@ function TarjetaComprobanteSubido({ item, onPersistir }) {
         />
       )}
 
-      {agregando ? (
+      {!hayAlguna ? (
+        // Salió de la lista sin prueba (ya cuadrado, o el cobro lo registró la
+        // oficina). No se le pide nada, pero si la tiene puede dejarla.
+        agregando ? (
+          <div className="mt-2">
+            <ComprobanteUploader
+              servicioId={item.svcId}
+              stashId={`${item.reciboId}_tardio`}
+              onSubido={(url, path, val) => { setAgregando(false); return onPersistir(item, url, path, val) }}
+            />
+          </div>
+        ) : (
+          <button type="button" onClick={() => setAgregando(true)}
+            className="mt-2 w-full py-2 rounded-xl border border-dashed text-[12px] font-semibold active:scale-98"
+            style={{ borderColor: '#E5E7EB', color: '#6B7280', background: '#F9FAFB' }}>
+            Subir el comprobante de todos modos
+          </button>
+        )
+      ) : agregando ? (
         <div className="mt-2">
           <div className="flex items-start gap-2 mb-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: '#EFF6FF', color: '#1E40AF' }}>
             <AlertCircle size={12} className="mt-0.5 flex-shrink-0" />
@@ -4834,26 +4951,41 @@ function ComprobanteTab({ tecnico, onCount }) {
   const [busqueda, setBusqueda] = useState('')
   const [desde,    setDesde]    = useState('')   // filtro de rango (vacío = desde el corte)
   const [hasta,    setHasta]    = useState('')
+  const [abrirResueltos, setAbrirResueltos] = useState(false)
 
   const cargar = useCallback(async () => {
     if (!tecnico?.id) return
     setCargando(true); setListErr('')
     try {
+      // ── QUÉ SE REÚNE EN ESTA PANTALLA ────────────────────────────────────
+      // Los recibos de ESTE técnico, desde el corte, de dos clases: los que
+      // cobró por un medio DIGITAL (necesitan comprobante) y los que cerró como
+      // PAGO PENDIENTE. Pero solo son TAREA SUYA los que siguen sin resolver.
+      // Un recibo se retira de sus pendientes cuando ya hay prueba o ya no hay
+      // cuenta que perseguir (ver `motivo` más abajo): comprobante subido por
+      // otra vía, servicio ya pagado, o servicio ya cuadrado y CERRADO con él.
+      // Nada de eso se miraba: la pantalla acumulaba todo lo histórico y cada
+      // técnico veía entre 170 y 231 filas, casi ninguna una tarea real.
+      //
       // Los recibos son la fuente: partir de la lista de servicios (que crece sin
       // tope) con .limit() y sin .order() dejaba los servicios nuevos por fuera
       // cuando el técnico pasaba de 80 acumulados, y la pestaña decía "Al día".
       // El corte se aplica en la FUENTE (no al hidratar mascota/plan más abajo):
       // si se filtrara allí, el recibo previo al corte igual entraría a la lista
       // pero sin mascota ni plan. El rango del técnico sube el piso sobre el corte.
-      let q = db.from('recibos_tecnico')
-        .select('id, servicio_id, numero_recibo, medios_pago, datos_form, created_at, servicios!inner(fecha_ingreso)')
-        .eq('tecnico_id', tecnico.id)
-        .gte('servicios.fecha_ingreso', desde && desde > FECHA_CORTE ? desde : FECHA_CORTE)
-      if (hasta) q = q.lte('servicios.fecha_ingreso', hasta)
-      const { data: recs, error } = await q
-        .order('created_at', { ascending: false })
-        .limit(500)
-      if (error) throw error
+      // Se pagina con `dbTodo`: el `.limit(500)` de antes ya rozaba el techo
+      // (363 recibos del técnico con más) y habría empezado a recortar mudo.
+      const piso = desde && desde > FECHA_CORTE ? desde : FECHA_CORTE
+      const recs = await dbTodo(() => {
+        let q = db.from('recibos_tecnico')
+          .select('id, servicio_id, numero_recibo, medios_pago, datos_form, created_at, servicios!inner(fecha_ingreso)')
+          .eq('tecnico_id', tecnico.id)
+          .gte('servicios.fecha_ingreso', piso)
+        if (hasta) q = q.lte('servicios.fecha_ingreso', hasta)
+        // El desempate por `id` es obligatorio al paginar: dos recibos con el
+        // mismo `created_at` pueden repetirse o saltarse en el corte de página.
+        return q.order('created_at', { ascending: false }).order('id')
+      })
       // Un item por recibo con al menos un medio DIGITAL con monto > 0…
       const tieneDigital = r =>
         Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
@@ -4872,62 +5004,81 @@ function ComprobanteTab({ tecnico, onCount }) {
       for (let i = 0; i < ids.length; i += 80) {
         const { data: svcs } = await db.from('servicios')
           .select(`
-            id, estado,
+            id, estado, estado_pago, valor_total, valor_pagado,
             mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
             planes:plan_id ( nombre )
           `)
           .in('id', ids.slice(i, i + 80))
         for (const s of (svcs || [])) svcById[s.id] = s
       }
-      // Comprobantes ya subidos, por recibo. Hace falta para los PAGO PENDIENTE:
-      // no tienen medios en el jsonb, así que `yaUrl` no sirve para saber si el
-      // técnico ya subió algo. Se consulta la tabla formal (en lotes: cientos de
-      // ids en un .in() revientan la URL).
-      const compsPorRecibo = {}
-      const idsRec = recibos.map(r => r.id)
-      for (let i = 0; i < idsRec.length; i += 80) {
-        const { data: cps } = await db.from('recibo_comprobantes')
-          .select('recibo_id')
-          .in('recibo_id', idsRec.slice(i, i + 80))
-          .is('eliminado_en', null)
-          .neq('estado', 'RECHAZADO')
-        for (const c of (cps || [])) compsPorRecibo[c.recibo_id] = (compsPorRecibo[c.recibo_id] || 0) + 1
+      // Comprobantes activos del SERVICIO, no solo del recibo.
+      // 🩸 Un comprobante subido desde la oficina —ficha del servicio, Kanban o
+      // el modal de Finanzas— se guarda colgado del SERVICIO con `recibo_id`
+      // NULL (a propósito, migración 018). Esta pantalla solo miraba por
+      // `recibo_id`, así que no lo veía NUNCA y le seguía pidiendo al técnico
+      // una prueba que ya estaba en el sistema: 114 de los 222 pagos pendientes
+      // estaban exactamente en ese caso.
+      // Se guardan los dos conteos porque significan cosas distintas: el de
+      // ESTE recibo permite reemplazar/agregar, el del servicio solo informa.
+      const compsPorRecibo  = {}
+      const compsPorServicio = {}
+      const cps = await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', ids,
+        q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))
+      for (const c of cps) {
+        if (c.servicio_id) compsPorServicio[c.servicio_id] = (compsPorServicio[c.servicio_id] || 0) + 1
+        if (c.recibo_id)   compsPorRecibo[c.recibo_id]     = (compsPorRecibo[c.recibo_id]     || 0) + 1
       }
+      // Servicios ya cuadrados y CERRADOS con este técnico: esa plata ya se
+      // cuadró con él y dejó de ser tarea suya. Mismo criterio que el candado
+      // de la bitácora en "Mis pagos" (`lockedSet`): exige que el cuadre sea
+      // SUYO, no de otro técnico que también tocó el servicio.
+      const cuadrados = new Set(
+        (await dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', ids))
+          .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
+          .map(r => r.servicio_id)
+      )
 
       const lista = []
       for (const r of recibos) {
+        const svc = svcById[r.servicio_id]
+        if (svc?.estado === 'CANCELADO') continue
         const medios  = Array.isArray(r.medios_pago) ? r.medios_pago : []
         const digital = medios.filter(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
         const pendientes = digital.filter(m => !m.comprobanteUrl)
         const yaUrl      = digital.find(m => m.comprobanteUrl)?.comprobanteUrl || ''
-        const svc        = svcById[r.servicio_id]
-        if (svc?.estado === 'CANCELADO') continue
-        const nComps = compsPorRecibo[r.id] || 0
+        const nComps     = compsPorRecibo[r.id] || 0
+        // Cerrado como PAGO PENDIENTE: sin medios y sin cobro. Tiene su propio
+        // grupo porque no es una tarea del técnico, es una cuenta por cobrar.
+        const pagoPend   = esPagoPendiente(r) && digital.length === 0
 
-        // Cerrado como PAGO PENDIENTE: sin medios y sin cobro. Va a su propio
-        // grupo, y pasa a "subido" solo cuando ya hay un comprobante en la tabla.
-        if (esPagoPendiente(r) && digital.length === 0) {
-          lista.push({
-            reciboId: r.id, svcId: r.servicio_id, numero: r.numero_recibo,
-            mascota: svc?.mascotas, plan: svc?.planes?.nombre || '',
-            metodos: [], monto: 0, yaUrl: '', nComps,
-            pagoPendiente: true,
-            estado: nComps > 0 ? 'SUBIDO' : 'PAGO_PENDIENTE',
-          })
-          continue
-        }
+        // ── Por qué deja de ser tarea suya ─────────────────────────────────
+        // SUBIDO   → la prueba de ESTE recibo ya está (jsonb o fila propia).
+        // OFICINA  → hay comprobante del servicio por otra vía.
+        // PAGADO   → el servicio ya quedó saldado; el pendiente se cobró.
+        // CUADRADO → el servicio ya entró en un cuadre CERRADO con él.
+        const pruebaPropia = pagoPend ? nComps > 0 : (pendientes.length === 0 && (!!yaUrl || nComps > 0))
+        const pruebaAjena  = (compsPorServicio[r.servicio_id] || 0) > nComps
+        const yaPagado     = svc?.estado_pago === 'COMPLETO'
+          || (Number(svc?.valor_total) > 0 && Number(svc?.valor_pagado || 0) >= Number(svc?.valor_total))
+        const motivo = pruebaPropia            ? 'SUBIDO'
+          : pruebaAjena                        ? 'OFICINA'
+          : (pagoPend && yaPagado)             ? 'PAGADO'
+          : cuadrados.has(r.servicio_id)       ? 'CUADRADO'
+          : null
+
         lista.push({
           reciboId: r.id,
           svcId:    r.servicio_id,
           numero:   r.numero_recibo,
           mascota:  svc?.mascotas,
           plan:     svc?.planes?.nombre || '',
-          metodos:  pendientes.length > 0 ? pendientes.map(m => m.metodo) : digital.map(m => m.metodo),
+          metodos:  pagoPend ? [] : (pendientes.length > 0 ? pendientes.map(m => m.metodo) : digital.map(m => m.metodo)),
           monto:    digital.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
-          estado:   pendientes.length > 0 ? 'PENDIENTE' : 'SUBIDO',
-          yaUrl,
+          yaUrl:    pagoPend ? '' : yaUrl,
           nComps,
-          pagoPendiente: false,
+          pagoPendiente: pagoPend,
+          motivo,
+          estado: motivo ? 'RESUELTO' : (pagoPend ? 'PAGO_PENDIENTE' : 'PENDIENTE'),
         })
       }
       setItems(lista)
@@ -5048,7 +5199,11 @@ function ComprobanteTab({ tecnico, onCount }) {
   const hayBusqueda = termino.length > 0
   const pendientes = itemsFiltrados.filter(i => i.estado === 'PENDIENTE')
   const porPagar   = itemsFiltrados.filter(i => i.estado === 'PAGO_PENDIENTE')
-  const subidos    = itemsFiltrados.filter(i => i.estado === 'SUBIDO')
+  const resueltos  = itemsFiltrados.filter(i => i.estado === 'RESUELTO')
+  // Lo resuelto no se borra: se guarda plegado. Sigue siendo la mayoría de la
+  // pantalla (historia de meses), pero deja de leerse como una lista de
+  // pendientes. Al buscar se abre solo, o la búsqueda no encontraría nada.
+  const verResueltos = abrirResueltos || hayBusqueda
 
   return (
     <div>
@@ -5063,10 +5218,15 @@ function ComprobanteTab({ tecnico, onCount }) {
         </button>
       </div>
 
-      <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 text-[11px]"
+      <div className="flex items-start gap-2 px-3 py-2 rounded-xl mb-3 text-[11px] leading-snug"
         style={{ background: '#FFF7ED', color: '#9A3412' }}>
-        <span className="text-base">💡</span>
-        <span>Subí acá el comprobante de cada pago digital. Es una pantalla simple — no se reinicia como el recibo.</span>
+        <span className="text-base leading-none mt-0.5">💡</span>
+        <span>
+          Acá llegan <strong>tus recibos con pago digital</strong> (transferencia, Nequi,
+          Daviplata o tarjeta) y los que quedaron en <strong>pagar después</strong>. Sale de la
+          lista solo lo que ya se resolvió: comprobante subido, cobro registrado en la oficina o
+          servicio ya cuadrado contigo. Lo resuelto queda guardado abajo.
+        </span>
       </div>
 
       <FiltroFechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} className="mb-3" />
@@ -5191,14 +5351,28 @@ function ComprobanteTab({ tecnico, onCount }) {
                 </div>
               )}
 
-              {subidos.length > 0 && (
+              {resueltos.length > 0 && (
                 <div className="mt-4">
-                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Subidos</div>
-                  {subidos.map(item => (
-                    <TarjetaComprobanteSubido
-                      key={`${item.reciboId}_${item.yaUrl || 'subido'}`}
-                      item={item} onPersistir={persistir} />
-                  ))}
+                  <button type="button" onClick={() => setAbrirResueltos(v => !v)}
+                    disabled={hayBusqueda}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-left disabled:opacity-100"
+                    style={{ borderColor: '#E5E7EB', background: '#F9FAFB' }}>
+                    <span className="text-[12px] font-bold text-gray-600">
+                      Ya resueltos ({resueltos.length})
+                    </span>
+                    <span className="text-[11px] font-semibold text-gray-400">
+                      {verResueltos ? 'Ocultar' : 'Ver'}
+                    </span>
+                  </button>
+                  {verResueltos && (
+                    <div className="mt-2">
+                      {resueltos.map(item => (
+                        <TarjetaComprobanteSubido
+                          key={`${item.reciboId}_${item.yaUrl || item.motivo}`}
+                          item={item} onPersistir={persistir} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </>
