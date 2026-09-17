@@ -7581,27 +7581,20 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             )}
           </div>
         ) : (
-          /* Recibo cliente: valor del servicio + nota de comisión si aplica */
+          /* Recibo cliente: SOLO el valor del servicio.
+             ⛔ Aquí NO va la comisión del aliado. Esta pantalla es el recibo que
+             el técnico tiene abierto FRENTE A LA FAMILIA mientras cobra, y lo que
+             Camino al Cielo le reconoce a la clínica es un acuerdo entre las dos
+             empresas: el cliente paga el precio completo y la comisión se liquida
+             aparte. Había una caja naranja "Comision aliado registrada" con el
+             monto y el porcentaje; se quitó el 17-sep-2026 por pedido de David
+             (aparecía en 23 servicios). El desglose de comisión vive donde
+             corresponde: en el recibo de VETERINARIA, arriba. */
           <div style={{ marginBottom: '10px' }}>
             <div style={{ border: '1.5px solid #C4A87A', borderRadius: '8px', padding: '8px 12px', textAlign: 'center', background: '#FFFDF8' }}>
               <div style={{ fontSize: '8px', fontWeight: '700', color: '#8C6C3C', textTransform: 'uppercase', marginBottom: '2px' }}>Valor del servicio</div>
               <div style={{ fontSize: '18px', fontWeight: '800', color: '#0B1D4F' }}>{fmt(precioServicio)}</div>
             </div>
-            {/* Nota de comisión — solo visible cuando el servicio viene de solicitud de cliente con aliado */}
-            {comisionManual > 0 && !comisionFueDescontada && aliado && (
-              <div style={{ marginTop: '6px', padding: '6px 10px', borderRadius: '8px', background: '#FFF7ED', border: '1px solid #FED7AA' }}>
-                <div style={{ fontSize: '9px', fontWeight: '700', color: '#92400E', marginBottom: '1px' }}>
-                  Comision aliado registrada — {aliado.nombre}
-                </div>
-                <div style={{ fontSize: '9px', color: '#B45309' }}>
-                  {fmt(comisionManual)}
-                  {comisionManualPct > 0 ? ` (${comisionManualPct}%)` : ''}
-                  {' — '}
-                  {aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual' :
-                   aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'  : 'gestion separada'}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
