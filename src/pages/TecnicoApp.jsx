@@ -23,6 +23,10 @@ import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import { orbitApi } from '@/lib/orbitApi'
 
 const POLL = 30_000
+// Contadores de pestañas y pool de entregas: se refrescan tras una acción del
+// técnico o, como mucho, cada tanto. Cada 30 s era pagar 4 viajes (uno de 270 ms)
+// por números que casi nunca cambian solos.
+const BADGES_MS = 5 * 60_000
 
 // Aviso "ve a cuadrar cuentas": a partir de estos servicios acumulados sin
 // cuadrar (regla David 2026-07-22). El conteo lo hace la RPC de la migración
@@ -1877,124 +1881,121 @@ export default function TecnicoApp() {
   const [misCF,          setMisCF]          = useState([])
   const [pendientesCF,   setPendientesCF]   = useState([])
 
+  // ── Carga principal ─────────────────────────────────────────────────────────
+  // Medido el 17-sep-2026 contra producción: la base contesta cada consulta en
+  // 1–22 ms y el servidor va al 90 % libre, pero cada viaje al servidor cuesta
+  // 300–600 ms desde un teléfono, y esto hacía ~14 viajes EN SERIE con el
+  // spinner de pantalla completa hasta el último. Eran 4–8 s de "Cargando…"
+  // para mostrar recogidas que ya estaban en mano tras el primer viaje. Y la
+  // misma cadena corría después de cada acción del técnico, cada 30 s y en
+  // cada evento realtime —incluido el canal de `entregas`, que no tiene filtro.
+  //
+  // Ahora va por fases, con las MISMAS consultas y las MISMAS reglas:
+  //   A. lo que necesita la pantalla, todo en paralelo (un viaje) → se pinta.
+  //   B. lo que depende de A (rezagados y gate de recibo), ya con pantalla.
+  //   C. los contadores de las pestañas, en paralelo, y solo tras una acción
+  //      del técnico o cada BADGES_MS: casi nunca cambian solos.
+  // El spinner de pantalla completa sale SOLO en la primera carga. Después la
+  // pantalla se queda montada y se refresca por debajo: mismo patrón que quitó
+  // el "se reinicia" del Kanban (ref `primeraCarga`).
+  const SELECT_SVC = `
+      id, estado, estado_pago, metodo_pago, valor_total, valor_pagado, valor_eutanasia,
+      mascota_id, fecha_ingreso,
+      direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
+      mascotas:mascota_id (
+        id_mascota, nombre, tamano, especie_id, peso_kg,
+        especies ( nombre ),
+        clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono, telefono2 )
+      ),
+      recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, fecha_llegada, hora_llegada, notas, foto_recogida_url ),
+      planes:plan_id ( nombre, codigo ),
+      aliados:aliado_origen_id ( nombre, horario, telefono, whatsapp )
+    `
+  // Entregas: las mías + el pool de disponibles. El pool (DISPONIBLE, sin dueño)
+  // lo ve todo mensajero/técnico y lo toma el primero que pueda; PENDIENTE es el
+  // cascarón que crea el trigger al nacer el servicio y NO se muestra nunca.
+  const SELECT_ENTREGA = `
+    *,
+    servicios:servicio_id (
+      id, estado, valor_total, valor_pagado, estado_pago,
+      mascotas:mascota_id (
+        nombre, especie_id,
+        especies ( nombre ),
+        clientes:cliente_id ( nombre, apellido, whatsapp )
+      ),
+      planes:plan_id ( nombre )
+    )
+  `
+  const CF_COLS = 'id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url'
+  const primeraCarga    = useRef(true)
+  const ultimoBadgesRef = useRef(0)
+  const ultimoPoolRef   = useRef(0)
+
+  const consultaEntregasMias = () => db.from('entregas').select(SELECT_ENTREGA)
+    .eq('mensajero_id', tecnico.id)
+    .in('estado', ['ASIGNADA', 'EN_CAMINO'])
+    .order('fecha_programada', { ascending: true, nullsFirst: true })
+  const consultaPool = () => db.from('entregas').select(SELECT_ENTREGA)
+    .eq('estado', 'DISPONIBLE')
+    .order('fecha_programada', { ascending: true, nullsFirst: true })
+    .limit(100)
+  const sinCancelados = lista => (lista || []).filter(e => e.servicios?.estado !== 'CANCELADO')
+
+  // Refresco liviano de SOLO entregas (mías + pool). Lo dispara el canal de
+  // `entregas` —que no tiene filtro: cualquier entrega de cualquier compañero—
+  // y abrir la pestaña. Antes ese canal relanzaba la carga completa a todos
+  // los técnicos a la vez.
+  const cargarEntregas = useLecturaSerial(async () => {
+    if (!tecnico) return
+    const [{ data: entData }, { data: poolData }] = await Promise.all([consultaEntregasMias(), consultaPool()])
+    ultimoPoolRef.current = Date.now()
+    setEntregas(sinCancelados(entData))
+    setDisponibles(sinCancelados(poolData))
+  })
+
   const cargar = useLecturaSerial(async (silent = false) => {
     if (!tecnico) return
-    if (!silent) setLoading(true)
+    if (!silent && primeraCarga.current) setLoading(true)
     setQueryErr('')
+    const ahora = Date.now()
+    // `silent` = sondeo o realtime. Lo que NO es silent lo disparó el técnico
+    // (abrir la app o terminar una acción): ahí sí se refresca todo.
+    const conBadges = !silent || (ahora - ultimoBadgesRef.current) > BADGES_MS
+    const conPool   = !silent || (ahora - ultimoPoolRef.current)   > BADGES_MS
     try {
-      // ── 1. Servicios asignados (sin join cuarto_frio para evitar errores) ──
-      const SELECT_SVC = `
-          id, estado, estado_pago, metodo_pago, valor_total, valor_pagado, valor_eutanasia,
-          mascota_id, fecha_ingreso,
-          direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida,
-          mascotas:mascota_id (
-            id_mascota, nombre, tamano, especie_id, peso_kg,
-            especies ( nombre ),
-            clientes:cliente_id ( nombre, apellido, whatsapp, email, telefono, telefono2 )
-          ),
-          recogidas ( id, contacto_nombre, contacto_telefono, tipo_lugar, fecha_programada, hora_programada, fecha_llegada, hora_llegada, notas, foto_recogida_url ),
-          planes:plan_id ( nombre, codigo ),
-          aliados:aliado_origen_id ( nombre, horario, telefono, whatsapp )
-        `
-      const { data: svcData, error: svcErr } = await db.from('servicios')
-        .select(SELECT_SVC)
-        .eq('tecnico_id', tecnico.id)
-        .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
-        .gte('fecha_ingreso', FECHA_CORTE)
-        .order('fecha_ingreso', { ascending: false })
-
-      if (svcErr) { setQueryErr(svcErr.message); return }
-      const servicios = svcData || []
-
-      // ── 1b. Rezagados de cuarto frío: mascotas FÍSICAMENTE en la nevera sin
-      // registro (sin nevera_codigo) cuyo servicio ya avanzó de estado por otro
-      // flujo (lote grupal completado, fotos del cliente, avance manual). El
-      // estado del servicio NO indica que la mascota salió de la nevera: el gate
-      // físico es cuarto_frio.fecha_salida (mismo principio que v_candidatos_tenjo).
-      // Sin esto, el técnico no puede registrar nevera/evidencia de esas mascotas.
-      const { data: cfRezag } = await db.from('cuarto_frio')
-        .select('id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url')
-        .is('fecha_salida', null)
-        .is('nevera_codigo', null)
-      const idsRezag = (cfRezag || [])
-        .map(cf => cf.servicio_id)
-        .filter(id => !servicios.some(s => s.id === id))
-      let rezagados = []
-      if (idsRezag.length > 0) {
-        const { data: rezData } = await db.from('servicios')
+      // ── A. Lo que necesita la pantalla, TODO en paralelo ──
+      const todayStr = hoyLocalISO()
+      const [svcRes, cfMiosRes, cfRezagRes, entRes, poolRes, reporteRes, neverasRes] = await Promise.all([
+        // 1. Servicios asignados (sin join cuarto_frio para evitar errores)
+        db.from('servicios')
           .select(SELECT_SVC)
           .eq('tecnico_id', tecnico.id)
-          .in('id', idsRezag)
-          .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
+          .in('estado', ['INGRESADO', 'EN_RECOGIDA', 'EN_CUARTO_FRIO'])
           .gte('fecha_ingreso', FECHA_CORTE)
-        const cfBySvc = Object.fromEntries((cfRezag || []).map(cf => [cf.servicio_id, cf]))
-        rezagados = (rezData || []).map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
-      }
-
-      // ── 2. Cuarto frío para servicios EN_CUARTO_FRIO (query separado) ──
-      const idsCF = servicios.filter(s => s.estado === 'EN_CUARTO_FRIO').map(s => s.id)
-      let cfMap = {}
-      if (idsCF.length > 0) {
-        const { data: cfData } = await db.from('cuarto_frio')
-          .select('id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url')
-          .in('servicio_id', idsCF)
-        ;(cfData || []).forEach(cf => { cfMap[cf.servicio_id] = cf })
-      }
-
-      // ── 3. Fusionar cuarto_frio en cada servicio ──
-      const serviciosConCF = servicios.map(s => ({
-        ...s,
-        cuarto_frio_data: cfMap[s.id] || null,
-      }))
-
-      // ── 4. Entregas: las mías + el pool de disponibles ──
-      // El pool (DISPONIBLE, sin dueño) lo ve todo mensajero/técnico y lo toma el
-      // primero que pueda; PENDIENTE es el cascarón que crea el trigger al nacer
-      // el servicio y NO se muestra nunca.
-      const SELECT_ENTREGA = `
-        *,
-        servicios:servicio_id (
-          id, estado, valor_total, valor_pagado, estado_pago,
-          mascotas:mascota_id (
-            nombre, especie_id,
-            especies ( nombre ),
-            clientes:cliente_id ( nombre, apellido, whatsapp )
-          ),
-          planes:plan_id ( nombre )
-        )
-      `
-      const [{ data: entData }, { data: poolData }] = await Promise.all([
-        db.from('entregas').select(SELECT_ENTREGA)
-          .eq('mensajero_id', tecnico.id)
-          .in('estado', ['ASIGNADA', 'EN_CAMINO'])
-          .order('fecha_programada', { ascending: true, nullsFirst: true }),
-        db.from('entregas').select(SELECT_ENTREGA)
-          .eq('estado', 'DISPONIBLE')
-          .order('fecha_programada', { ascending: true, nullsFirst: true })
-          .limit(100),
-      ])
-
-      // Recogidas activas: solo INGRESADO y EN_RECOGIDA
-      // EN_CUARTO_FRIO va exclusivamente al tab C. Frío
-      const nuevasR = serviciosConCF.filter(s =>
-        ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
-      )
-      // Entregas de servicios cancelados no son tareas activas
-      const nuevasE = (entData || []).filter(e => e.servicios?.estado !== 'CANCELADO')
-      setDisponibles((poolData || []).filter(e => e.servicios?.estado !== 'CANCELADO'))
-
-      const total = nuevasR.length
-      if (silent && prevCountRef.current !== null && total > prevCountRef.current) {
-        const diff = total - prevCountRef.current
-        setNotif(`¡Nueva recogida asignada! (${diff} nueva${diff > 1 ? 's' : ''})`)
-        playNotifSound()
-        setTimeout(() => setNotif(null), 8000)
-      }
-      prevCountRef.current = total
-
-      // ── 5. Reporte del día y neveras activas (desde tabla neveras) ──
-      const todayStr = hoyLocalISO()
-      const [{ data: reporteData }, { data: neverasData }] = await Promise.all([
+          .order('fecha_ingreso', { ascending: false }),
+        // 2. Cuarto frío de MIS servicios EN_CUARTO_FRIO. Se filtra por el
+        //    servicio embebido para no depender de los ids de la consulta 1:
+        //    son exactamente las filas que antes se pedían con `.in(idsCF)`,
+        //    con cualquier fecha_salida, igual que entonces.
+        db.from('cuarto_frio')
+          .select(`${CF_COLS}, servicios!inner(id)`)
+          .eq('servicios.tecnico_id', tecnico.id)
+          .eq('servicios.estado', 'EN_CUARTO_FRIO'),
+        // 1b. Rezagados de cuarto frío: mascotas FÍSICAMENTE en la nevera sin
+        //    registro (sin nevera_codigo) cuyo servicio ya avanzó de estado por
+        //    otro flujo (lote grupal completado, fotos del cliente, avance
+        //    manual). El estado del servicio NO indica que la mascota salió de
+        //    la nevera: el gate físico es cuarto_frio.fecha_salida (mismo
+        //    principio que v_candidatos_tenjo). Sin esto, el técnico no puede
+        //    registrar nevera/evidencia de esas mascotas. Medido: ~45 filas.
+        db.from('cuarto_frio')
+          .select(CF_COLS)
+          .is('fecha_salida', null)
+          .is('nevera_codigo', null),
+        // 4. Entregas mías; el pool solo cuando toca (pesa: 100 filas con joins).
+        consultaEntregasMias(),
+        conPool ? consultaPool() : Promise.resolve({ data: null }),
+        // 5. Reporte del día y neveras activas (desde tabla neveras)
         db.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*)')
           .eq('fecha', todayStr)
@@ -2005,13 +2006,74 @@ export default function TecnicoApp() {
           .eq('activa', true)
           .order('codigo'),
       ])
-      setReporteHoy(reporteData?.[0] || null)
+
+      if (svcRes.error) { setQueryErr(svcRes.error.message); return }
+      const servicios = svcRes.data || []
+      const cfRezag   = cfRezagRes.data || []
+
+      // ── 3. Fusionar cuarto_frio en cada servicio ──
+      const cfMap = {}
+      ;(cfMiosRes.data || []).forEach(cf => { cfMap[cf.servicio_id] = cf })
+      const serviciosConCF = servicios.map(s => ({
+        ...s,
+        cuarto_frio_data: cfMap[s.id] || null,
+      }))
+
+      // Recogidas activas: solo INGRESADO y EN_RECOGIDA
+      // EN_CUARTO_FRIO va exclusivamente al tab C. Frío
+      const nuevasR = serviciosConCF.filter(s =>
+        ['INGRESADO', 'EN_RECOGIDA'].includes(s.estado)
+      )
+      // Entregas de servicios cancelados no son tareas activas
+      const nuevasE = sinCancelados(entRes.data)
+      if (conPool) {
+        setDisponibles(sinCancelados(poolRes.data))
+        ultimoPoolRef.current = ahora
+      }
+
+      const total = nuevasR.length
+      if (silent && prevCountRef.current !== null && total > prevCountRef.current) {
+        const diff = total - prevCountRef.current
+        setNotif(`¡Nueva recogida asignada! (${diff} nueva${diff > 1 ? 's' : ''})`)
+        playNotifSound()
+        setTimeout(() => setNotif(null), 8000)
+      }
+      prevCountRef.current = total
+
+      setReporteHoy(reporteRes.data?.[0] || null)
       // Usar neveras de la tabla; fallback a defaults si la tabla está vacía
-      const codigosNeveras = (neverasData || [])
+      const codigosNeveras = (neverasRes.data || [])
         .map(n => n.codigo)
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       setNeverasActivas(codigosNeveras.length > 0 ? codigosNeveras : NEVERAS_DEFAULT)
 
+      // Mis registros en cuarto frío (ya registrados con nevera)
+      setMisCF(serviciosConCF.filter(s =>
+        s.estado === 'EN_CUARTO_FRIO' && s.cuarto_frio_data?.nevera_codigo
+      ))
+      setRecogidas(nuevasR)
+      setEntregas(nuevasE)
+
+      // Primer pintado: la pantalla ya tiene todo lo suyo. Lo que sigue corre
+      // por debajo, con la pantalla puesta.
+      if (!silent) setLoading(false)
+      primeraCarga.current = false
+
+      // ── B. Rezagados + gate de recibo (dependen de A) ──
+      const idsRezag = cfRezag
+        .map(cf => cf.servicio_id)
+        .filter(id => !servicios.some(s => s.id === id))
+      let rezagados = []
+      if (idsRezag.length > 0) {
+        const { data: rezData } = await db.from('servicios')
+          .select(SELECT_SVC)
+          .eq('tecnico_id', tecnico.id)
+          .in('id', idsRezag)
+          .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
+          .gte('fecha_ingreso', FECHA_CORTE)
+        const cfBySvc = Object.fromEntries(cfRezag.map(cf => [cf.servicio_id, cf]))
+        rezagados = (rezData || []).map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
+      }
       // Pendientes de registro en C. Frío (seleccionaron nevera aún no) +
       // rezagados: en nevera sin registro aunque el servicio ya avanzó de estado.
       const pendientesCFArr = [
@@ -2033,127 +2095,137 @@ export default function TecnicoApp() {
       }
       setPendientesCF(pendientesCFArr.map(s => ({ ...s, tiene_recibo: conRecibo.has(s.id) })))
 
-      // Mis registros en cuarto frío (ya registrados con nevera)
-      const misCFArr = serviciosConCF.filter(s =>
-        s.estado === 'EN_CUARTO_FRIO' && s.cuarto_frio_data?.nevera_codigo
-      )
-      setMisCF(misCFArr)
+      // ── C. Contadores de las pestañas: en paralelo y solo cuando toca ──
+      if (!conBadges) return
+      ultimoBadgesRef.current = ahora
+      await Promise.all([
+        // ── 6. Badge de comprobantes pendientes (recibos con pago digital sin comprobante) ──
+        // Mismo criterio que la pestaña, o el badge manda a una pantalla que ya
+        // está al día: que falte el `comprobanteUrl` en el jsonb NO significa que
+        // falte la prueba —la oficina la sube colgada del SERVICIO, con
+        // `recibo_id` NULL— ni que siga siendo tarea suya si el servicio ya se
+        // cuadró y cerró con él.
+        (async () => {
+          try {
+            const { data: recs } = await db.from('recibos_tecnico')
+              .select('id, servicio_id, medios_pago, servicios!inner(fecha_ingreso, estado)')
+              .eq('tecnico_id', tecnico.id)
+              .gte('servicios.fecha_ingreso', FECHA_CORTE)
+              .order('created_at', { ascending: false }).limit(300)
+            const candidatos = (recs || []).filter(r =>
+              r.servicios?.estado !== 'CANCELADO' &&
+              Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
+                METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
+            )
+            const idsSvc = [...new Set(candidatos.map(r => r.servicio_id).filter(Boolean))]
+            let n = candidatos.length
+            if (idsSvc.length) {
+              const porSvc = {}, porRec = {}
+              const [comps, items] = await Promise.all([
+                dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
+                  q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO')),
+                dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc),
+              ])
+              for (const c of comps) {
+                if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
+                if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
+              }
+              const cuadrados = new Set(
+                items
+                  .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnico.id)
+                  .map(ci => ci.servicio_id)
+              )
+              n = candidatos.filter(r =>
+                (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0) && !cuadrados.has(r.servicio_id)
+              ).length
+            }
+            setCompPend(n)
+          } catch (_) { /* badge best-effort */ }
+        })(),
 
-      setRecogidas(nuevasR)
-      setEntregas(nuevasE)
+        // ── 6b. Badge de recibos por generar ──
+        // La pestaña Recibos era la única del menú sin contador (`count: 0`): lo
+        // único que de verdad exige acción del técnico —una mascota recogida sin
+        // su recibo— era justo lo que no se anunciaba.
+        //
+        // MISMO CRITERIO Y MISMA VENTANA que la pestaña (`pisoRecibos()`), o el
+        // badge manda a una pantalla que ya está al día — el error que hubo que
+        // corregir en Comprobantes. Por eso tampoco descuenta los cuadrados: la
+        // pestaña los sigue mostrando en "Por generar recibo", y un badge que
+        // cuente distinto de lo que se ve es peor que no tener badge.
+        //
+        // Barato a propósito: pide SOLO ids (sin joins de mascota/plan), que es
+        // lo que separa este conteo de recargar la pestaña entera. Medido el
+        // 17-sep: 96-161 servicios por técnico en la ventana, 0-2 sin recibo.
+        (async () => {
+          try {
+            // `dbTodo` y no `.select()` a secas: el servidor recorta en 1000 filas sin
+            // avisar, y un badge recortado diría "al día" mintiendo. Hoy la ventana
+            // deja 96-161 filas —lejísimos del tope— pero el día que alguien suba
+            // DIAS_RECIBOS_RECIENTES el recorte no daría la cara.
+            const svcVentana = await dbTodo(() => db.from('servicios')
+              .select('id')
+              .eq('tecnico_id', tecnico.id)
+              .in('estado', ESTADOS_RECOGIDO)
+              .gte('fecha_ingreso', pisoRecibos(''))
+              .order('id'))
+            const idsVentana = (svcVentana || []).map(s2 => s2.id)
+            if (idsVentana.length === 0) setRecibosPend(0)
+            else {
+              const conRecibo = new Set(
+                (await dbIn('recibos_tecnico', 'servicio_id', 'servicio_id', idsVentana))
+                  .map(r => r.servicio_id)
+              )
+              setRecibosPend(idsVentana.filter(id => !conRecibo.has(id)).length)
+            }
+          } catch (_) { /* badge best-effort */ }
+        })(),
 
-      // ── 6. Badge de comprobantes pendientes (recibos con pago digital sin comprobante) ──
-      // Mismo criterio que la pestaña, o el badge manda a una pantalla que ya
-      // está al día: que falte el `comprobanteUrl` en el jsonb NO significa que
-      // falte la prueba —la oficina la sube colgada del SERVICIO, con
-      // `recibo_id` NULL— ni que siga siendo tarea suya si el servicio ya se
-      // cuadró y cerró con él.
-      try {
-        const { data: recs } = await db.from('recibos_tecnico')
-          .select('id, servicio_id, medios_pago, servicios!inner(fecha_ingreso, estado)')
-          .eq('tecnico_id', tecnico.id)
-          .gte('servicios.fecha_ingreso', FECHA_CORTE)
-          .order('created_at', { ascending: false }).limit(300)
-        const candidatos = (recs || []).filter(r =>
-          r.servicios?.estado !== 'CANCELADO' &&
-          Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
-            METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
-        )
-        const idsSvc = [...new Set(candidatos.map(r => r.servicio_id).filter(Boolean))]
-        let n = candidatos.length
-        if (idsSvc.length) {
-          const porSvc = {}, porRec = {}
-          for (const c of await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
-            q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))) {
-            if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
-            if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
-          }
-          const cuadrados = new Set(
-            (await dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc))
-              .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnico.id)
-              .map(ci => ci.servicio_id)
-          )
-          n = candidatos.filter(r =>
-            (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0) && !cuadrados.has(r.servicio_id)
-          ).length
-        }
-        setCompPend(n)
-      } catch (_) { /* badge best-effort */ }
+        // ── 7. Cuadres BORRADOR pendientes de la firma del técnico ──
+        // Pendiente = nunca confirmó, o confirmó otra versión (el monto cambió
+        // después — misma regla del chip en Finanzas). Alimenta el badge de
+        // "Mis pagos" y el aviso al abrir la app; sin su firma, gerencia no
+        // puede cerrar el cuadre (migración 038).
+        (async () => {
+          try {
+            const { data: cuadresBor } = await db.from('cuadres_tecnico')
+              .select('id, tecnico_confirmado_en, tecnico_confirmado_monto, dinero_a_entregar')
+              .eq('tecnico_id', tecnico.id).eq('estado', 'BORRADOR')
+            setCuadresPend((cuadresBor || []).filter(c =>
+              !c.tecnico_confirmado_en ||
+              Number(c.tecnico_confirmado_monto) !== Number(c.dinero_a_entregar)
+            ).length)
+          } catch (_) { /* badge best-effort */ }
+        })(),
 
-      // ── 6b. Badge de recibos por generar ──
-      // La pestaña Recibos era la única del menú sin contador (`count: 0`): lo
-      // único que de verdad exige acción del técnico —una mascota recogida sin
-      // su recibo— era justo lo que no se anunciaba.
-      //
-      // MISMO CRITERIO Y MISMA VENTANA que la pestaña (`pisoRecibos()`), o el
-      // badge manda a una pantalla que ya está al día — el error que hubo que
-      // corregir en Comprobantes. Por eso tampoco descuenta los cuadrados: la
-      // pestaña los sigue mostrando en "Por generar recibo", y un badge que
-      // cuente distinto de lo que se ve es peor que no tener badge.
-      //
-      // Barato a propósito: pide SOLO ids (sin joins de mascota/plan), que es
-      // lo que separa este conteo de recargar la pestaña entera. Medido el
-      // 17-sep: 96-161 servicios por técnico en la ventana, 0-2 sin recibo.
-      try {
-        // `dbTodo` y no `.select()` a secas: el servidor recorta en 1000 filas sin
-        // avisar, y un badge recortado diría "al día" mintiendo. Hoy la ventana
-        // deja 96-161 filas —lejísimos del tope— pero el día que alguien suba
-        // DIAS_RECIBOS_RECIENTES el recorte no daría la cara.
-        const svcVentana = await dbTodo(() => db.from('servicios')
-          .select('id')
-          .eq('tecnico_id', tecnico.id)
-          .in('estado', ESTADOS_RECOGIDO)
-          .gte('fecha_ingreso', pisoRecibos(''))
-          .order('id'))
-        const idsVentana = (svcVentana || []).map(s2 => s2.id)
-        if (idsVentana.length === 0) setRecibosPend(0)
-        else {
-          const conRecibo = new Set(
-            (await dbIn('recibos_tecnico', 'servicio_id', 'servicio_id', idsVentana))
-              .map(r => r.servicio_id)
-          )
-          setRecibosPend(idsVentana.filter(id => !conRecibo.has(id)).length)
-        }
-      } catch (_) { /* badge best-effort */ }
-
-      // ── 7. Cuadres BORRADOR pendientes de la firma del técnico ──
-      // Pendiente = nunca confirmó, o confirmó otra versión (el monto cambió
-      // después — misma regla del chip en Finanzas). Alimenta el badge de
-      // "Mis pagos" y el aviso al abrir la app; sin su firma, gerencia no
-      // puede cerrar el cuadre (migración 038).
-      try {
-        const { data: cuadresBor } = await db.from('cuadres_tecnico')
-          .select('id, tecnico_confirmado_en, tecnico_confirmado_monto, dinero_a_entregar')
-          .eq('tecnico_id', tecnico.id).eq('estado', 'BORRADOR')
-        setCuadresPend((cuadresBor || []).filter(c =>
-          !c.tecnico_confirmado_en ||
-          Number(c.tecnico_confirmado_monto) !== Number(c.dinero_a_entregar)
-        ).length)
-      } catch (_) { /* badge best-effort */ }
-
-      // ── 8. Servicios acumulados SIN CUADRAR (migración 071) ──
-      // A partir de UMBRAL_CUADRAR se le avisa al técnico que vaya a cuadrar
-      // cuentas. El conteo lo hace la DB para que sea el mismo que ve el
-      // coordinador al generar el cuadre.
-      try {
-        const { data: pend } = await db.rpc('servicios_sin_cuadrar_tecnico', {
-          p_tecnico_id: tecnico.id,
-          p_desde:      FECHA_CORTE,
-        })
-        if (pend) {
-          setSinCuadrar(pend)
-          // El modal salta UNA vez al día: insistir en cada carga (hay polling)
-          // volvería la app inusable en la calle.
-          if (Number(pend.total) >= UMBRAL_CUADRAR) {
-            try {
-              const clave = `orbit_alerta_cuadrar_${tecnico.id}`
-              if (localStorage.getItem(clave) !== hoyLocalISO()) setAlertaCuadrar(true)
-            } catch (_) { setAlertaCuadrar(true) }
-          }
-        }
-      } catch (_) { /* aviso best-effort: nunca bloquea la operación */ }
+        // ── 8. Servicios acumulados SIN CUADRAR (migración 071) ──
+        // A partir de UMBRAL_CUADRAR se le avisa al técnico que vaya a cuadrar
+        // cuentas. El conteo lo hace la DB para que sea el mismo que ve el
+        // coordinador al generar el cuadre. Es la consulta más lenta de la app
+        // (270 ms medidos): por eso va aquí y no en cada sondeo.
+        (async () => {
+          try {
+            const { data: pend } = await db.rpc('servicios_sin_cuadrar_tecnico', {
+              p_tecnico_id: tecnico.id,
+              p_desde:      FECHA_CORTE,
+            })
+            if (pend) {
+              setSinCuadrar(pend)
+              // El modal salta UNA vez al día: insistir en cada carga (hay polling)
+              // volvería la app inusable en la calle.
+              if (Number(pend.total) >= UMBRAL_CUADRAR) {
+                try {
+                  const clave = `orbit_alerta_cuadrar_${tecnico.id}`
+                  if (localStorage.getItem(clave) !== hoyLocalISO()) setAlertaCuadrar(true)
+                } catch (_) { setAlertaCuadrar(true) }
+              }
+            }
+          } catch (_) { /* aviso best-effort: nunca bloquea la operación */ }
+        })(),
+      ])
     } finally {
       if (!silent) setLoading(false)
+      primeraCarga.current = false
     }
   })
 
@@ -2172,17 +2244,23 @@ export default function TecnicoApp() {
       .subscribe()
     // El pool es compartido: si un compañero toma una entrega, debe desaparecer
     // de mi lista sin esperar al polling (si no, la toco y me sale "ya la tomaron").
+    // Solo refresca entregas: este canal no tiene filtro y dispara para todos.
     const canalEnt = db
       .channel(`tecnico-entregas-${tecnico.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' },
-        () => { cargar(true) })
+        () => { cargarEntregas() })
       .subscribe()
     return () => {
       clearInterval(id)
       db.removeChannel(canal)
       db.removeChannel(canalEnt)
     }
-  }, [tecnico, cargar])
+  }, [tecnico, cargar, cargarEntregas])
+
+  // El pool ya no viaja en cada sondeo: al abrir la pestaña se pide fresco.
+  useEffect(() => {
+    if (tab === 'entregas') cargarEntregas()
+  }, [tab, cargarEntregas])
 
   // Al volver a C. Frío, refrescar el estado del recibo (el gate "no entra sin
   // recibo" es por DB): un recibo en PAGO PENDIENTE no toca `servicios`, así que
