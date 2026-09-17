@@ -6838,11 +6838,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '12px', rowGap: '6px', marginBottom: '10px', fontSize: '11px' }}>
-          <RField label="Mascota" value={form.mascota_nombre} onChange={v => f('mascota_nombre',v)} />
-          <RField label="Especie" value={form.especie} onChange={v => f('especie',v)} />
-          <RField label="Propietario" value={form.propietario} onChange={v => f('propietario',v)} span2 />
-          {tipoRecibo !== 'VETERINARIA' && <RField label="Teléfono" value={form.telefono} onChange={v => f('telefono',v)} />}
-          <RField label="Plan" value={form.servicio} onChange={v => f('servicio',v)} span2 />
+          {/* Datos de la mascota, del propietario y del plan: se MUESTRAN, no se
+              editan. Salen del servicio (CAMPOS_DEL_SERVICIO) y el recibo es el
+              documento que ve la familia: si el técnico los reescribe aquí, el
+              PDF y el WhatsApp dicen algo distinto de lo que hay en Orbit y no
+              queda rastro del cambio. Si están mal, los corrige el coordinador
+              en el servicio y el recibo los toma al reabrirlo. */}
+          <RField label="Mascota" value={form.mascota_nombre} soloLectura />
+          <RField label="Especie" value={form.especie} soloLectura />
+          <RField label="Propietario" value={form.propietario} soloLectura span2 />
+          {tipoRecibo !== 'VETERINARIA' && <RField label="Teléfono" value={form.telefono} soloLectura />}
+          <RField label="Plan" value={form.servicio} soloLectura span2 />
         </div>
 
         {/* Cajas de valor */}
@@ -7420,10 +7426,26 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 }
 
 // ─── RECIBO FIELD — solo inline styles para html2canvas (sin Tailwind/oklch) ─
-function RField({ label, value, onChange, type = 'text', highlight, span2 }) {
+// `soloLectura` no pinta <input>: el dato no se puede tocar ni con el teclado
+// del celular ni con autocompletado, y no hay onChange que pueda dispararse.
+function RField({ label, value, onChange, type = 'text', highlight, span2, soloLectura }) {
   return (
     <div style={span2 ? { gridColumn: 'span 2' } : {}}>
       <div style={{ fontSize: '9px', fontWeight: 'bold', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '2px' }}>{label}</div>
+      {soloLectura ? (
+        <div
+          style={{
+            width: '100%', padding: '6px 8px', borderRadius: '8px',
+            border: '1px solid #EEF0F3', background: '#F3F4F6',
+            fontSize: '12px', fontWeight: '600', color: '#374151',
+            boxSizing: 'border-box', minHeight: '28px',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+          title={value || ''}
+        >
+          {value || '—'}
+        </div>
+      ) : (
       <input
         type={type}
         value={value}
@@ -7436,6 +7458,7 @@ function RField({ label, value, onChange, type = 'text', highlight, span2 }) {
           outline: 'none', boxSizing: 'border-box',
         }}
       />
+      )}
     </div>
   )
 }
