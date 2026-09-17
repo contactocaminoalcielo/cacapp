@@ -6,6 +6,7 @@ import { ESTADO_COLOR, ESTADO_LABEL } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { eleccionDeServicio, ESTADO_ELECCION } from '@/lib/plantas'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
+import BitacoraTecnico from '@/components/servicio/BitacoraTecnico'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
@@ -414,6 +415,11 @@ export default function FichaServicio({ servicioId, onClose }) {
 
           {/* Recibos + comprobantes (cuál afecta Finanzas) */}
           <RecibosServicio servicioId={servicioId} onCambio={() => setRecarga(n => n + 1)} />
+
+          {/* Lo que el técnico dejó dicho sobre esta mascota al cerrar su recibo.
+              Mismo componente que el modal del Kanban: si se escribieran dos
+              veces, una pantalla mostraría el ajuste como aplicado y la otra no. */}
+          <BitacoraTecnico servicioId={servicioId} />
 
           {/* Evidencias */}
           {evidencias.length > 0 && (
