@@ -5209,6 +5209,16 @@ function ComprobanteTab({ tecnico, onCount }) {
   )
 }
 
+// ¿Son el mismo celular? Se comparan los ÚLTIMOS 10 DÍGITOS: el mismo número
+// está guardado como `+573001234567`, `573001234567` y `300 123 4567` según
+// quién lo haya digitado, y comparar las cadenas tal cual daría "distintos".
+// Menos de 10 dígitos no alcanza a identificar a nadie: se responde que no.
+function mismoCelular(a, b) {
+  const soloDigitos = v => String(v || '').replace(/\D/g, '').slice(-10)
+  const x = soloDigitos(a)
+  return x.length === 10 && x === soloDigitos(b)
+}
+
 // ─── RECIBO FORM ────────────────────────────────────────────────────────────
 function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onVolver, onGuardado }) {
   const mascota = svcData.mascotas
@@ -5571,6 +5581,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [pagoRegistrado,  setPagoRegistrado]  = useState(!!reciboExistente)
   const [reciboId,        setReciboId]        = useState(reciboExistente?.id || null)
   const [err, setErr]               = useState('')
+  // Guarda de privacidad: cuando el número del aliado es el MISMO que el de la
+  // familia, el envío del recibo de veterinaria se detiene aquí y pregunta.
+  // `null` = no hay nada que preguntar. Ver `enviarPorWA`.
+  const [confirmarEnvioVet, setConfirmarEnvioVet] = useState(null)
   // Si la subida se reanuda sola tras un reinicio del teléfono, mostramos aviso
   const [reanudando, setReanudando] = useState(false)
   // Aviso flotante FIJO arriba (visible sin importar el scroll) del estado del
@@ -6384,7 +6398,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Cierra el recibo (vuelve a la tarjeta de recogida)
   function cerrar() { if (onVolver) onVolver() }
 
-  async function enviarPorWA() {
+  // `saltarGuardaVet` lo pone SOLO el botón de confirmación del modal de abajo,
+  // cuando el técnico ya respondió que el número es el de la clínica.
+  async function enviarPorWA(saltarGuardaVet = false) {
     if (!guardado) { setErr('Guarda el recibo primero.'); return }
 
     // ── Número y nombre del destinatario según tipo de recibo ──────────────
@@ -6394,6 +6410,29 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       nombreDestino = aliado?.contacto_nombre || aliado?.nombre || ''
       msgTipo       = 'VETERINARIA'
       if (!waDestino) { setErr('La veterinaria no tiene número de WhatsApp registrado.'); return }
+
+      // ── Guarda de privacidad ───────────────────────────────────────────
+      // El recibo de veterinaria enseña la comisión y el descuento, o sea la
+      // negociación con la clínica. Si el número del aliado es EL MISMO que el
+      // de la familia, no hay forma de saber de quién es ese teléfono: puede
+      // ser la clínica (a la familia le registraron el número de la vet, que es
+      // lo normal cuando la clínica lleva la mascota) o puede ser el celular de
+      // la familia mal cargado en la ficha del aliado. En el segundo caso le
+      // estaríamos mandando a la familia lo que le cobramos a la clínica.
+      //
+      // Medido el 17-sep-2026: pasa en 174 de los 708 recibos de veterinaria de
+      // los últimos 90 días (94 números distintos). Bloquearlo del todo sería
+      // frenar una cuarta parte de los envíos —muchos son legítimos, la
+      // "familia" ES la clínica—, así que se PREGUNTA en vez de prohibir.
+      if (!saltarGuardaVet && mismoCelular(waDestino, cliente?.whatsapp || cliente?.telefono)) {
+        setErr('')
+        setConfirmarEnvioVet({
+          destino: waDestino,
+          clinica: aliado?.nombre || 'la veterinaria',
+          familia: `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim() || form.propietario || 'la familia',
+        })
+        return
+      }
     } else {
       waDestino     = cliente?.whatsapp || cliente?.telefono
       nombreDestino = form.propietario
@@ -7278,6 +7317,89 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           ← Volver a la lista de recibos
         </button>
       </div>
+
+      {/* ── ¿De quién es este número? ────────────────────────────────────────
+          El recibo de veterinaria lleva la comisión. Si el teléfono del aliado
+          es el mismo que el de la familia, esto frena el envío y le pregunta al
+          técnico de quién es, en vez de mandarlo y averiguarlo después.
+          No se cierra con clic afuera: la pregunta hay que responderla. */}
+      {confirmarEnvioVet && (
+        <div className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center"
+          style={{ background: 'rgba(11,29,79,0.62)' }}>
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] overflow-y-auto">
+
+            <div className="px-5 pt-5 pb-4 text-center" style={{ background: '#FEF2F2' }}>
+              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full"
+                style={{ background: '#FECACA' }}>
+                <AlertCircle size={24} style={{ color: '#B91C1C' }} />
+              </div>
+              <p className="text-[18px] font-extrabold leading-tight" style={{ color: '#991B1B' }}>
+                ¿De quién es este número?
+              </p>
+              <p className="text-[12px] mt-1.5 leading-snug" style={{ color: '#B91C1C' }}>
+                Este recibo muestra <b>la comisión que le cobramos a la clínica</b>.
+                Si el número es de la familia, no puede recibirlo.
+              </p>
+            </div>
+
+            <div className="px-5 py-4 space-y-3">
+              <div className="px-4 py-3 rounded-2xl text-center" style={{ background: '#F9FAFB' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                  El recibo saldría a
+                </p>
+                <p className="text-[22px] font-extrabold text-gray-900 leading-tight mt-0.5">
+                  {confirmarEnvioVet.destino}
+                </p>
+              </div>
+
+              <p className="text-[12px] leading-snug text-gray-600">
+                Ese mismo número está guardado en las dos fichas:
+              </p>
+              <div className="rounded-2xl overflow-hidden" style={{ border: '1.5px solid #E5E7EB' }}>
+                <div className="px-4 py-2.5 flex items-center justify-between gap-3"
+                  style={{ background: '#F0FDF4' }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#15803D' }}>
+                    🏥 Veterinaria
+                  </span>
+                  <span className="text-[13px] font-bold text-gray-800 truncate">{confirmarEnvioVet.clinica}</span>
+                </div>
+                <div className="px-4 py-2.5 flex items-center justify-between gap-3 border-t"
+                  style={{ background: '#FEF2F2', borderColor: '#E5E7EB' }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#B91C1C' }}>
+                    👤 Familia
+                  </span>
+                  <span className="text-[13px] font-bold text-gray-800 truncate">{confirmarEnvioVet.familia}</span>
+                </div>
+              </div>
+
+              <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
+                style={{ background: '#FFFBEB', color: '#92400E' }}>
+                Si no estás seguro, <b>cancela y avisa a coordinación</b>. El recibo ya quedó
+                guardado — no se pierde nada por no enviarlo ahora.
+              </p>
+            </div>
+
+            <div className="px-5 pb-6 pt-1 space-y-2">
+              <button
+                onClick={() => { setConfirmarEnvioVet(null); enviarPorWA(true) }}
+                disabled={generando}
+                className="w-full py-4 rounded-2xl text-[15px] font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.99] transition-transform"
+                style={{ background: '#15803D' }}>
+                <CheckCircle size={18} />
+                Es de {confirmarEnvioVet.clinica} — enviar
+              </button>
+              <button
+                onClick={() => setConfirmarEnvioVet(null)}
+                disabled={generando}
+                className="w-full py-3.5 rounded-2xl text-[14px] font-bold text-gray-700 border disabled:opacity-60"
+                style={{ borderColor: '#E5E7EB' }}>
+                Cancelar — no enviar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Confirmación del cobro antes de guardar ──────────────────────────
           Última pantalla donde el técnico puede corregir: apenas guarda, el
