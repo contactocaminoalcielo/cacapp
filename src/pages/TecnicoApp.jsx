@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { db, dbIn, dbTodo } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
-import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO } from '@/lib/utils'
+import { petEmoji, fmt, waLink, calcularEstadoVet, hoyLocalISO, parseDate } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion } from '@/lib/notificaciones'
 import {
@@ -4414,6 +4414,101 @@ function SeccionRecibos({ color, emoji, titulo, lista, abierta, onToggle, onSele
   )
 }
 
+// Cuántos días atrás arranca la lista de recibos. Antes cargaba TODO desde el
+// corte (9-jun): a los tres meses eran cientos de servicios, cada uno con sus
+// joins, y encima tres consultas en lotes por recibos, cuadres y comprobantes.
+// El técnico trabaja sobre lo de las últimas semanas; lo viejo se pide aparte
+// con "Buscar en el historial", que va a la DB por el término exacto.
+const DIAS_RECIBOS_RECIENTES = 45
+
+// Piso por defecto de la lista: hace DIAS_RECIBOS_RECIENTES días, nunca antes
+// del corte. Si el técnico pone su propio `desde`, manda el suyo.
+function pisoRecibos(desde) {
+  if (desde) return desde > FECHA_CORTE ? desde : FECHA_CORTE
+  // `fecha_ingreso` es DATE: se resta en hora LOCAL. Con `toISOString()` sobre
+  // un `new Date()` la cuenta se hace en UTC y después de las 7 p.m. en Bogotá
+  // el piso se corre un día — justo el error de siempre con las columnas DATE.
+  const d = parseDate(hoyLocalISO())
+  d.setDate(d.getDate() - DIAS_RECIBOS_RECIENTES)
+  const piso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return piso > FECHA_CORTE ? piso : FECHA_CORTE
+}
+
+// Toma servicios crudos y les cuelga lo que decide en qué sección caen:
+// sus recibos, si ya se cuadraron y si hay prueba subida por otra vía.
+// Vive fuera del componente porque lo usan los DOS caminos —la lista normal y
+// la búsqueda en el historial— y tienen que clasificar con la misma regla: si
+// divergen, el mismo servicio sale archivado en una y pendiente en la otra.
+async function hidratarRecibos(svcs, tecnicoId) {
+  const ids = (svcs || []).map(s => s.id)
+  const porSvc = {}
+  const cuadrados = new Set()
+  const conPrueba = new Set()
+  if (ids.length) {
+    // Query separado + merge client-side (el join inverso falla en silencio).
+    // EN LOTES: con cientos de ids la URL de .in() pasa de ~4 KB y el upstream
+    // la corta sin lanzar (502) → sin recibos, TODO caería en "por generar".
+    const recs = await dbIn(
+      'recibos_tecnico',
+      'id, servicio_id, tipo, numero_recibo, valor_cobrado, medios_pago, datos_form, created_at',
+      'servicio_id', ids,
+      q => q.order('created_at', { ascending: true }),
+    )
+    recs.forEach(r => {
+      ;(porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
+    })
+    // Servicios ya cuadrados y CERRADOS: la plata de ese servicio ya se
+    // entregó y el cuadre no se puede volver a tocar. Es la ÚNICA señal
+    // honesta de "esto ya no es asunto del técnico" — misma regla que el
+    // candado de la bitácora. En lotes por el 414 de .in() con cientos de
+    // ids; si falla, no se archiva nada (se ve de más, nunca de menos).
+    try {
+      const lockRows = await dbIn(
+        'cuadre_items',
+        'servicio_id, cuadre:cuadre_id(estado, tecnico_id)',
+        'servicio_id', ids,
+      )
+      lockRows
+        .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnicoId)
+        .forEach(r => cuadrados.add(r.servicio_id))
+    } catch (_) { /* sin candado: el servicio sigue visible */ }
+    // Comprobantes que el recibo del técnico NO ve: los que sube la oficina
+    // cuelgan del SERVICIO con `recibo_id` NULL. Hay prueba "por otra vía"
+    // cuando el servicio tiene más comprobantes activos que los atados a
+    // sus propios recibos — mismo criterio que la pestaña Comprobantes,
+    // para que las dos pantallas no se contradigan.
+    try {
+      const porRecibo = {}, porServicio = {}
+      for (const c of await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', ids,
+        q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))) {
+        if (c.servicio_id) porServicio[c.servicio_id] = (porServicio[c.servicio_id] || 0) + 1
+        if (c.recibo_id)   porRecibo[c.recibo_id]     = (porRecibo[c.recibo_id]     || 0) + 1
+      }
+      for (const sid of ids) {
+        const propios = (porSvc[sid] || []).reduce((n, r) => n + (porRecibo[r.id] || 0), 0)
+        if ((porServicio[sid] || 0) > propios) conPrueba.add(sid)
+      }
+    } catch (_) { /* sin esto el chip se ve de más, nunca de menos */ }
+  }
+  return (svcs || []).map(svc => {
+    const estadoRecibo = estadoReciboDe(porSvc[svc.id], {
+      conPrueba: conPrueba.has(svc.id),
+      cuadrado:  cuadrados.has(svc.id),
+    })
+    const saldo = Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0))
+    return {
+      svc,
+      recibos: porSvc[svc.id] || [],
+      estadoRecibo,
+      // Archivado ≠ "recibo completo". Un recibo COMPLETO puede tener saldo
+      // vivo (el valor subió después de cobrar: adicional vendido aparte,
+      // recálculo por peso) o estar sin cuadrar. Se archiva solo cuando las
+      // tres cosas se cumplen: recibo hecho, nada por cobrar y cuadre cerrado.
+      archivado: estadoRecibo === 'COMPLETO' && saldo <= 0 && cuadrados.has(svc.id),
+    }
+  })
+}
+
 function ReciboTab({ tecnico }) {
   // El módulo Recibos es independiente del flujo de recogida: consulta la DB
   // directamente (servicios ya recogidos del técnico + sus recibos guardados)
@@ -4426,17 +4521,25 @@ function ReciboTab({ tecnico }) {
   const [svcData,     setSvcData]     = useState(null)
   const [reciboExistente, setReciboExistente] = useState(null)
   const [loading,     setLoading]     = useState(false)
-  const [desde,       setDesde]       = useState('')   // filtro de rango (vacío = desde el corte)
+  const [desde,       setDesde]       = useState('')   // filtro de rango (vacío = últimos 45 días)
   const [hasta,       setHasta]       = useState('')
+  // Resultados traídos del historial viejo: viven aparte de `items` para que
+  // recargar la lista no los arrastre y para poder decir cuántos se trajeron.
+  const [hallazgos,       setHallazgos]       = useState([])
+  const [buscandoDb,      setBuscandoDb]      = useState(false)
+  const [buscadoTermino,  setBuscadoTermino]  = useState('')
   const restauradoRef                 = useRef(false)
 
   const cargarLista = useCallback(async () => {
     if (!tecnico?.id) return
     setCargando(true); setListErr('')
     try {
-      // El piso siempre es el corte (9-jun); el filtro solo lo sube. El tope de
-      // 60 escondía junio ("solo desde los más recientes") → lo subimos a 500 y
-      // dejamos que el rango de fechas acote.
+      // Arranca en los últimos DIAS_RECIBOS_RECIENTES días, no en el corte: eso
+      // es lo que el técnico tiene entre manos. Lo anterior sigue existiendo y
+      // se alcanza por dos puertas explícitas —el filtro de fechas ("Todo"
+      // vuelve al corte) y "Buscar en el historial"—, así que nada se pierde:
+      // solo deja de cargarse sin que nadie lo haya pedido.
+      const piso = pisoRecibos(desde)
       let q = db.from('servicios')
         .select(`
           id, estado, estado_pago, valor_total, valor_pagado, fecha_ingreso,
@@ -4446,85 +4549,88 @@ function ReciboTab({ tecnico }) {
         `)
         .eq('tecnico_id', tecnico.id)
         .in('estado', ESTADOS_RECOGIDO)
-        .gte('fecha_ingreso', desde && desde > FECHA_CORTE ? desde : FECHA_CORTE)
+        .gte('fecha_ingreso', piso)
       if (hasta) q = q.lte('fecha_ingreso', hasta)
       const { data: svcs, error } = await q
         .order('fecha_ingreso', { ascending: false })
         .limit(500)
       if (error) throw error
-      const ids = (svcs || []).map(s => s.id)
-      const porSvc = {}
-      const cuadrados = new Set()
-      const conPrueba = new Set()
-      if (ids.length) {
-        // Query separado + merge client-side (el join inverso falla en silencio).
-        // EN LOTES: con cientos de ids la URL de .in() pasa de ~4 KB y el upstream
-        // la corta sin lanzar (502) → sin recibos, TODO caería en "por generar".
-        const recs = await dbIn(
-          'recibos_tecnico',
-          'id, servicio_id, tipo, numero_recibo, valor_cobrado, medios_pago, datos_form, created_at',
-          'servicio_id', ids,
-          q => q.order('created_at', { ascending: true }),
-        )
-        recs.forEach(r => {
-          ;(porSvc[r.servicio_id] = porSvc[r.servicio_id] || []).push(r)
-        })
-        // Servicios ya cuadrados y CERRADOS: la plata de ese servicio ya se
-        // entregó y el cuadre no se puede volver a tocar. Es la ÚNICA señal
-        // honesta de "esto ya no es asunto del técnico" — misma regla que el
-        // candado de la bitácora. En lotes por el 414 de .in() con cientos de
-        // ids; si falla, no se archiva nada (se ve de más, nunca de menos).
-        try {
-          const lockRows = await dbIn(
-            'cuadre_items',
-            'servicio_id, cuadre:cuadre_id(estado, tecnico_id)',
-            'servicio_id', ids,
-          )
-          lockRows
-            .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
-            .forEach(r => cuadrados.add(r.servicio_id))
-        } catch (_) { /* sin candado: el servicio sigue visible */ }
-        // Comprobantes que el recibo del técnico NO ve: los que sube la oficina
-        // cuelgan del SERVICIO con `recibo_id` NULL. Hay prueba "por otra vía"
-        // cuando el servicio tiene más comprobantes activos que los atados a
-        // sus propios recibos — mismo criterio que la pestaña Comprobantes,
-        // para que las dos pantallas no se contradigan.
-        try {
-          const porRecibo = {}, porServicio = {}
-          for (const c of await dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', ids,
-            q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO'))) {
-            if (c.servicio_id) porServicio[c.servicio_id] = (porServicio[c.servicio_id] || 0) + 1
-            if (c.recibo_id)   porRecibo[c.recibo_id]     = (porRecibo[c.recibo_id]     || 0) + 1
-          }
-          for (const sid of ids) {
-            const propios = (porSvc[sid] || []).reduce((n, r) => n + (porRecibo[r.id] || 0), 0)
-            if ((porServicio[sid] || 0) > propios) conPrueba.add(sid)
-          }
-        } catch (_) { /* sin esto el chip se ve de más, nunca de menos */ }
-      }
-      setItems((svcs || []).map(svc => {
-        const estadoRecibo = estadoReciboDe(porSvc[svc.id], {
-          conPrueba: conPrueba.has(svc.id),
-          cuadrado:  cuadrados.has(svc.id),
-        })
-        const saldo = Math.max(0, (svc.valor_total || 0) - (svc.valor_pagado || 0))
-        return {
-          svc,
-          recibos: porSvc[svc.id] || [],
-          estadoRecibo,
-          // Archivado ≠ "recibo completo". Un recibo COMPLETO puede tener saldo
-          // vivo (el valor subió después de cobrar: adicional vendido aparte,
-          // recálculo por peso) o estar sin cuadrar. Se archiva solo cuando las
-          // tres cosas se cumplen: recibo hecho, nada por cobrar y cuadre cerrado.
-          archivado: estadoRecibo === 'COMPLETO' && saldo <= 0 && cuadrados.has(svc.id),
-        }
-      }))
+      setItems(await hidratarRecibos(svcs, tecnico.id))
     } catch (e) {
       setListErr(e.message || 'Error al cargar la lista de recibos')
     } finally { setCargando(false) }
   }, [tecnico?.id, desde, hasta])
 
   useEffect(() => { cargarLista() }, [cargarLista])
+
+  // ── Buscar en el historial (fuera de la ventana cargada) ──────────────────
+  // El buscador de arriba filtra lo que ya está en pantalla. Este botón va a la
+  // DB por el término, sin piso de fecha, y trae SOLO lo que coincide. Es la
+  // puerta a lo viejo: se paga una consulta cuando alguien la pide, en vez de
+  // arrastrar meses de servicios en cada apertura de la pestaña.
+  //
+  // ⚠️ `ilike` compara con tildes; el filtro en memoria las ignora. Por eso se
+  // busca por el término tal cual Y sin tildes: "MUÑECA" y "muneca" encuentran.
+  async function buscarHistorial() {
+    const termino = busqueda.trim()
+    if (termino.length < 3 || !tecnico?.id) return
+    setBuscandoDb(true); setListErr('')
+    try {
+      const variantes = [...new Set([termino, termino.normalize('NFD').replace(/[\u0300-\u036f]/g, '')])]
+      const ids = new Set()
+
+      // 1. Por número de recibo — cómo pregunta coordinación ("el recibo 0456").
+      for (const t of variantes) {
+        const { data } = await db.from('recibos_tecnico')
+          .select('servicio_id')
+          .eq('tecnico_id', tecnico.id)
+          .ilike('numero_recibo', `%${t}%`)
+          // Sin `.order()` el tope de 40 recorta filas al azar: si un término
+          // ancho pega en más, que ganen los recibos más recientes.
+          .order('created_at', { ascending: false })
+          .limit(40)
+        for (const r of (data || [])) if (r.servicio_id) ids.add(r.servicio_id)
+      }
+
+      // 2. Por nombre de mascota — cómo pregunta la familia. `!inner` es
+      //    obligatorio: sin él PostgREST ignora el filtro sobre el embebido y
+      //    devuelve TODOS los servicios del técnico como si todos coincidieran.
+      for (const t of variantes) {
+        const { data } = await db.from('servicios')
+          .select('id, mascotas!inner(nombre)')
+          .eq('tecnico_id', tecnico.id)
+          .in('estado', ESTADOS_RECOGIDO)
+          .gte('fecha_ingreso', FECHA_CORTE)
+          .ilike('mascotas.nombre', `%${t}%`)
+          .order('fecha_ingreso', { ascending: false })
+          .limit(40)
+        for (const s of (data || [])) ids.add(s.id)
+      }
+
+      // Lo que ya está en pantalla no se repite abajo.
+      const yaVisibles = new Set(items.map(i => i.svc.id))
+      const nuevos = [...ids].filter(id => !yaVisibles.has(id))
+      if (nuevos.length === 0) { setHallazgos([]); setBuscadoTermino(termino); return }
+
+      const svcs = await dbIn(
+        'servicios',
+        `id, estado, estado_pago, valor_total, valor_pagado, fecha_ingreso,
+         mascotas:mascota_id ( nombre, especies(nombre), clientes:cliente_id(nombre, apellido) ),
+         planes:plan_id ( nombre ),
+         recogidas ( fecha_realizada, hora_realizada, hora_llegada )`,
+        'id', nuevos,
+        // Mismo universo que la lista. Sin esto, el camino por número de recibo
+        // podía traer un servicio CANCELADO o anterior al corte, que la pantalla
+        // nunca muestra: el técnico vería una tarjeta que no existe en su flujo.
+        q => q.in('estado', ESTADOS_RECOGIDO).gte('fecha_ingreso', FECHA_CORTE),
+      )
+      const ordenados = svcs.sort((a, b) => String(b.fecha_ingreso || '').localeCompare(String(a.fecha_ingreso || '')))
+      setHallazgos(await hidratarRecibos(ordenados, tecnico.id))
+      setBuscadoTermino(termino)
+    } catch (e) {
+      setListErr('No se pudo buscar en el historial: ' + (e.message || 'error de conexión'))
+    } finally { setBuscandoDb(false) }
+  }
 
   async function seleccionar(item) {
     const svc = item.svc
@@ -4584,6 +4690,11 @@ function ReciboTab({ tecnico }) {
     try { localStorage.removeItem('tecnico_recibo_sel') } catch (_) {}
     setServicioSel(null); setSvcData(null); setReciboExistente(null)
     cargarLista()
+    // El recibo pudo cambiar mientras estaba abierto (se generó el de la
+    // veterinaria, se subió el comprobante). Si venía del historial, esa
+    // tarjeta vive fuera de `items` y `cargarLista` no la toca: se repite la
+    // consulta para que no quede mostrando el estado viejo.
+    if (buscadoTermino) buscarHistorial()
   }
 
   // Si la PWA se reinició con un recibo abierto, volver a abrirlo solo:
@@ -4595,7 +4706,7 @@ function ReciboTab({ tecnico }) {
     try {
       const id = localStorage.getItem('tecnico_recibo_sel')
       if (!id) return
-      const item = items.find(i => i.svc.id === id)
+      const item = [...items, ...hallazgos].find(i => i.svc.id === id)
       if (item) seleccionar(item)
       else localStorage.removeItem('tecnico_recibo_sel')
     } catch (_) {}
@@ -4605,14 +4716,24 @@ function ReciboTab({ tecnico }) {
   if (!servicioSel || !svcData) {
     const q         = normalizar(busqueda.trim())
     const filtrados = items.filter(i => coincideRecibo(i, q))
+    const termino   = busqueda.trim()
+    // Los hallazgos son de un término concreto: si el técnico ya escribió otra
+    // cosa, dejan de mostrarse solos en vez de quedar mintiendo debajo.
+    const yaEnLista = new Set(items.map(i => i.svc.id))
+    const delHistorial = buscadoTermino === termino
+      ? hallazgos.filter(i => !yaEnLista.has(i.svc.id))
+      : []
+    // El botón aparece cuando hay término y la ventana cargada no alcanza:
+    // buscar en la DB por algo que ya está en pantalla no aporta nada.
+    const ofrecerHistorial = termino.length >= 3 && buscadoTermino !== termino
     const GRUPOS = [
       { key: 'PENDIENTE_COMPROBANTE', color: '#EA580C', emoji: '⏳', titulo: 'Comprobante pendiente' },
       { key: 'PENDIENTE_RECIBO',      color: '#D97706', emoji: '📄', titulo: 'Por generar recibo' },
       { key: 'PAGO_PENDIENTE',        color: '#854D0E', emoji: '💤', titulo: 'Pago pendiente' },
       { key: 'COMPLETO',              color: '#16A34A', emoji: '✅', titulo: 'Recibo completo' },
-      // Cerrados: recibo hecho, sin saldo y cuadre CERRADO. Siguen cargados (la
-      // búsqueda es en memoria y tiene que encontrarlos por No. de recibo) pero
-      // salen del camino: la sección va de última y arranca colapsada.
+      // Cerrados: recibo hecho, sin saldo y cuadre CERRADO. Dentro de la ventana
+      // siguen cargados —la búsqueda es en memoria y tiene que encontrarlos—
+      // pero salen del camino: van de últimos y la sección arranca colapsada.
       { key: 'ARCHIVADO',             color: '#6B7280', emoji: '🗃️', titulo: 'Archivados · ya cuadrados' },
     ]
     const hayPendientes = items.some(i =>
@@ -4620,8 +4741,17 @@ function ReciboTab({ tecnico }) {
     return (
       <div>
         <div className="flex items-center justify-between mb-3">
-          <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
-            📄 Recibos de tus servicios recogidos
+          <div>
+            <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+              📄 Recibos de tus servicios recogidos
+            </div>
+            {/* Decir SIEMPRE qué ventana se está viendo: una lista recortada que
+                no avisa se lee como "no existe" y manda a buscar por otro lado. */}
+            <div className="text-[10px] text-gray-400 mt-0.5">
+              {(desde || hasta)
+                ? `Rango: ${desde || 'el corte'} → ${hasta || 'hoy'}`
+                : `Últimos ${DIAS_RECIBOS_RECIENTES} días · lo anterior, buscándolo`}
+            </div>
           </div>
           <button onClick={cargarLista} disabled={cargando}
             className="text-[11px] font-bold px-2.5 py-1 rounded-lg disabled:opacity-50"
@@ -4647,6 +4777,16 @@ function ReciboTab({ tecnico }) {
 
         <FiltroFechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} className="mb-3" />
 
+        {/* Puerta a lo viejo. Va pegada al buscador porque es su continuación:
+            "no lo encuentro arriba" → una consulta a la DB por ese término. */}
+        {(ofrecerHistorial || buscandoDb) && (
+          <button onClick={buscarHistorial} disabled={buscandoDb}
+            className="w-full mb-3 py-2.5 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+            style={{ background: '#F3E8FF', color: '#7C3AED' }}>
+            {buscandoDb ? 'Buscando en el historial…' : `🔎 Buscar "${termino}" en todo el historial`}
+          </button>
+        )}
+
         {listErr && (
           <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
             style={{ background: '#FEE2E2', color: '#991B1B' }}>
@@ -4656,10 +4796,12 @@ function ReciboTab({ tecnico }) {
 
         {cargando && items.length === 0 ? (
           <div className="flex justify-center py-10"><div className="spinner" /></div>
-        ) : items.length === 0 ? (
+        ) : (items.length === 0 && delHistorial.length === 0) ? (
           <EmptyState icon="📄"
-            texto={(desde || hasta) ? 'Sin servicios en ese rango' : 'Sin servicios recogidos'}
-            sub={(desde || hasta) ? 'Ajusta o quita el filtro de fechas (por ejemplo "Todo") para ver junio y meses anteriores.' : 'Cuando completes una recogida, el servicio aparecerá aquí para generar su recibo.'} />
+            texto={(desde || hasta) ? 'Sin servicios en ese rango' : `Sin servicios en los últimos ${DIAS_RECIBOS_RECIENTES} días`}
+            sub={(desde || hasta)
+              ? 'Ajusta o quita el filtro de fechas (por ejemplo "Todo") para ver junio y meses anteriores.'
+              : 'Cuando completes una recogida, el servicio aparecerá aquí. Para un recibo más viejo, escribe el nombre o el número y búscalo en el historial.'} />
         ) : (
           <>
             {!hayPendientes && !q && (
@@ -4669,8 +4811,14 @@ function ReciboTab({ tecnico }) {
                 <span className="text-[12px] font-bold text-green-800">Al día — sin recibos pendientes</span>
               </div>
             )}
-            {q && filtrados.length === 0 && (
-              <div className="text-center py-8 text-gray-400 text-sm">Sin resultados para "{busqueda.trim()}"</div>
+            {q && filtrados.length === 0 && delHistorial.length === 0 && (
+              <div className="text-center py-8 text-gray-400 text-sm">
+                Sin resultados para "{termino}"
+                {ofrecerHistorial && <span className="block text-[11px] mt-1">Puede estar más atrás: búscalo en el historial 👆</span>}
+                {buscadoTermino === termino && !buscandoDb && (
+                  <span className="block text-[11px] mt-1">Tampoco está en el historial.</span>
+                )}
+              </div>
             )}
             {/* Secciones colapsables por estado; con búsqueda activa se despliegan solas */}
             {GRUPOS.map(g => (
@@ -4682,6 +4830,26 @@ function ReciboTab({ tecnico }) {
                 disabled={loading}
               />
             ))}
+
+            {/* Traído de la DB, fuera de la ventana cargada. Se muestra aparte
+                —y no mezclado en las secciones de arriba— para que quede claro
+                que es historia consultada, no trabajo pendiente de hoy. */}
+            {delHistorial.length > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-2"
+                  style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
+                  <span className="text-[12px] font-bold" style={{ color: '#5B21B6' }}>
+                    🗂️ Del historial ({delHistorial.length})
+                  </span>
+                  <span className="text-[10px] flex-1" style={{ color: '#7C3AED' }}>fuera de los últimos {DIAS_RECIBOS_RECIENTES} días</span>
+                </div>
+                {delHistorial.map(item => (
+                  <div key={item.svc.id} className="mb-2">
+                    <CardServicioRecibo item={item} onSeleccionar={seleccionar} disabled={loading} />
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
