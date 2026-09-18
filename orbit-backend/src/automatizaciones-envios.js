@@ -32,6 +32,7 @@ import { enviarAvisoPlanta } from './plantas.js'
 import { enviarAvisoMitad } from './mitad-compostaje.js'
 import { enviarAutomatico } from './digitales.js'
 import { enviarReporte } from './grupales.js'
+import { explicarErrorWa } from './errores-wa.js'
 
 const TOPE_FILAS = 400
 
@@ -236,7 +237,12 @@ export async function listarEnvios({ clave, estado = 'todos', q = null, dias = 3
        ORDER BY f.fecha DESC NULLS LAST
        LIMIT ${TOPE_FILAS}`, [ventana, texto])
 
-    const filas = rows.map(r => ({ ...r, ...relanzable(clave, r) }))
+    // El error que importa es el último que pasó: si Meta dijo `failed` después
+    // de que el flujo marcara ENVIADO, manda el motivo del acuse.
+    const filas = rows.map(r => ({
+      ...r, ...relanzable(clave, r),
+      explicacion: explicarErrorWa(r.acuse === 'failed' && r.acuse_error ? r.acuse_error : (r.error || r.acuse_error)),
+    }))
     return { status: 200, body: { ok: true, filas, conteos, tope: TOPE_FILAS, dias: ventana } }
   } finally {
     client.release()
@@ -309,7 +315,12 @@ export async function relanzarEnvio({ clave, id, personal }) {
   const r = await RELANZAR[clave](fila, personal)
   if (r.ok) log('[automatizaciones] relanzado OK', clave, id)
   else      log('[automatizaciones] relanzar FALLÓ', clave, id, '—', r.error)
-  return { status: r.ok ? 200 : (r.status || 409), body: r }
+  // El texto crudo va en `explicacion.tecnico`; `error` es lo que se enseña.
+  const explicacion = r.ok ? null : explicarErrorWa(r.error)
+  return {
+    status: r.ok ? 200 : (r.status || 409),
+    body: r.ok ? r : { ...r, error: explicacion?.titulo || r.error, explicacion },
+  }
 }
 
 /** Traduce el `{enviado, motivo, error}` de plantas/mitad/vet a `{ok, error}`. */

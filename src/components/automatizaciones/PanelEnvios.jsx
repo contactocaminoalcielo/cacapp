@@ -109,8 +109,14 @@ export default function PanelEnvios({ flujo, onCambio }) {
       setResultado(r => ({ ...r, [f.id]: { ok: true } }))
       return true
     } catch (e) {
-      setResultado(r => ({ ...r, [f.id]: { ok: false, error: e.message } }))
-      if (!silencioso) await showAlert(e.message || 'No se pudo relanzar', { title: 'No se relanzó', variant: 'danger' })
+      // El backend ya traduce el error: `error` es la frase para una persona y
+      // `explicacion.hacer` dice qué hacer ahora.
+      const exp = e.detalle?.explicacion
+      setResultado(r => ({ ...r, [f.id]: { ok: false, error: e.message, hacer: exp?.hacer } }))
+      if (!silencioso) {
+        await showAlert(`${e.message || 'No se pudo relanzar'}${exp?.hacer ? `\n\nQué hacer: ${exp.hacer}` : ''}`,
+          { title: 'No se relanzó', variant: 'danger' })
+      }
       return false
     } finally {
       setOcupado('')
@@ -218,7 +224,7 @@ export default function PanelEnvios({ flujo, onCambio }) {
             <tbody>
               {filas.map(f => {
                 const res = resultado[f.id]
-                const fallo = f.error || f.acuse_error
+                const exp = f.explicacion
                 return (
                   <tr key={f.id} className="border-t border-gray-100 align-top" style={{ opacity: cargando ? 0.6 : 1 }}>
                     <td className="px-3 py-2 whitespace-nowrap text-gray-500">{f.fecha ? fmtDateTime(f.fecha) : '—'}</td>
@@ -233,11 +239,25 @@ export default function PanelEnvios({ flujo, onCambio }) {
                     </td>
                     <td className="px-3 py-2 max-w-[22rem]">
                       <div className="text-gray-600">{f.detalle}</div>
-                      {fallo && <div className="mt-0.5 text-[11px] leading-snug" style={{ color: '#B91C1C' }}>{fallo}</div>}
+                      {/* El error, en cristiano: qué pasó y qué hacer. Lo técnico
+                          queda plegado para quien lo necesite (soporte). */}
+                      {exp && (
+                        <div className="mt-1 text-[11px] leading-snug">
+                          <div className="font-semibold" style={{ color: '#B91C1C' }}>{exp.titulo}</div>
+                          <div className="text-gray-600 mt-0.5"><span className="font-semibold text-gray-700">Qué hacer:</span> {exp.hacer}</div>
+                          <details className="mt-0.5">
+                            <summary className="cursor-pointer text-[10px] text-gray-400 hover:text-gray-600 select-none">Detalle técnico</summary>
+                            <div className="text-[10px] text-gray-400 font-mono break-all mt-0.5">{exp.tecnico}</div>
+                          </details>
+                        </div>
+                      )}
                       {res && (
-                        <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: res.ok ? '#166534' : '#B91C1C' }}>
-                          {res.ok ? <Check size={11} /> : <X size={11} />}
-                          {res.ok ? 'Relanzado' : res.error}
+                        <div className="mt-1 text-[11px]" style={{ color: res.ok ? '#166534' : '#B91C1C' }}>
+                          <span className="inline-flex items-center gap-1 font-semibold">
+                            {res.ok ? <Check size={11} /> : <X size={11} />}
+                            {res.ok ? 'Relanzado' : `Al relanzar: ${res.error}`}
+                          </span>
+                          {!res.ok && res.hacer && <div className="text-gray-600 mt-0.5">Qué hacer: {res.hacer}</div>}
                         </div>
                       )}
                     </td>
