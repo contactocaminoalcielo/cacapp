@@ -16,6 +16,7 @@ import { jobEleccionPlanta } from './jobs/plantas.js'
 import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
 import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
 import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.js'
+import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
@@ -1286,6 +1287,36 @@ app.post('/automatizaciones/:clave/activo', requireAuth, requireRol('COORDINADOR
   } catch (e) {
     log('[automatizaciones] ERROR interruptor', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Seguimiento real, contacto por contacto: a quién le llegó (acuse de Meta),
+// a quién no, y qué falló. Filtros y tope en SQL: las tablas pasan de mil filas.
+app.get('/automatizaciones/:clave/envios', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await listarEnvios({
+      clave: req.params.clave, estado: req.query.estado || 'todos',
+      q: req.query.q || null, dias: req.query.dias ?? 30,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[automatizaciones] ERROR envios', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Relanzar un contacto con la función de envío de su propio flujo. Nunca
+// duplica un mensaje que sí llegó: esa regla vive en el módulo.
+app.post('/automatizaciones/:clave/envios/:id/relanzar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await relanzarEnvio({
+      clave: req.params.clave, id: req.params.id,
+      personal: { id: req.personal.id, rol: req.personal.rol },
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[automatizaciones] ERROR relanzar', e.message)
+    res.status(500).json({ ok: false, error: e.message })
   }
 })
 

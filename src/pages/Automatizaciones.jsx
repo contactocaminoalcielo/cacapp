@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { orbitApi } from '@/lib/orbitApi'
 import { fmtDateTime } from '@/lib/utils'
-import { RefreshCw, Power, AlertTriangle, Clock, Users, Send } from 'lucide-react'
+import { RefreshCw, Power, AlertTriangle, Clock, Users, Send, ListChecks, ChevronUp } from 'lucide-react'
+import PanelEnvios from '@/components/automatizaciones/PanelEnvios'
 
 /** "hace 2 horas" / "hace 3 días" — lo que se quiere saber es si está vivo. */
 function haceCuanto(ts) {
@@ -51,6 +52,7 @@ export default function Automatizaciones() {
   const [error,    setError]    = useState('')
   const [cargando, setCargando] = useState(true)
   const [tocando,  setTocando]  = useState('')   // clave del flujo que se está cambiando
+  const [abierto,  setAbierto]  = useState('')   // clave del flujo con la lista de contactos desplegada
 
   const cargar = useCallback(async () => {
     try {
@@ -105,7 +107,7 @@ export default function Automatizaciones() {
         <div>
           <p className="text-[13px] text-gray-500 leading-snug max-w-2xl">
             Todo lo que Orbit le manda solo a una familia o a una clínica, en un solo lugar:
-            si está encendido, cuánto salió hoy, cuándo fue lo último y qué falló.
+            si está encendido, cuánto salió hoy, cuándo fue lo último y qué falló. Con «Ver contactos» se ve a quién le llegó, a quién no, y se relanza lo que falló.
             Los interruptores de aquí son los de verdad — los mismos que leen los jobs.
           </p>
           {datos && (
@@ -161,12 +163,20 @@ export default function Automatizaciones() {
                   </div>
                 </div>
 
-                {f.interruptor && (
-                  <Button size="sm" variant={f.activo ? 'secondary' : 'gold'} disabled={tocando === f.clave}
-                    onClick={() => alternar(f)}>
-                    <Power size={12} /> {tocando === f.clave ? '…' : (f.activo ? 'Apagar' : 'Encender')}
-                  </Button>
-                )}
+                <div className="flex items-center gap-2">
+                  {f.disponible && (
+                    <Button size="sm" variant="secondary" onClick={() => setAbierto(abierto === f.clave ? '' : f.clave)}>
+                      {abierto === f.clave ? <ChevronUp size={12} /> : <ListChecks size={12} />}
+                      {abierto === f.clave ? 'Ocultar' : 'Ver contactos'}
+                    </Button>
+                  )}
+                  {f.interruptor && (
+                    <Button size="sm" variant={f.activo ? 'secondary' : 'gold'} disabled={tocando === f.clave}
+                      onClick={() => alternar(f)}>
+                      <Power size={12} /> {tocando === f.clave ? '…' : (f.activo ? 'Apagar' : 'Encender')}
+                    </Button>
+                  )}
+                </div>
               </div>
 
               {!f.disponible ? (
@@ -210,6 +220,9 @@ export default function Automatizaciones() {
                       Encendido pero <strong>sin plantilla aprobada</strong>: los avisos se acumulan sin salir.
                     </div>
                   )}
+
+                  {/* La lista contacto por contacto: a quién le llegó, a quién no, y relanzar. */}
+                  {abierto === f.clave && <PanelEnvios flujo={f} onCambio={cargar} />}
                 </>
               )}
             </section>
