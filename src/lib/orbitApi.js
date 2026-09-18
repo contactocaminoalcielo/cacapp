@@ -14,11 +14,18 @@ const BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.com/
  * bajan aquí y se pintan desde un object URL. Quien lo use debe hacer
  * `URL.revokeObjectURL` al desmontar o la memoria se va llenando de fotos.
  */
-export async function orbitApiBlob(path) {
+export async function orbitApiBlob(path, { method = 'GET', body } = {}) {
   const { data: { session } } = await db.auth.getSession()
   if (!session?.access_token) throw new Error('Sesión expirada — vuelve a iniciar sesión')
+  // Con `body` es un POST con JSON (los PDFs de marca se piden así: datos van,
+  // bytes vuelven).
   const res = await fetch(`${BASE}${path}`, {
-    headers: { Authorization: `Bearer ${session.access_token}` },
+    method,
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     // El backend responde JSON en los errores (410 con el motivo de por qué no

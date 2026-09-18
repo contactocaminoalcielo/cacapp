@@ -5,6 +5,11 @@ services:
     build: .
     container_name: orbit-backend
     restart: unless-stopped
+    # Chromium (memoriales y PDFs) deja procesos zombis si nadie los recoge:
+    # `init` pone un PID 1 que sí lo hace. /dev/shm por defecto son 64 MB y a
+    # Chromium se le quedan cortos con documentos largos.
+    init: true
+    shm_size: 256m
     env_file: .env
     environment:
       - TZ=America/Bogota

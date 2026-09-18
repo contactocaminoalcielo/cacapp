@@ -60,8 +60,49 @@ async function cargarPlantas(servicioId) {
   }
 }
 
-// Genera y descarga el certificado de entrega
+/** El número del certificado, compartido por las dos vías de generarlo. */
+function numeroCertificado(svc) {
+  const f = String(svc?.fecha_ingreso || '')
+  const hoy = new Date()
+  return `CAC-${f.slice(0, 4) || hoy.getFullYear()}${f.slice(5, 7) || String(hoy.getMonth() + 1).padStart(2, '0')}-${(svc?.id || '').slice(0, 6).toUpperCase()}`
+}
+
+function descargarBlob(blob, nombre) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = nombre
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
+
+/**
+ * Genera y descarga el certificado de entrega.
+ *
+ * Desde el 2026-09-18 lo imprime el backend en HTML con la marca de la empresa
+ * (orbit-backend/src/pdf-plantillas/certificado-entrega.js): recordatorios en
+ * lista compacta, logo, fuentes y pie de marca. Recibe los MISMOS datos que
+ * siempre. Si el backend no responde (sin red en la calle, contenedor caído),
+ * cae al generador local de jsPDF para que el mensajero nunca se quede sin
+ * certificado.
+ */
 export async function generarCertificadoEntrega({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
+  try {
+    const { orbitApiBlob } = await import('@/lib/orbitApi')
+    const blob = await orbitApiBlob('/pdf/certificado-entrega', {
+      method: 'POST',
+      body: { svc, entrega, mensajero, items, firma: firmaDataUrl || entrega?.foto_firma_url || null },
+    })
+    const mascotaNombre = (svc?.mascotas || svc?.mascota)?.nombre || 'servicio'
+    descargarBlob(blob, `Certificado_Entrega_${mascotaNombre}_${numeroCertificado(svc)}.pdf`)
+    return
+  } catch (e) {
+    console.warn('[certificado] el backend no pudo generarlo, se usa el local:', e.message)
+  }
+  await generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl })
+}
+
+// Generador local (jsPDF), el de siempre: queda como respaldo del de marca.
+export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
   const firmaImg = await resolverFirma(firmaDataUrl || entrega?.foto_firma_url)
   const { eleccion: plantaEleccion, extras: plantasExtra } = await cargarPlantas(svc?.id)
   const { default: jsPDF } = await import('jspdf')
@@ -76,7 +117,7 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
 
   const mascota = svc?.mascotas || svc?.mascota
   const cliente = mascota?.clientes || mascota?.cliente
-  const numero  = `CAC-${(svc?.fecha_ingreso || '').slice(0,4) || new Date().getFullYear()}${(svc?.fecha_ingreso || '').slice(5,7) || String(new Date().getMonth()+1).padStart(2,'0')}-${(svc?.id || '').slice(0,6).toUpperCase()}`
+  const numero  = numeroCertificado(svc)
   const fechaEntrega = entrega?.fecha_realizada
     ? new Date(entrega.fecha_realizada + 'T12:00:00').toLocaleDateString('es-CO', { day:'2-digit', month:'long', year:'numeric' })
     : new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'long', year:'numeric' })

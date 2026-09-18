@@ -17,6 +17,8 @@ import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
 import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
 import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.js'
 import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
+import { estadoPdf } from './pdf.js'
+import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
@@ -123,6 +125,9 @@ app.use('/whatsapp/materiales', cargaBandeja, express.json({ limit: '90mb' }))
 // no dice nada — y desde que la cabecera se guarda además como material, es
 // exactamente el mismo archivo por el mismo camino.
 app.use('/whatsapp/plantillas-cabecera', cargaBandeja, express.json({ limit: '90mb' }))
+// Los PDFs de marca reciben los datos del documento y, a veces, la firma
+// dibujada en base64 (≈ 100-300 kB): no cabe en el límite por defecto.
+app.use('/pdf', express.json({ limit: '8mb' }))
 
 app.use(express.json())
 
@@ -1318,6 +1323,30 @@ app.post('/automatizaciones/:clave/envios/:id/relanzar', requireAuth, requireRol
     log('[automatizaciones] ERROR relanzar', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+// ── PDFs de marca (HTML → PDF con el Chromium del contenedor) ───────────────
+// El frontend manda los mismos datos que antes armaba para jsPDF y recibe los
+// bytes. Cualquier persona activa del equipo puede pedirlos: el certificado lo
+// genera el mensajero en la puerta, el coordinador desde el tablero y la ficha.
+app.post('/pdf/certificado-entrega', requireAuth, async (req, res) => {
+  try {
+    const { svc, entrega, mensajero, items, firma } = req.body || {}
+    if (!svc?.id) return res.status(400).json({ ok: false, error: 'Falta el servicio' })
+    const { pdf, archivo } = await certificadoEntregaPdf({ svc, entrega, mensajero, items, firma })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${archivo}"`)
+    res.setHeader('X-Archivo', archivo)
+    res.send(pdf)
+  } catch (e) {
+    log('[pdf/certificado-entrega] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'No se pudo generar el PDF: ' + e.message })
+  }
+})
+
+// ¿Hay Chromium y arranca? Para comprobar el despliegue sin generar un documento.
+app.get('/pdf/estado', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
+  res.json(await estadoPdf())
 })
 
 // ── Portal público de la visita a planta (mismo código que el portal de fotos) ──

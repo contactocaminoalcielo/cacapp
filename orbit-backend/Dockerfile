@@ -19,6 +19,8 @@ RUN npm install --omit=dev
 COPY src ./src
 COPY memorial ./memorial
 COPY scripts ./scripts
+# Fuentes de marca de los PDFs (se incrustan como data URI; ver src/pdf-recursos.js).
+COPY pdf ./pdf
 
 # Descarga el Chromium headless de Remotion en build (evita bajarlo en el 1er render).
 RUN node memorial/ensure-browser.mjs || true
