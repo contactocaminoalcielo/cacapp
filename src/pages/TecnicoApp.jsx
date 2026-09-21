@@ -7210,21 +7210,19 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           y += lineH + 8
         }
       } else {
-        // Recibo cliente: valor del servicio + nota de comisión si viene de solicitud con aliado
+        /* Recibo cliente: SOLO el valor del servicio.
+           ⛔ Aquí NO va la comisión del aliado. Este PDF es el que se descarga y
+           el que se le adjunta al propietario por WhatsApp, así que la caja
+           naranja "Comision aliado: <clínica> — <monto> (<%>)" le mostraba a la
+           familia lo que Camino al Cielo le reconoce a la clínica: un acuerdo
+           entre las dos empresas. La familia paga el precio completo y la
+           comisión se liquida aparte.
+           El 17-sep-2026 se quitó la misma caja de la PANTALLA del recibo, pero
+           quedó viva aquí: el técnico ya no la veía y el cliente sí. Se quita el
+           21-sep-2026 por pedido de David. El desglose de comisión vive donde
+           corresponde: en el recibo de VETERINARIA (rama de arriba). */
         drawBox('Valor del servicio', valorMostrar, M, y)
         y += 18
-        if (comisionManual > 0 && !comisionFueDescontada && aliado) {
-          const modCom = aliado.modalidad_comision === 'FACTURACION_MENSUAL' ? 'facturacion mensual'
-                       : aliado.modalidad_comision === 'CREDITO_ACUMULADO'   ? 'credito acumulado'
-                       : 'gestion separada'
-          pdf.setFillColor(255, 247, 237); pdf.rect(M, y, CW, 9, 'F')
-          pdf.setDrawColor(253, 215, 170); pdf.setLineWidth(0.3); pdf.rect(M, y, CW, 9, 'D')
-          pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(146, 64, 14)
-          t(`Comision aliado: ${aliado.nombre}`, M + 2, y + 3.5)
-          pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7)
-          t(`${fmt(comisionManual)}${comisionManualPct > 0 ? ` (${comisionManualPct}%)` : ''} — ${modCom}`, M + 2, y + 7)
-          y += 12
-        }
       }
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(80, 80, 80)
       t(`Medios de pago: ${mediosPagoTexto}`, M, y); y += 6
