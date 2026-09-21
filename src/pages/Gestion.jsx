@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { FiltroChecklist, valoresParaConsulta } from '@/components/ui/filtro-checklist'
 import { Textarea } from '@/components/ui/textarea'
 import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
@@ -1260,14 +1261,16 @@ function TabHistorialServicios({ canEdit }) {
   const [catPersonal, setCatPersonal] = useState([])
   const [catEspecies, setCatEspecies] = useState([])
   // filtros
+  // Cada filtro es un Set con lo CHULEADO, como una columna de Excel.
+  // 🔑 Set vacío = todas: "no he elegido nada" no es "no quiero ver nada".
   const [busqueda,      setBusqueda]      = useState('')
-  const [filtroEstado,  setFiltroEstado]  = useState('')
-  const [filtroPago,    setFiltroPago]    = useState('')
-  const [filtroPlan,    setFiltroPlan]    = useState('')
-  const [filtroAliado,  setFiltroAliado]  = useState('')
-  const [filtroTecnico, setFiltroTecnico] = useState('')
-  const [filtroUsuario, setFiltroUsuario] = useState('')
-  const [filtroEspecie, setFiltroEspecie] = useState('')   // especies.id; '' = todas
+  const [filtroEstado,  setFiltroEstado]  = useState(() => new Set())
+  const [filtroPago,    setFiltroPago]    = useState(() => new Set())
+  const [filtroPlan,    setFiltroPlan]    = useState(() => new Set())
+  const [filtroAliado,  setFiltroAliado]  = useState(() => new Set())
+  const [filtroTecnico, setFiltroTecnico] = useState(() => new Set())
+  const [filtroUsuario, setFiltroUsuario] = useState(() => new Set())  // ids de personal + '__none__'
+  const [filtroEspecie, setFiltroEspecie] = useState(() => new Set())  // especies.id
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
@@ -1289,21 +1292,54 @@ function TabHistorialServicios({ canEdit }) {
     })
   }, [])
 
+  // Cuántas opciones tiene cada lista: hace falta para saber si "está todo
+  // chuleado", que es lo mismo que no filtrar (ver `valoresParaConsulta`).
+  const opcsEstado  = useMemo(() => Object.entries(ESTADO_LABEL).map(([v, label]) => ({ v, label })), [])
+  const opcsPago    = useMemo(() => ['PENDIENTE', 'PARCIAL', 'COMPLETO'].map(v => ({ v, label: v[0] + v.slice(1).toLowerCase() })), [])
+  const opcsPlan    = useMemo(() => catPlanes.map(p => ({ v: p.id, label: p.nombre })), [catPlanes])
+  const opcsAliado  = useMemo(() => catAliados.map(a => ({ v: a.id_aliado, label: a.nombre })), [catAliados])
+  const opcsTecnico = useMemo(() => catPersonal.map(p => ({ v: p.id, label: `${p.nombre} ${p.apellido || ''}`.trim() })), [catPersonal])
+  const opcsUsuario = useMemo(
+    () => [...catPersonal.map(p => ({ v: p.id, label: `${p.nombre} ${p.apellido || ''}`.trim() })), { v: '__none__', label: '— Sin registrar —' }],
+    [catPersonal]
+  )
+  const opcsEspecie = useMemo(() => catEspecies.map(e => ({ v: e.id, label: e.nombre })), [catEspecies])
+
+  // El filtro por especie pega sobre la tabla embebida, y eso solo muerde si el
+  // select lleva `!inner`. Se calcula una vez y se usa en los dos sitios que
+  // arman el select (la tabla y el CSV): si divergen, el CSV sale sin filtrar.
+  const especieFiltrada = valoresParaConsulta(filtroEspecie, opcsEspecie.length)
+
   function buildQuery(base) {
     // Corte de datos: el histórico arranca en FECHA_CORTE. Si el usuario elige un
     // "desde" anterior, ambos gte se combinan con AND y gana el más estricto.
     base = base.gte('fecha_ingreso', FECHA_CORTE)
-    if (filtroEstado)  base = base.eq('estado', filtroEstado)
-    if (filtroPago)    base = base.eq('estado_pago', filtroPago)
-    if (filtroPlan)    base = base.eq('plan_id', filtroPlan)
-    if (filtroAliado)  base = base.eq('aliado_origen_id', filtroAliado)
-    if (filtroTecnico) base = base.eq('tecnico_id', filtroTecnico)
-    if (filtroUsuario === '__none__') base = base.is('registrado_por', null)
-    else if (filtroUsuario)           base = base.eq('registrado_por', filtroUsuario)
-    // Filtra sobre la tabla embebida; solo muerde porque el select lleva `!inner`
-    if (filtroEspecie) base = base.eq('mascotas.especie_id', filtroEspecie)
-    if (desde)         base = base.gte('fecha_ingreso', desde)
-    if (hasta)         base = base.lte('fecha_ingreso', hasta)
+    // `valoresParaConsulta` devuelve null cuando no hay nada marcado O cuando
+    // está todo marcado. Lo segundo importa: mandar los ~100 uuids de todos los
+    // aliados revienta la URL de PostgREST (414) y la consulta se cae entera.
+    const vEstado  = valoresParaConsulta(filtroEstado,  opcsEstado.length)
+    const vPago    = valoresParaConsulta(filtroPago,    opcsPago.length)
+    const vPlan    = valoresParaConsulta(filtroPlan,    opcsPlan.length)
+    const vAliado  = valoresParaConsulta(filtroAliado,  opcsAliado.length)
+    const vTecnico = valoresParaConsulta(filtroTecnico, opcsTecnico.length)
+    const vUsuario = valoresParaConsulta(filtroUsuario, opcsUsuario.length)
+    if (vEstado)  base = base.in('estado', vEstado)
+    if (vPago)    base = base.in('estado_pago', vPago)
+    if (vPlan)    base = base.in('plan_id', vPlan)
+    if (vAliado)  base = base.in('aliado_origen_id', vAliado)
+    if (vTecnico) base = base.in('tecnico_id', vTecnico)
+    // "Sin registrar" es un NULL, no un id: no cabe dentro del `in` y hay que
+    // pedirlo aparte. Marcado junto con personas, las dos condiciones van en OR.
+    if (vUsuario) {
+      const ids = vUsuario.filter(v => v !== '__none__')
+      const sinRegistrar = vUsuario.includes('__none__')
+      if (sinRegistrar && ids.length) base = base.or(`registrado_por.is.null,registrado_por.in.(${ids.join(',')})`)
+      else if (sinRegistrar)          base = base.is('registrado_por', null)
+      else                            base = base.in('registrado_por', ids)
+    }
+    if (especieFiltrada) base = base.in('mascotas.especie_id', especieFiltrada)
+    if (desde)           base = base.gte('fecha_ingreso', desde)
+    if (hasta)           base = base.lte('fecha_ingreso', hasta)
     return base
   }
 
@@ -1315,7 +1351,7 @@ function TabHistorialServicios({ canEdit }) {
     // otro, porque el orden de las filas empatadas no está garantizado.
     const construir = () => buildQuery(
       db.from('servicios')
-        .select(selectHistorial(!!filtroEspecie), { count: 'exact' })
+        .select(selectHistorial(!!especieFiltrada), { count: 'exact' })
         .order('fecha_ingreso', { ascending: false })
         .order('id', { ascending: false })
     )
@@ -1357,7 +1393,7 @@ function TabHistorialServicios({ canEdit }) {
     // CSV salía mocho — el peor sitio para un corte mudo, porque nadie cuenta
     // las filas de un export antes de cuadrar con él.
     const filas = await dbTodo(() => buildQuery(
-      db.from('servicios').select(selectHistorial(!!filtroEspecie))
+      db.from('servicios').select(selectHistorial(!!especieFiltrada))
         .order('fecha_ingreso', { ascending: false })
         .order('id', { ascending: false })
     ))
@@ -1578,11 +1614,16 @@ function TabHistorialServicios({ canEdit }) {
   const COP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0)
   const fmtFecha = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'
 
-  const hayFiltros = filtroEstado || filtroPago || filtroPlan || filtroAliado || filtroTecnico || filtroUsuario || filtroEspecie || desde || hasta || busqueda
+  // Un Set vacío es falsy… no lo es: `new Set()` es un objeto y siempre da true.
+  // Hay que mirar el `.size` o "Limpiar filtros" quedaría puesto para siempre.
+  const marcados = [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie]
+    .reduce((a, s) => a + s.size, 0)
+  const hayFiltros = marcados > 0 || desde || hasta || busqueda
   function limpiarFiltros() {
-    setBusqueda(''); setFiltroEstado(''); setFiltroPago('')
-    setFiltroPlan(''); setFiltroAliado(''); setFiltroTecnico(''); setFiltroUsuario('')
-    setFiltroEspecie(''); setDesde(''); setHasta('')
+    setBusqueda('')
+    setFiltroEstado(new Set()); setFiltroPago(new Set()); setFiltroPlan(new Set())
+    setFiltroAliado(new Set()); setFiltroTecnico(new Set()); setFiltroUsuario(new Set())
+    setFiltroEspecie(new Set()); setDesde(''); setHasta('')
   }
 
   return (
@@ -1593,40 +1634,16 @@ function TabHistorialServicios({ canEdit }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8 w-52" placeholder="Cliente, mascota..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
         </div>
-        <Select value={filtroPlan} onChange={e => setFiltroPlan(e.target.value)} className="w-44">
-          <option value="">Todos los planes</option>
-          {catPlanes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-        </Select>
-        <Select value={filtroAliado} onChange={e => setFiltroAliado(e.target.value)} className="w-44">
-          <option value="">Todos los aliados</option>
-          {catAliados.map(a => <option key={a.id_aliado} value={a.id_aliado}>{a.nombre}</option>)}
-        </Select>
-        <Select value={filtroTecnico} onChange={e => setFiltroTecnico(e.target.value)} className="w-40">
-          <option value="">Todos los técnicos</option>
-          {catPersonal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido || ''}</option>)}
-        </Select>
-        <Select value={filtroUsuario} onChange={e => setFiltroUsuario(e.target.value)} className="w-44">
-          <option value="">Registrado por (todos)</option>
-          {catPersonal.map(p => <option key={p.id} value={p.id}>{p.nombre} {p.apellido || ''}</option>)}
-          <option value="__none__">— Sin registrar —</option>
-        </Select>
+        <FiltroChecklist label="Todos los planes"   opciones={opcsPlan}    seleccion={filtroPlan}    onChange={setFiltroPlan}    className="w-44" />
+        <FiltroChecklist label="Todos los aliados"  opciones={opcsAliado}  seleccion={filtroAliado}  onChange={setFiltroAliado}  className="w-44" />
+        <FiltroChecklist label="Todos los técnicos" opciones={opcsTecnico} seleccion={filtroTecnico} onChange={setFiltroTecnico} className="w-40" />
+        <FiltroChecklist label="Registrado por (todos)" opciones={opcsUsuario} seleccion={filtroUsuario} onChange={setFiltroUsuario} className="w-44" />
       </div>
       {/* Filtros — fila 2 */}
       <div className="flex flex-wrap items-end gap-2 mb-4">
-        <Select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} className="w-40">
-          <option value="">Todos los estados</option>
-          {Object.entries(ESTADO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </Select>
-        <Select value={filtroPago} onChange={e => setFiltroPago(e.target.value)} className="w-36">
-          <option value="">Todo pago</option>
-          <option value="PENDIENTE">Pendiente</option>
-          <option value="PARCIAL">Parcial</option>
-          <option value="COMPLETO">Completo</option>
-        </Select>
-        <Select value={filtroEspecie} onChange={e => setFiltroEspecie(e.target.value)} className="w-40">
-          <option value="">Todas las especies</option>
-          {catEspecies.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-        </Select>
+        <FiltroChecklist label="Todos los estados"  opciones={opcsEstado}  seleccion={filtroEstado}  onChange={setFiltroEstado}  className="w-40" />
+        <FiltroChecklist label="Todo pago"          opciones={opcsPago}    seleccion={filtroPago}    onChange={setFiltroPago}    className="w-36" />
+        <FiltroChecklist label="Todas las especies" opciones={opcsEspecie} seleccion={filtroEspecie} onChange={setFiltroEspecie} className="w-40" />
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Desde</span>
           <Input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="w-36" />
