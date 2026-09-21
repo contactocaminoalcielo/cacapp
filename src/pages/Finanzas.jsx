@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
-import { db, dbIn } from '@/lib/supabase'
+import { db, dbIn, dbTodo } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { fmt, parsearErrorDB, parseDate, today, petEmoji } from '@/lib/utils'
@@ -330,11 +330,16 @@ export default function Finanzas() {
   async function cargarResumenFinanzas() {
     setResumenLoading(true)
     try {
-      const { data, error } = await db.from('servicios')
+      // Los KPIs de arriba suman TODOS los servicios desde el corte, así que
+      // esta es la consulta que más rápido pasa de 1000 filas — y el corte mudo
+      // aquí no rompe nada: simplemente enseña unos totales más bajos que los
+      // reales, que es la peor forma de fallar en una pantalla de plata.
+      const data = await dbTodo(() => db.from('servicios')
         .select(RESUMEN_SELECT)
         .not('estado', 'eq', 'CANCELADO')
         .gte('fecha_ingreso', FECHA_CORTE)
-      if (error) throw error
+        .order('fecha_ingreso', { ascending: false })
+        .order('id', { ascending: false }))
       setResumenServicios(data || [])
     } catch (err) {
       console.error('[Finanzas] Error cargando resumen financiero:', err)
@@ -353,13 +358,20 @@ export default function Finanzas() {
   // que de verdad tienen saldo.
   async function cargarCompletosConSaldo() {
     try {
-      const { data, error } = await db.from('servicios')
+      // 🩸 Esta consulta pide TODOS los servicios ya pagados desde el corte —la
+      // mayoría— y el servidor corta en 1000 sin avisar. Con el `.order` a secas
+      // "cortaba por lo más viejo", o sea que los descuadres antiguos ("marcado
+      // pagado, con saldo") dejaban de verse y nadie se enteraba. `dbTodo`
+      // pagina; el `.order('id')` es el desempate obligatorio, porque
+      // `fecha_ingreso` empata a diario y sin él una página repite una fila y se
+      // salta otra.
+      const data = await dbTodo(() => db.from('servicios')
         .select('id, valor_total, valor_pagado')
         .not('estado', 'eq', 'CANCELADO')
         .gte('fecha_ingreso', FECHA_CORTE)
         .eq('estado_pago', 'COMPLETO')
-        .order('fecha_ingreso', { ascending: false })   // si algún día topa el máximo de filas, que corte por lo más viejo
-      if (error) throw error
+        .order('fecha_ingreso', { ascending: false })
+        .order('id', { ascending: false }))
       const ids = (data || [])
         .filter(s => (s.valor_total || 0) - (s.valor_pagado || 0) > 0)
         .map(s => s.id)
@@ -377,16 +389,18 @@ export default function Finanzas() {
     setLoading(true)
     setResumenLoading(true)
     try {
-      const [{ data, error }, descuadrados] = await Promise.all([
-        db.from('servicios')
+      // `dbTodo` y no un select suelto: la cartera es la lista de lo que se
+      // debe, y un corte mudo en 1000 filas se lee como "ya no deben nada".
+      const [data, descuadrados] = await Promise.all([
+        dbTodo(() => db.from('servicios')
           .select(SERVICIO_SELECT)
           .not('estado', 'eq', 'CANCELADO')
           .gte('fecha_ingreso', FECHA_CORTE)
           .or('estado_pago.is.null,and(estado_pago.neq.COMPLETO,estado_pago.neq.CORTESIA)')
-          .order('fecha_ingreso', { ascending: false }),
+          .order('fecha_ingreso', { ascending: false })
+          .order('id', { ascending: false })),
         cargarCompletosConSaldo(),
       ])
-      if (error) throw error
 
       const filas = [...(data || []), ...descuadrados]
         .sort((a, b) => String(b.fecha_ingreso || '').localeCompare(String(a.fecha_ingreso || '')))
@@ -1907,7 +1921,11 @@ export default function Finanzas() {
           valor_pagado: nuevo_pagado,
           estado_pago:  nuevo_estado,
           metodo_pago:  metodoPago,
-          ...(pagoNotas.trim() ? { notas: pagoNotas.trim() } : {}),
+          // 🩸 Aquí iba `notas: pagoNotas.trim()`, que REEMPLAZABA las notas del
+          // servicio: lo que alguien hubiera escrito antes se perdía al
+          // registrar un abono, sin avisar. La nota del pago ahora vive en la
+          // novedad PAGO_RECIBIDO (paso 4), con fecha y autor — que es donde
+          // pertenece. Las notas del servicio no se tocan.
         })
         .eq('id', pagoModal.id)
       if (error) throw error
