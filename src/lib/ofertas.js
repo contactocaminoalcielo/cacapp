@@ -7,7 +7,7 @@
 // por aquí: la ejecuta orbit-backend dentro de la transacción de recepción de
 // imágenes, con el precio leído de la tabla `ofertas`. Ver ofertas.js del
 // backend y migración 078.
-import { db } from '@/lib/supabase'
+import { db, dbIn, dbTodo } from '@/lib/supabase'
 import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imageUtils'
 
 export const BUCKET_OFERTAS = 'ofertas'
@@ -142,4 +142,72 @@ export async function respuestasDeOferta(ofertaId) {
     .order('respondido_en', { ascending: false })
   if (error) throw error
   return data || []
+}
+
+/**
+ * Todo lo necesario para ANALIZAR las ofertas: una fila por (servicio, oferta)
+ * que llegó al cliente, con su estado.
+ *
+ * 🔑 El universo son las VISTAS, no las respuestas. Quien vio el anuncio y no
+ * contestó es el grupo que más dice —hoy son 223 servicios— y si la lista
+ * saliera de `oferta_respuestas` sería invisible: parecería que todo el mundo
+ * contestó y la conversión se leería sobre la mitad del público real.
+ *
+ * 🪤 `dbTodo` y no un select suelto: los alcanzados ya pasan de 1.000 y el
+ * servidor corta ahí sin avisar. Con un select normal el análisis mostraría
+ * 1.000 filas como si fueran todas, y los totales de abajo mentirían.
+ *
+ * Estados: ACEPTADA · RECHAZADA · SIN_RESPONDER
+ */
+export async function analisisOfertas() {
+  const [vistas, respuestas] = await Promise.all([
+    dbTodo(() => db.from('oferta_vistas')
+      .select('oferta_id, servicio_id, vistas, primera_vista_en, ultima_vista_en')
+      .order('primera_vista_en', { ascending: false }).order('id', { ascending: false })),
+    dbTodo(() => db.from('oferta_respuestas')
+      .select('oferta_id, servicio_id, respuesta, precio_ofrecido, respondido_en')
+      .order('respondido_en', { ascending: false }).order('id', { ascending: false })),
+  ])
+
+  const clave = r => `${r.servicio_id}|${r.oferta_id}`
+  const respPorClave = new Map((respuestas || []).map(r => [clave(r), r]))
+
+  // El universo es la UNIÓN: normalmente toda respuesta tiene su vista (las
+  // vistas se sembraron con las respuestas previas en la migración 081), pero
+  // si alguna faltara no se puede perder una venta del análisis.
+  const filas = new Map()
+  for (const v of vistas || []) filas.set(clave(v), { ...v, respuesta: null })
+  for (const r of respuestas || []) {
+    const k = clave(r)
+    if (!filas.has(k)) filas.set(k, { oferta_id: r.oferta_id, servicio_id: r.servicio_id, vistas: 0 })
+  }
+
+  const ids = [...new Set([...filas.values()].map(f => f.servicio_id))]
+  const svcs = await dbIn('servicios',
+    'id, fecha_ingreso, plan_id, valor_total, mascotas:mascota_id(nombre, clientes:cliente_id(nombre, apellido, whatsapp, telefono))',
+    'id', ids)
+  const svcPorId = Object.fromEntries(svcs.map(s => [s.id, s]))
+
+  return [...filas.entries()].map(([k, f]) => {
+    const r = respPorClave.get(k) || null
+    const s = svcPorId[f.servicio_id] || null
+    const c = s?.mascotas?.clientes || null
+    return {
+      clave: k,
+      oferta_id:   f.oferta_id,
+      servicio_id: f.servicio_id,
+      estado:      r ? r.respuesta : 'SIN_RESPONDER',
+      precio:      r?.precio_ofrecido ?? null,
+      respondido_en:    r?.respondido_en ?? null,
+      primera_vista_en: f.primera_vista_en ?? null,
+      aperturas:   Number(f.vistas) || 0,
+      fecha_ingreso: s?.fecha_ingreso ?? null,
+      plan_id:     s?.plan_id ?? null,
+      mascota:     s?.mascotas?.nombre || '—',
+      cliente:     c ? `${c.nombre || ''} ${c.apellido || ''}`.trim() : '—',
+      // Para el botón de WhatsApp: se escribe por wa.me porque lo que sigue a
+      // un "no, gracias" lo dice una persona, no una automatización.
+      telefono:    c?.whatsapp || c?.telefono || null,
+    }
+  })
 }

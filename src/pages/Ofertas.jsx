@@ -22,6 +22,7 @@ import {
   listarOfertas, guardarOferta, eliminarOferta, desactivarOferta,
   subirImagenOferta, respuestasDeOferta, MAX_MB_OFERTA,
 } from '@/lib/ofertas'
+import PanelAnalisis from '@/components/ofertas/PanelAnalisis'
 import {
   Plus, Search, Trash2, ImageIcon, Tag, TrendingUp, CheckCircle2, XCircle,
   Loader2, Eye, Percent,
@@ -52,6 +53,7 @@ export default function Ofertas() {
   const [q, setQ]                       = useState('')
   const [editando, setEditando]         = useState(null)  // oferta | { _nueva: true }
   const [verRespuestas, setVerRespuestas] = useState(null)
+  const [vista, setVista]               = useState('anuncios')  // anuncios | analisis
 
   useEffect(() => { cargar() }, [])
 
@@ -131,6 +133,22 @@ export default function Ofertas() {
           <StatCard label="Vendido por ofertas" value={fmt(totales.vendido)} icon={Percent} valueColor="#1A5CD8" />
         </div>
 
+        {/* Dos vistas: el catálogo de anuncios y el análisis de lo que
+            respondió la gente. Van separadas porque son dos trabajos
+            distintos — configurar la oferta y entender por qué no vende. */}
+        <div className="flex items-center gap-1 border-b" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+          {[['anuncios', 'Anuncios'], ['analisis', 'Respuestas y análisis']].map(([k, label]) => (
+            <button key={k} onClick={() => setVista(k)}
+              className={`px-4 py-2 text-[13px] font-semibold border-b-2 -mb-px transition-colors ${
+                vista === k ? 'border-[#1A5CD8] text-[#1A5CD8]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {vista === 'analisis' ? (
+          <PanelAnalisis ofertas={ofertas} planes={planes} />
+        ) : (<>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-xs">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -161,6 +179,7 @@ export default function Ofertas() {
             ))}
           </div>
         )}
+        </>)}
       </div>
 
       {editando && (
