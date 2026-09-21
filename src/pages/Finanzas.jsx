@@ -1929,6 +1929,37 @@ export default function Finanzas() {
         if (ce) avisoComprobante = ce.message
       }
 
+      // 4. Dejar la novedad en la bitácora de la mascota.
+      //
+      // 🩸 Durante meses este abono escribió `valor_pagado` y NADA MÁS: un pago
+      // real y una marca puesta a mano se veían idénticos en la base. Medido el
+      // 16-sep-2026: 176 servicios ($35,8 M) sin rastro de cobro en su bitácora
+      // y 19 ($2,39 M) sin novedad, sin comprobante y sin cobro en campo. El
+      // recibo del técnico siempre dejó la suya; la cartera no.
+      //
+      // Se dice CUÁNTO, POR QUÉ MEDIO, QUÉ SALDO QUEDA y —sobre todo— si quedó
+      // SIN COMPROBANTE: esa frase es la que permite distinguir después un pago
+      // respaldado de uno que solo alguien afirmó.
+      const saldoDespues = Math.max(0, (pagoModal.valor_total || 0) - nuevo_pagado)
+      const respaldo = comprobantes.length
+        ? `${comprobantes.length} comprobante${comprobantes.length > 1 ? 's' : ''} adjunto${comprobantes.length > 1 ? 's' : ''}`
+        : 'SIN comprobante'
+      let avisoNovedad = null
+      const { error: ne } = await db.from('novedades_servicio').insert({
+        servicio_id:    pagoModal.id,
+        tipo_novedad:   'PAGO_RECIBIDO',
+        descripcion:    `Abono registrado en cartera: ${fmt(abono)} — ${metodoPago} · ${respaldo} · ` +
+                        (saldoDespues > 0 ? `Queda saldo ${fmt(saldoDespues)}` : 'Saldo en cero') +
+                        (pagoNotas.trim() ? ` · ${pagoNotas.trim()}` : ''),
+        valor_ajuste:   abono,
+        registrado_por: personalData?.id || null,
+      })
+      // No se revierte el pago si esto falla —el dinero ya quedó registrado y
+      // tumbarlo sería peor—, pero TAMPOCO se calla: quedarse sin la novedad es
+      // exactamente el agujero que esto viene a cerrar, y quien registró el pago
+      // es el único que puede dejar la constancia a mano.
+      if (ne) avisoNovedad = ne.message
+
       cerrarPagoModal()
       await cargar()
       if (comisionesServicios !== null) cargarComisiones(true)
@@ -1936,6 +1967,8 @@ export default function Finanzas() {
       if (noCobrados !== null) cargarNoCobrados()
       if (avisoComprobante)
         await showAlert('El pago se registró, pero ' + (comprobantes.length > 1 ? 'los comprobantes no se pudieron guardar: ' : 'el comprobante no se pudo guardar: ') + avisoComprobante + '\n\nVuelve a adjuntarlo desde la ficha del servicio.', { title: 'Comprobante no guardado', variant: 'warning' })
+      if (avisoNovedad)
+        await showAlert('El pago quedó registrado, pero no se pudo escribir la novedad en la bitácora de la mascota: ' + avisoNovedad + '\n\nDéjala a mano desde la ficha del servicio: sin ella, ese cobro no tiene rastro de quién lo registró.', { title: 'Pago sin novedad en la bitácora', variant: 'warning' })
     } catch (err) {
       setPagoError('Error al registrar el pago: ' + (err.message || err))
     } finally {
