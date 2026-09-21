@@ -169,6 +169,30 @@ export default function Finanzas() {
   const [filtroCartera, setFiltroCartera] = useState('TODOS') // TODOS | PENDIENTE | PARCIAL
   const [filtroAliado,  setFiltroAliado]  = useState(null)    // null | aliado_origen_id
 
+  // ── State filtro historial ──────────────────────────────────────────────────
+  // ⚠️ Estos filtros viajan a la CONSULTA, no se aplican sobre lo ya cargado: el
+  // historial se pide de a 100 con "Cargar más", así que filtrar en memoria
+  // mostraría "los de esa veterinaria que había en la primera página" y el
+  // número se leería como si fuera el total. Al cambiar cualquiera se vuelve a
+  // pedir desde cero.
+  const FILTRO_HIST_VACIO = { aliado: '', tecnico: '', estadoPago: '', canal: '', plan: '', desde: '', hasta: '' }
+  const [filtroHist, setFiltroHist] = useState(FILTRO_HIST_VACIO)
+  const filtroHistActivo = Object.values(filtroHist).some(Boolean)
+  const setFH = (k, v) => setFiltroHist(prev => ({ ...prev, [k]: v }))
+  // Catálogos de los desplegables. Van completos (no solo lo que aparezca en la
+  // página cargada): si la lista saliera de las filas visibles, la veterinaria
+  // que buscas no estaría ahí justo cuando la necesitas.
+  const [aliadosCat, setAliadosCat] = useState([])
+  const [planesCat,  setPlanesCat]  = useState([])
+
+  // ── State filtro "No cobrados" ──────────────────────────────────────────────
+  // Aquí SÍ se filtra en memoria, y es correcto: la pestaña trae de una vez todo
+  // lo que muestra (sin "Cargar más"), así que lo filtrado es el conjunto
+  // completo y el conteo no engaña. Por eso las opciones salen de las filas.
+  const FILTRO_NC_VACIO = { vet: '', tecnico: '', motivo: '' }
+  const [filtroNC, setFiltroNC] = useState(FILTRO_NC_VACIO)
+  const filtroNCActivo = Object.values(filtroNC).some(Boolean)
+
   // ── State modal pago ────────────────────────────────────────────────────────
   const [pagoModal,    setPagoModal]    = useState(null)   // null | servicio
   const [pagoComprobantes, setPagoComprobantes] = useState([])   // File[] adjuntos al registrar pago (un pago puede llegar partido)
@@ -399,35 +423,70 @@ export default function Finanzas() {
     if (tab === 'comisiones') cargarComisiones()
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function cargarHistorialServicios(reset = true) {
-    if (historialServiciosLoading) return
+  // Cada petición lleva número. Si el coordinador cambia de veterinaria mientras
+  // la anterior viene en camino, la que llega tarde se descarta en vez de pintar
+  // resultados que ya no corresponden al filtro en pantalla.
+  const histReqRef = useRef(0)
+
+  async function cargarHistorialServicios(reset = true, filtros = filtroHist) {
+    const req = ++histReqRef.current
     setHistorialServiciosLoading(true)
     try {
       const base = reset ? [] : (historialServicios || [])
       const from = base.length
       const to = from + HISTORIAL_PAGE_SIZE - 1
-      const { data, error } = await db.from('servicios')
+      let q = db.from('servicios')
         .select(SERVICIO_SELECT)
         .not('estado', 'eq', 'CANCELADO')
         .gte('fecha_ingreso', FECHA_CORTE)
+      // Los filtros van en la consulta, no sobre lo ya cargado (ver la nota del
+      // estado). `desde` nunca puede abrir más que FECHA_CORTE: antes de esa
+      // fecha los datos no son confiables.
+      if (filtros.aliado)     q = q.eq('aliado_origen_id', filtros.aliado)
+      if (filtros.tecnico)    q = q.eq('tecnico_id', filtros.tecnico)
+      if (filtros.estadoPago) q = q.eq('estado_pago', filtros.estadoPago)
+      if (filtros.canal)      q = q.eq('canal_entrada', filtros.canal)
+      if (filtros.plan)       q = q.eq('plan_id', filtros.plan)
+      if (filtros.desde)      q = q.gte('fecha_ingreso', filtros.desde)
+      if (filtros.hasta)      q = q.lte('fecha_ingreso', filtros.hasta)
+      const { data, error } = await q
         .order('fecha_ingreso', { ascending: false })
         .range(from, to)
       if (error) throw error
       const { enriched } = await enriquecerServicios(data || [], { incluirRecibos: true })
+      if (req !== histReqRef.current) return   // llegó tarde: ya hay otra búsqueda
       setHistorialServicios(reset ? enriched : [...base, ...enriched])
       setHistorialHasMore((data || []).length === HISTORIAL_PAGE_SIZE)
     } catch (err) {
       console.error('[Finanzas] Error cargando historial de servicios:', err)
+      if (req !== histReqRef.current) return
       if (reset) setHistorialServicios([])
       setHistorialHasMore(false)
     } finally {
-      setHistorialServiciosLoading(false)
+      if (req === histReqRef.current) setHistorialServiciosLoading(false)
     }
   }
 
   useEffect(() => {
     if (tab === 'historial' && historialServicios === null) cargarHistorialServicios(true)
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cambiar un filtro vuelve a pedir desde la primera página: si se conservara
+  // el desplazamiento, la consulta nueva empezaría en la fila 100 de un
+  // resultado que quizá tiene 12.
+  useEffect(() => {
+    if (tab !== 'historial') return
+    if (historialServicios === null) return   // la carga inicial ya la hace el efecto de arriba
+    cargarHistorialServicios(true, filtroHist)
+  }, [filtroHist]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Catálogos de los desplegables del historial. Se piden una sola vez.
+  useEffect(() => {
+    db.from('aliados').select('id_aliado, nombre').order('nombre')
+      .then(({ data }) => setAliadosCat(data || []))
+    db.from('planes').select('id, nombre').order('nombre')
+      .then(({ data }) => setPlanesCat(data || []))
+  }, [])
 
   async function actualizarFinanzas() {
     if (tab === 'comisiones') return cargarComisiones(true)
@@ -1598,6 +1657,36 @@ export default function Finanzas() {
     return base
   }, [carteraSvcs, filtroCartera, filtroAliado])
 
+  // Opciones de los desplegables de "No cobrados": salen de las filas cargadas
+  // porque la pestaña carga todo de una vez (ver la nota del estado).
+  const opcionesNC = useMemo(() => {
+    const vets = new Set(), tecs = new Set()
+    for (const r of (noCobrados || [])) {
+      const v = r.servicios?.aliados?.nombre
+      if (v) vets.add(v)
+      const t = r.personal ? `${r.personal.nombre} ${r.personal.apellido || ''}`.trim() : ''
+      if (t) tecs.add(t)
+    }
+    return { vets: [...vets].sort(), tecnicos: [...tecs].sort() }
+  }, [noCobrados])
+
+  const noCobVisibles = useMemo(() => {
+    let base = noCobrados || []
+    if (filtroNC.vet)    base = base.filter(r => r.servicios?.aliados?.nombre === filtroNC.vet)
+    if (filtroNC.motivo) base = base.filter(r => r.motivo === filtroNC.motivo)
+    if (filtroNC.tecnico) base = base.filter(r =>
+      (r.personal ? `${r.personal.nombre} ${r.personal.apellido || ''}`.trim() : '') === filtroNC.tecnico)
+    return base
+  }, [noCobrados, filtroNC])
+
+  // Lo que suman las filas que se están viendo. Con un filtro de veterinaria
+  // puesto, esto es «cuánto tiene sin cobrar esta clínica», que es la pregunta
+  // por la que se abre esta pestaña.
+  const noCobTotal = useMemo(
+    () => noCobVisibles.reduce((a, r) => a + (Number(r.valor_total) || Number(r.servicios?.valor_total) || 0), 0),
+    [noCobVisibles]
+  )
+
   const comisionesPorAliado = useMemo(() => {
     const svcAliados = (comisionesServicios || []).filter(
       s => s.canal_entrada === 'ALIADO' && (s.comision_aliado || 0) > 0 && s.aliado
@@ -2284,6 +2373,52 @@ export default function Finanzas() {
                       <p className="text-[12px] text-gray-400 mt-1">Todo lo emitido por los técnicos fue cobrado o ya se completó.</p>
                     </div>
                   ) : (
+                  <>
+                    <div className="rounded-2xl border p-3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide"><Filter size={11} /> Filtros</span>
+                        <select value={filtroNC.vet} onChange={e => setFiltroNC(p => ({ ...p, vet: e.target.value }))}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[210px]"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                          <option value="">Veterinaria: todas</option>
+                          {opcionesNC.vets.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <select value={filtroNC.tecnico} onChange={e => setFiltroNC(p => ({ ...p, tecnico: e.target.value }))}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[180px]"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                          <option value="">Técnico: todos</option>
+                          {opcionesNC.tecnicos.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <select value={filtroNC.motivo} onChange={e => setFiltroNC(p => ({ ...p, motivo: e.target.value }))}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                          <option value="">Motivo: todos</option>
+                          <option value="PAGO_PENDIENTE">Pago pendiente</option>
+                          <option value="FACTURACION_MENSUAL">Facturación mensual</option>
+                          <option value="SIN_COBRO">Sin cobro</option>
+                        </select>
+                        {filtroNCActivo && (
+                          <button type="button" onClick={() => setFiltroNC(FILTRO_NC_VACIO)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors">
+                            <X size={12} /> Limpiar
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-2 text-[11px] text-gray-500">
+                        <strong className="text-gray-700">{noCobVisibles.length}</strong> de {noCobrados.length} servicios
+                        {' · suman '}<strong className="text-gray-700 tabular-nums">{fmt(noCobTotal)}</strong>
+                      </div>
+                    </div>
+                    {noCobVisibles.length === 0 ? (
+                      <div className="py-12 text-center">
+                        <p className="text-[14px] font-semibold text-gray-700">Ninguno con estos filtros</p>
+                        <button type="button" onClick={() => setFiltroNC(FILTRO_NC_VACIO)}
+                          className="mt-3 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                          Quitar los filtros
+                        </button>
+                      </div>
+                    ) : (
                     <div className="overflow-auto max-h-[68vh] -mx-5 px-5">
                       <table className="w-full min-w-[920px]">
                         <thead className="sticky top-0 z-10 bg-white">
@@ -2294,7 +2429,7 @@ export default function Finanzas() {
                           </tr>
                         </thead>
                         <tbody>
-                          {noCobrados.map(r => {
+                          {noCobVisibles.map(r => {
                             const svc = r.servicios || {}
                             const cli = r.cliente
                             const MOT = {
@@ -2348,13 +2483,85 @@ export default function Finanzas() {
                         </tbody>
                       </table>
                     </div>
+                    )}
+                  </>
                   )}
                 </div>
               )}
 
               {/* ── Tab: Historial ───────────────────────────────────── */}
               {tab === 'historial' && (
-                <div className="p-5">
+                <div className="p-5 space-y-3">
+                  {/* Barra de filtros. Se pinta SIEMPRE, también cuando el
+                      resultado viene vacío: si desapareciera con la tabla, un
+                      filtro que no devuelve nada dejaría la pantalla sin forma
+                      de deshacerlo. */}
+                  <div className="rounded-2xl border p-3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase tracking-wide"><Filter size={11} /> Filtros</span>
+                      <select value={filtroHist.aliado} onChange={e => setFH('aliado', e.target.value)}
+                        className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[210px]"
+                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                        <option value="">Veterinaria: todas</option>
+                        {aliadosCat.map(a => <option key={a.id_aliado} value={a.id_aliado}>{a.nombre}</option>)}
+                      </select>
+                      <select value={filtroHist.tecnico} onChange={e => setFH('tecnico', e.target.value)}
+                        className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[180px]"
+                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                        <option value="">Técnico: todos</option>
+                        {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre} {t.apellido}</option>)}
+                      </select>
+                      <select value={filtroHist.plan} onChange={e => setFH('plan', e.target.value)}
+                        className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[180px]"
+                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                        <option value="">Plan: todos</option>
+                        {planesCat.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                      </select>
+                      <select value={filtroHist.estadoPago} onChange={e => setFH('estadoPago', e.target.value)}
+                        className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                        <option value="">Pago: todos</option>
+                        {['PENDIENTE', 'PARCIAL', 'COMPLETO', 'CORTESIA'].map(e2 => <option key={e2} value={e2}>{e2}</option>)}
+                      </select>
+                      <select value={filtroHist.canal} onChange={e => setFH('canal', e.target.value)}
+                        className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 max-w-[170px]"
+                        style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                        <option value="">Canal: todos</option>
+                        {['DIRECTO', 'ALIADO', 'CLIENTE_ANTIGUO', 'REFERIDO', 'REDES_SOCIALES', 'GOOGLE'].map(c => (
+                          <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+                        ))}
+                      </select>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Del</span>
+                        <input type="date" value={filtroHist.desde} min={FECHA_CORTE} onChange={e => setFH('desde', e.target.value)}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">al</span>
+                        <input type="date" value={filtroHist.hasta} min={filtroHist.desde || FECHA_CORTE} onChange={e => setFH('hasta', e.target.value)}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                      </span>
+                      {filtroHistActivo && (
+                        <button type="button" onClick={() => setFiltroHist(FILTRO_HIST_VACIO)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors">
+                          <X size={12} /> Limpiar
+                        </button>
+                      )}
+                    </div>
+                    {/* El conteo dice "cargados", no "encontrados": la tabla trae
+                        de a 100 y mientras quede "Cargar más" el total es mayor.
+                        Decir "12 servicios" con 12 de 340 sería mentirle a quien
+                        está cuadrando plata. */}
+                    <div className="mt-2 text-[11px] text-gray-500">
+                      {historialServiciosLoading && historialServicios !== null
+                        ? 'Buscando…'
+                        : <>
+                            <strong className="text-gray-700">{(historialServicios || []).length}</strong> servicios cargados
+                            {historialHasMore ? ' (hay más, usa «Cargar más»)' : ''}
+                            {filtroHistActivo ? ' · con filtros' : ''}
+                          </>}
+                    </div>
+                  </div>
                   {historialServiciosLoading && historialServicios === null ? (
                     <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
                       <div className="spinner" /><span className="text-sm font-medium">Cargando historial…</span>
@@ -2362,14 +2569,23 @@ export default function Finanzas() {
                   ) : (historialServicios || []).length === 0 ? (
                     <div className="py-16 text-center">
                       <div className="text-4xl mb-3">📋</div>
-                      <p className="text-[14px] font-semibold text-gray-700">No hay servicios registrados</p>
+                      <p className="text-[14px] font-semibold text-gray-700">
+                        {filtroHistActivo ? 'Ningún servicio con estos filtros' : 'No hay servicios registrados'}
+                      </p>
+                      {filtroHistActivo && (
+                        <button type="button" onClick={() => setFiltroHist(FILTRO_HIST_VACIO)}
+                          className="mt-3 px-3 py-1.5 rounded-xl text-[12px] font-semibold border text-[#1A5CD8] hover:bg-[#F0F7EC] transition-colors"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }}>
+                          Quitar los filtros
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="overflow-auto max-h-[68vh] -mx-5 px-5">
-                      <table className="w-full min-w-[1100px]">
+                      <table className="w-full min-w-[1250px]">
                         <thead className="sticky top-0 z-10 bg-white">
                           <tr style={{ borderBottom: '1px solid rgba(30,80,40,0.08)' }}>
-                            {['Fecha', 'Mascota', 'Cliente', 'Canal', 'Plan', 'Técnico', 'Total', 'Pagado', 'Saldo', 'Estado pago', 'Medios de pago', ''].map(h => (
+                            {['Fecha', 'Mascota', 'Cliente', 'Veterinaria', 'Canal', 'Plan', 'Técnico', 'Total', 'Pagado', 'Saldo', 'Estado pago', 'Medios de pago', ''].map(h => (
                               <th key={h} className="text-left text-[11px] font-bold text-gray-500 uppercase tracking-wide pb-2 pr-4 first:pl-0">{h}</th>
                             ))}
                           </tr>
@@ -2382,6 +2598,17 @@ export default function Finanzas() {
                                 <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{fmtFecha(s.fecha_ingreso)}</td>
                                 <td className="py-3 pr-4 font-semibold text-gray-900">{nombreMascota(s)}</td>
                                 <td className="py-3 pr-4 text-gray-600">{nombreCliente(s)}</td>
+                                {/* Sin esta columna se puede filtrar por veterinaria
+                                    pero no leer de cuál es cada fila cuando no hay
+                                    filtro puesto, que es como se mira el historial. */}
+                                <td className="py-3 pr-4 text-[12px]">
+                                  {s.aliado ? (
+                                    <span className="flex items-center gap-1 text-gray-700">
+                                      <Building2 size={11} className="text-gray-400 shrink-0" />
+                                      <span className="truncate max-w-[150px]" title={s.aliado.nombre}>{s.aliado.nombre}</span>
+                                    </span>
+                                  ) : <span className="text-gray-300 italic text-[11px]">Particular</span>}
+                                </td>
                                 <td className="py-3 pr-4"><BadgeCanal canal={s.canal_entrada} /></td>
                                 <td className="py-3 pr-4 text-gray-600 text-[12px]">{nombrePlan(s)}</td>
                                 <td className="py-3 pr-4 text-[12px]">
