@@ -20,6 +20,7 @@ import { portalVisita, portalPedirVisita, FRANJA_LABEL } from '@/lib/visitas'
 import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE } from '@/components/portal/Botanica'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
+import { limpiarYRecargar } from '@/lib/versionApp'
 
 /**
  * Los nombres llegan en MAYÚSCULAS desde la base. Gritar "JOSHUA" en una
@@ -236,6 +237,13 @@ export default function VisitaCliente({ codigo: codigoProp }) {
           return
         }
         if (r.error === 'ya_tiene_visita') { await cargar(codigo); return }
+        // Ver la nota del portal de fotos: con el build viejo no viaja la
+        // autorización de datos y el reintento es idéntico. Se refresca.
+        if (r.error === 'falta_autorizacion') {
+          setError('Esta pantalla quedó con una versión anterior. Vamos a actualizarla…')
+          limpiarYRecargar()
+          return
+        }
         setError('No pudimos registrar tu solicitud. Inténtalo de nuevo o escríbenos por WhatsApp.')
         return
       }

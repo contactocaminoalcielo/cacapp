@@ -25,6 +25,7 @@ import { ESTILOS_VIVERO, FondoVivero, Brota, useFuentesVivero,
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
+import { limpiarYRecargar } from '@/lib/versionApp'
 
 // La paleta y las ilustraciones viven en components/portal/Botanica.jsx: las
 // comparte con el portal de fotos.
@@ -298,6 +299,15 @@ export default function PlantaCliente({ codigo: codigoProp }) {
           setEditandoEntrega(true)
           setEntregaConfirmada(false)
           setError('Nos faltan la dirección, quién recibe y un teléfono para poder llevarla.')
+          return
+        }
+        // Pantalla con el build viejo: no manda la autorización de datos que
+        // el backend exige, y reintentar manda exactamente lo mismo. Igual que
+        // en el portal de fotos (19-sep-2026), la salida es traer el código
+        // nuevo de la red, no insistir.
+        if (r.error === 'falta_autorizacion') {
+          setError('Esta pantalla quedó con una versión anterior. Vamos a actualizarla…')
+          limpiarYRecargar()
           return
         }
         setError('No pudimos guardar tu elección. Inténtalo de nuevo en un momento.')

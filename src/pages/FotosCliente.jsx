@@ -8,6 +8,7 @@ import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, BORDE } from 
 import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package } from 'lucide-react'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
+import { limpiarYRecargar } from '@/lib/versionApp'
 
 // Los nombres se conservan (los usan ~150 sitios de este archivo); lo que cambia
 // es a qué apuntan. El portal pasa del azul de Orbit al papel cálido y el verde
@@ -326,10 +327,20 @@ export default function FotosCliente({ codigo: codigoProp }) {
         throw new Error('Por favor completa los datos de entrega: dirección, quién recibe y teléfono.')
       if (r.error === 'ya_procesado') { setFase('ya_procesado'); return }
       if (r.error === 'fuera_de_ventana') { setFase('fuera_ventana'); return }
+      // Esta pantalla se quedó con el código viejo y el backend ya exige la
+      // autorización de datos que ese build ni siquiera pide. Reintentar no la
+      // saca: el navegador volvería a mandar lo mismo. Pasó el 19-sep-2026 —
+      // una familia lo intentó NUEVE veces en 18 minutos y se rindió, porque lo
+      // único que veía era "Ocurrió un error". Se le da la salida real:
+      // refrescar contra la red. Lo que subió no se pierde por esto — el
+      // backend hizo ROLLBACK, así que no había nada guardado que perder.
+      if (r.error === 'falta_autorizacion') { setFase('version_vieja'); return }
       // `ref` lo genera el backend y queda en su log junto al error real: es lo
       // único que permite diagnosticar un fallo del portal sin adivinar.
       console.error('[FotosCliente] guardar falló:', r)
-      throw new Error((r.error || 'No se pudo guardar') + (r.ref ? ` (ref ${r.ref})` : ''))
+      // `mensaje` lo escribe el backend PARA la familia; `error` es el código
+      // interno. Mostrar el código dejaba a quien lo leía sin nada que hacer.
+      throw new Error((r.mensaje || r.error || 'No se pudo guardar') + (r.ref ? ` (ref ${r.ref})` : ''))
     } catch (e) {
       alert('Ocurrió un error. Intenta de nuevo.\n\n' + e.message +
             '\n\nSi vuelve a fallar, escríbenos por WhatsApp con este mensaje.')
@@ -357,6 +368,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
     <PantallaInfo titulo="Escríbenos para tus fotos"
       texto={`El servicio de ${mascota} ya avanzó de etapa. Para ayudarte con las fotos de sus recordatorios, por favor escríbenos por WhatsApp y con gusto lo resolvemos.`}
       cta={{ label: 'Escribir por WhatsApp', fn: () => { window.location.href = 'https://wa.me/573159891247' } }} />
+  )
+  // Esta pantalla quedó vieja (service worker con el build anterior). No es un
+  // error de la familia ni algo que se arregle reintentando: hay que traer el
+  // código nuevo de la red. `limpiarYRecargar` borra SW y cachés y recarga.
+  if (fase === 'version_vieja') return (
+    <PantallaInfo titulo="Actualiza esta página"
+      texto={`Esta pantalla quedó con una versión anterior y por eso no pudimos recibir las fotos de ${mascota}. Toca el botón para actualizarla y vuelve a seleccionarlas: solo toma un momento.`}
+      cta={{ label: 'Actualizar y volver a intentar', fn: () => { limpiarYRecargar() } }} />
   )
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
 

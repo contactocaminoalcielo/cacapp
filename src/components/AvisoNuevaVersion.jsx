@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { recargarPagina, limpiarYRecargar } from '@/lib/versionApp'
 
 /**
  * Aviso de versión nueva.
@@ -32,33 +33,10 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
  *    SW + cachés y recarga.
  */
 // ─── Recarga, compartida por el aviso interno y el auto-refresco público ────
-// A nivel de módulo y no por componente: solo hay uno vivo a la vez, y así el
-// candado anti-doble-recarga vale para los dos.
-let recargando = false
-
-function recargarPagina() {
-  if (recargando) return
-  recargando = true
-  window.location.reload()
-}
-
-// Plan B: el SW nuevo nunca tomó el control. Sin SW ni cachés, el navegador
-// vuelve a pedir el index.html a la red y entra la versión nueva.
-async function limpiarYRecargar() {
-  if (recargando) return
-  // Sin red no hay versión nueva que traer y borrar la caché dejaría la app
-  // en blanco: mejor recargar a secas y que el SW viejo siga sirviendo.
-  if (navigator.onLine === false) return recargarPagina()
-  try {
-    const regs = await navigator.serviceWorker?.getRegistrations?.() ?? []
-    await Promise.all(regs.map(r => r.unregister()))
-    if ('caches' in window) {
-      const claves = await caches.keys()
-      await Promise.all(claves.map(k => caches.delete(k)))
-    }
-  } catch (_) { /* da igual: recargamos igual */ }
-  recargarPagina()
-}
+// Vive en `lib/versionApp.js` para que los portales públicos puedan usarla sin
+// importar este archivo, que arrastra `virtual:pwa-register/react` (registrar
+// el service worker es justo lo que no se le quiere hacer a una familia).
+// El candado anti-doble-recarga es de ese módulo, así que vale para los dos.
 
 /** Manda SKIP_WAITING y recarga cuando el worker nuevo tome el control. */
 function entrarAVersionNueva(updateServiceWorker) {
