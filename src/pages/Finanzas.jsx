@@ -21,6 +21,7 @@ import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
 import { recategorizacionesPorServicio, esRecatSoloComision } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
+import { FiltroChecklist, valoresParaConsulta } from '@/components/ui/filtro-checklist'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
 //  · VERIFICADO          → saldado, no se debe nada; ese dinero cuenta en Finanzas.
@@ -102,6 +103,13 @@ const CHIPS_MEDIO_CUADRE = [
 function posteriorRecibo(it) {
   return Math.max(0, Number(it.valor_posterior_recibo) || 0)
 }
+
+// Texto comparable para buscar: sin tildes y en minúscula. Aquí los nombres se
+// escriben de las dos formas ("Ángel" y "Angel", "Maximo" y "Máximo") y un
+// buscador que distinga acentos falla justo con esos.
+const normalizar = s => String(s || '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().trim()
 // El bruto que de verdad le tocaba a este técnico: lo que valía el servicio
 // cuando emitió su recibo.
 function brutoCuadreItem(it) {
@@ -168,6 +176,15 @@ export default function Finanzas() {
   // ── State filtro cartera ────────────────────────────────────────────────────
   const [filtroCartera, setFiltroCartera] = useState('TODOS') // TODOS | PENDIENTE | PARCIAL
   const [filtroAliado,  setFiltroAliado]  = useState(null)    // null | aliado_origen_id
+  // Buscador y filtros de la cartera. Se aplican EN MEMORIA y está bien: la
+  // cartera carga de una vez todo lo que tiene saldo (no pagina), así que lo
+  // filtrado es el conjunto completo y el total que se muestra es de verdad.
+  const [qCartera,       setQCartera]       = useState('')
+  const [cartPlan,       setCartPlan]       = useState(() => new Set())
+  const [cartTecnico,    setCartTecnico]    = useState(() => new Set())
+  const [cartOrigen,     setCartOrigen]     = useState(() => new Set())  // PARTICULAR | ALIADO
+  const [cartDesde,      setCartDesde]      = useState('')
+  const [cartHasta,      setCartHasta]      = useState('')
 
   // ── State filtro historial ──────────────────────────────────────────────────
   // ⚠️ Estos filtros viajan a la CONSULTA, no se aplican sobre lo ya cargado: el
@@ -1649,13 +1666,62 @@ export default function Finanzas() {
     return Object.values(mapa).sort((a, b) => b.saldo - a.saldo)
   }, [carteraSvcs])
 
+  // Opciones de los desplegables de cartera: salen de las filas porque la
+  // pestaña las tiene todas cargadas. Ofrecer un plan que no le debe nada a
+  // nadie solo estorba.
+  const opcionesCartera = useMemo(() => {
+    const planes = new Map(), tecnicos = new Map()
+    for (const s of carteraSvcs) {
+      if (s.plan?.nombre)  planes.set(s.plan_id, s.plan.nombre)
+      if (s.tecnico)       tecnicos.set(s.tecnico_id, `${s.tecnico.nombre} ${s.tecnico.apellido || ''}`.trim())
+    }
+    const ord = m => [...m].map(([v, label]) => ({ v, label })).sort((a, b) => a.label.localeCompare(b.label))
+    return { planes: ord(planes), tecnicos: ord(tecnicos) }
+  }, [carteraSvcs])
+
+  const ORIGENES_CARTERA = [{ v: 'PARTICULAR', label: 'Particular' }, { v: 'ALIADO', label: 'Veterinaria' }]
+
+  const cartFiltrosActivos = !!qCartera.trim() || cartPlan.size > 0 || cartTecnico.size > 0
+    || cartOrigen.size > 0 || !!cartDesde || !!cartHasta
+
   const carteraFiltrada = useMemo(() => {
     let base = filtroCartera === 'TODOS' ? carteraSvcs
       : filtroCartera === 'DESCUADRE' ? carteraSvcs.filter(esDescuadre)
       : carteraSvcs.filter(s => s.estado_pago === filtroCartera)
     if (filtroAliado) base = base.filter(s => s.aliado_origen_id === filtroAliado)
+
+    // Buscador: mascota, cliente y veterinaria. Sin acentos y sin mayúsculas —
+    // "ángel" y "Angel" tienen que encontrar lo mismo, o el buscador falla justo
+    // con los nombres que más se escriben de las dos formas.
+    const q = normalizar(qCartera)
+    if (q) base = base.filter(s =>
+      normalizar(`${nombreMascota(s)} ${nombreCliente(s)} ${s.aliado?.nombre || ''}`).includes(q))
+
+    const vPlan = valoresParaConsulta(cartPlan, opcionesCartera.planes.length)
+    if (vPlan) base = base.filter(s => vPlan.includes(s.plan_id))
+    const vTec = valoresParaConsulta(cartTecnico, opcionesCartera.tecnicos.length)
+    if (vTec) base = base.filter(s => vTec.includes(s.tecnico_id))
+    const vOri = valoresParaConsulta(cartOrigen, ORIGENES_CARTERA.length)
+    // "Particular" es todo lo que NO entró por una clínica: el canal manda, no
+    // que el servicio tenga o no un aliado colgado.
+    if (vOri) base = base.filter(s => vOri.includes(s.canal_entrada === 'ALIADO' ? 'ALIADO' : 'PARTICULAR'))
+
+    if (cartDesde) base = base.filter(s => (s.fecha_ingreso || '') >= cartDesde)
+    if (cartHasta) base = base.filter(s => (s.fecha_ingreso || '') <= cartHasta)
     return base
-  }, [carteraSvcs, filtroCartera, filtroAliado])
+  }, [carteraSvcs, filtroCartera, filtroAliado, qCartera, cartPlan, cartTecnico, cartOrigen, cartDesde, cartHasta, opcionesCartera])
+
+  // Lo que suman las filas visibles: con un filtro puesto es "cuánto me deben
+  // estos", que es la pregunta por la que se abre la cartera.
+  const carteraTotal = useMemo(
+    () => carteraFiltrada.reduce((a, s) => a + (s.saldo || 0), 0),
+    [carteraFiltrada]
+  )
+
+  function limpiarFiltrosCartera() {
+    setQCartera(''); setCartPlan(new Set()); setCartTecnico(new Set())
+    setCartOrigen(new Set()); setCartDesde(''); setCartHasta('')
+  }
 
   // Opciones de los desplegables de "No cobrados": salen de las filas cargadas
   // porque la pestaña carga todo de una vez (ver la nota del estado).
@@ -2098,6 +2164,58 @@ export default function Finanzas() {
                         </button>
                       </span>
                     )}
+                  </div>
+
+                  {/* Buscador y filtros. Van SIEMPRE visibles, también cuando no
+                      queda ninguna fila: si desaparecieran con la tabla, una
+                      búsqueda sin resultados dejaría la pantalla sin cómo
+                      deshacerse. */}
+                  <div className="rounded-2xl border p-3 mb-3" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="relative flex-1 min-w-[220px]">
+                        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <input type="text" value={qCartera} onChange={e => setQCartera(e.target.value)}
+                          placeholder="Buscar mascota, cliente o veterinaria…"
+                          className="w-full pl-8 pr-8 py-1.5 rounded-lg border text-[12px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                        {qCartera && (
+                          <button type="button" onClick={() => setQCartera('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" title="Borrar">
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+                      <FiltroChecklist label="Origen: todo" opciones={ORIGENES_CARTERA}
+                        seleccion={cartOrigen} onChange={setCartOrigen} className="w-[150px]" />
+                      <FiltroChecklist label="Plan: todos" opciones={opcionesCartera.planes}
+                        seleccion={cartPlan} onChange={setCartPlan} className="w-[170px]" />
+                      <FiltroChecklist label="Técnico: todos" opciones={opcionesCartera.tecnicos}
+                        seleccion={cartTecnico} onChange={setCartTecnico} className="w-[170px]" />
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Del</span>
+                        <input type="date" value={cartDesde} onChange={e => setCartDesde(e.target.value)}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">al</span>
+                        <input type="date" value={cartHasta} min={cartDesde || undefined} onChange={e => setCartHasta(e.target.value)}
+                          className="rounded-lg border px-2 py-1.5 text-[12px] bg-white outline-none focus:ring-2 focus:ring-[#1A5CD8]/20"
+                          style={{ borderColor: 'rgba(30,80,40,0.15)' }} />
+                      </span>
+                      {cartFiltrosActivos && (
+                        <button type="button" onClick={limpiarFiltrosCartera}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100 transition-colors">
+                          <X size={12} /> Limpiar
+                        </button>
+                      )}
+                    </div>
+                    {/* El total es de lo que se está VIENDO. La cartera carga
+                        completa, así que esta suma sí es la deuda real de lo
+                        filtrado — no "lo que cabía en la página". */}
+                    <div className="mt-2 text-[11px] text-gray-500">
+                      <strong className="text-gray-700">{carteraFiltrada.length}</strong>
+                      {cartFiltrosActivos || filtroAliado || filtroCartera !== 'TODOS' ? ` de ${carteraSvcs.length}` : ''} servicios
+                      {' · deben '}<strong className="text-[#DC2626] tabular-nums">{fmt(carteraTotal)}</strong>
+                    </div>
                   </div>
 
                   {carteraFiltrada.length === 0 ? (
