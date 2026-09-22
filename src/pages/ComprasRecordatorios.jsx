@@ -12,6 +12,7 @@
 // Todo lo que escribe pasa por orbit-backend (lib/comprasRecordatorios.js);
 // aquí solo se leen catálogos y se buscan clientes y mascotas por PostgREST.
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,10 +32,11 @@ import {
   listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
   cargarCatalogos, buscarClientes, mascotasDeCliente, subirArchivoCompra, urlFirmada,
   METODOS_PAGO, ESTADOS_ITEM, ESTADO_ITEM_META, ESTADO_COMPRA, ESTADO_PAGO,
+  esCedula, descargarCedula,
 } from '@/lib/comprasRecordatorios'
 import {
   Plus, Search, ShoppingBag, Wallet, Layers, PackageCheck, ChevronRight, ChevronLeft,
-  User, Trash2, Paperclip, Loader2, Ban, ImagePlus, Save, AlertTriangle,
+  User, Trash2, Paperclip, Loader2, Ban, ImagePlus, Save, AlertTriangle, FileDown,
 } from 'lucide-react'
 
 const LABEL = 'text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1'
@@ -74,7 +76,10 @@ export default function ComprasRecordatorios() {
   const [hasta, setHasta]         = useState('')
 
   const [nueva, setNueva]         = useState(false)
-  const [verId, setVerId]         = useState(null)
+  // `?ver=<id>` abre una compra directo (desde el tablero de Producción).
+  const [params, setParams]       = useSearchParams()
+  const [verId, setVerIdRaw]      = useState(params.get('ver') || null)
+  const setVerId = id => { setVerIdRaw(id); if (!id && params.get('ver')) setParams({}, { replace: true }) }
   const debounceRef = useRef(null)
 
   useEffect(() => {
@@ -928,6 +933,19 @@ function LineaItem({ it, compraId, personal, urls, activa, ocupado, onGuardar })
           <div className="text-[11px] text-gray-400">{fmt(it.precio_unitario)} c/u · {fmt(it.subtotal)}
             {it.fecha_inicio_prod && ` · inicio ${it.fecha_inicio_prod}`}{it.fecha_fin_prod && ` · listo ${it.fecha_fin_prod}`}{it.fecha_entrega && ` · entregado ${it.fecha_entrega}`}</div>
         </div>
+        {esCedula(it.nombre) && (
+          <button onClick={async () => {
+              setSubiendo(true)
+              try { await descargarCedula(compraId, it.id, fotos[0] || null) }
+              catch (e) { await showAlert(e.message, { title: 'No se pudo generar la cédula' }) }
+              finally { setSubiendo(false) }
+            }}
+            disabled={subiendo}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 text-[#1F5A32] border border-[#CFE3D5] bg-[#E8F3EB] hover:bg-[#d9ecdf] disabled:opacity-50"
+            title={fotos.length ? 'Descargar la cédula en PDF' : 'Sin foto: la cédula sale con el recuadro vacío'}>
+            {subiendo ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} Cédula PDF
+          </button>
+        )}
         {/* Estado: pastillas, la actual resaltada. Un clic cambia y guarda. */}
         <div className="flex gap-1">
           {ESTADOS_ITEM.map(e => {

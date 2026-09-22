@@ -19,6 +19,7 @@ import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.
 import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
+import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
@@ -1360,6 +1361,24 @@ app.post('/pdf/certificado-entrega', requireAuth, async (req, res) => {
   } catch (e) {
     log('[pdf/certificado-entrega] ERROR', e.message)
     res.status(500).json({ ok: false, error: 'No se pudo generar el PDF: ' + e.message })
+  }
+})
+
+// Cédula de mascota (compras de recordatorios, migr. 168). Los datos salen de
+// la base por los ids; el navegador solo manda la URL firmada de la foto, que
+// el backend no puede firmar solo. La pide quien produce la cédula.
+app.post('/pdf/cedula-mascota', requireAuth, requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR'), async (req, res) => {
+  try {
+    const { compra_id, item_id, foto } = req.body || {}
+    const { pdf, archivo } = await cedulaMascotaPdf({ compraId: compra_id, itemId: item_id, foto })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${archivo}"`)
+    res.setHeader('X-Archivo', archivo)
+    res.send(pdf)
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ ok: false, error: e.message })
+    log('[pdf/cedula-mascota] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'No se pudo generar la cédula: ' + e.message })
   }
 })
 

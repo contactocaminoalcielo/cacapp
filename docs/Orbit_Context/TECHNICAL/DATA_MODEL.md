@@ -178,6 +178,7 @@ Ver [MODULES/COMPRAS_RECORDATORIOS.md](../MODULES/COMPRAS_RECORDATORIOS.md).
 - `compra_recordatorio_eventos.tipo` ∈ `CREADA | PAGO | ESTADO_ITEM | DATOS_ITEM | ANULADA | NOTA`
 - `autorizaciones_datos.origen` gana el valor `COMPRA_RECORDATORIOS`
 - RLS: `authenticated` solo SELECT. Escribe **solo `orbit_backend`** (GRANT explícito, incluida la secuencia)
+- Migr. 170: `orbit_contadores.produccion` suma las líneas PENDIENTE de compras no anuladas; ambas tablas en `supabase_realtime`
 
 ### Elección de planta — tablas `plantas`, `planta_elecciones`, `planta_adicionales` (migraciones 149/150)
 

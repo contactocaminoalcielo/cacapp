@@ -12,7 +12,7 @@
 // la base se guarda la RUTA, nunca una URL: las URL públicas viejas apuntaban al
 // Supabase Cloud muerto (ver memoria feedback_comprobantes_dos_fuentes).
 import { db } from '@/lib/supabase'
-import { orbitApi } from '@/lib/orbitApi'
+import { orbitApi, orbitApiBlob } from '@/lib/orbitApi'
 
 export const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA', 'OTRO']
 
@@ -65,6 +65,24 @@ export const actualizarItem = (id, itemId, patch) =>
 
 export const anularCompra = (id, motivo) =>
   orbitApi(`/compras-recordatorios/${id}/anular`, { method: 'POST', body: { motivo } })
+
+/** ¿Esta línea es la cédula de mascota? Se decide por el nombre del catálogo. */
+export const esCedula = nombre => /c[eé]dula/i.test(String(nombre || ''))
+
+/**
+ * Descarga el PDF de la cédula (orbit-backend, plantilla cedula-mascota.js).
+ * El backend no puede leer el bucket privado: se le manda la URL FIRMADA de la
+ * foto, que él baja e incrusta. Sin foto, la cédula sale con el recuadro vacío.
+ */
+export async function descargarCedula(compraId, itemId, fotoPath) {
+  const foto = fotoPath ? await urlFirmada(fotoPath, 300) : null
+  const blob = await orbitApiBlob('/pdf/cedula-mascota', { method: 'POST', body: { compra_id: compraId, item_id: itemId, foto } })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `Cedula_${compraId.slice(0, 6)}.pdf`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
 
 // ── Catálogos y búsqueda (PostgREST) ────────────────────────────────────────
 

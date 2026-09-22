@@ -19,6 +19,7 @@ import { petEmoji, parsearErrorDB, today, parseDate, fmt } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
+import ComprasEnProduccion from '@/components/produccion/ComprasEnProduccion'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
@@ -1274,6 +1275,11 @@ export default function Produccion() {
         )}
 
         {/* Contenido según vista */}
+        {/* Compras de recordatorios sin servicio (migración 168): sección aparte,
+            con su propia carga y su propio modal. Solo aparece si hay algo. */}
+        {vista === 'servicio' && !filtroRec && !soloAnticipados && (
+          <ComprasEnProduccion filtroEstado={filtroEstado} filtroPersona={filtroPersona} personal={personal} />
+        )}
         {vista === 'servicio' && (
           <VistaPorServicio
             recordatorios={recordatorios} personal={personal} maquinas={maquinas} etapas={etapas}

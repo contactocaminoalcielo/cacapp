@@ -22,6 +22,7 @@ import { recategorizacionesPorServicio, esRecatSoloComision } from '@/lib/servic
 import RecatBadges from '@/components/RecatBadges'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import { FiltroChecklist, valoresParaConsulta } from '@/components/ui/filtro-checklist'
+import ComprasCartera from '@/components/finanzas/ComprasCartera'
 
 // Estado de revisión por mascota. NULL = sin revisar. Solo dos estados:
 //  · VERIFICADO          → saldado, no se debe nada; ese dinero cuenta en Finanzas.
@@ -2101,6 +2102,7 @@ export default function Finanzas() {
                   { key: 'historial',   label: 'Historial' },
                   { key: 'tecnicos',    label: 'Cuadre técnicos' },
                   { key: 'conciliaciones', label: 'Conciliaciones' },
+                  { key: 'compras',     label: 'Compras recordatorios' },
                 ].map(t => (
                   <button
                     key={t.key}
@@ -2125,6 +2127,9 @@ export default function Finanzas() {
                   </button>
                 ))}
               </div>
+
+              {/* ── Tab: Compras de recordatorios sin servicio (migr. 168) ── */}
+              {tab === 'compras' && <ComprasCartera />}
 
               {/* ── Tab: Cartera ─────────────────────────────────────── */}
               {tab === 'cartera' && (

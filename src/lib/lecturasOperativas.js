@@ -17,9 +17,14 @@ export async function cargarContadores() {
       .eq('estado', 'PENDIENTE').neq('origen', 'REMOVIDO').gte('servicios.fecha_ingreso', FECHA_CORTE),
     db.from('solicitudes_imagenes').select('*', { count: 'exact', head: true }).eq('estado', 'POR_VALIDAR'),
     db.from('nps_seguimiento').select('*', { count: 'exact', head: true }).eq('estado', 'PENDIENTE'),
+    // Compras de recordatorios sin servicio (migr. 168/170): también se producen.
+    db.from('compra_recordatorio_items').select('*, compras_recordatorios!inner(id)', { count: 'exact', head: true })
+      .eq('estado', 'PENDIENTE').is('compras_recordatorios.anulada_en', null),
   ])
-  for (const r of resultados) if (r.error) throw r.error
-  return Object.fromEntries(['kanban', 'produccion', 'imagenes', 'nps'].map((k, i) => [k, resultados[i].count || 0]))
+  for (const r of resultados.slice(0, 4)) if (r.error) throw r.error
+  const out = Object.fromEntries(['kanban', 'produccion', 'imagenes', 'nps'].map((k, i) => [k, resultados[i].count || 0]))
+  if (!resultados[4].error) out.produccion += resultados[4].count || 0   // si la tabla no existe aún, no tumba el menú
+  return out
 }
 
 export async function cargarItemsKanban(ids) {

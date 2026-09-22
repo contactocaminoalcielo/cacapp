@@ -80,15 +80,41 @@ señas particulares», 3 días de producción. **Precio $0 a propósito**: David
 Configuración › Recordatorios. Lo demás que imprime la cédula (nombre, especie, raza, sexo,
 edad) ya vive en `mascotas`.
 
+## Dónde más aparece la compra (2026-09-22, migración 170)
+
+- **Producción** (`src/components/produccion/ComprasEnProduccion.jsx`): sección propia
+  «Compras de recordatorios · sin servicio» arriba de las tarjetas de la vista *Por servicio*,
+  con sus propias carga, realtime y modal (estado, asignado, notas), que escribe **por el
+  backend**. NO se mezcla con el array de `servicio_recordatorios`: `autoCorregirEstados`
+  agrupa por `servicio_id` y haría UPDATE a `servicios` con una clave nula. Solo se pinta si
+  hay algo; con el filtro por recordatorio o «solo anticipados» se oculta. Cada tarjeta enlaza
+  a `/compras-recordatorios?ver=<id>`.
+- **Badge del menú**: `orbit_contadores` (migr. 170) suma las líneas PENDIENTE de compras no
+  anuladas; el fallback JS de `lecturasOperativas.js` también. Las dos tablas entran a
+  `supabase_realtime`.
+- **Finanzas › Compras recordatorios** (`src/components/finanzas/ComprasCartera.jsx`): pestaña
+  aparte con saldo, «solo con saldo» y registro de pago (backend). No toca `guardarPago()` de
+  servicios ni la cartera: estas compras tienen su propio libro y no hay descuadre posible.
+- **Cédula en PDF** (`orbit-backend/src/pdf-plantillas/cedula-mascota.js`, ruta
+  `POST /pdf/cedula-mascota`, roles ADMIN/COORDINADOR/PRODUCTOR): hoja A4 con anverso y reverso
+  de la tarjeta a tamaño real (85,6 × 54 mm) con marcas de corte, más ficha de registro. Los
+  datos salen de la base por `compra_id` + `item_id`; el navegador solo manda la **URL firmada**
+  de la foto (el bucket es privado y el backend no tiene llave de storage), y el backend solo
+  acepta URLs de nuestro storage. Botón «Cédula PDF» en la línea cuyo nombre contiene «cédula».
+  Número estable `CM-<compra>-<6 hex de la mascota>`.
+
 ## Pruebas
 
 `node --test tests/compras-recordatorios.test.mjs` — reglas puras en
 `orbit-backend/src/compras-recordatorios-reglas.js` (normalizar líneas, validar pago, estado
-de la compra).
+de la compra). La cédula se prueba en local con `PDF_CHROMIUM_PATH` y `htmlCedulaMascota()`
+con datos de mentira (no necesita base).
 
 ## Pendientes / decisiones abiertas
 
-- Integrar las líneas al tablero de **Producción** y a las **Entregas** del mensajero (hoy la
-  cola vive en el módulo).
-- Finanzas no lee estas ventas todavía: el «Por cobrar» del módulo es aparte de la cartera.
-- Producir la cédula (plantilla PDF de marca) — hoy el módulo solo registra y hace seguimiento.
+- **Entregas del mensajero**: NO integradas. `entregas` es «una fila por servicio» de punta a
+  punta (trigger, `SELECT_ENTREGA` del técnico, `completarEntrega`, y el **INNER JOIN de
+  `generar_cuadre_tecnico`**, que haría desaparecer del cuadre el efectivo de una compra).
+  Integrarla exige migración (columna `compra_id` + XOR), reescribir la RPC del cuadre
+  (~600 líneas, copiar de la 166) y bifurcar ocho puntos de `TecnicoApp`. Decisión de David
+  pendiente. Hoy la entrega se marca desde la compra (línea → ENTREGADO).
