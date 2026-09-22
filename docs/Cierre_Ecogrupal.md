@@ -38,15 +38,28 @@ SECURITY DEFINER y search_path fijo para consultar registros de envío privados.
 Se bloquea la fila del servicio para serializar cierres y las de entregas para
 no competir con la toma de una ruta. No se revierten cierres al reenviar.
 
-Prueba aislada: `node scripts/probar-cierre-sin-ruta.mjs` genera SQL para psql
-con ON_ERROR_STOP=1, tablas temporales y ROLLBACK. Comprueba ambos órdenes,
-envíos incompletos/fallidos, pendientes, adicionales, NA, REMOVIDO, cancelados,
-otros planes, finalización del último ítem, reenvíos y los tres planes de solo
-comprobante (que cierran sin pieza digital y no cierran sin el envío).
+Prueba aislada: `node scripts/probar-cierre-ecogrupal.mjs` genera SQL para psql
+con ON_ERROR_STOP=1, tablas temporales y ROLLBACK (carga la 160 y encima la
+169). Comprueba ambos órdenes, envíos incompletos/fallidos, pendientes,
+adicionales, NA, REMOVIDO, cancelados, otros planes, finalización del último
+ítem, reenvíos, los tres planes de solo comprobante (que cierran sin pieza
+digital y no cierran sin el envío), el ítem ignorado y la config mal formada.
+Sin la 169 la prueba falla («Cierre incorrecto: 3 entregados»).
 
-No se considera automáticamente cumplido «Día de amor y milagrino». Es un ítem
-aplicable y sigue bloqueando mientras esté pendiente; cambiar esa regla requiere
-definir si se cumple con el envío digital o con una acción diferente.
+**Ítems que no bloquean (migración 169, 2026-09-22).** «Día de amor y milagrino»
+se queda en PENDIENTE a propósito (la plantilla de digitales no lo entrega,
+decisión del 2026-07-16), y como la regla exigía todos los ítems ENTREGADOS,
+ningún ECO_GRUPAL cerraba solo: se quedaban 5/6 para siempre. David decidió el
+2026-09-22 que por el momento ese ítem se ignora en el cierre. La lista vive en
+`config_operativa` (`CIERRE_SIN_RUTA` / `items_no_bloqueantes`, arreglo de ids
+de `recordatorios`); la función la lee en cada evaluación y excluye esos ítems
+tanto del «todos entregados» como del «al menos un ítem aplicable» (un servicio
+cuyo único ítem sea uno ignorado no cierra). El ítem no cambia de estado en el
+tablero: sigue PENDIENTE. Un valor mal formado en la config se trata como lista
+vacía, es decir, vuelve la regla estricta. Cuando se defina cómo se cumple ese
+ítem, basta con sacarlo de la lista; no hay que desplegar. La 169 recorre una
+vez los servicios abiertos de los cuatro planes y anota en un NOTICE cuántos
+cerró.
 
 Para desactivar futuros cierres, retirar los tres triggers trg_cierre_sin_ruta_*
 de digitales_envios, reportes_grupales_envios y servicio_recordatorios. Eso no
