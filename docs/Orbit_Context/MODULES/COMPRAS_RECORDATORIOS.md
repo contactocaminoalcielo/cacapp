@@ -3,7 +3,7 @@
 **Ruta:** `/compras-recordatorios` · **Página:** `src/pages/ComprasRecordatorios.jsx`
 **Roles:** ADMIN / COORDINADOR (todo) · PRODUCTOR (ve y mueve el estado de las líneas)
 **Migración:** `migrations/168_compras_recordatorios.sql` · **Backend:** `orbit-backend/src/compras-recordatorios.js`
-**Estado:** implementado el 2026-09-22, pendiente de desplegar (migración → backend → frontend)
+**Estado:** en producción desde el 2026-09-22 (migración, backend y frontend verificados)
 
 ## Qué es
 
