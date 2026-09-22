@@ -14,6 +14,8 @@ const ACCESO_TOTAL = {
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
     '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',
+    // Compra de recordatorios sin servicio (cédula de mascota): vender, cobrar, anular.
+    '/compras-recordatorios',
     // Enciende y apaga los envíos automáticos: ADMIN/COORDINADOR y nadie más.
     '/automatizaciones',
   ]),
@@ -38,7 +40,9 @@ export const ROLE_CONFIG = {
     // En Tenjo el PRODUCTOR solo ve Jornada y Operación (gating de pestañas en Tenjo.jsx)
     // El PRODUCTOR entra a Inventario para mirar existencias y reportar merma:
     // es quien tiene el material en la mano. El backend le cierra el resto.
-    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales', '/inventario']),
+    // Y ve las compras de recordatorios sin servicio para producir la cédula:
+    // mueve el estado de cada línea; vender, cobrar y anular es de coordinación.
+    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales', '/inventario', '/compras-recordatorios']),
   },
   OPERARIO: {
     isTecnico:  false,

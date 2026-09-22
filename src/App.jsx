@@ -42,6 +42,7 @@ const Certificados       = lazy(() => import('@/pages/Certificados'))
 const Eutanasias         = lazy(() => import('@/pages/Eutanasias'))
 const Digitales          = lazy(() => import('@/pages/Digitales'))
 const Ofertas            = lazy(() => import('@/pages/Ofertas'))
+const ComprasRecordatorios = lazy(() => import('@/pages/ComprasRecordatorios'))
 const Whatsapp           = lazy(() => import('@/pages/Whatsapp'))
 const AgenteWhatsapp     = lazy(() => import('@/pages/AgenteWhatsapp'))
 const AgentesIA          = lazy(() => import('@/pages/AgentesIA'))
@@ -108,6 +109,7 @@ function AppRoutes({ rol }) {
             {routes.has('/eutanasias')     && <Route path="/eutanasias"     element={<Eutanasias />} />}
             {routes.has('/digitales')      && <Route path="/digitales"      element={<Digitales />} />}
             {routes.has('/ofertas')        && <Route path="/ofertas"        element={<Ofertas />} />}
+            {routes.has('/compras-recordatorios') && <Route path="/compras-recordatorios" element={<ComprasRecordatorios />} />}
             {routes.has('/whatsapp')       && <Route path="/whatsapp"       element={<Whatsapp />} />}
             {/* ── Agentes IA ── */}
             {routes.has('/agentes') && <Route path="/agentes" element={<AgentesIA />} />}

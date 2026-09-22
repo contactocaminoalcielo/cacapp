@@ -20,6 +20,7 @@ const PAGE_META = {
   '/pqr':          { title: 'PQR',                    sub: 'Lo que la familia nos dijo de cada servicio' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/ofertas':      { title: 'Ofertas',                sub: 'Anuncios que ve el cliente en el portal de fotos' },
+  '/compras-recordatorios': { title: 'Compras de recordatorios', sub: 'Cédula de mascota y recuerdos vendidos sin servicio funerario' },
   '/whatsapp':     { title: 'Bandeja de WhatsApp',    sub: 'Una bandeja por línea — lo que dijo el agente y lo que respondes tú' },
   '/agentes':      { title: 'Agentes IA',             sub: 'Una línea, un agente: su contexto, sus reglas y su voz' },
   '/costos-ia':    { title: 'Costos de la IA',        sub: 'Lo que se ha gastado de verdad, por proveedor y por canal' },

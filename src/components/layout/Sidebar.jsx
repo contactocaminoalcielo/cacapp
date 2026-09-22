@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
-  MessageCircle, MessageSquare, Bot, FileText, Boxes, Radio } from 'lucide-react'
+  MessageCircle, MessageSquare, Bot, FileText, Boxes, Radio, ShoppingBag } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { filterNavGroups } from '@/lib/roles'
@@ -42,6 +42,7 @@ const ALL_NAV_GROUPS = [
       { path: '/pqr',          label: 'PQR',              icon: MessageSquare },
       { path: '/digitales',    label: 'Digitales',        icon: Film },
       { path: '/ofertas',      label: 'Ofertas',          icon: Tag },
+      { path: '/compras-recordatorios', label: 'Compras recordatorios', icon: ShoppingBag },
       { path: '/presequiales', label: 'Pre-Exequiales',     icon: Heart },
     ],
   },

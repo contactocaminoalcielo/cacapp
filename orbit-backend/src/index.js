@@ -77,6 +77,9 @@ import {
   listarStock, listarMovimientos, verificarSaldos,
   registrarMovimiento, revertirMovimiento, importarCatalogo,
 } from './inventario.js'
+import {
+  listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
+} from './compras-recordatorios.js'
 
 const app = express()
 
@@ -179,6 +182,22 @@ app.get('/inventario/verificar',    requireAuth, rolInventario,  verificarSaldos
 app.post('/inventario/movimientos', requireAuth, rolInventarioL, registrarMovimiento)
 app.post('/inventario/movimientos/:id/revertir', requireAuth, rolInventario, revertirMovimiento)
 app.post('/inventario/importar',    requireAuth, rolInventario,  importarCatalogo)
+
+// ── Compras de recordatorios sin servicio (migración 168) ──
+// Toda escritura pasa por aquí (transacción + eventos). El PRODUCTOR ve la
+// lista y mueve el estado de las líneas: es quien hace la cédula; vender,
+// cobrar y anular es de coordinación.
+const rolCompras  = requireRol('COORDINADOR', 'ADMIN')
+const rolComprasL = requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR')
+
+app.get('/compras-recordatorios',                    requireAuth, rolComprasL, listarCompras)
+app.get('/compras-recordatorios/:id',                requireAuth, rolComprasL, detalleCompra)
+app.post('/compras-recordatorios',                   requireAuth, rolCompras,  crearCompra)
+app.post('/compras-recordatorios/:id/pagos',         requireAuth, rolCompras,  registrarPago)
+// POST y no PATCH: el CORS de arriba no anuncia métodos extra y en desarrollo
+// (localhost → prod) el preflight de un PATCH se cae mudo.
+app.post('/compras-recordatorios/:id/items/:itemId', requireAuth, rolComprasL, actualizarItem)
+app.post('/compras-recordatorios/:id/anular',        requireAuth, rolCompras,  anularCompra)
 
 // ── WhatsApp Cloud API — receptor de webhooks (línea de veterinarias) ──
 // Público a propósito: lo llama Meta, no un usuario. La autenticación es la

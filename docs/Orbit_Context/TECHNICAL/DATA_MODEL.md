@@ -162,6 +162,23 @@ Ver `MODULES/OFERTAS.md`.
 - RLS: solo `authenticated` (ALL en catálogo, SELECT en respuestas). `anon` NO tiene acceso —
   el portal las lee por el backend propio. Bucket público `ofertas` para la foto del anuncio.
 
+### Compras de recordatorios sin servicio — tablas `compras_recordatorios`, `compra_recordatorio_items`, `compra_recordatorio_pagos`, `compra_recordatorio_eventos` (migración 168)
+
+Ver [MODULES/COMPRAS_RECORDATORIOS.md](../MODULES/COMPRAS_RECORDATORIOS.md).
+
+- `compras_recordatorios.id` (UUID) — PK · `numero` (int, secuencia propia, se muestra CR-n)
+- `cliente_id` → `clientes.id_cliente` · `mascota_id` → `mascotas.id_mascota` (la mascota puede estar VIVA)
+- `total` numeric · `valor_pagado` — **la mantiene el trigger** `trg_compra_rec_pagos`; nunca escribirla
+- `estado_pago` — **columna generada** (PENDIENTE / PARCIAL / COMPLETO); no existe UPDATE posible
+- `anulada_en`, `anulada_por`, `motivo_anulacion` — CHECK: o los tres o ninguno. No hay DELETE
+- `compra_recordatorio_items`: `nombre` y `precio_unitario` son **snapshot** del catálogo; `subtotal` generada;
+  `estado` ∈ `PENDIENTE | EN_PROCESO | LISTO | ENTREGADO`; `datos_cliente` jsonb con la MISMA forma que
+  `servicio_recordatorios.datos_cliente`; `imagenes_urls` text[] guarda **rutas** del bucket `evidencias`, no URLs
+- `compra_recordatorio_pagos`: `monto > 0`, `metodo` ∈ `EFECTIVO|TRANSFERENCIA|NEQUI|DAVIPLATA|TARJETA|OTRO`, `comprobante_path`
+- `compra_recordatorio_eventos.tipo` ∈ `CREADA | PAGO | ESTADO_ITEM | DATOS_ITEM | ANULADA | NOTA`
+- `autorizaciones_datos.origen` gana el valor `COMPRA_RECORDATORIOS`
+- RLS: `authenticated` solo SELECT. Escribe **solo `orbit_backend`** (GRANT explícito, incluida la secuencia)
+
 ### Elección de planta — tablas `plantas`, `planta_elecciones`, `planta_adicionales` (migraciones 149/150)
 
 Ver [MODULES/PLANTAS.md](../MODULES/PLANTAS.md).
