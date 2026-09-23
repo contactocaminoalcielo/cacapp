@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { BadgesProvider } from '@/contexts/BadgesContext'
 import { ChatWaProvider } from '@/contexts/ChatWaContext'
 import ChatFlotante from '@/components/ChatFlotante'
+import EsperasCoordinacion from '@/components/EsperasCoordinacion'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ConfirmProvider } from '@/contexts/ConfirmContext'
 import { getRoleConfig, esRolValido } from '@/lib/roles'
@@ -305,6 +306,9 @@ function InnerApp() {
         {/* Fuera del AppShell: la ventanita flota sobre cualquier pantalla, y
             avisa aunque estés en Kanban o en Finanzas. */}
         <ChatFlotante />
+        {/* Cuando el agente escala: franja arriba y, si urge o pasan 10 min
+            sin respuesta, pantalla gris. Ver EsperasCoordinacion.jsx. */}
+        <EsperasCoordinacion />
       </BadgesProvider>
     </ChatWaProvider>
   )

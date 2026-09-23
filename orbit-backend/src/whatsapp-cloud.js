@@ -155,8 +155,12 @@ export async function etiquetar({ contacto, linea = null, agenteId = null, clave
   // llamada viene del agente se limita a su catálogo (más las etiquetas
   // globales del sistema); así dos empresas pueden tener una etiqueta
   // `RECLAMO` sin que una conversación termine en el tablero de la otra.
+  //
+  // `alerta` se lee por `to_jsonb` y no como columna: si este backend llegara
+  // antes que la migración 171, un `SELECT alerta` reventaría y el agente
+  // dejaría de etiquetar — justo la señal que la alerta viene a reforzar.
   const { rows: [etq] } = await pool.query(
-    `SELECT id FROM public.whatsapp_etiquetas
+    `SELECT id, to_jsonb(t) ->> 'alerta' AS alerta FROM public.whatsapp_etiquetas t
       WHERE clave = $1 AND activo
         AND ($2::integer IS NULL OR agente_id IS NULL OR agente_id = $2)
       ORDER BY (agente_id = $2) DESC NULLS LAST, id
@@ -173,7 +177,123 @@ export async function etiquetar({ contacto, linea = null, agenteId = null, clave
        SET motivo = COALESCE(EXCLUDED.motivo, public.whatsapp_conversacion_etiquetas.motivo)`,
     [num, etq.id, origen, motivo, personalId, desde]
   )
+
+  // Solo cuando la pone el AGENTE: es él quien le dijo a alguien "coordinación
+  // te responde". Si la pone una persona, esa persona ya está en el hilo.
+  if (origen === 'AGENTE' && etq.alerta) {
+    await abrirEspera({ linea: desde, contacto: num, etiquetaId: etq.id, nivel: etq.alerta, motivo })
+  }
   return { status: 200, body: { ok: true } }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Esperas de coordinación (migración 171)
+//
+// Cuando el agente escala, alguien queda esperando a una persona. La etiqueta
+// sola no bastaba: se veía solo entrando a la bandeja. Una espera es lo que
+// alimenta la alerta que sale en cualquier pantalla de Orbit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Abre (o refresca) la espera de una conversación. Nunca lanza: una alerta que
+ * no se pudo abrir no puede tumbar la etiqueta, que es la señal de respaldo.
+ *
+ * Si ya había una abierta, es la MISMA espera: se actualiza el motivo y sube a
+ * INMEDIATA si toca, pero el reloj no vuelve a cero — la clínica lleva
+ * esperando desde la primera vez.
+ */
+async function abrirEspera({ linea, contacto, etiquetaId, nivel, motivo }) {
+  try {
+    await pool.query(
+      `INSERT INTO public.whatsapp_esperas (phone_number_id, contacto, etiqueta_id, nivel, motivo)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (phone_number_id, contacto) WHERE cerrada_en IS NULL DO UPDATE
+         SET motivo      = COALESCE(EXCLUDED.motivo, public.whatsapp_esperas.motivo),
+             etiqueta_id = CASE WHEN EXCLUDED.nivel = 'INMEDIATA'
+                                  OR public.whatsapp_esperas.nivel = 'ESPERA'
+                                THEN EXCLUDED.etiqueta_id
+                                ELSE public.whatsapp_esperas.etiqueta_id END,
+             nivel       = CASE WHEN EXCLUDED.nivel = 'INMEDIATA'
+                                THEN 'INMEDIATA' ELSE public.whatsapp_esperas.nivel END`,
+      [linea, contacto, etiquetaId, nivel, motivo]
+    )
+    log(MOD, `${contacto}: espera de coordinación abierta (${nivel})`)
+  } catch (e) {
+    log(MOD, `NO se pudo abrir la espera de ${contacto} —`, e.message)
+  }
+}
+
+/**
+ * Las esperas abiertas, de la más vieja a la más nueva.
+ *
+ * Antes de listar cierra las que ya tuvieron respuesta: una persona escribió en
+ * ese hilo desde Orbit (`enviado_por`) después de abrirse. Se hace aquí y no en
+ * cada vía de envío (texto, plantilla, archivo, voz, interactivo…) porque son
+ * muchas y basta con olvidar una para que la alerta no se apague nunca.
+ *
+ * No cuentan: un envío que falló (a la clínica no le llegó) ni un envío masivo
+ * (lleva `enviado_por`, pero no es alguien contestándole a ELLA).
+ */
+export async function listarEsperas() {
+  await pool.query(
+    `WITH respondidas AS (
+       SELECT e.id, r.ocurrido_en, r.enviado_por
+         FROM public.whatsapp_esperas e
+         CROSS JOIN LATERAL (
+           SELECT m.ocurrido_en, m.enviado_por
+             FROM public.whatsapp_mensajes m
+            WHERE m.phone_number_id = e.phone_number_id AND m.contacto = e.contacto
+              AND m.direccion = 'OUT' AND m.enviado_por IS NOT NULL
+              AND m.ocurrido_en >= e.abierta_en
+              AND m.estado IS DISTINCT FROM 'failed'
+              AND NOT EXISTS (
+                SELECT 1 FROM public.whatsapp_campana_destinos d
+                 WHERE d.wa_message_id = m.wa_message_id)
+            ORDER BY m.ocurrido_en
+            LIMIT 1
+         ) r
+        WHERE e.cerrada_en IS NULL
+     )
+     UPDATE public.whatsapp_esperas e
+        SET cerrada_en = r.ocurrido_en, cierre = 'RESPUESTA', cerrada_por = r.enviado_por
+       FROM respondidas r
+      WHERE e.id = r.id AND e.cerrada_en IS NULL`
+  )
+
+  // Lo último que dijo la clínica va en la alerta: sin eso, quien la ve tiene
+  // que abrir el hilo solo para saber de qué se trata.
+  const { rows } = await pool.query(
+    `SELECT e.id, e.phone_number_id, e.contacto, e.nivel, e.motivo, e.abierta_en,
+            t.clave AS etiqueta_clave, t.nombre AS etiqueta_nombre, t.color AS etiqueta_color,
+            v.nombre, v.tipo_contacto,
+            (SELECT m.texto FROM public.whatsapp_mensajes m
+              WHERE m.phone_number_id = e.phone_number_id AND m.contacto = e.contacto
+                AND m.direccion = 'IN'
+              ORDER BY m.ocurrido_en DESC, m.id DESC LIMIT 1) AS ultimo_entrante
+       FROM public.whatsapp_esperas e
+       LEFT JOIN public.whatsapp_etiquetas t ON t.id = e.etiqueta_id
+       LEFT JOIN public.v_whatsapp_conversaciones v
+              ON v.contacto = e.contacto AND v.phone_number_id = e.phone_number_id
+      WHERE e.cerrada_en IS NULL
+      ORDER BY e.abierta_en`
+  )
+  // La hora del servidor viaja con la lista: el reloj de la alerta se cuenta
+  // contra ella, no contra el del computador de quien la mira.
+  const { rows: [{ ahora }] } = await pool.query('SELECT now() AS ahora')
+  return { ok: true, ahora, esperas: rows }
+}
+
+/** "Ya lo resolví" — por teléfono o por otro lado. Queda quién y cuándo. */
+export async function cerrarEspera({ id, personalId }) {
+  const n = parseInt(id)
+  if (!n) return { status: 400, body: { ok: false, error: 'Espera inválida' } }
+  const { rowCount } = await pool.query(
+    `UPDATE public.whatsapp_esperas
+        SET cerrada_en = now(), cierre = 'MANUAL', cerrada_por = $2
+      WHERE id = $1 AND cerrada_en IS NULL`,
+    [n, personalId]
+  )
+  return { status: 200, body: { ok: true, cerrada: rowCount > 0 } }
 }
 
 /** Quitarla es cómo se cierra una novedad: la conversación sale de la lista. */

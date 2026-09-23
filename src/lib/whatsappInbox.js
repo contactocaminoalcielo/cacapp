@@ -118,6 +118,18 @@ export function quitarEtiqueta(contacto, clave, linea = null) {
   )
 }
 
+// ── Esperas de coordinación (migración 171) ──────────────────────────────────
+// El agente escaló y alguien espera a una persona. Se cierran solas cuando se
+// le responde desde Orbit; `cerrarEspera` es el "ya lo resolví por teléfono".
+
+export function listarEsperas() {
+  return orbitApi('/whatsapp/esperas')
+}
+
+export function cerrarEspera(id) {
+  return orbitApi(`/whatsapp/esperas/${encodeURIComponent(id)}/cerrar`, { method: 'POST' })
+}
+
 /** Las listas que ve el coordinador, en el orden en que las mira. */
 export const GRUPOS = [
   { clave: 'NOVEDAD',   nombre: 'Novedades' },

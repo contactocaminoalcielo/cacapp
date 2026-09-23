@@ -38,6 +38,7 @@ import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-clou
 import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
   listarEtiquetas, etiquetar, desetiquetar, cambiarAgente, bloquearConversacion,
+  listarEsperas, cerrarEspera,
 } from './whatsapp-cloud.js'
 import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
@@ -316,6 +317,28 @@ app.post('/whatsapp/operativo/documento', requireAuth, async (req, res) => {
 // ── Etiquetas de conversación (migración 090) ──
 // Son las listas de trabajo de la bandeja: con el agente respondiendo solo, el
 // badge de no leídos no basta para saber qué necesita a una persona.
+// Esperas de coordinación (migración 171): lo que alimenta la alerta que sale
+// en cualquier pantalla cuando el agente le dijo a alguien "coordinación te
+// responde". Se sondea cada pocos segundos desde cada Orbit abierto.
+app.get('/whatsapp/esperas', requireAuth, rolBandeja, async (_req, res) => {
+  try {
+    res.json(await listarEsperas())
+  } catch (e) {
+    log('[wa-bandeja/esperas] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/whatsapp/esperas/:id/cerrar', requireAuth, rolBandeja, async (req, res) => {
+  try {
+    const r = await cerrarEspera({ id: req.params.id, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[wa-bandeja/esperas/cerrar] ERROR', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 app.get('/whatsapp/etiquetas', requireAuth, rolBandeja, async (_req, res) => {
   try {
     res.json(await listarEtiquetas())

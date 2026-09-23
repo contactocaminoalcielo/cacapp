@@ -26,7 +26,7 @@ const ChatWaContext = createContext(null)
  * los navegadores bloquean el audio hasta que el usuario ha interactuado con la
  * página: si falla, falla en silencio — el aviso visual sigue estando.
  */
-function pitar() {
+export function pitar() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext
     if (!Ctx) return
