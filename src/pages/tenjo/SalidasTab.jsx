@@ -31,6 +31,12 @@ const fmt = f => f
   ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
   : '—'
 
+// Encabezado de cada jornada de salida ("miércoles, 7 de octubre"), el mismo
+// formato con día de semana que usa la pestaña Jornada.
+const fmtJornada = f => f
+  ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
+  : '—'
+
 // Por defecto la lista de "ya salieron" muestra los últimos 60 días: es el
 // horizonte en que todavía se corrige algo. El rango se puede abrir a mano.
 const desdePorDefecto = () => {
@@ -151,6 +157,19 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const sinFecha = datos?.sinFecha || []
 
   const seleccionados = useMemo(() => porSacar.filter(it => sel.has(it.id)), [porSacar, sel])
+
+  // Las aplazadas agrupadas por su fecha de salida: cada fecha es una jornada
+  // ("esto es lo que sale el 7 de octubre"), con su propio PDF y WhatsApp.
+  // Lo pidió David: "se recopile lo que va a salir en tal fecha".
+  const jornadasAplazadas = useMemo(() => {
+    const porFecha = new Map()
+    for (const it of aplazadas) {
+      const f = it.salida_programada
+      if (!porFecha.has(f)) porFecha.set(f, [])
+      porFecha.get(f).push(it)
+    }
+    return [...porFecha.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [aplazadas])
 
   function alternar(id) {
     setSel(prev => {
@@ -395,53 +414,65 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
             </div>
             <Acciones tipo="APLAZADAS" items={aplazadas} />
           </div>
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Mascota</Th>
-                  <Th>Cubículo</Th>
-                  <Th>Ingresó</Th>
-                  <Th>Se cumple</Th>
-                  <Th>Saldrá</Th>
-                  <Th>Motivo</Th>
-                  <Th></Th>
-                </tr>
-              </thead>
-              <tbody>
-                {aplazadas.map(it => (
-                  <Tr key={it.id}>
-                    <Td><Mascota item={it} /></Td>
-                    <Td><Cubiculo item={it} /></Td>
-                    <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
-                    <Td className="text-ink3 text-[11px]">{fmt(it.fechaCumple)}</Td>
-                    <Td className="text-[11px]">
-                      <span className="font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
-                        style={{ background: '#FEF3C7', color: '#92400E' }}>
-                        {fmt(it.salida_programada)}
-                      </span>
-                    </Td>
-                    <Td className="text-[11px] text-ink2 max-w-[220px]">
-                      <span className="line-clamp-2">{it.salida_programada_motivo || '—'}</span>
-                    </Td>
-                    <Td>
-                      <div className="flex items-center gap-1.5 justify-end">
-                        <Button size="sm" variant="secondary" disabled={saving}
-                          onClick={() => abrirAplazar([it])}>
-                          <Pencil size={12} className="mr-1" /> Fecha
-                        </Button>
-                        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
-                          disabled={saving} title="Quitar el aplazamiento: vuelve a la regla general"
-                          onClick={() => quitarAplazamiento(it)}>
-                          <Undo2 size={14} />
-                        </button>
-                      </div>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableWrap>
+
+          {/* Una jornada por fecha: lo que va a salir ese día, junto. */}
+          {jornadasAplazadas.map(([fecha, items]) => (
+            <div key={fecha} className="border-b last:border-b-0" style={{ borderColor: '#FDE68A' }}>
+              <div className="px-5 py-2.5 flex items-center gap-2 flex-wrap"
+                style={{ background: '#FFFBEB' }}>
+                <CalendarClock size={13} style={{ color: '#9A5500' }} />
+                <span className="text-[12px] font-bold capitalize" style={{ color: '#9A5500' }}>
+                  {fmtJornada(fecha)}
+                </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ background: '#FEF3C7', color: '#92400E' }}>
+                  {items.length} mascota{items.length !== 1 ? 's' : ''}
+                </span>
+                <div className="flex-1" />
+                <Acciones tipo="APLAZADAS" items={items} />
+              </div>
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Mascota</Th>
+                      <Th>Cubículo</Th>
+                      <Th>Ingresó</Th>
+                      <Th>Se cumple</Th>
+                      <Th>Motivo</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(it => (
+                      <Tr key={it.id}>
+                        <Td><Mascota item={it} /></Td>
+                        <Td><Cubiculo item={it} /></Td>
+                        <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
+                        <Td className="text-ink3 text-[11px]">{fmt(it.fechaCumple)}</Td>
+                        <Td className="text-[11px] text-ink2 max-w-[220px]">
+                          <span className="line-clamp-2">{it.salida_programada_motivo || '—'}</span>
+                        </Td>
+                        <Td>
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <Button size="sm" variant="secondary" disabled={saving}
+                              onClick={() => abrirAplazar([it])}>
+                              <Pencil size={12} className="mr-1" /> Fecha
+                            </Button>
+                            <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
+                              disabled={saving} title="Quitar el aplazamiento: vuelve a la regla general"
+                              onClick={() => quitarAplazamiento(it)}>
+                              <Undo2 size={14} />
+                            </button>
+                          </div>
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            </div>
+          ))}
         </div>
       )}
 
