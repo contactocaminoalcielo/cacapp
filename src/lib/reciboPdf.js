@@ -16,7 +16,8 @@ export const EMPRESA = {
     { label: 'Daviplata',           numero: '313 266 6356' },
     { label: 'Cta. Ahorros Bancolombia', numero: '200 958 666 04' },
   ],
-  factura: 'Si desea factura electrónica comuníquese al 319 358 5508',
+  // Va en TODO recibo (técnico y reimpresión): pantalla, PDF y WhatsApp.
+  factura: 'Este es un recibo temporal. Si solicita factura electrónica, comuníquese al 319 358 5508.',
 }
 
 const fmtFechaISO = iso => iso

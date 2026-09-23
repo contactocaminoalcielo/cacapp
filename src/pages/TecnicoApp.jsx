@@ -21,6 +21,7 @@ import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CON
 import { desgloseReciboTecnico } from '@/lib/reciboDesglose'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import { orbitApi } from '@/lib/orbitApi'
+import { EMPRESA } from '@/lib/reciboPdf'
 
 const POLL = 30_000
 // Contadores de pestañas y pool de entregas: se refrescan tras una acción del
@@ -7267,6 +7268,13 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         t('Sin firma registrada', W / 2, y + 13, { align: 'center' }); y += 26
       }
 
+      // Nota de recibo temporal / factura electrónica (misma que pantalla y WhatsApp)
+      if (y > 272) { pdf.addPage(); y = 20 }
+      pdf.setFillColor(255, 249, 237); pdf.setDrawColor(253, 230, 138)
+      pdf.setLineWidth(0.3); pdf.rect(M, y, CW, 8, 'FD')
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(146, 64, 14)
+      t(EMPRESA.factura, W / 2, y + 5.2, { align: 'center' }); y += 12
+
       pdf.setFillColor(11, 29, 79); pdf.rect(0, 285, W, 12, 'F')
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(176, 196, 228)
       t(`Técnico: ${tecnico?.nombre || ''} ${tecnico?.apellido || ''}  ·  Camino al Cielo  ·  contacto@caminoalcielo.com.co  ·  ${now.getFullYear()}`, W / 2, 292, { align: 'center' })
@@ -7399,6 +7407,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         `📦 Plan: ${form.servicio}`,
         `💰 Valor del servicio: ${fmt(precioServicio)}`,
         ``,
+        `ℹ️ ${EMPRESA.factura}`,
+        ``,
         `Gracias por confiar en nosotros 🙏`,
         `_Camino al Cielo · contacto@caminoalcielo.com.co_`,
       ].join('\n')
@@ -7437,6 +7447,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         ] : []),
         ``,
         `Medios de pago recibidos:\n${mediosTxt}`,
+        ``,
+        `ℹ️ ${EMPRESA.factura}`,
         ``,
         `_Camino al Cielo · contacto@caminoalcielo.com.co_`,
       ].join('\n')
@@ -8022,6 +8034,10 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             style={{ width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FAFAFA', fontSize: '11px', outline: 'none', resize: 'none', boxSizing: 'border-box' }} />
         </div>
         <SignaturePad onSigned={setFirma} firmaDataUrl={firma} />
+        {/* Misma nota en las tres superficies: pantalla, PDF y WhatsApp */}
+        <div style={{ marginTop: '10px', padding: '6px 10px', borderRadius: '8px', background: '#FFF9ED', border: '1px solid #FDE68A', fontSize: '10px', color: '#92400E', textAlign: 'center' }}>
+          {EMPRESA.factura}
+        </div>
         <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #E5E7EB', fontSize: '9px', color: '#9CA3AF', textAlign: 'center' }}>
           Técnico: {tecnico?.nombre} {tecnico?.apellido} · Camino al Cielo
         </div>
