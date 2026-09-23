@@ -17,13 +17,14 @@ import { Input } from '@/components/ui/input'
 import { StatCard } from '@/components/ui/card'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import {
-  cargarSalidasCompostaje, liberarCubiculo, actualizarFechaSalida,
+  cargarSalidasCompostaje, liberarCubiculo, actualizarFechaSalida, programarSalida,
   etiquetaCubiculo, zonaCfg, mensajeErrorCubiculo,
 } from '@/lib/cubiculos'
 import { generarPdfSalidas, textoSalidasWa } from '@/lib/salidasCompostajePdf'
 import { petEmoji, parsearErrorDB, hoyLocalISO } from '@/lib/utils'
 import {
   Leaf, LogOut, FileDown, MessageCircle, RefreshCw, CalendarClock, Pencil, AlertTriangle,
+  CalendarPlus, Undo2,
 } from 'lucide-react'
 
 const fmt = f => f
@@ -123,25 +124,28 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const [modalSacar,  setModalSacar]  = useState(null)  // { items: [] }
   const [modalFecha,  setModalFecha]  = useState(null)  // item a corregir
   const [fechaForm,   setFechaForm]   = useState('')
+  const [modalAplazar, setModalAplazar] = useState(null) // { items: [] }
+  const [motivoForm,   setMotivoForm]   = useState('')
 
   const cargar = useCallback(async () => {
     try {
       const d = await cargarSalidasCompostaje({ desde })
       setDatos(d); setError(null); setSel(new Set())
     } catch (e) {
-      const falta = /cubiculo_salida|capacidad|schema cache|does not exist/i.test(e?.message || '')
+      const falta = /cubiculo_salida|salida_programada|capacidad|schema cache|does not exist/i.test(e?.message || '')
       setError(falta
-        ? 'Falta aplicar la migración 155 (migrations/155_tenjo_salida_cubiculo_cupo.sql) en esta base de datos.'
+        ? 'Falta aplicar una migración (155 o 172, en migrations/) en esta base de datos.'
         : parsearErrorDB(e))
-      setDatos({ porSacar: [], enCurso: [], sinFecha: [], salieron: [] })
+      setDatos({ porSacar: [], aplazadas: [], enCurso: [], sinFecha: [], salieron: [] })
     }
   }, [desde])
 
   useEffect(() => { cargar() }, [cargar])
 
-  const porSacar = datos?.porSacar || []
-  const salieron = datos?.salieron || []
-  const enCurso  = datos?.enCurso  || []
+  const porSacar  = datos?.porSacar  || []
+  const salieron  = datos?.salieron  || []
+  const enCurso   = datos?.enCurso   || []
+  const aplazadas = datos?.aplazadas || []
   // Dentro del cubículo pero sin fecha de ingreso: no cumplen "ya les tocó"
   // NUNCA, así que si no se muestran aquí no aparecen en ningún sitio.
   const sinFecha = datos?.sinFecha || []
@@ -180,6 +184,41 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
     } finally { setSaving(false) }
   }
 
+  function abrirAplazar(items) {
+    if (!items.length) return
+    // Mañana por defecto: aplazar "para hoy" no la saca de la lista y confunde.
+    const d = new Date(); d.setDate(d.getDate() + 1)
+    setFechaForm(items.length === 1 && items[0].salida_programada
+      ? items[0].salida_programada : hoyLocalISO(d))
+    setMotivoForm(items.length === 1 ? (items[0].salida_programada_motivo || '') : '')
+    setModalAplazar({ items })
+  }
+
+  async function confirmarAplazar() {
+    const items = modalAplazar?.items || []
+    if (!items.length || !fechaForm) return
+    setSaving(true)
+    try {
+      for (const it of items) {
+        await programarSalida(it.id, fechaForm, motivoForm, personalData?.id)
+      }
+      setModalAplazar(null)
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo aplazar', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  async function quitarAplazamiento(it) {
+    setSaving(true)
+    try {
+      await programarSalida(it.id, null)
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo quitar', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
   async function guardarFecha() {
     if (!modalFecha || !fechaForm) return
     setSaving(true)
@@ -205,8 +244,9 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Por sacar hoy" value={porSacar.length} valueColor={porSacar.length > 0 ? '#C03030' : '#9CA3AF'} />
+        <StatCard label="Aplazadas" value={aplazadas.length} valueColor={aplazadas.length > 0 ? '#9A5500' : '#9CA3AF'} />
         <StatCard label="Aún en compostaje" value={enCurso.length} valueColor="#1D8A55" />
         <StatCard label="Salieron en el rango" value={salieron.length} valueColor="#3B6FBF" />
         <StatCard label="Seleccionadas" value={seleccionados.length} valueColor={seleccionados.length > 0 ? '#9A5500' : '#9CA3AF'} />
@@ -270,6 +310,11 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                 {sel.size === porSacar.length ? 'Quitar selección' : 'Seleccionar todas'}
               </button>
               <div className="flex-1" />
+              <Button size="sm" variant="secondary" disabled={!seleccionados.length || saving}
+                onClick={() => abrirAplazar(seleccionados)}>
+                <CalendarPlus size={12} className="mr-1" />
+                Aplazar {seleccionados.length || ''}
+              </Button>
               <Button size="sm" disabled={!seleccionados.length || saving}
                 onClick={() => abrirSacar(seleccionados)}>
                 <LogOut size={12} className="mr-1" />
@@ -312,10 +357,17 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                         </Td>
                         <Td><ChipEntrega item={it} /></Td>
                         <Td>
-                          <Button size="sm" variant="secondary" disabled={saving}
-                            onClick={() => abrirSacar([it])}>
-                            <LogOut size={12} className="mr-1" /> Sacar
-                          </Button>
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
+                              disabled={saving} title="Aplazar la salida a otra fecha"
+                              onClick={() => abrirAplazar([it])}>
+                              <CalendarPlus size={14} />
+                            </button>
+                            <Button size="sm" variant="secondary" disabled={saving}
+                              onClick={() => abrirSacar([it])}>
+                              <LogOut size={12} className="mr-1" /> Sacar
+                            </Button>
+                          </div>
                         </Td>
                       </Tr>
                     )
@@ -326,6 +378,72 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
           </>
         )}
       </div>
+
+      {/* ── APLAZADAS ──
+          El operario les puso una fecha futura: no salen en «Por sacar» ni en
+          su PDF hasta que llegue. El motivo va en la tabla, no en un tooltip:
+          el siguiente turno tiene que saber por qué Dallas sigue adentro. */}
+      {aplazadas.length > 0 && (
+        <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: '#FDE68A' }}>
+          <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: '#FDE68A' }}>
+            <CalendarPlus size={15} style={{ color: '#9A5500' }} />
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-[15px] text-ink">Salida aplazada</div>
+              <div className="text-[11px] text-ink3 mt-0.5">
+                Saldrán en la fecha que decidió el operario. Ese día pasan solas a «Por sacar».
+              </div>
+            </div>
+            <Acciones tipo="APLAZADAS" items={aplazadas} />
+          </div>
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Mascota</Th>
+                  <Th>Cubículo</Th>
+                  <Th>Ingresó</Th>
+                  <Th>Se cumple</Th>
+                  <Th>Saldrá</Th>
+                  <Th>Motivo</Th>
+                  <Th></Th>
+                </tr>
+              </thead>
+              <tbody>
+                {aplazadas.map(it => (
+                  <Tr key={it.id}>
+                    <Td><Mascota item={it} /></Td>
+                    <Td><Cubiculo item={it} /></Td>
+                    <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
+                    <Td className="text-ink3 text-[11px]">{fmt(it.fechaCumple)}</Td>
+                    <Td className="text-[11px]">
+                      <span className="font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                        style={{ background: '#FEF3C7', color: '#92400E' }}>
+                        {fmt(it.salida_programada)}
+                      </span>
+                    </Td>
+                    <Td className="text-[11px] text-ink2 max-w-[220px]">
+                      <span className="line-clamp-2">{it.salida_programada_motivo || '—'}</span>
+                    </Td>
+                    <Td>
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <Button size="sm" variant="secondary" disabled={saving}
+                          onClick={() => abrirAplazar([it])}>
+                          <Pencil size={12} className="mr-1" /> Fecha
+                        </Button>
+                        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
+                          disabled={saving} title="Quitar el aplazamiento: vuelve a la regla general"
+                          onClick={() => quitarAplazamiento(it)}>
+                          <Undo2 size={14} />
+                        </button>
+                      </div>
+                    </Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        </div>
+      )}
 
       {/* ── YA SALIERON ── */}
       <div className="bg-surface border rounded-2xl shadow-sm" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
@@ -418,6 +536,53 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
             <p className="text-[11px] text-ink3">
               El cubículo queda libre para otra mascota.
             </p>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal: aplazar / programar la salida ── */}
+      {modalAplazar && (
+        <Modal open onClose={() => setModalAplazar(null)} maxWidth="max-w-md"
+          title={modalAplazar.items.length === 1
+            ? `Aplazar la salida de ${modalAplazar.items[0].servicios?.mascotas?.nombre || 'la mascota'}`
+            : `Aplazar la salida de ${modalAplazar.items.length} mascotas`}
+          footer={<>
+            <Button variant="secondary" onClick={() => setModalAplazar(null)}>Cancelar</Button>
+            <Button onClick={confirmarAplazar} disabled={saving || !fechaForm}>
+              {saving ? 'Guardando…' : 'Aplazar salida'}
+            </Button>
+          </>}>
+          <div className="space-y-4">
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Saldrá el</label>
+              <Input type="date" min={hoyLocalISO()} value={fechaForm}
+                onChange={e => setFechaForm(e.target.value)} />
+              <p className="text-[11px] text-ink3 mt-1.5">
+                Hasta ese día no aparece en «Por sacar» ni en el PDF del recorte. Ese día
+                vuelve sola a la lista. Esto no registra la salida: al sacarla se pone la
+                fecha real, como siempre.
+              </p>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">Motivo</label>
+              <Input value={motivoForm} maxLength={300}
+                placeholder="Ej: le falta tiempo · la familia pide una última visita"
+                onChange={e => setMotivoForm(e.target.value)} />
+              <p className="text-[11px] text-ink3 mt-1.5">
+                Queda en la lista de aplazadas para que el siguiente turno sepa por qué.
+              </p>
+            </div>
+            {modalAplazar.items.length > 1 && (
+              <div className="rounded-xl border border-gray-200 p-3 max-h-40 overflow-y-auto space-y-1.5">
+                {modalAplazar.items.map(it => (
+                  <div key={it.id} className="flex items-center gap-2 text-[12px]">
+                    <span>{petEmoji(it.servicios?.mascotas?.especies?.nombre)}</span>
+                    <span className="font-semibold text-ink flex-1 truncate">{it.servicios?.mascotas?.nombre || '—'}</span>
+                    <Cubiculo item={it} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </Modal>
       )}

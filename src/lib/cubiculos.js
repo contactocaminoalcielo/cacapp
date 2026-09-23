@@ -60,7 +60,7 @@ export function sugerirTalla(pesoKg) {
 // Columnas que necesita cualquier vista de "quién está en el cubículo".
 const SELECT_ITEM_OCUPANTE =
   'id, cubiculo_id, cubiculo_codigo, fecha_compostaje_inicio, meses_compostaje, '
-  + 'fecha_fin_proceso, cubiculo_salida, servicio_id, '
+  + 'fecha_fin_proceso, cubiculo_salida, salida_programada, salida_programada_motivo, servicio_id, '
   + 'servicios(id, estado, fecha_limite_entrega, recordatorios_anticipados, '
   + 'mascotas(nombre, peso_kg, especies(nombre), clientes(nombre, apellido, whatsapp)), '
   + 'planes(nombre, tipo_proceso, dias_entrega_prometidos))'
@@ -152,6 +152,29 @@ export async function asignarCubiculo(itemId, cubiculoId) {
     cubiculo_liberado_en:  null,
     cubiculo_liberado_por: null,
     cubiculo_salida:       null,
+    // Un aplazamiento es de la ESTANCIA, no de la mascota: al volver a entrar,
+    // la fecha planeada de la estancia anterior ya no significa nada.
+    salida_programada:        null,
+    salida_programada_motivo: null,
+    salida_programada_por:    null,
+    salida_programada_en:     null,
+  }).eq('id', itemId)
+  if (error) throw error
+}
+
+/**
+ * El operario decide cuándo sale esta mascota (migración 172). Con fecha
+ * futura deja de aparecer en «Por sacar» y en su PDF: es cómo se aplaza a la
+ * que le falta tiempo o espera a otra mascota de la misma familia.
+ * `fecha = null` quita el aplazamiento y la mascota vuelve a la regla general.
+ * NO toca `cubiculo_salida`: la salida real se registra al sacar, como siempre.
+ */
+export async function programarSalida(itemId, fecha, motivo = null, personalId = null) {
+  const { error } = await db.from('lotes_tenjo_items').update({
+    salida_programada:        fecha || null,
+    salida_programada_motivo: fecha ? (motivo?.trim() || null) : null,
+    salida_programada_por:    fecha ? (personalId || null) : null,
+    salida_programada_en:     fecha ? new Date().toISOString() : null,
   }).eq('id', itemId)
   if (error) throw error
 }
@@ -204,8 +227,13 @@ export function finCompostaje(fechaStr, meses = 2) {
 }
 
 /**
- * Las dos listas de la pestaña Salidas:
- *   · `porSacar`  — siguen en el cubículo y el compostaje ya se cumplió.
+ * Las listas de la pestaña Salidas:
+ *   · `porSacar`  — le toca salir HOY: su fecha programada llegó o, si no
+ *     tiene, su compostaje ya se cumplió. La fecha del operario MANDA sobre el
+ *     cálculo (migr. 172): puede adelantar y puede aplazar.
+ *   · `aplazadas` — el operario les puso una fecha futura; no salen en el PDF
+ *     del recorte. Van aparte y con su motivo: metidas en `enCurso` nadie
+ *     recordaría por qué no salieron ni cuándo les toca.
  *   · `enCurso`   — siguen dentro pero aún les falta (contexto, no urgencia).
  *   · `sinFecha`  — siguen dentro y NO se sabe cuándo cumplen.
  *   · `salieron`  — ya salieron, desde `desde` (ISO) hacia acá.
@@ -242,10 +270,14 @@ export async function cargarSalidasCompostaje({ desde } = {}) {
 
   const hoy = hoyLocalISO()
   const adentro = (dentro || []).filter(esCompostaje).map(conCalculo)
+  const leToca = it => it.salida_programada
+    ? it.salida_programada <= hoy
+    : (it.fechaCumple && it.fechaCumple <= hoy)
   return {
-    porSacar: adentro.filter(it => it.fechaCumple && it.fechaCumple <= hoy),
-    enCurso:  adentro.filter(it => it.fechaCumple && it.fechaCumple > hoy),
-    sinFecha: adentro.filter(it => !it.fechaCumple),
-    salieron: (fuera || []).filter(esCompostaje).map(conCalculo),
+    porSacar:  adentro.filter(leToca),
+    aplazadas: adentro.filter(it => it.salida_programada && it.salida_programada > hoy),
+    enCurso:   adentro.filter(it => !leToca(it) && !it.salida_programada && it.fechaCumple),
+    sinFecha:  adentro.filter(it => !it.fechaCumple && !it.salida_programada),
+    salieron:  (fuera || []).filter(esCompostaje).map(conCalculo),
   }
 }

@@ -35,26 +35,42 @@ const clienteTxt = it => {
 
 /**
  * Genera y descarga el listado.
- * @param {'POR_SACAR'|'SALIERON'} tipo
+ * @param {'POR_SACAR'|'APLAZADAS'|'SALIERON'} tipo
  * @param {Array} items  filas de cargarSalidasCompostaje
  */
 export async function generarPdfSalidas(tipo, items) {
   const { default: jsPDF } = await import('jspdf')
   const pdf = new jsPDF('p', 'mm', 'a4')
   const W = 210, H = 297, M = 14
-  const porSacar = tipo === 'POR_SACAR'
-  const titulo = porSacar ? 'MASCOTAS POR SACAR DEL CUBÍCULO' : 'MASCOTAS QUE YA SALIERON DEL CUBÍCULO'
+  const porSacar  = tipo === 'POR_SACAR'
+  const aplazadas = tipo === 'APLAZADAS'
+  const titulo = porSacar ? 'MASCOTAS POR SACAR DEL CUBÍCULO'
+    : aplazadas ? 'MASCOTAS CON LA SALIDA APLAZADA'
+    : 'MASCOTAS QUE YA SALIERON DEL CUBÍCULO'
   const hoyTxt = new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
 
   // Columnas: x de inicio y ancho. La última se deja ancha porque la fecha de
   // entrega de los recordatorios es lo que se consulta de verdad.
+  // En el recorte van las TRES fechas que pidió David: ingreso, cumplimiento
+  // del compostaje y salida (la programada por el operario; «—» si sale con el
+  // recorte de hoy sin fecha aparte).
   const COLS = porSacar
     ? [
-        { k: 'mascota',  label: 'Mascota',   x: M,      w: 34 },
-        { k: 'cliente',  label: 'Familia',   x: M + 34, w: 46 },
-        { k: 'cubiculo', label: 'Cubículo',  x: M + 80, w: 30 },
-        { k: 'ingreso',  label: 'Ingresó',   x: M + 110, w: 30 },
-        { k: 'cumple',   label: 'Se cumplió', x: M + 140, w: 42 },
+        { k: 'mascota',  label: 'Mascota',   x: M,       w: 30 },
+        { k: 'cliente',  label: 'Familia',   x: M + 30,  w: 42 },
+        { k: 'cubiculo', label: 'Cubículo',  x: M + 72,  w: 26 },
+        { k: 'ingreso',  label: 'Ingresó',   x: M + 98,  w: 26 },
+        { k: 'cumple',   label: 'Se cumplió', x: M + 124, w: 28 },
+        { k: 'sale',     label: 'Sale',      x: M + 152, w: 30 },
+      ]
+    : aplazadas
+    ? [
+        { k: 'mascota',  label: 'Mascota',   x: M,       w: 26 },
+        { k: 'cubiculo', label: 'Cubículo',  x: M + 26,  w: 24 },
+        { k: 'ingreso',  label: 'Ingresó',   x: M + 50,  w: 24 },
+        { k: 'cumple',   label: 'Se cumple', x: M + 74,  w: 24 },
+        { k: 'sale',     label: 'Saldrá',    x: M + 98,  w: 24 },
+        { k: 'motivo',   label: 'Motivo',    x: M + 122, w: 60 },
       ]
     : [
         { k: 'mascota',  label: 'Mascota',   x: M,      w: 32 },
@@ -72,6 +88,8 @@ export async function generarPdfSalidas(tipo, items) {
       case 'ingreso':  return fmt(it.fecha_compostaje_inicio)
       case 'cumple':   return fmt(it.fechaCumple)
       case 'salida':   return fmt(it.cubiculo_salida)
+      case 'sale':     return it.salida_programada ? fmt(it.salida_programada) : (porSacar ? 'Hoy' : '—')
+      case 'motivo':   return it.salida_programada_motivo || '—'
       case 'entrega':  return fmt(it.servicios?.fecha_limite_entrega)
       default:         return '—'
     }
@@ -114,6 +132,8 @@ export async function generarPdfSalidas(tipo, items) {
     pdf.setFont('helvetica', 'italic'); pdf.setFontSize(9); pdf.setTextColor(...GRIS)
     pdf.text(porSacar
       ? 'No hay ninguna mascota cumplida esperando salir del cubículo.'
+      : aplazadas
+      ? 'Ninguna mascota tiene la salida aplazada.'
       : 'Ninguna mascota salió del cubículo en el rango consultado.', M, y)
   }
 
@@ -157,7 +177,7 @@ export async function generarPdfSalidas(tipo, items) {
   pie()
 
   const sello = new Date().toISOString().slice(0, 10)
-  pdf.save(`${porSacar ? 'por-sacar' : 'salieron'}-compostaje-${sello}.pdf`)
+  pdf.save(`${porSacar ? 'por-sacar' : aplazadas ? 'aplazadas' : 'salieron'}-compostaje-${sello}.pdf`)
 }
 
 /**
@@ -165,10 +185,13 @@ export async function generarPdfSalidas(tipo, items) {
  * enlace, así que el listado va escrito; el PDF se adjunta a mano si hace falta.
  */
 export function textoSalidasWa(tipo, items) {
-  const porSacar = tipo === 'POR_SACAR'
+  const porSacar  = tipo === 'POR_SACAR'
+  const aplazadas = tipo === 'APLAZADAS'
   const hoyTxt = new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
   const cabeza = porSacar
     ? `🌿 *Por sacar del cubículo* — ${hoyTxt}`
+    : aplazadas
+    ? `📅 *Salida aplazada* — ${hoyTxt}`
     : `✅ *Ya salieron del cubículo* — ${hoyTxt}`
 
   if (!items.length) {
@@ -177,6 +200,10 @@ export function textoSalidasWa(tipo, items) {
 
   const lineas = items.map(it => porSacar
     ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · cumplió ${fmt(it.fechaCumple)}`
+      + (it.salida_programada ? ` · sale ${fmt(it.salida_programada)}` : '')
+    : aplazadas
+    ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · saldrá ${fmt(it.salida_programada)}`
+      + (it.salida_programada_motivo ? ` · ${it.salida_programada_motivo}` : '')
     : `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · salió ${fmt(it.cubiculo_salida)}`
       + (it.servicios?.fecha_limite_entrega ? ` · entrega ${fmt(it.servicios.fecha_limite_entrega)}` : ''))
 
