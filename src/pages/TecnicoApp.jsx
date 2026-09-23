@@ -5417,6 +5417,7 @@ const MOTIVO_RESUELTO = {
   OFICINA:  { texto: 'Lo subió la oficina', color: '#1D4ED8', bg: '#DBEAFE' },
   PAGADO:   { texto: 'Ya lo pagaron',     color: '#0F766E', bg: '#CCFBF1' },
   CUADRADO: { texto: 'Ya cuadrado',       color: '#6D28D9', bg: '#EDE9FE' },
+  SIN_DIGITAL: { texto: 'No se exige',    color: '#4B5563', bg: '#F3F4F6' },
 }
 
 // Tarjeta de un recibo que ya no es tarea del técnico. Tres caminos, y la
@@ -5442,7 +5443,9 @@ function TarjetaComprobanteSubido({ item, onPersistir }) {
           <div className="text-[10px] text-gray-500 truncate">
             {item.pagoPendiente
               ? 'Quedo en pagar despues'
-              : `${item.metodos.join(', ')} - ${fmt(item.monto)}`}
+              : item.metodos.length
+                ? `${item.metodos.join(', ')} - ${fmt(item.monto)}`
+                : 'Sin cobro en el recibo'}
           </div>
         </div>
         <span className="text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 flex-shrink-0"
@@ -5454,7 +5457,7 @@ function TarjetaComprobanteSubido({ item, onPersistir }) {
 
       {/* Un PAGO PENDIENTE no tiene "comprobante anterior" que reemplazar: su
           único camino es sumar otro. */}
-      {pruebaPropia && !item.pagoPendiente && (
+      {pruebaPropia && !item.soloAdjunto && (
         <ComprobanteUploader
           servicioId={item.svcId}
           stashId={`${item.reciboId}_reemplazo`}
@@ -5547,18 +5550,18 @@ function ComprobanteTab({ tecnico, onCount }) {
         // mismo `created_at` pueden repetirse o saltarse en el corte de página.
         return q.order('created_at', { ascending: false }).order('id')
       })
-      // Un item por recibo con al menos un medio DIGITAL con monto > 0…
-      const tieneDigital = r =>
-        Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
-          METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
-      // …y TAMBIÉN los cerrados como PAGO PENDIENTE. Esos se guardan sin medios
-      // (`medios_pago = []`, `valor_cobrado = 0`), así que el filtro de arriba los
-      // dejaba fuera y el técnico no tenía dónde subir el comprobante cuando el
-      // cliente pagaba después. Son 183 recibos, 176 sin comprobante.
-      // ⚠️ Subir aquí NO levanta el pendiente: solo adjunta la prueba. Quien
-      // convierte eso en un cobro (medio de pago y valor) es coordinación.
+      // Entran TODOS los recibos del técnico, sea cual sea el medio de pago.
+      // 🩸 Antes solo entraban los de medio DIGITAL y los PAGO PENDIENTE, y
+      // subir un comprobante no depende del medio (David, 23-sep): los de
+      // EFECTIVO quedaban fuera y PECATA —de Jeisson, 11-sep— no tenía dónde
+      // recibir el suyo. Lo que es TAREA sigue siendo lo mismo (ver `motivo`):
+      // los de efectivo entran como resueltos, con el botón de subir de todos
+      // modos.
+      // Los PAGO PENDIENTE se guardan sin medios (`medios_pago = []`,
+      // `valor_cobrado = 0`). ⚠️ Subir ahí NO levanta el pendiente: solo adjunta
+      // la prueba. Quien la convierte en un cobro (medio y valor) es coordinación.
       const esPagoPendiente = r => r.datos_form?.pago_pendiente === true
-      const recibos = (recs || []).filter(r => tieneDigital(r) || esPagoPendiente(r))
+      const recibos = recs || []
       // Mascota/plan de esos servicios, en lotes (cientos de ids en .in() dan 414)
       const ids = [...new Set(recibos.map(r => r.servicio_id).filter(Boolean))]
       const svcById = {}
@@ -5611,13 +5614,18 @@ function ComprobanteTab({ tecnico, onCount }) {
         // Cerrado como PAGO PENDIENTE: sin medios y sin cobro. Tiene su propio
         // grupo porque no es una tarea del técnico, es una cuenta por cobrar.
         const pagoPend   = esPagoPendiente(r) && digital.length === 0
+        // Efectivo, o sin cobro en el recibo: no hay medio digital al que
+        // colgarle la prueba. Como en un pago pendiente, solo se ADJUNTA.
+        const sinDigital = !pagoPend && digital.length === 0
+        const soloAdjunto = pagoPend || sinDigital
 
         // ── Por qué deja de ser tarea suya ─────────────────────────────────
         // SUBIDO   → la prueba de ESTE recibo ya está (jsonb o fila propia).
         // OFICINA  → hay comprobante del servicio por otra vía.
         // PAGADO   → el servicio ya quedó saldado; el pendiente se cobró.
         // CUADRADO → el servicio ya entró en un cuadre CERRADO con él.
-        const pruebaPropia = pagoPend ? nComps > 0 : (pendientes.length === 0 && (!!yaUrl || nComps > 0))
+        // SIN_DIGITAL → se cobró en efectivo (o no se cobró): no se le exige.
+        const pruebaPropia = soloAdjunto ? nComps > 0 : (pendientes.length === 0 && (!!yaUrl || nComps > 0))
         const pruebaAjena  = (compsPorServicio[r.servicio_id] || 0) > nComps
         const yaPagado     = svc?.estado_pago === 'COMPLETO'
           || (Number(svc?.valor_total) > 0 && Number(svc?.valor_pagado || 0) >= Number(svc?.valor_total))
@@ -5625,7 +5633,9 @@ function ComprobanteTab({ tecnico, onCount }) {
           : pruebaAjena                        ? 'OFICINA'
           : (pagoPend && yaPagado)             ? 'PAGADO'
           : cuadrados.has(r.servicio_id)       ? 'CUADRADO'
+          : sinDigital                         ? 'SIN_DIGITAL'
           : null
+        const conMonto = medios.filter(m => parseFloat(m.monto) > 0)
 
         lista.push({
           reciboId: r.id,
@@ -5633,11 +5643,14 @@ function ComprobanteTab({ tecnico, onCount }) {
           numero:   r.numero_recibo,
           mascota:  svc?.mascotas,
           plan:     svc?.planes?.nombre || '',
-          metodos:  pagoPend ? [] : (pendientes.length > 0 ? pendientes.map(m => m.metodo) : digital.map(m => m.metodo)),
-          monto:    digital.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
-          yaUrl:    pagoPend ? '' : yaUrl,
+          metodos:  pagoPend ? []
+            : sinDigital ? [...new Set(conMonto.map(m => m.metodo))]
+            : (pendientes.length > 0 ? pendientes.map(m => m.metodo) : digital.map(m => m.metodo)),
+          monto:    (sinDigital ? conMonto : digital).reduce((s, m) => s + (parseFloat(m.monto) || 0), 0),
+          yaUrl:    soloAdjunto ? '' : yaUrl,
           nComps,
           pagoPendiente: pagoPend,
+          soloAdjunto,
           motivo,
           estado: motivo ? 'RESUELTO' : (pagoPend ? 'PAGO_PENDIENTE' : 'PENDIENTE'),
         })
@@ -5665,7 +5678,7 @@ function ComprobanteTab({ tecnico, onCount }) {
   // `estado_pago` ni los montos: el técnico adjunta la PRUEBA, nunca levanta el
   // pendiente. Convertir eso en cobro (medio y valor) es de coordinación.
   async function persistir(item, publicUrl, storagePath, val, { reemplazar = false, adicional = false } = {}) {
-    const soloAdjuntar = adicional || item.pagoPendiente
+    const soloAdjuntar = adicional || item.soloAdjunto
     // 1. Compat: actualizar el medio digital en el jsonb.
     let idx = -1
     // Un comprobante adicional o el de un pago pendiente NO entra aquí: escribir
@@ -5730,6 +5743,9 @@ function ComprobanteTab({ tecnico, onCount }) {
         descripcion:    item.pagoPendiente
           ? `El tecnico subio un comprobante de pago para el recibo ${item.numero}, que se habia cerrado como PAGO PENDIENTE. `
             + 'El cobro NO se registro: sigue pendiente hasta que coordinacion revise el comprobante y le ponga el medio de pago y el valor.'
+          : item.soloAdjunto
+          ? `El tecnico subio un comprobante para el recibo ${item.numero}, registrado como ${item.metodos.join(', ') || 'sin cobro'}. `
+            + 'Los medios de pago del recibo NO cambiaron. Pendiente de revision.'
           : `Comprobante de pago ${reemplazar ? 'reemplazado' : adicional ? 'adicional subido' : 'subido'} (recibo ${item.numero}). Pendiente de revision.`,
         registrado_por: tecnico?.id || null,
       })
@@ -5763,8 +5779,11 @@ function ComprobanteTab({ tecnico, onCount }) {
   const resueltos  = itemsFiltrados.filter(i => i.estado === 'RESUELTO')
   // Lo resuelto no se borra: se guarda plegado. Sigue siendo la mayoría de la
   // pantalla (historia de meses), pero deja de leerse como una lista de
-  // pendientes. Al buscar se abre solo, o la búsqueda no encontraría nada.
-  const verResueltos = abrirResueltos || hayBusqueda
+  // pendientes. Al buscar se abre solo, o la búsqueda no encontraría nada. Al
+  // filtrar por fecha, también: quien pide "el 11 de septiembre" busca algo
+  // concreto, y cerrado parecía que esas mascotas no existían.
+  const hayFiltroFecha = !!(desde || hasta)
+  const verResueltos = abrirResueltos || hayBusqueda || hayFiltroFecha
 
   return (
     <div>
@@ -5783,10 +5802,10 @@ function ComprobanteTab({ tecnico, onCount }) {
         style={{ background: '#FFF7ED', color: '#9A3412' }}>
         <span className="text-base leading-none mt-0.5">💡</span>
         <span>
-          Acá llegan <strong>tus recibos con pago digital</strong> (transferencia, Nequi,
-          Daviplata o tarjeta) y los que quedaron en <strong>pagar después</strong>. Sale de la
-          lista solo lo que ya se resolvió: comprobante subido, cobro registrado en la oficina o
-          servicio ya cuadrado contigo. Lo resuelto queda guardado abajo.
+          Arriba, lo que te toca: <strong>tus recibos con pago digital</strong> (transferencia,
+          Nequi, Daviplata o tarjeta) sin comprobante y los que quedaron en <strong>pagar
+          después</strong>. Todos tus demás recibos —también los de <strong>efectivo</strong>—
+          quedan abajo en "Ya resueltos", y a cualquiera le puedes subir un comprobante.
         </span>
       </div>
 
@@ -5824,8 +5843,8 @@ function ComprobanteTab({ tecnico, onCount }) {
       {cargando && items.length === 0 ? (
         <div className="flex justify-center py-10"><div className="spinner" /></div>
       ) : items.length === 0 ? (
-        <EmptyState icon="🧾" texto="Sin comprobantes por subir"
-          sub="Cuando registres un pago por transferencia, Nequi, Daviplata o tarjeta, aparecerá aquí para subir el comprobante." />
+        <EmptyState icon="🧾" texto="Sin recibos en estas fechas"
+          sub="Cuando guardes un recibo aparecerá aquí, y le podrás subir el comprobante sea cual sea el medio de pago." />
       ) : (
         <>
           {itemsFiltrados.length === 0 ? (
@@ -5915,7 +5934,7 @@ function ComprobanteTab({ tecnico, onCount }) {
               {resueltos.length > 0 && (
                 <div className="mt-4">
                   <button type="button" onClick={() => setAbrirResueltos(v => !v)}
-                    disabled={hayBusqueda}
+                    disabled={hayBusqueda || hayFiltroFecha}
                     className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-left disabled:opacity-100"
                     style={{ borderColor: '#E5E7EB', background: '#F9FAFB' }}>
                     <span className="text-[12px] font-bold text-gray-600">
