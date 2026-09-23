@@ -24,7 +24,7 @@
 import { pool, log } from './db.js'
 import { registrar as registrarCosto } from './costos.js'
 import { motorDe } from './motores/index.js'
-import { enviarTexto, enviarSobre, etiquetar, acusarLectura } from './whatsapp-cloud.js'
+import { enviarTexto, enviarSobre, etiquetar, acusarLectura, abrirEsperaSiPrometio } from './whatsapp-cloud.js'
 import { catalogoParaAgente, enviarInteractivo } from './whatsapp-interactivos.js'
 import { catalogoDeMateriales, enviarMaterial } from './whatsapp-materiales.js'
 import {
@@ -1852,6 +1852,11 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
       const porQue = env?.body?.error || 'Meta rechazó el envío'
       log(MOD, `🚨 ${num}: el agente respondió pero el mensaje NO SALIÓ — ${porQue}`)
       await avisarQueQuedoSinRespuesta(num, `Respuesta generada pero NO entregada: ${porQue}`, phoneNumberId)
+    } else {
+      // Si le prometió a la clínica que coordinación le responde, alguien queda
+      // esperando: se abre la alerta aunque el agente no haya puesto una
+      // etiqueta que avise (migr. 171, ver `promesaDeCoordinacion`).
+      await abrirEsperaSiPrometio({ linea: phoneNumberId, contacto: num, texto: r.texto })
     }
     return r.hastaId || null
   }

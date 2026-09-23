@@ -208,9 +208,15 @@ async function abrirEspera({ linea, contacto, etiquetaId, nivel, motivo }) {
       `INSERT INTO public.whatsapp_esperas (phone_number_id, contacto, etiqueta_id, nivel, motivo)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (phone_number_id, contacto) WHERE cerrada_en IS NULL DO UPDATE
-         SET motivo      = COALESCE(EXCLUDED.motivo, public.whatsapp_esperas.motivo),
-             etiqueta_id = CASE WHEN EXCLUDED.nivel = 'INMEDIATA'
-                                  OR public.whatsapp_esperas.nivel = 'ESPERA'
+         -- Sin etiqueta = viene de la promesa del texto, que llega DESPUÉS de
+         -- que el agente etiquetó en la misma respuesta: no pisa el motivo
+         -- de la etiqueta ("de 4:20 a 5:00, LUNA"), que dice más.
+         SET motivo      = CASE WHEN EXCLUDED.etiqueta_id IS NULL
+                                THEN COALESCE(public.whatsapp_esperas.motivo, EXCLUDED.motivo)
+                                ELSE COALESCE(EXCLUDED.motivo, public.whatsapp_esperas.motivo) END,
+             etiqueta_id = CASE WHEN EXCLUDED.etiqueta_id IS NOT NULL
+                                 AND (EXCLUDED.nivel = 'INMEDIATA'
+                                      OR public.whatsapp_esperas.nivel = 'ESPERA')
                                 THEN EXCLUDED.etiqueta_id
                                 ELSE public.whatsapp_esperas.etiqueta_id END,
              nivel       = CASE WHEN EXCLUDED.nivel = 'INMEDIATA'
@@ -221,6 +227,81 @@ async function abrirEspera({ linea, contacto, etiquetaId, nivel, motivo }) {
   } catch (e) {
     log(MOD, `NO se pudo abrir la espera de ${contacto} —`, e.message)
   }
+}
+
+// 🩸 La etiqueta sola NO bastó (prueba de David, 23-sep, el mismo día en que salió
+// la alerta): el agente registró la solicitud de Lupe, escribió "Coordinación
+// confirma la hora directamente por aquí" y solo etiquetó SOLICITUD, que no avisa.
+// Cuando le preguntaron "¿a qué horas pasan?", volvió a etiquetar SOLICITUD.
+// En 14 días el agente nombró a coordinación en 114 de 410 respuestas, casi
+// siempre prometiendo que alguien iba a responder. Lo que promete es lo que
+// deja a alguien esperando, así que se lee de lo que DIJO, no de la etiqueta.
+//
+// Calibrado con esas frases reales. Queda fuera a propósito lo que solo
+// informa ("coordinación lo revisa y aprueba", del enlace de afiliación):
+// eso no deja a nadie esperando una respuesta en el chat.
+// Verbos con que se promete una respuesta, en presente, futuro y subjuntivo
+// ("te confirma", "te confirmará", "que te escriba").
+const V = '(?:confirma|confirman|confirmara|confirmaran|confirme|confirmen|escribe|escriben|escribira|escribiran|escriba|escriban|contacta|contactan|contactara|contacte|contacten|llama|llaman|llamara|llame|llamen|responde|responden|respondera|responda|respondan|avisa|avisan|avisara|avise|comunica|comunican|comunicara|comunique|atiende|atienda|de|den|da|dan)'
+const PROMESAS = [
+  // "Coordinación confirma la hora…", "coordinación te escribe", "que coordinación te escriba",
+  // "coordinación se comunicará contigo", "coordinación revisa la información y te confirma"
+  new RegExp(String.raw`\bcoordinacion\s+(?:directamente\s+)?(?:te|le|les|los|las|lo|la|se)?\s*${V}\b`),
+  new RegExp(String.raw`\bcoordinacion\b[^.!?\n]{0,80}\b(?:te|le|les)\s+(?:lo\s+|la\s+|los\s+|las\s+)?${V}\b`),
+  // "Coordinación va a contactarte", "estará en contacto"
+  /\bcoordinacion\s+(?:va a (?:contactar|escribir|llamar|confirmar|comunicar)|estara en contacto)/,
+  // "te la confirma coordinación", "lo maneja directamente coordinación"
+  /\b(?:confirma|confirman|maneja|manejan)\s+(?:directamente\s+)?coordinacion\b/,
+  // "le paso esto a coordinación", "quedó pasado a coordinación", "se lo hago llegar a…",
+  // "voy a pasar tu caso al equipo de coordinación", "te dejo con coordinación"
+  /\b(?:paso|pase|pasado|pasada|pasar|llegar|escalo|escale|escalado|escalada|escalar|escalando|aviso|avise|avisar|informe|informo|reporto|reporte|dejo|deje|remito|remiti)\b[^.!?\n]{0,40}\b(?:a|al equipo de|con)\s+coordinacion\b/,
+  // "lo escalo ya", "ya quedó escalado": escalar es siempre pasárselo a una persona
+  /\b(?:lo|la|te|se lo|se la|ya)\s+(?:\w+\s+)?(?:escalo|escale|escalando|escalado|escalada)\b/,
+  // "para que coordinación revise", "necesito que coordinación confirme", "te lo confirmo con coordinación"
+  /\b(?:para|necesito) que (?:alguien de |el equipo de )?coordinacion\b/,
+  /\bconfirmo con coordinacion\b/,
+  // "voy a escalar tu caso"
+  /\bvoy a escalar\b/,
+  // "Te escribimos apenas coordinación tenga novedades"
+  /\bte (?:escribimos|contactamos|llamamos|confirmamos)\b/,
+  // "en cuanto coordinación confirme", "pendiente de lo que te confirme coordinación"
+  /\b(?:en cuanto|cuando|lo que)\s+(?:te\s+)?(?:coordinacion\s+confirme|confirme\s+coordinacion)\b/,
+  // "…y te escriben por aquí", "te confirman por acá"
+  /\bte\s+(?:escriben|confirman|contactan|llaman|responden)\s+(?:por\s+(?:aqui|aca)|en seguida|enseguida|de inmediato)\b/,
+  // Línea de familias: "un asesor te escribe", "un asesor continúe contigo"
+  new RegExp(String.raw`\b(?:asesor|asesora|asesores)\s+(?:del equipo\s+)?(?:(?:te|le)\s+${V}|continue)\b`),
+]
+
+/**
+ * La frase en la que el agente promete que una persona va a responder, o
+ * `null` si no promete nada. Se exporta para poder probarla sin base.
+ */
+export function promesaDeCoordinacion(texto) {
+  const plano = String(texto || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  if (!PROMESAS.some(re => re.test(plano))) return null
+  // La frase original (con tildes) que contiene la promesa: es lo que el
+  // coordinador lee en la alerta para saber qué se prometió.
+  const frases = String(texto).split(/(?<=[.!?])\s+|\n+/)
+  const frase = frases.find(f => {
+    const p = f.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    return PROMESAS.some(re => re.test(p))
+  })
+  return (frase || texto).trim().slice(0, 240)
+}
+
+/**
+ * Si la respuesta que el agente acaba de ENVIAR promete a coordinación, abre la
+ * espera. Nunca lanza. No sube de nivel una espera que ya estaba (ESPERA no
+ * pisa INMEDIATA) y no reinicia su reloj.
+ */
+export async function abrirEsperaSiPrometio({ linea, contacto, texto }) {
+  const frase = promesaDeCoordinacion(texto)
+  if (!frase) return false
+  await abrirEspera({
+    linea, contacto: soloDigitos(contacto), etiquetaId: null, nivel: 'ESPERA',
+    motivo: `El agente le dijo: «${frase}»`,
+  })
+  return true
 }
 
 /**
