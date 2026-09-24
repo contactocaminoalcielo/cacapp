@@ -5,18 +5,23 @@
 // una etiqueta en la bandeja que nadie estaba mirando.
 //
 // Dos niveles, y el segundo llega solo:
-//   · Franja arriba, estilo isla de iPhone, en CUALQUIER pantalla.
+//   · Franja arriba, estilo isla de iPhone.
 //   · Pantalla gris completa si la etiqueta es urgente (INMEDIATA) o si pasan
 //     MIN_PARA_BLOQUEAR minutos sin que nadie responda.
+//
+// Solo en el TABLERO (/kanban). El primer día salió en cualquier pantalla y la
+// pantalla gris bloqueó a producción en pleno trabajo (Diana, 24-sep): quien
+// coordina vive en el tablero, y es ahí donde la alerta tiene un destinatario.
 //
 // 🔑 La alerta se apaga RESPONDIENDO, no cerrándola. Una ✕ se cerraría "para
 // después" y volvería a pasar lo mismo. "Revisar conversación" solo la aparta
 // unos minutos mientras se escribe; si no se contesta, vuelve. La única salida
 // sin responder es "Ya lo resolví por teléfono", y deja quién y cuándo.
 //
-// Vive al lado de ChatFlotante (fuera del AppShell) por la misma razón que él:
-// tiene que verse en Kanban, en Finanzas o en Tenjo.
+// Vive al lado de ChatFlotante (fuera del AppShell): necesita el ChatWaContext
+// para abrir el hilo, aunque solo se pinte en el tablero.
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { MessageCircle, ChevronDown, Phone } from 'lucide-react'
 import { useChatWa, pitar } from '@/contexts/ChatWaContext'
@@ -49,6 +54,9 @@ export default function EsperasCoordinacion() {
   const chat = useChatWa()
   const vigila = chat?.vigila
   const quieto = useReducedMotion()
+  // Fuera del tablero ni se pinta NI se sondea: si sonara el pitido desde
+  // Producción o Finanzas, sería la misma interrupción que se vino a quitar.
+  const enTablero = useLocation().pathname === '/kanban'
 
   const [esperas, setEsperas] = useState([])
   // Diferencia entre el reloj del servidor y el de este computador: los
@@ -64,7 +72,7 @@ export default function EsperasCoordinacion() {
   sonidoRef.current = chat?.conSonido
 
   useEffect(() => {
-    if (!vigila) return
+    if (!vigila || !enTablero) return
     let vivo = true
     const mirar = lecturaSerial(async () => {
       try {
@@ -87,7 +95,7 @@ export default function EsperasCoordinacion() {
     mirar()
     const id = setInterval(mirar, POLL_MS)
     return () => { vivo = false; clearInterval(id) }
-  }, [vigila])
+  }, [vigila, enTablero])
 
   // El reloj de los minutos. Cada 15 s basta: se muestra en minutos.
   useEffect(() => {
@@ -127,7 +135,7 @@ export default function EsperasCoordinacion() {
     }
   }, [])
 
-  if (!vigila || !conMinutos.length) return null
+  if (!vigila || !enTablero || !conMinutos.length) return null
 
   const primera = conMinutos[0]
   const varias = conMinutos.length > 1

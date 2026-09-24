@@ -204,6 +204,19 @@ export async function etiquetar({ contacto, linea = null, agenteId = null, clave
  */
 async function abrirEspera({ linea, contacto, etiquetaId, nivel, motivo }) {
   try {
+    // La línea de FAMILIAS no abre esperas (David, 24-sep): la alerta es de
+    // coordinación de veterinarias, y sonar por familias interrumpía sin
+    // necesidad. Se decide por el agente asignado a la línea — no por un id
+    // quemado — para que la regla siga a la línea si algún día se muda.
+    // Cubre las DOS vías de una sola vez: etiqueta del agente y promesa.
+    const { rows: [esFamilias] } = await pool.query(
+      `SELECT 1 FROM public.agente_wa WHERE clave = 'FAMILIAS' AND $1 = ANY(phone_number_ids)`,
+      [linea]
+    )
+    if (esFamilias) {
+      log(MOD, `${contacto}: sin espera — la línea es del agente FAMILIAS`)
+      return
+    }
     await pool.query(
       `INSERT INTO public.whatsapp_esperas (phone_number_id, contacto, etiqueta_id, nivel, motivo)
        VALUES ($1, $2, $3, $4, $5)

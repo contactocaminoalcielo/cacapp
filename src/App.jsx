@@ -307,7 +307,8 @@ function InnerApp() {
             avisa aunque estés en Kanban o en Finanzas. */}
         <ChatFlotante />
         {/* Cuando el agente escala: franja arriba y, si urge o pasan 10 min
-            sin respuesta, pantalla gris. Ver EsperasCoordinacion.jsx. */}
+            sin respuesta, pantalla gris. SOLO se pinta en el Tablero (/kanban),
+            pero vive aquí porque usa el ChatWaContext. Ver EsperasCoordinacion.jsx. */}
         <EsperasCoordinacion />
       </BadgesProvider>
     </ChatWaProvider>
