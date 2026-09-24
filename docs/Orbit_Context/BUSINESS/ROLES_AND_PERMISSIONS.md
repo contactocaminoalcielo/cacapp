@@ -35,6 +35,11 @@ Estos roles existen en el diseño pero no tienen entrada en `roles_personal` aú
 - Gestión (aliados, configuración operativa).
 - Calendario.
 
+**COORDINADOR y ADMIN** son los únicos que vigilan la bandeja de WhatsApp (`vigila` en
+`ChatWaContext`). Solo ellos reciben el chat flotante y la **alerta "espera respuesta"** del
+agente, y esa alerta **solo aparece dentro del Tablero (`/kanban`)** desde el 24-sep (RN090).
+Un ADMIN que trabaja en Producción, Finanzas o Tenjo no la ve mientras no abra el Tablero.
+
 ### TECNICO
 - TecnicoApp exclusivamente. Ve solo lo asignado a él.
 - Pestañas: Recogidas, Recibos, Comprobantes, C. Frío, Entregas, Mis pagos.

@@ -17,6 +17,30 @@ Dos caminos, ambos vigentes:
   condicional, así que si dos la tocan a la vez la segunda ve "otro compañero la tomó primero".
 - **Asignación directa** a una persona, que además notifica.
 
+## Qué ve el mensajero (pestaña Entregas de la app)
+- **Mis entregas**: las suyas en `ASIGNADA` o `EN_CAMINO`.
+- **Disponibles**: el pool, **solo entregas reales**. La consulta excluye en el servidor los
+  servicios `ENTREGADO` o `CANCELADO` (`servicios!inner` + `.not('servicios.estado', …)`), con
+  tope de 500 filas.
+- **Buscar** por mascota, cliente o teléfono, y **filtrar por fechas**. Las dos cosas aplican a las
+  dos listas. La fecha es la programada o, si no tiene, el día en que coordinación la publicó.
+
+## 🩸 Incidente del 24-sep: el pool tapado por entregas ya hechas
+Coordinación marcaba `ENTREGADO` en el Tablero y la fila de `entregas` seguía `DISPONIBLE`:
+**152 así**, más 1 `ASIGNADA` y 2 `EN_CAMINO`. El pool traía las 100 más antiguas, así que de
+**94 entregas reales el mensajero veía 25** y las recién preparadas nunca le aparecían. Además,
+Producción mostraba como "disponibles" mascotas que ya estaban entregadas.
+
+Se corrigió en dos capas:
+- **DB (migración 173):** el trigger `trg_entrega_sigue_servicio_entregado` cierra la entrega cuando
+  el servicio pasa a `ENTREGADO` por cualquier vía (regla RN088), y se hizo el backfill de las 155.
+  Resultado verificado: 0 abiertas de servicios entregados y 99 reales en el pool.
+- **App:** el filtro del pool va en la consulta, no después. Filtrar en el celular no recupera las
+  plazas que ya se comieron las entregas viejas dentro del tope.
+
+No movió dinero: el cuadre solo lee entregas con `cobro_monto`, y ni el trigger ni el backfill lo
+escriben. Si el servicio tenía saldo, ese saldo sigue en cartera.
+
 ## Cobro en la puerta (migraciones 151 y 152)
 Si el servicio tiene saldo, en la fase `EN_CAMINO` el mensajero resuelve el dinero antes de
 poder completar: **`Recibí el dinero`** (medio de pago + comprobante, obligatorio si no es

@@ -133,6 +133,21 @@ RN086. La fecha de salida del cubículo es **corregible** y al corregirla se rec
 RN087. Un cubículo puede alojar **más de una mascota**: su `capacidad` la fija a mano el
        coordinador, cubículo por cubículo (por defecto 1). La base rechaza pasarse del cupo.
 
+## N. La entrega sigue al servicio (2026-09-24, migración 173)
+RN088. **Si el servicio queda `ENTREGADO` por cualquier vía** (el Tablero, el cliente recogió en
+       sede, un cierre manual), **su entrega publicada o asignada se cierra sola**. Una entrega
+       abierta de algo ya entregado no es trabajo pendiente: ensucia el pool y tapa lo real.
+       La excepción es la que está `EN_CAMINO`: un mensajero la tiene en la calle y la cierra él,
+       porque puede traer dinero cobrado en la puerta (RN077).
+
+## O. Alerta de coordinación en WhatsApp (migración 171 del 23-sep, recortada el 24-sep)
+RN089. Cuando el agente de **veterinarias** le promete a alguien que coordinación le responde, o
+       pone una etiqueta que avisa, se abre una alerta que **solo se apaga respondiendo en el hilo**
+       o con "Ya lo resolví por teléfono" (queda quién y cuándo). No tiene botón de cerrar.
+RN090. La alerta **solo se muestra en el Tablero (`/kanban`)**, donde trabaja quien coordina, y
+       **nunca por la línea de familias**. Salir en cualquier pantalla bloqueó a producción en
+       pleno trabajo (David, 24-sep).
+
 ## L. Reglas pendientes por validar
 - Estados exactos por plan.
 - Lista definitiva de recordatorios incluidos por plan.

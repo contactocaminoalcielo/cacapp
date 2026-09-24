@@ -115,7 +115,11 @@ Estados REALES (`entregas.estado`, migración 083 — no son "sugeridos"):
 5. Al confirmar: servicio `ENTREGADO`, se actualiza la cartera (`valor_pagado`/`estado_pago`),
    queda la novedad `PAGO_RECIBIDO` y el comprobante, y el efectivo entra al cuadre del mensajero.
 
-Ver `MODULES/ENTREGAS.md` y las reglas RN077–RN084.
+**Si el servicio se entrega por otra vía** (coordinación lo marca `ENTREGADO` en el Tablero, o el
+cliente recoge en sede), la entrega publicada o asignada se cierra sola (migración 173) y sale del
+pool. La que ya va `EN_CAMINO` la sigue cerrando el mensajero.
+
+Ver `MODULES/ENTREGAS.md` y las reglas RN077–RN084 y RN088.
 
 ## 8. Proceso veterinarias/aliados
 1. Registro del aliado con modalidad de comisión.

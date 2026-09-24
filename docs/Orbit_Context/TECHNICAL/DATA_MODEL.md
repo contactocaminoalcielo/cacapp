@@ -231,6 +231,10 @@ Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
   `cobro_registrado_por` uuid → `personal(id)` · `cobro_no_realizado_motivo` text
 - CHECKs: o cobró (monto + medio + quién) **o** explicó por qué no —nunca ambos—, y un medio que
   no sea EFECTIVO/OTRO **exige comprobante**
+- **Trigger `trg_entrega_sigue_servicio_entregado` (migración 173)** — AFTER UPDATE OF `estado` en
+  `servicios`: cuando el servicio pasa a `ENTREGADO`, su entrega `DISPONIBLE` o `ASIGNADA` pasa a
+  `ENTREGADA` (con `fecha_realizada` y una nota). **No toca `EN_CAMINO`**: esa la cierra el
+  mensajero con su cobro. No escribe `cobro_*`, así que no mueve el cuadre
 
 ### Cuadre — tablas `cuadres_tecnico`, `cuadre_items`
 - `cuadre_items.es_entrega` bool + `entrega_id` uuid → `entregas(id)` (**migración 152**): la fila
@@ -251,6 +255,23 @@ Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
   texto de una plantilla no lo contiene y un certificado caía como `whatsapp-<id>.pdf`
 - Lo llenan: lo que ENTRA (webhook), lo que se manda desde la bandeja, y —desde el 10-sep— **la
   cabecera de una plantilla**, que es como sale un certificado
+
+### Esperas de coordinación — tabla `whatsapp_esperas` (migración 171)
+Alimenta la alerta "X espera respuesta" cuando el agente le promete a alguien que coordinación
+le responde. Ver BUSINESS_RULES RN089–RN090.
+- `whatsapp_etiquetas.alerta` text — `NULL | ESPERA | INMEDIATA`. Es un **dato**: se cambia con UPDATE.
+  INMEDIATA: `URGENTE_TECNICO`, `REPROGRAMAR_RECOGIDA`. `SOLICITUD` no avisa (ya tiene columna en el Kanban)
+- `whatsapp_esperas`: `id`, `phone_number_id` + `contacto` (FK compuesta → `whatsapp_contactos`),
+  `etiqueta_id` (NULL si la abrió una **promesa** detectada en el texto, no una etiqueta), `nivel`
+  (`ESPERA|INMEDIATA`), `motivo`, `abierta_en`, `cerrada_en`, `cierre` (`RESPUESTA|MANUAL`), `cerrada_por`
+- **Una sola abierta por conversación** (índice único parcial `WHERE cerrada_en IS NULL`). Si el
+  agente vuelve a escalar, es la misma espera: sube de nivel pero el reloj no vuelve a cero
+- La abre el backend (`abrirEspera` en `whatsapp-cloud.js`) **solo por el agente**, nunca por una
+  etiqueta puesta a mano. **No abre nada en la línea del agente `FAMILIAS`** (24-sep): se decide
+  por `agente_wa.phone_number_ids`, no por un id fijo
+- Se cierra sola al listarla (`GET /whatsapp/esperas`) si hubo un OUT con `enviado_por` después de
+  `abierta_en`. No cuentan los envíos fallidos ni los de campañas. Responder por fuera de Orbit
+  (Zolutium, WhatsApp Manager) **no** la cierra: para eso está "Ya lo resolví por teléfono"
 
 ## Relaciones críticas
 - `servicios → mascotas` vía `mascota_id` → para llegar a cliente: `mascotas(nombre, clientes(nombre, apellido))`
