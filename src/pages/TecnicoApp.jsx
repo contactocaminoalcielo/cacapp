@@ -1936,10 +1936,18 @@ export default function TecnicoApp() {
     .eq('mensajero_id', tecnico.id)
     .in('estado', ['ASIGNADA', 'EN_CAMINO'])
     .order('fecha_programada', { ascending: true, nullsFirst: true })
-  const consultaPool = () => db.from('entregas').select(SELECT_ENTREGA)
+  // 🩸 Solo entregas REALES: el servicio sigue sin entregar. Coordinación marca
+  // ENTREGADO desde el Tablero sin tocar la entrega, y el 24-sep había 152
+  // así en DISPONIBLE; como el pool traía las 100 más antiguas, de 94 reales
+  // solo salían 25 y las recién preparadas nunca aparecían. El filtro va en la
+  // consulta (`!inner`), no después: filtrar en el cliente no devuelve el cupo.
+  // La migración 173 cierra esas entregas sola; esto es la segunda barrera.
+  const consultaPool = () => db.from('entregas')
+    .select(SELECT_ENTREGA.replace('servicios:servicio_id (', 'servicios:servicio_id!inner ('))
     .eq('estado', 'DISPONIBLE')
+    .not('servicios.estado', 'in', '(ENTREGADO,CANCELADO)')
     .order('fecha_programada', { ascending: true, nullsFirst: true })
-    .limit(100)
+    .limit(500)
   const sinCancelados = lista => (lista || []).filter(e => e.servicios?.estado !== 'CANCELADO')
 
   // Refresco liviano de SOLO entregas (mías + pool). Lo dispara el canal de
@@ -1993,7 +2001,7 @@ export default function TecnicoApp() {
           .select(CF_COLS)
           .is('fecha_salida', null)
           .is('nevera_codigo', null),
-        // 4. Entregas mías; el pool solo cuando toca (pesa: 100 filas con joins).
+        // 4. Entregas mías; el pool solo cuando toca (pesa: una fila con joins por entrega).
         consultaEntregasMias(),
         conPool ? consultaPool() : Promise.resolve({ data: null }),
         // 5. Reporte del día y neveras activas (desde tabla neveras)
@@ -2923,8 +2931,12 @@ export default function TecnicoApp() {
       cliente?.whatsapp, cliente?.telefono, e.direccion_entrega, e.direccion].filter(Boolean).join(' '))
     return palabrasEntrega.every(p => texto.includes(p))
   }
-  const entregasFiltradas = entregas.filter(e => coincideEntrega(e) && enRango(e.fecha_programada || e.servicios?.fecha_ingreso, entDesde, entHasta))
-  const disponiblesFiltradas = disponibles.filter(coincideEntrega)
+  // Sin fecha programada, la del día en que coordinación la preparó: es la que
+  // sirve para buscar "lo que se preparó ayer". El filtro antes solo tocaba las
+  // propias, y las preparadas viven en el pool.
+  const fechaEntrega = e => e.fecha_programada || (e.publicada_en ? hoyLocalISO(new Date(e.publicada_en)) : null)
+  const entregasFiltradas = entregas.filter(e => coincideEntrega(e) && enRango(fechaEntrega(e), entDesde, entHasta))
+  const disponiblesFiltradas = disponibles.filter(e => coincideEntrega(e) && enRango(fechaEntrega(e), entDesde, entHasta))
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: '#F3F4F6', maxWidth: 520, margin: '0 auto' }}>
@@ -3164,7 +3176,7 @@ export default function TecnicoApp() {
             </div>
 
             {/* ── Mis entregas ── */}
-            {entregas.length > 0 && (
+            {(entregas.length > 0 || disponibles.length > 0) && (
               <FiltroFechas desde={entDesde} hasta={entHasta} setDesde={setEntDesde} setHasta={setEntHasta} />
             )}
             {entregasFiltradas.length === 0
@@ -3188,7 +3200,7 @@ export default function TecnicoApp() {
                   <Package size={15} style={{ flexShrink: 0 }} />
                   {disponiblesFiltradas.length} de {disponibles.length} entregas disponibles — toma la que puedas hacer
                 </div>
-                {disponiblesFiltradas.length === 0 && <p className="text-sm text-gray-500 px-3 pb-3">No hay entregas disponibles que coincidan con la búsqueda.</p>}
+                {disponiblesFiltradas.length === 0 && <p className="text-sm text-gray-500 px-3 pb-3">No hay entregas disponibles que coincidan con la búsqueda o las fechas.</p>}
                 {disponiblesFiltradas.map(e => (
                   <CardDisponible key={e.id} ent={e}
                     tomando={tomando === e.id} onTomar={tomarEntrega} />
