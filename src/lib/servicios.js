@@ -30,6 +30,67 @@ export function trazaValor(antes, despues, motivo) {
   return { valor_antes: a, valor_despues: d, motivo_valor: motivo }
 }
 
+// ── Concepto del pago (migración 174) ───────────────────────────────────────
+// Un abono puede ser de un concepto concreto (el Memopet adicional) y no del
+// saldo general. La novedad PAGO_RECIBIDO lo dice en `concepto_pago` y, si es
+// un ítem, en `servicio_recordatorio_id`. Lo abonado a cada ítem se DERIVA
+// sumando esas novedades: nada se marca en el ítem, así que nada se queda viejo.
+
+/**
+ * Adicionales con precio del servicio, con lo que ya se les abonó.
+ * Best-effort: si la 174 aún no está aplicada, `abonado` sale en 0.
+ * @returns {Promise<Array<{ id, nombre, precio, abonado, pendiente }>>}
+ */
+export async function conceptosPagoServicio(servicioId) {
+  if (!servicioId) return []
+  const { data: items, error } = await db.from('servicio_recordatorios')
+    .select('id, cantidad, precio_cobrado, created_at, recordatorios(nombre)')
+    .eq('servicio_id', servicioId)
+    .eq('origen', 'ADICIONAL')
+    .gt('precio_cobrado', 0)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  if (!items?.length) return []
+
+  const abonado = {}
+  const { data: pagos } = await db.from('novedades_servicio')
+    .select('servicio_recordatorio_id, valor_ajuste')
+    .eq('servicio_id', servicioId)
+    .eq('tipo_novedad', 'PAGO_RECIBIDO')
+    .not('servicio_recordatorio_id', 'is', null)
+  for (const p of pagos || [])
+    abonado[p.servicio_recordatorio_id] = (abonado[p.servicio_recordatorio_id] || 0) + (Number(p.valor_ajuste) || 0)
+
+  return items.map(it => {
+    const precio = Number(it.precio_cobrado) || 0
+    const pagado = abonado[it.id] || 0
+    return {
+      id:        it.id,
+      nombre:    (it.recordatorios?.nombre || 'Adicional') + ((it.cantidad || 1) > 1 ? ` × ${it.cantidad}` : ''),
+      precio,
+      abonado:   pagado,
+      pendiente: Math.max(0, precio - pagado),
+    }
+  })
+}
+
+/**
+ * Inserta una novedad que puede llevar el concepto del pago.
+ * 🪤 Si el frontend llega a producción antes que la 174, PostgREST rechaza las
+ * columnas nuevas (PGRST204 / 42703) y el pago se quedaría SIN novedad — el agujero
+ * que cerró el 21-sep. Se reintenta sin ellas: el concepto igual va escrito
+ * en la descripción.
+ */
+export async function insertarNovedadPago(fila, columnas) {
+  const insertar = f => columnas
+    ? db.from('novedades_servicio').insert(f).select(columnas)
+    : db.from('novedades_servicio').insert(f)
+  const res = await insertar(fila)
+  if (!['PGRST204', '42703'].includes(res.error?.code)) return res
+  const { servicio_recordatorio_id, concepto_pago, ...sinConcepto } = fila
+  return insertar(sinConcepto)
+}
+
 /**
  * Cadena de cambios de valor de un servicio, de más viejo a más nuevo.
  * Best-effort: ante error devuelve [] (nunca tumba la vista de pago).

@@ -273,6 +273,16 @@ le responde. Ver BUSINESS_RULES RN089–RN090.
   `abierta_en`. No cuentan los envíos fallidos ni los de campañas. Responder por fuera de Orbit
   (Zolutium, WhatsApp Manager) **no** la cierra: para eso está "Ya lo resolví por teléfono"
 
+### Bitácora del servicio — tabla `novedades_servicio`
+- `tipo_novedad` (CHECK: `NOTA`, `PAGO_RECIBIDO`, `RECATEGORIZACION_PESO`, …), `descripcion`,
+  `valor_ajuste`, `registrado_por` (FK → `personal.id`), `created_at`
+- Traza del valor (**migración 089**): `valor_antes` / `valor_despues` (siempre en pareja) y
+  `motivo_valor` (`PESO|PLAN|ADICIONAL|ITEM_QUITADO|COMISION|CORRECCION`)
+- Concepto del pago (**migración 174**): `concepto_pago` text (NULL = saldo general) y
+  `servicio_recordatorio_id` (FK → `servicio_recordatorios.id`, `ON DELETE SET NULL`) cuando el
+  pago es de un adicional. Lo abonado a un ítem = suma de `valor_ajuste` de sus `PAGO_RECIBIDO`
+  (`conceptosPagoServicio` en `src/lib/servicios.js`). Ver BUSINESS_RULES RN091–RN093
+
 ## Relaciones críticas
 - `servicios → mascotas` vía `mascota_id` → para llegar a cliente: `mascotas(nombre, clientes(nombre, apellido))`
 - `servicios → aliados` vía `aliado_origen_id`

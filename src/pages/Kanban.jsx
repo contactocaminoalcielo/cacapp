@@ -13,7 +13,7 @@ import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
-import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor } from '@/lib/servicios'
+import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor, insertarNovedadPago } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
@@ -1995,13 +1995,13 @@ export default function Kanban() {
 
       // Insertar ítem adicional (guardamos el precio cobrado para que sea
       // removible después con el monto correcto prellenado)
-      const { error: recErr } = await db.from('servicio_recordatorios').insert({
+      const { data: recNuevo, error: recErr } = await db.from('servicio_recordatorios').insert({
         servicio_id:     selected.servicio_id,
         recordatorio_id: addRecId,
         origen:          'ADICIONAL',
         estado:          'PENDIENTE',
         precio_cobrado:  subtotal,
-      })
+      }).select('id').single()
       if (recErr) throw recErr
 
       // Actualizar valor_total + desglose de adicionales del servicio.
@@ -2043,8 +2043,10 @@ export default function Kanban() {
         if (ce) avisoComprobante = ce.message
       }
 
-      // Registrar novedad
-      const { data: novInserted } = await db.from('novedades_servicio').insert({
+      // Registrar novedad. Si ya pagó, el pago queda atado al ítem (migr. 174):
+      // así la cartera de Finanzas lo ve como pagado y no lo ofrece otra vez.
+      const { data: novInserted } = await insertarNovedadPago({
+        ...(pagado ? { servicio_recordatorio_id: recNuevo?.id || null, concepto_pago: rec.nombre } : {}),
         servicio_id:    selected.servicio_id,
         tipo_novedad:   pagado ? 'PAGO_RECIBIDO' : 'NOTA',
         descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. ` +
@@ -2054,7 +2056,7 @@ export default function Kanban() {
         valor_ajuste:   subtotal,
         registrado_por: personalData?.id || null,
         ...trazaValor(selected.valor_total || 0, nuevoTotal, 'ADICIONAL'),
-      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+      }, 'id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
 
       // Recargar ítems
       const { data: recsNuevos } = await db.from('servicio_recordatorios')

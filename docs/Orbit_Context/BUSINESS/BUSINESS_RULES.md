@@ -148,6 +148,15 @@ RN090. La alerta **solo se muestra en el Tablero (`/kanban`)**, donde trabaja qu
        **nunca por la línea de familias**. Salir en cualquier pantalla bloqueó a producción en
        pleno trabajo (David, 24-sep).
 
+## P. Concepto del abono en la cartera (2026-09-25, migración 174)
+RN091. Al registrar un pago en Finanzas se dice **a qué corresponde**: el saldo general (lo de
+       siempre), un **adicional** del servicio o **otro concepto** escrito a mano. Queda en la
+       novedad `PAGO_RECIBIDO` (`concepto_pago` y, si es un ítem, `servicio_recordatorio_id`).
+RN092. Un abono a un adicional **no pasa de lo que le falta a ese adicional**. Si el cliente pagó
+       más, lo demás es de otro concepto: se registra como saldo general o en dos abonos.
+RN093. Lo abonado a cada adicional **se deriva** sumando sus novedades de pago; no se marca en el
+       ítem. El adicional vendido como "ya pagado" en el Tablero queda atado a su pago igual.
+
 ## L. Reglas pendientes por validar
 - Estados exactos por plan.
 - Lista definitiva de recordatorios incluidos por plan.

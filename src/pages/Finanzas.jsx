@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
-import { recategorizacionesPorServicio, esRecatSoloComision } from '@/lib/servicios'
+import { recategorizacionesPorServicio, esRecatSoloComision, conceptosPagoServicio, insertarNovedadPago } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import { FiltroChecklist, valoresParaConsulta } from '@/components/ui/filtro-checklist'
@@ -220,6 +220,11 @@ export default function Finanzas() {
   const [pagoNotas,    setPagoNotas]    = useState('')
   const [pagoSaving,   setPagoSaving]   = useState(false)
   const [pagoError,    setPagoError]    = useState('')
+  // A qué corresponde el abono (migr. 174): '' = saldo general, 'OTRO' = texto
+  // libre, o el id del ítem adicional. `pagoConceptos` = null mientras carga.
+  const [pagoConceptos,    setPagoConceptos]    = useState(null)
+  const [pagoConcepto,     setPagoConcepto]     = useState('')
+  const [pagoConceptoOtro, setPagoConceptoOtro] = useState('')
 
   // ── State comisiones ────────────────────────────────────────────────────────
   const [liquidandoAliado,  setLiquidandoAliado]  = useState(null)  // null | aliado_id
@@ -1874,6 +1879,14 @@ export default function Finanzas() {
     setPagoNotas('')
     setPagoError('')
     setPagoComprobantes([])
+    setPagoConcepto('')
+    setPagoConceptoOtro('')
+    setPagoConceptos(null)
+    // Se guardan con el id del servicio: si cierran y abren otro antes de que
+    // responda, la lista vieja no se cuela en el modal nuevo.
+    conceptosPagoServicio(svc.id)
+      .then(items => setPagoConceptos({ servicioId: svc.id, items }))
+      .catch(() => setPagoConceptos({ servicioId: svc.id, items: [] }))
   }
 
   function cerrarPagoModal() {
@@ -1884,6 +1897,23 @@ export default function Finanzas() {
     setPagoError('')
     setPagoSaving(false)
     setPagoComprobantes([])
+    setPagoConcepto('')
+    setPagoConceptoOtro('')
+    setPagoConceptos(null)
+  }
+
+  // Ítems adicionales del servicio abierto (vacío mientras carga).
+  const conceptosDelPago = pagoModal && pagoConceptos?.servicioId === pagoModal.id ? pagoConceptos.items : []
+  const itemDelPago      = conceptosDelPago.find(c => c.id === pagoConcepto) || null
+  // Con un ítem elegido, el abono no pasa de lo que le falta a ESE ítem: si el
+  // cliente pagó más, lo demás es de otro concepto.
+  const maxAbono = itemDelPago ? Math.min(itemDelPago.pendiente, pagoModal?.saldo || 0) : (pagoModal?.saldo || 0)
+
+  function elegirConceptoPago(valor) {
+    setPagoConcepto(valor)
+    setPagoError('')
+    const item = conceptosDelPago.find(c => c.id === valor)
+    setValorAbono(String(item ? Math.min(item.pendiente, pagoModal.saldo) : pagoModal.saldo))
   }
 
   // ── Modal pago — guardar ────────────────────────────────────────────────────
@@ -1895,6 +1925,17 @@ export default function Finanzas() {
     }
     if (abono > pagoModal.saldo) {
       setPagoError(`El abono no puede superar el saldo de ${fmt(pagoModal.saldo)}.`)
+      return
+    }
+    if (itemDelPago && abono > itemDelPago.pendiente) {
+      setPagoError(`A «${itemDelPago.nombre}» le faltan ${fmt(itemDelPago.pendiente)}. Si el pago cubre más, regístralo como saldo general o en dos abonos.`)
+      return
+    }
+    const conceptoTexto = itemDelPago ? itemDelPago.nombre
+                        : pagoConcepto === 'OTRO' ? pagoConceptoOtro.trim()
+                        : ''
+    if (pagoConcepto === 'OTRO' && !conceptoTexto) {
+      setPagoError('Escribe a qué concepto corresponde el pago.')
       return
     }
     setPagoSaving(true)
@@ -1963,15 +2004,24 @@ export default function Finanzas() {
       const respaldo = comprobantes.length
         ? `${comprobantes.length} comprobante${comprobantes.length > 1 ? 's' : ''} adjunto${comprobantes.length > 1 ? 's' : ''}`
         : 'SIN comprobante'
+      // Con concepto (migr. 174), la frase lo dice primero —es lo que se busca
+      // al leer la bitácora— y, si es un ítem, cuánto le queda a ese ítem.
+      const faltaItem = itemDelPago ? itemDelPago.pendiente - abono : 0
       let avisoNovedad = null
-      const { error: ne } = await db.from('novedades_servicio').insert({
+      const { error: ne } = await insertarNovedadPago({
         servicio_id:    pagoModal.id,
         tipo_novedad:   'PAGO_RECIBIDO',
-        descripcion:    `Abono registrado en cartera: ${fmt(abono)} — ${metodoPago} · ${respaldo} · ` +
+        descripcion:    (conceptoTexto
+                          ? `Abono registrado en cartera por ${conceptoTexto}: ${fmt(abono)}` +
+                            (itemDelPago ? (faltaItem > 0 ? ` (le faltan ${fmt(faltaItem)})` : ' (queda pagado)') : '')
+                          : `Abono registrado en cartera: ${fmt(abono)}`) +
+                        ` — ${metodoPago} · ${respaldo} · ` +
                         (saldoDespues > 0 ? `Queda saldo ${fmt(saldoDespues)}` : 'Saldo en cero') +
                         (pagoNotas.trim() ? ` · ${pagoNotas.trim()}` : ''),
         valor_ajuste:   abono,
         registrado_por: personalData?.id || null,
+        servicio_recordatorio_id: itemDelPago?.id || null,
+        concepto_pago:            conceptoTexto || null,
       })
       // No se revierte el pago si esto falla —el dinero ya quedó registrado y
       // tumbarlo sería peor—, pero TAMPOCO se calla: quedarse sin la novedad es
@@ -3876,6 +3926,47 @@ export default function Finanzas() {
 
               {/* Campos del formulario */}
               <div className="space-y-3 pb-5">
+                {/* A qué corresponde el pago (migr. 174). Sin elegir nada es
+                    el saldo general, como siempre. */}
+                <div>
+                  <label className="block text-[12px] font-semibold text-gray-700 mb-1">
+                    ¿A qué corresponde este pago?
+                  </label>
+                  <select
+                    value={pagoConcepto}
+                    onChange={e => elegirConceptoPago(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] transition-all bg-white"
+                    style={{ borderColor: 'rgba(30,80,40,0.2)' }}
+                  >
+                    <option value="">Saldo general del servicio</option>
+                    {conceptosDelPago.length > 0 && (
+                      <optgroup label="Adicionales">
+                        {conceptosDelPago.map(c => (
+                          <option key={c.id} value={c.id} disabled={c.pendiente <= 0}>
+                            {c.nombre} · {fmt(c.precio)}
+                            {c.pendiente <= 0 ? ' · ya pagado' : c.abonado > 0 ? ` · faltan ${fmt(c.pendiente)}` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <option value="OTRO">Otro concepto…</option>
+                  </select>
+                  {pagoConcepto === 'OTRO' && (
+                    <input
+                      type="text"
+                      value={pagoConceptoOtro}
+                      onChange={e => { setPagoConceptoOtro(e.target.value); setPagoError('') }}
+                      placeholder="Ej.: Transporte, Eutanasia…"
+                      maxLength={80}
+                      className="w-full mt-2 px-3 py-2 rounded-xl border text-[13px] outline-none focus:ring-2 focus:ring-[#1A5CD8]/20 focus:border-[#1A5CD8] transition-all"
+                      style={{ borderColor: 'rgba(30,80,40,0.2)' }}
+                    />
+                  )}
+                  {pagoConceptos?.servicioId !== pagoModal.id && (
+                    <p className="text-[11px] text-gray-400 mt-1">Cargando los adicionales del servicio…</p>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-[12px] font-semibold text-gray-700 mb-1">
                     Valor del abono
@@ -3885,7 +3976,7 @@ export default function Finanzas() {
                     <input
                       type="number"
                       min={1}
-                      max={pagoModal.saldo}
+                      max={maxAbono}
                       step={1000}
                       value={valorAbono}
                       onChange={e => { setValorAbono(e.target.value); setPagoError('') }}
@@ -3893,7 +3984,9 @@ export default function Finanzas() {
                       style={{ borderColor: 'rgba(30,80,40,0.2)' }}
                     />
                   </div>
-                  <p className="text-[11px] text-gray-400 mt-1">Máximo: {fmt(pagoModal.saldo)}</p>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Máximo: {fmt(maxAbono)}{itemDelPago ? ` · lo que le falta a «${itemDelPago.nombre}»` : ''}
+                  </p>
                 </div>
 
                 <div>
