@@ -12,6 +12,7 @@ import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
 import { invalidarTarifasEspecie } from '@/lib/precios'
+import { contarServiciosVip, cumpleVip, VIP_MIN_POR_MES } from '@/lib/vipAliados'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame, Leaf } from 'lucide-react'
 import TabPlantas from '@/components/configuracion/TabPlantas'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
@@ -352,8 +353,31 @@ function TabVeterinarias() {
   const [aprobando, setAprobando] = useState(null)   // id_aliado en curso
   const [aprobado, setAprobado]   = useState(null)   // { aliado, enlace } recién aprobado
   const [copiado, setCopiado]     = useState(false)
+  // Revisión VIP: servicios por aliado en los dos meses cerrados (ver vipAliados.js)
+  const [revisionVip, setRevisionVip]   = useState(null)   // { meses, conteo } | { error }
+  const [cambiandoVip, setCambiandoVip] = useState(null)   // id_aliado en curso
 
   useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    contarServiciosVip()
+      .then(setRevisionVip)
+      .catch(e => setRevisionVip({ error: e.message }))
+  }, [])
+
+  // El VIP mueve la comisión: se pregunta siempre antes de cambiarlo.
+  async function cambiarVip(a, vip) {
+    const ok = await confirm(
+      vip
+        ? 'Los servicios que se registren desde ahora llevarán la comisión VIP: 32 % en grupal, 27 % en individual y 10 % en eco-grupal.'
+        : 'Los servicios que se registren desde ahora vuelven a la escala de comisión por volumen del mes.',
+      { title: vip ? `¿Marcar VIP a ${a.nombre}?` : `¿Quitarle el VIP a ${a.nombre}?`, variant: 'warning', confirmLabel: vip ? 'Marcar VIP' : 'Quitar VIP', cancelLabel: 'Cancelar' })
+    if (!ok) return
+    setCambiandoVip(a.id_aliado)
+    const { error } = await db.from('aliados').update({ vip }).eq('id_aliado', a.id_aliado)
+    setCambiandoVip(null)
+    if (error) { await showAlert(parsearErrorDB(error), { title: 'Error al guardar' }); return }
+    setData(prev => prev.map(x => x.id_aliado === a.id_aliado ? { ...x, vip } : x))
+  }
 
   // Aprueba una vet pendiente: el backend genera el token y devuelve el enlace.
   async function aprobarAliado(a) {
@@ -466,6 +490,15 @@ function TabVeterinarias() {
   const activasReales = data.filter(a => a.activo !== false && a.estado !== 'pendiente_validacion')
   const conAcceso = activasReales.filter(a => a.token_acceso).length
 
+  // Las que la regla pondría distinto de como están: primero las que ganan el VIP.
+  const sugerenciasVip = revisionVip?.conteo
+    ? data
+        .map(a => ({ a, par: revisionVip.conteo.get(a.id_aliado) || [0, 0] }))
+        .filter(({ a, par }) => !!a.vip !== cumpleVip(par))
+        .sort((x, y) => (!!x.a.vip - !!y.a.vip) || (y.par[0] + y.par[1]) - (x.par[0] + x.par[1]))
+    : []
+  const mesesVip = revisionVip?.meses || []
+
   return (
     <div>
       <div className="flex items-center gap-4 mb-5">
@@ -503,6 +536,39 @@ function TabVeterinarias() {
                 <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Revisar</Button>
                 <Button size="sm" onClick={() => aprobarAliado(a)} disabled={aprobando === a.id_aliado}>
                   {aprobando === a.id_aliado ? 'Aprobando…' : <><CheckCircle size={13} /> Aprobar</>}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Revisión VIP — la regla sugiere, coordinación aplica */}
+      {revisionVip?.error && (
+        <div className="mb-4 text-[12px] text-red-600">No se pudo revisar el VIP: {revisionVip.error}</div>
+      )}
+      {!loading && sugerenciasVip.length > 0 && (
+        <div className="mb-4 rounded-2xl border-2 p-4" style={{ borderColor: '#FCD9A6', background: '#FFFBF3' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Star size={15} className="text-amber-600" />
+            <span className="text-[13px] font-bold text-amber-800">Revisión VIP · {mesesVip.map(m => m.etiqueta).join(' y ')}</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{sugerenciasVip.length}</span>
+          </div>
+          <p className="text-[11px] text-amber-900/60 mb-3">
+            Regla: {VIP_MIN_POR_MES} o más servicios en cada uno de los dos meses, sin cancelados ni desamparados.
+            Nada cambia hasta que lo apliques.
+          </p>
+          <div className="space-y-2">
+            {sugerenciasVip.map(({ a, par }) => (
+              <div key={a.id_aliado} className="flex items-center gap-3 bg-white rounded-xl border border-amber-100 px-3.5 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold text-gray-900 truncate">{a.nombre}</div>
+                  <div className="text-[11px] text-gray-400">
+                    {mesesVip[0]?.etiqueta} {par[0]} · {mesesVip[1]?.etiqueta} {par[1]} — {a.vip ? 'es VIP y ya no cumple' : 'cumple y no es VIP'}
+                  </div>
+                </div>
+                <Button size="sm" variant={a.vip ? 'ghost' : 'primary'} onClick={() => cambiarVip(a, !a.vip)} disabled={cambiandoVip === a.id_aliado}>
+                  {cambiandoVip === a.id_aliado ? 'Guardando…' : a.vip ? 'Quitar VIP' : <><Star size={13} /> Marcar VIP</>}
                 </Button>
               </div>
             ))}
