@@ -721,6 +721,9 @@ function TabAliados({ isAdmin, canEdit }) {
   const [saving, setSaving] = useState(false)
   const [modalImport, setModalImport] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','contacto_nombre','ciudad'])
+  const [filtroVip, setFiltroVip] = useState('TODOS')   // TODOS | VIP | NO_VIP
+  const visibles = filtered.filter(a => filtroVip === 'TODOS' || !!a.vip === (filtroVip === 'VIP'))
+  const nVip = data.filter(a => a.vip).length
 
   const primeraCarga = useRef(true)
   useEffect(() => {
@@ -787,6 +790,16 @@ function TabAliados({ isAdmin, canEdit }) {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
+        <div className="flex items-center gap-1">
+          {[['TODOS', 'Todos', data.length], ['VIP', 'VIP', nVip], ['NO_VIP', 'No VIP', data.length - nVip]].map(([valor, etiqueta, n]) => (
+            <button key={valor} onClick={() => setFiltroVip(valor)}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-full transition-colors ${filtroVip === valor
+                ? (valor === 'VIP' ? 'bg-[#FFF3DC] text-[#9A5500]' : 'bg-ink text-white')
+                : 'bg-[#F0F0F0] text-[#555] hover:bg-[#E4E4E4]'}`}>
+              {etiqueta} · {n}
+            </button>
+          ))}
+        </div>
         {(canEdit || isAdmin) && (
           <>
             {isAdmin && (
@@ -802,7 +815,7 @@ function TabAliados({ isAdmin, canEdit }) {
         <TableWrap><Table>
           <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
           <tbody>
-            {filtered.map(a => (
+            {visibles.map(a => (
               <Tr key={a.id_aliado}>
                 <Td className="font-semibold text-ink">{a.nombre}</Td>
                 <Td className="text-ink3">{a.contacto_nombre}</Td>
