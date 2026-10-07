@@ -27,6 +27,15 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   // el mismo portal). COMPETS_SIN_REC es compostaje: no hay cenizas, y la planta
   // del plan pide su entrega en el portal de elección de planta (David 2026-10-07).
   planes_entrega_solo_adicional: ['COMPETS_SIN_REC'],
+  // Plantilla del contacto 1 por plan: { PLAN: { nombre, idioma, categoria } }.
+  // La general habla de "adjuntar las fotografías", y a COMPETS_SIN_REC no se le
+  // pide ninguna (David 2026-10-07). Vacío → todos usan `plantilla_nombre`.
+  // Se siembra en config_operativa cuando Meta aprueba la plantilla: sembrarla
+  // antes haría fallar el envío.
+  plantillas_contacto_1_por_plan: {},
+  // Planes que NO reciben el 2º ni el 3er contacto: no tienen nada obligatorio
+  // que enviar, y el 3º dice "si no las recibimos, el proceso quedará cerrado".
+  planes_sin_seguimiento: ['COMPETS_SIN_REC'],
   recordatorio_cofre: 'Foto para el cofre',   // nombre del recordatorio de catálogo (migración 052)
   // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).
   estados_elegibles: ['EN_CUARTO_FRIO'],
@@ -141,6 +150,42 @@ export function mensajeSolicitud({ nombre, mascota, enlace }) {
   return `Hola, ${n}. Recibe un saludo de Camino al Cielo. Para continuar con los ` +
     `recordatorios de ${mascota || 'tu mascota'}, por favor adjunta las fotografías ` +
     `solicitadas en el siguiente enlace: ${enlace}. Gracias por confiar en nosotros.`
+}
+
+/**
+ * Plantilla del contacto 1 para un plan: la propia si está sembrada en
+ * `plantillas_contacto_1_por_plan`, si no la general. `porPlan` dice cuál salió.
+ */
+export function plantillaSolicitud(config, planCodigo) {
+  const mapa = typeof config.plantillas_contacto_1_por_plan === 'string'
+    ? safeJson(config.plantillas_contacto_1_por_plan)
+    : config.plantillas_contacto_1_por_plan
+  const p = mapa && planCodigo ? mapa[planCodigo] : null
+  if (p && p.nombre) {
+    return {
+      nombre:    p.nombre,
+      idioma:    p.idioma    || config.plantilla_idioma    || 'es_MX',
+      categoria: p.categoria || config.plantilla_categoria || 'UTILITY',
+      porPlan:   true,
+    }
+  }
+  return {
+    nombre:    config.plantilla_nombre,
+    idioma:    config.plantilla_idioma    || 'es_MX',
+    categoria: config.plantilla_categoria || 'UTILITY',
+    porPlan:   false,
+  }
+}
+
+/** Espejo de `solicitud_compets_sin_recordatorios` (Meta id 3006939679653495):
+ *  {{1}} mascota, {{2}} enlace. Es lo que queda registrado como "lo que vio el cliente". */
+export function mensajeSolicitudCompetsSinRec({ mascota, enlace }) {
+  return `Hola 🤍 Queremos acompañarte en este proceso con mucho respeto y cariño.\n\n` +
+    `*${mascota || 'Tu mascota'}* ya está con nosotros y pronto comenzará su proceso de compostaje 🌱. ` +
+    `A mitad del camino te escribiremos para contarte cómo va y, si quieres, invitarte a nuestra planta en Tenjo.\n\n` +
+    `En este enlace puedes conocer los recuerdos que tenemos para honrar su memoria. ` +
+    `Si eliges alguno, ahí mismo nos dejas los datos para entregártelo:\n\n${enlace}\n\n` +
+    `Gracias por permitirnos acompañarte en este homenaje tan especial.`
 }
 
 /** ¿El recordatorio requiere imagen? (gate de selección del flujo) */

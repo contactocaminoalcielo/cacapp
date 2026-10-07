@@ -67,6 +67,7 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
     const { rows } = await client.query(
       `SELECT sol.id, sol.servicio_id, sol.estado, sol.seguimiento_pausado, sol.whatsapp_destino,
               s.estado AS servicio_estado, s.fecha_imagenes_recibidas, s.codigo_fotos,
+              p.codigo AS plan_codigo,
               m.nombre AS mascota,
               c.nombre AS cliente_nombre, c.whatsapp,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario
@@ -74,6 +75,7 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
        JOIN public.servicios s     ON s.id = sol.servicio_id
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.planes p   ON p.id = s.plan_id
        WHERE sol.id = $1
        FOR UPDATE OF sol`,
       [solicitudId]
@@ -96,6 +98,15 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
     if (!destino) { await client.query('ROLLBACK'); return { enviado: false, motivo: 'sin_whatsapp' } }
 
     const config = await cargarConfigImagenes(client)
+
+    // Planes sin seguimiento (COMPETS_SIN_REC): el job ya no los elige; esto es
+    // la defensa por si alguien llama el envío automático por otro camino. El
+    // envío manual desde la bandeja sigue permitido: lo decide una persona.
+    const sinSeguimiento = Array.isArray(config.planes_sin_seguimiento) ? config.planes_sin_seguimiento : []
+    if (automatico && sinSeguimiento.includes(sol.plan_codigo)) {
+      await client.query('ROLLBACK')
+      return { enviado: false, motivo: 'plan_sin_seguimiento' }
+    }
 
     // El portal solo acepta cargas en estos estados: si el servicio ya salió de la
     // ventana, perseguir fotos es inútil (el cliente no podría subirlas).
@@ -341,11 +352,14 @@ export async function resumenSeguimiento() {
               c1.dia::text AS ancla,
               public.fn_sumar_dias_habiles(c1.dia, $1::int)::text AS due2,
               public.fn_sumar_dias_habiles(c1.dia, $2::int)::text AS due3,
-              public.fn_hoy_bogota()::text AS hoy
+              public.fn_hoy_bogota()::text AS hoy,
+              (COALESCE(p.codigo, '') = ANY($3::text[])) AS sin_seguimiento
        FROM public.solicitudes_imagenes sol
        JOIN c1 ON c1.solicitud_id = sol.id
+       JOIN public.servicios s ON s.id = sol.servicio_id
+       LEFT JOIN public.planes p ON p.id = s.plan_id
        WHERE sol.estado = 'ENVIADO'`,
-      [dias2, dias3]
+      [dias2, dias3, Array.isArray(config.planes_sin_seguimiento) ? config.planes_sin_seguimiento : []]
     )
 
     const porSolicitud = {}
@@ -356,7 +370,9 @@ export async function resumenSeguimiento() {
       const entry = (porSolicitud[p.solicitud_id] ||= { contactos: [] })
       const hecho = n => entry.contactos.some(c => c.numero === n && c.estado === 'ENVIADO')
       // El próximo es el primer contacto pendiente; su fecha ya es día hábil real.
-      const proximo = !hecho(2) ? { numero: 2, fecha: p.due2 }
+      // Los planes sin seguimiento (COMPETS_SIN_REC) no tienen próximo: no va a salir.
+      const proximo = p.sin_seguimiento ? null
+                    : !hecho(2) ? { numero: 2, fecha: p.due2 }
                     : !hecho(3) ? { numero: 3, fecha: p.due3 }
                     : null
       Object.assign(entry, { ancla: p.ancla, due2: p.due2, due3: p.due3, hoy: p.hoy, proximo })

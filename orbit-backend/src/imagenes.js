@@ -13,6 +13,7 @@
 import { pool, log } from './db.js'
 import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
+  plantillaSolicitud, mensajeSolicitudCompetsSinRec,
 } from './reglas-imagenes.js'
 import {
   ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
@@ -85,11 +86,13 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       `SELECT sol.*, s.codigo_fotos, s.estado AS servicio_estado,
               m.nombre AS mascota,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
-              c.nombre AS cliente_nombre, c.whatsapp
+              c.nombre AS cliente_nombre, c.whatsapp,
+              p.codigo AS plan_codigo
        FROM public.solicitudes_imagenes sol
        JOIN public.servicios s     ON s.id = sol.servicio_id
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.planes p   ON p.id = s.plan_id
        WHERE sol.id = $1
        FOR UPDATE OF sol`,
       [solicitudId]
@@ -111,6 +114,8 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
 
     const config = await cargarConfigImagenes(client)
     const usarPlantilla = config.usar_plantilla === true || config.usar_plantilla === 'true'
+    // COMPETS_SIN_REC tiene la suya: no se le piden fotos (David 2026-10-07).
+    const plantilla = plantillaSolicitud(config, sol.plan_codigo)
 
     // Asegurar código de acceso (seguro/único) y registrar fecha de envío del código
     const { rows: cod } = await client.query(
@@ -129,7 +134,7 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
     const linea  = LINEA_WA_NUMERO
 
     // Sin plantilla aprobada → NO se envía. Se deja en POR_VALIDAR sin tocar estado.
-    if (!usarPlantilla || !config.plantilla_nombre) {
+    if (!usarPlantilla || !plantilla.nombre) {
       await client.query(
         `UPDATE public.solicitudes_imagenes
          SET codigo = $2, enlace = $3, whatsapp_destino = $4, linea_wa = $5
@@ -141,7 +146,9 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         error: 'La plantilla de WhatsApp aún no está configurada. Cuando esté aprobada en Meta, activa config_operativa SOLICITUDES_IMAGENES.usar_plantilla=true. La solicitud queda lista para validar; aún no se envió.' } }
     }
 
-    const mensaje = mensajeSolicitud({ nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace })
+    const mensaje = plantilla.nombre === 'solicitud_compets_sin_recordatorios'
+      ? mensajeSolicitudCompetsSinRec({ mascota: sol.mascota, enlace })
+      : mensajeSolicitud({ nombre: sol.cliente_nombre || sol.propietario, mascota: sol.mascota, enlace })
 
     // Envío (red, dentro del advisory lock para serializar; volumen bajo y manual)
     let envioOk = null, envioErr = null
@@ -149,11 +156,12 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       envioOk = await enviarPlantillaGenerica({
         telefono: sol.whatsapp,
         nombre:   sol.propietario || sol.cliente_nombre || '',
-        plantillaNombre: config.plantilla_nombre,
-        idioma:   config.plantilla_idioma || 'es_MX',
-        category: config.plantilla_categoria || 'UTILITY',
+        plantillaNombre: plantilla.nombre,
+        idioma:   plantilla.idioma,
+        category: plantilla.categoria,
         mensaje,
-        // Plantilla aprobada `solicitud_imagenes_cliente`: 2 variables → {{1}} mascota, {{2}} enlace.
+        // Las dos plantillas del contacto 1 (`solicitud_imagenes_cliente` y
+        // `solicitud_compets_sin_recordatorios`): 2 variables → {{1}} mascota, {{2}} enlace.
         // El enlace lleva el código embebido (/#/fotos/CODIGO); el cliente entra sin teclear código.
         bodyParams: [sol.mascota || '', enlace],
         personalId: actorId,
@@ -192,8 +200,8 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
       )
       // Contacto 1 en la bitácora: es el ancla de los contactos 2 y 3 (migr. 044).
       await registrarContacto1(client, {
-        solicitudId, servicioId: sol.servicio_id, plantilla: config.plantilla_nombre,
-        idioma: config.plantilla_idioma || 'es_MX', destino: sol.whatsapp, mensaje,
+        solicitudId, servicioId: sol.servicio_id, plantilla: plantilla.nombre,
+        idioma: plantilla.idioma, destino: sol.whatsapp, mensaje,
         messageId: envioOk.messageId, contactId: envioOk.contactId, estadoMeta,
         error: null, actorId,
       })
@@ -209,8 +217,8 @@ export async function enviarSolicitud({ solicitudId, personalId, body = {} }) {
         [solicitudId, codigo, enlace, sol.whatsapp, linea, envioErr, actorId]
       )
       await registrarContacto1(client, {
-        solicitudId, servicioId: sol.servicio_id, plantilla: config.plantilla_nombre,
-        idioma: config.plantilla_idioma || 'es_MX', destino: sol.whatsapp, mensaje,
+        solicitudId, servicioId: sol.servicio_id, plantilla: plantilla.nombre,
+        idioma: plantilla.idioma, destino: sol.whatsapp, mensaje,
         messageId: envioOk?.messageId || null, contactId: envioOk?.contactId || null,
         estadoMeta, error: envioErr, actorId,
       })

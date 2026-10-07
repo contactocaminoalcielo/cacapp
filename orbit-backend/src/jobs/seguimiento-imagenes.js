@@ -51,6 +51,10 @@ export async function jobSeguimientoImagenes({ dryRun = false } = {}) {
   const arranque = normalizarFecha(config.arranque_desde)
   const portalStates = Array.isArray(config.estados_portal)
     ? config.estados_portal : ['EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION']
+  // Planes sin 2º ni 3er contacto (COMPETS_SIN_REC): no tienen nada obligatorio
+  // que enviar. Quedan fuera del todo: tampoco se cierran en SIN_RESPUESTA, que
+  // dispara una alerta para llamarlos.
+  const sinSeguimiento = Array.isArray(config.planes_sin_seguimiento) ? config.planes_sin_seguimiento : []
 
   // ── 1. Candidatos: una fila por solicitud viva, con sus fechas ya calculadas ──
   const { rows: candidatos } = await pool.query(
@@ -87,14 +91,16 @@ export async function jobSeguimientoImagenes({ dryRun = false } = {}) {
      FROM public.solicitudes_imagenes sol
      JOIN ancla a            ON a.solicitud_id = sol.id
      JOIN public.servicios s ON s.id = sol.servicio_id
+     LEFT JOIN public.planes p ON p.id = s.plan_id
      LEFT JOIN public.solicitud_imagenes_contactos e2 ON e2.solicitud_id = sol.id AND e2.numero = 2
      LEFT JOIN public.solicitud_imagenes_contactos e3 ON e3.solicitud_id = sol.id AND e3.numero = 3
      WHERE sol.estado = 'ENVIADO'
        AND sol.seguimiento_pausado = false
        AND s.fecha_imagenes_recibidas IS NULL
        AND ($4::date IS NULL OR a.dia >= $4::date)
+       AND NOT (COALESCE(p.codigo, '') = ANY($5::text[]))
      ORDER BY a.dia ASC`,
-    [dias2, dias3, cierre, arranque]
+    [dias2, dias3, cierre, arranque, sinSeguimiento]
   )
 
   const r = { candidatos: candidatos.length, enviados_c2: 0, enviados_c3: 0,
