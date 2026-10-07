@@ -108,14 +108,30 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [ofertaFotos,   setOfertaFotos]  = useState({})     // { [id]: [File|null] }
   const [ofertaTextos,  setOfertaTextos] = useState({})     // { [id]: { label: [...] } }
   const [confirmando,   setConfirmando]  = useState(false)  // secuencia de confirmaciones finales
+  const [avisoAutoriza, setAvisoAutoriza] = useState(0)     // sube → la casilla se sacude
+  const casillaRef = useRef(null)
 
   useEffect(() => { if (codigoProp) cargar(codigoProp) }, [codigoProp])
 
+  // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
+  // Aceptar una oferta física convierte en entregable un servicio que no lo era:
+  // el backend aplica la misma regla al recibir.
+  // Basta con que UNA de las aceptadas sea física.
+  const pedirEntrega = servicio?.tiene_entrega_fisica !== false ||
+                       ofertas.some(of => ofertaResp[of.id] === true && of.es_fisico)
   // Cada anuncio es un paso propio del wizard, entre los recordatorios y la
   // revisión final: así el cliente los ve con calma y no como un banner al paso.
   // Van uno tras otro a partir de `items.length`.
-  const totalPasos   = items.length + ofertas.length + 1
+  //
+  // 🩸 La entrega también es un paso propio, justo antes de la revisión final.
+  // Antes vivía al fondo de la revisión, debajo del resumen, las ofertas y la
+  // pregunta del compostaje: en el celular nadie bajaba hasta ahí, el botón de
+  // enviar se quedaba gris y las familias escribían que "no las dejaba enviar"
+  // (David 2026-10-07). Como paso, no se puede pasar de largo.
+  const pasoEntrega  = pedirEntrega ? items.length + ofertas.length : -1
+  const totalPasos   = items.length + ofertas.length + (pedirEntrega ? 1 : 0) + 1
   const esFinal      = paso === totalPasos - 1
+  const enEntrega    = paso === pasoEntrega
   const ofertaIdx    = paso - items.length
   const ofertaActual = (ofertaIdx >= 0 && ofertaIdx < ofertas.length) ? ofertas[ofertaIdx] : null
   const enOferta     = !!ofertaActual
@@ -124,12 +140,6 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // La pregunta de "recordatorios anticipados" SOLO aplica a compostaje INDIVIDUAL.
   // En eco-grupal (COMPOSTAJE_GRUPAL) el proceso es por lote y no se pregunta.
   const esCompostajeIndividual = (servicio?.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
-  // Solo pedimos datos de entrega si hay algo físico que entregar (no en eco-grupal).
-  // Aceptar una oferta física convierte en entregable un servicio que no lo era:
-  // el backend aplica la misma regla al recibir.
-  // Basta con que UNA de las aceptadas sea física.
-  const pedirEntrega = servicio?.tiene_entrega_fisica !== false ||
-                       ofertas.some(of => ofertaResp[of.id] === true && of.es_fisico)
   // Compets sin recordatorios no tiene nada que recibir: "¿cuándo desea recibir
   // los recordatorios?" solo se pregunta si hay alguno (del plan, adicional
   // físico ya comprado, u oferta aceptada aquí).
@@ -155,6 +165,10 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
   const puedeEnviar  = todoListo && ofertasListas && entregaReqOk && autorizo
+  // ¿Se puede pasar del paso actual? (recordatorio, oferta o entrega)
+  const pasoActualListo = enOferta ? (respActual != null && ofertaActualListo)
+                        : enEntrega ? entregaReqOk
+                        : itemActualListo
 
   // ¿El anuncio vende algo que el cliente YA lleva en su plan? Se le ofrece
   // igual (es "un recuerdo más"), pero conviene decírselo para que no crea que
@@ -182,6 +196,18 @@ export default function FotosCliente({ codigo: codigoProp }) {
   }
 
   function ir(n) { setDir(n > paso ? 1 : -1); setPaso(n) }
+  // El botón de enviar nunca se queda "muerto": si falta algo, lleva hasta ahí.
+  function irALoQueFalta() {
+    const iItem = items.findIndex(it => !declinados.has(it.id) && !itemListo(it, fotos, textos))
+    if (iItem >= 0) return ir(iItem)
+    const of = ofertas.find(o => !ofertaResuelta(o))
+    if (of) return ir(pasoDeOferta(of))
+    if (!entregaReqOk && pasoEntrega >= 0) return ir(pasoEntrega)
+    if (!autorizo) {
+      casillaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setAvisoAutoriza(n => n + 1)
+    }
+  }
   function siguiente() { if (paso < totalPasos - 1) ir(paso + 1) }
   function anterior()  { if (paso > 0) ir(paso - 1) }
 
@@ -385,7 +411,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
 
   // ── WIZARD ────────────────────────────────────────────────────────────────
-  const pasosVisibles = items.length + ofertas.length
+  const pasosVisibles = totalPasos - 1
   return (
     <div className="min-h-screen flex flex-col" style={{ background: BG }}>
       <header className="sticky top-0 z-20 border-b" style={{ borderColor: BORDE, background: PAPEL }}>
@@ -443,6 +469,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   onTextosChange={v => setOfertaTextos(p => ({ ...p, [ofertaActual.id]: v }))}
                 />
               )}
+              {enEntrega && (
+                <PasoEntrega mascota={mascota} entrega={entrega} setEntrega={setEntrega} />
+              )}
               {esFinal && (
                 <PasoFinal
                   mascota={mascota}
@@ -451,23 +480,31 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   esCompostaje={preguntarAnticipados}
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
-                  entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}
+                  entrega={entrega} pedirEntrega={pedirEntrega}
+                  onIrEntrega={() => ir(pasoEntrega)}
                   ofertas={ofertas} ofertaResp={ofertaResp}
                   onIrOferta={of => ir(pasoDeOferta(of))}
                   onQuiereOferta={of => quiereOferta(of)}
                   onGoTo={ir}
                 />
               )}
+              {/* 🩸 Antes iba FIJA sobre el botón: con su aviso legal ocupaba
+                  más de media pantalla del celular y la revisión quedaba en una
+                  franja de ~200 px. Aquí se desplaza con el resto; si la familia
+                  toca "Enviar" sin marcarla, irALoQueFalta baja hasta aquí. */}
+              {esFinal && (
+                <motion.div ref={casillaRef} key={avisoAutoriza}
+                  animate={avisoAutoriza ? { x: [0, -8, 8, -6, 6, 0] } : {}}
+                  transition={{ duration: 0.45 }}
+                  className="mt-5 rounded-2xl"
+                  style={avisoAutoriza && !autorizo ? { boxShadow: '0 0 0 2px #B45309' } : undefined}>
+                  <CasillaDatos tono="portal" checked={autorizo} onChange={setAutorizo} />
+                </motion.div>
+              )}
             </div>
           </motion.div>
         </AnimatePresence>
       </div>
-
-      {esFinal && (
-        <div className="px-5 pb-2 max-w-lg mx-auto w-full">
-          <CasillaDatos tono="portal" checked={autorizo} onChange={setAutorizo} />
-        </div>
-      )}
 
       <div className="sticky bottom-0 z-20 bg-white border-t shadow-lg px-5 py-4" style={{ borderColor: BORD }}>
         <div className="max-w-lg mx-auto space-y-3">
@@ -482,13 +519,14 @@ export default function FotosCliente({ codigo: codigoProp }) {
                           ? `Responde si deseas ${ofertas.length > 1 ? 'las ofertas' : 'la oferta'} para poder enviar.`
                           : 'Falta subir la foto del recordatorio que aceptaste.')
                       : !entregaReqOk
-                        ? 'Completa los datos de entrega (dirección, quién recibe y teléfono) para enviar.'
-                        : 'Marca la autorización de datos para poder enviar.'}
+                        ? 'Faltan los datos de entrega. Toca el botón y te llevamos.'
+                        : 'Falta marcar la autorización de datos. Toca el botón y te llevamos.'}
                 </p>
               )}
-              <motion.button onClick={() => setConfirmando(true)} disabled={guardando || !puedeEnviar} whileTap={{ scale: 0.98 }}
+              <motion.button onClick={puedeEnviar ? () => setConfirmando(true) : irALoQueFalta}
+                disabled={guardando} whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
-                style={{ background: G }}>
+                style={{ background: G, opacity: puedeEnviar || guardando ? 1 : 0.55 }}>
                 {guardando
                   ? <><Loader2 size={20} className="animate-spin" /> Enviando las fotos…</>
                   : <><Send size={18} /> Enviar fotos a Camino al Cielo</>}
@@ -506,13 +544,17 @@ export default function FotosCliente({ codigo: codigoProp }) {
                     Sube la foto de tu nuevo recordatorio para continuar.
                   </p>
                 )
-              ) : !itemActualListo && (
+              ) : enEntrega ? (!entregaReqOk && (
+                <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
+                  Completa la dirección, quién recibe y el teléfono para continuar.
+                </p>
+              )) : !itemActualListo && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                   Sube la foto o marca "No deseo este recordatorio" para continuar.
                 </p>
               )}
               <motion.button onClick={siguiente}
-                disabled={enOferta ? (respActual == null || !ofertaActualListo) : !itemActualListo}
+                disabled={!pasoActualListo}
                 whileTap={{ scale: 0.98 }}
                 className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-bold text-white text-[17px] transition-opacity disabled:opacity-50"
                 style={{ background: G }}>
@@ -539,7 +581,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
           entrega={entrega} pedirEntrega={pedirEntrega}
           ofertas={ofertas} ofertaResp={ofertaResp}
           onCancelar={() => setConfirmando(false)}
-          onCorregirEntrega={() => { setConfirmando(false); ir(totalPasos - 1) }}
+          onCorregirEntrega={() => { setConfirmando(false); ir(pasoEntrega) }}
           onQuieroOferta={of => { setConfirmando(false); quiereOferta(of) }}
           onConfirmado={guardar}
         />
@@ -926,10 +968,54 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
   )
 }
 
-// ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, setEntrega, pedirEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, onGoTo }) {
-  const [abierto, setAbierto] = useState(false)
+// ── PasoEntrega ───────────────────────────────────────────────────────────────
+// Paso propio del wizard (ver `pasoEntrega`): no se puede pasar sin dirección,
+// quién recibe y teléfono.
+function PasoEntrega({ mascota, entrega, setEntrega }) {
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: APAGADO }}>
+          Para entregar los recuerdos de {mascota}
+        </p>
+        <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>¿Dónde los entregamos?</h2>
+        <p className="text-[14px] text-gray-500 mt-2 leading-relaxed">
+          Cuando estén listos, así sabremos dónde y con quién dejarlos.
+          Los campos con <span className="text-red-500 font-bold">*</span> son obligatorios.
+        </p>
+      </div>
+      <div className="bg-white rounded-2xl border p-5" style={{ borderColor: BORD }}>
+        <div className="space-y-3">
+          <CampoEntrega label="Dirección de entrega" required value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
+          <div className="grid grid-cols-2 gap-3">
+            <CampoEntrega label="Barrio" value={entrega.barrio} onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
+            <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
+          </div>
+          <CampoEntrega label="¿Quién recibe?" required value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
+          <div className="grid grid-cols-2 gap-3">
+            <CampoEntrega label="Teléfono" required value={entrega.telefono} onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
+            <CampoEntrega label="Teléfono adicional" value={entrega.telefono_adicional} onChange={v => setE('telefono_adicional', v)} placeholder="Otro contacto" inputMode="tel" />
+          </div>
+          <div>
+            <label className="text-[13px] font-bold text-gray-600 block mb-2">Horarios a tener en cuenta</label>
+            <textarea value={entrega.horarios} onChange={e => setE('horarios', e.target.value)} rows={2}
+              placeholder="Ej: entre semana después de las 2 pm, fines de semana en la mañana…"
+              className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none"
+              style={{ borderColor: entrega.horarios.trim() ? G : BORD, background: PAPEL }} />
+            <p className="text-[12px] text-gray-400 mt-2 leading-relaxed">
+              Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora exacta</strong> de entrega; te avisaremos cuando el mensajero vaya en camino.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── PasoFinal ─────────────────────────────────────────────────────────────────
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, pedirEntrega, onIrEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, onGoTo }) {
+  const [abierto, setAbierto] = useState(false)
 
   return (
     <div className="space-y-5">
@@ -1091,39 +1177,26 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
           onBlur={e  => e.target.style.borderColor = comentarios.trim() ? G : BORD} />
       </div>
 
-      {/* Datos para la entrega — solo si hay algo físico que entregar
-          (en eco-grupal todos los recordatorios son digitales → no se pide) */}
+      {/* Entrega: ya la llenó en su propio paso; aquí solo se confirma */}
       {pedirEntrega && (
-      <div className="bg-white rounded-2xl border p-5" style={{ borderColor: BORD }}>
-        <label className="text-[16px] font-bold text-gray-800 block mb-1">
-          📦 Datos para la entrega<span className="text-[13px] font-bold ml-1.5" style={{ color: '#B45309' }}>· obligatorio</span>
-        </label>
-        <p className="text-[13px] text-gray-500 mb-4 leading-relaxed">
-          Cuando los recuerdos de {mascota} estén listos, así sabremos dónde y con quién entregarlos.
-        </p>
-        <div className="space-y-3">
-          <CampoEntrega label="Dirección de entrega" required value={entrega.direccion} onChange={v => setE('direccion', v)} placeholder="Calle, carrera, conjunto, apto…" />
-          <div className="grid grid-cols-2 gap-3">
-            <CampoEntrega label="Barrio" value={entrega.barrio} onChange={v => setE('barrio', v)} placeholder="Barrio / sector" />
-            <CampoLocalidad value={entrega.localidad} onChange={v => setE('localidad', v)} />
-          </div>
-          <CampoEntrega label="¿Quién recibe?" required value={entrega.recibe} onChange={v => setE('recibe', v)} placeholder="Nombre de quien recibe" />
-          <div className="grid grid-cols-2 gap-3">
-            <CampoEntrega label="Teléfono" required value={entrega.telefono} onChange={v => setE('telefono', v)} placeholder="Celular" inputMode="tel" />
-            <CampoEntrega label="Teléfono adicional" value={entrega.telefono_adicional} onChange={v => setE('telefono_adicional', v)} placeholder="Otro contacto" inputMode="tel" />
-          </div>
-          <div>
-            <label className="text-[13px] font-bold text-gray-600 block mb-2">Horarios a tener en cuenta</label>
-            <textarea value={entrega.horarios} onChange={e => setE('horarios', e.target.value)} rows={2}
-              placeholder="Ej: entre semana después de las 2 pm, fines de semana en la mañana…"
-              className="w-full text-[15px] border-2 rounded-xl px-4 py-3 outline-none resize-none"
-              style={{ borderColor: entrega.horarios.trim() ? G : BORD, background: PAPEL }} />
-            <p className="text-[12px] text-gray-400 mt-2 leading-relaxed">
-              Nos ayuda a coordinar mejor. Ten en cuenta que <strong>no confirmamos una hora exacta</strong> de entrega; te avisaremos cuando el mensajero vaya en camino.
-            </p>
+        <div className="bg-white rounded-2xl border-2 p-5" style={{ borderColor: G_MID }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[15px] font-bold" style={{ color: G }}>📦 Entrega</p>
+              <p className="text-[14px] text-gray-700 mt-1.5 leading-snug break-words">
+                {[entrega.direccion, entrega.barrio, entrega.localidad].filter(v => String(v || '').trim()).join(' · ')}
+              </p>
+              <p className="text-[13px] text-gray-500 mt-1 break-words">
+                Recibe {entrega.recibe} · {entrega.telefono}
+              </p>
+            </div>
+            <button onClick={onIrEntrega}
+              className="flex-shrink-0 px-4 py-2.5 rounded-xl text-[14px] font-bold border-2"
+              style={{ borderColor: G, color: G, background: 'white' }}>
+              Cambiar
+            </button>
           </div>
         </div>
-      </div>
       )}
 
       <p className="text-center text-[13px] text-gray-400 pb-2 leading-relaxed px-2">
