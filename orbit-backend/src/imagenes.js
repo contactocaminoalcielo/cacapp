@@ -281,6 +281,40 @@ export async function cancelarSolicitud({ solicitudId, personalId }) {
 }
 
 // ─── Portal público: datos curados que debe mostrar (GET) ───────────────────
+/**
+ * ¿Hay algo FÍSICO que entregar? Decide si el portal pide datos de entrega.
+ * Misma regla en datosPortal y en recibirImagenesPortal (sin contar las
+ * ofertas que el cliente acepte en ese envío: eso lo suma quien llama).
+ *  · Proceso INDIVIDUAL → sí (devuelve cenizas), salvo los planes de
+ *    `planes_entrega_solo_adicional`.
+ *  · Grupal → solo si hay algún recordatorio no-digital (eco-grupal es todo
+ *    digital).
+ *  · `planes_entrega_solo_adicional` (COMPETS_SIN_REC): compostaje, no hay
+ *    cenizas, y su único físico del plan —la planta— pide su propia entrega en
+ *    el portal de elección de planta. Aquí solo cuenta un ADICIONAL físico
+ *    (David 2026-10-07: «si adquiere un recordatorio adicional le solicite los
+ *    datos de entrega»).
+ */
+async function hayEntregaFisica(client, s, config) {
+  const soloAdicional = (Array.isArray(config.planes_entrega_solo_adicional)
+    ? config.planes_entrega_solo_adicional : []).includes(s.plan_codigo)
+  const esGrupal = /GRUPAL/i.test(s.tipo_proceso || '')
+  if (!esGrupal && !soloAdicional) return true
+  const { rows } = await client.query(
+    `SELECT EXISTS(
+       SELECT 1 FROM public.servicio_recordatorios sr
+       JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+       WHERE sr.servicio_id = $1
+         AND COALESCE(sr.origen,'') <> 'REMOVIDO'
+         AND sr.estado <> 'NA'
+         AND COALESCE(r.categoria,'') <> 'digital'
+         AND ($2::boolean IS FALSE OR sr.origen = 'ADICIONAL')
+     ) AS tiene`,
+    [s.id, soloAdicional]
+  )
+  return rows[0]?.tiene === true
+}
+
 export async function datosPortal({ codigo }) {
   const cod = (codigo || '').trim().toUpperCase()
   if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
@@ -289,7 +323,7 @@ export async function datosPortal({ codigo }) {
     const { rows } = await client.query(
       `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id,
               m.nombre AS mascota, e.nombre AS especie,
-              p.nombre AS plan, p.tipo_proceso
+              p.nombre AS plan, p.codigo AS plan_codigo, p.tipo_proceso
        FROM public.servicios s
        JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
        LEFT JOIN public.especies e  ON e.id = m.especie_id
@@ -321,23 +355,7 @@ export async function datosPortal({ codigo }) {
 
     const items = (yaRecibido || fueraDeVentana) ? [] : await itemsPortal(client, s.id, soloAdicional)
 
-    // ¿Hay algo FÍSICO que entregar? Sirve para no pedir datos de entrega cuando
-    // no aplica (p.ej. eco-grupal / compostaje grupal: no se devuelven cenizas y
-    // todos los recordatorios son digitales). Regla: entrega física si el proceso
-    // es INDIVIDUAL (devuelve cenizas) o si existe algún recordatorio no-digital.
-    const esGrupal = /GRUPAL/i.test(s.tipo_proceso || '')
-    const { rows: fisRows } = await client.query(
-      `SELECT EXISTS(
-         SELECT 1 FROM public.servicio_recordatorios sr
-         JOIN public.recordatorios r ON r.id = sr.recordatorio_id
-         WHERE sr.servicio_id = $1
-           AND COALESCE(sr.origen,'') <> 'REMOVIDO'
-           AND sr.estado <> 'NA'
-           AND COALESCE(r.categoria,'') <> 'digital'
-       ) AS tiene`,
-      [s.id]
-    )
-    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true
+    const tieneEntregaFisica = await hayEntregaFisica(client, s, config)
 
     // Anuncios que le corresponden a este servicio (los de mayor prioridad,
     // con tope server-side). Por cada uno que acepte, el portal habilita la
@@ -378,7 +396,8 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     await lockClave(client, `fotos:${cod}`)
 
     const { rows: svcRows } = await client.query(
-      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id, p.tipo_proceso
+      `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id,
+              p.codigo AS plan_codigo, p.tipo_proceso
        FROM public.servicios s
        LEFT JOIN public.planes p ON p.id = s.plan_id
        WHERE s.codigo_fotos = $1
@@ -478,22 +497,10 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     // que datosPortal.tiene_entrega_fisica). En eco-grupal (todo digital, sin
     // cenizas) no se exige. Núcleo requerido: dirección, quién recibe y teléfono.
     const entrega = sanitizarEntrega(payload.entrega)
-    const esGrupal = /GRUPAL/i.test(s.tipo_proceso || '')
-    const { rows: fisRows } = await client.query(
-      `SELECT EXISTS(
-         SELECT 1 FROM public.servicio_recordatorios sr
-         JOIN public.recordatorios r ON r.id = sr.recordatorio_id
-         WHERE sr.servicio_id = $1
-           AND COALESCE(sr.origen,'') <> 'REMOVIDO'
-           AND sr.estado <> 'NA'
-           AND COALESCE(r.categoria,'') <> 'digital'
-       ) AS tiene`,
-      [s.id]
-    )
     // Aceptar una oferta física convierte en entregable un servicio que no lo
     // era (p.ej. eco-grupal, todo digital): entonces sí hay que pedir la entrega.
     // Basta con que UNA de las aceptadas sea física.
-    const tieneEntregaFisica = !esGrupal || fisRows[0]?.tiene === true ||
+    const tieneEntregaFisica = await hayEntregaFisica(client, s, config) ||
                                aceptadas.some(r => r.oferta.es_fisico)
     if (tieneEntregaFisica && !entregaNucleoOk(entrega)) {
       await client.query('ROLLBACK')

@@ -130,6 +130,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // Basta con que UNA de las aceptadas sea física.
   const pedirEntrega = servicio?.tiene_entrega_fisica !== false ||
                        ofertas.some(of => ofertaResp[of.id] === true && of.es_fisico)
+  // Compets sin recordatorios no tiene nada que recibir: "¿cuándo desea recibir
+  // los recordatorios?" solo se pregunta si hay alguno (del plan, adicional
+  // físico ya comprado, u oferta aceptada aquí).
+  const preguntarAnticipados = esCompostajeIndividual &&
+    (items.length > 0 || pedirEntrega || ofertas.some(of => ofertaResp[of.id] === true))
   // Cuando aplica, los datos esenciales son obligatorios para enviar.
   const CAMPOS_ENTREGA_REQ = ['direccion', 'recibe', 'telefono']
   const entregaReqOk = !pedirEntrega || CAMPOS_ENTREGA_REQ.every(k => String(entrega[k] || '').trim())
@@ -309,7 +314,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         recordatorios,
         declinados: [...declinados],
         comentarios: comentarios.trim() || null,
-        anticipados: esCompostajeIndividual ? anticipados : undefined,
+        anticipados: preguntarAnticipados ? anticipados : undefined,
         adicional_interes: interes.quiere ? { recordatorio_id: interes.recordatorio_id || null, texto: interes.texto.trim() || null } : null,
         entrega: entregaLlena ? entrega : undefined,
         autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
@@ -443,7 +448,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   mascota={mascota}
                   items={items} fotos={fotos} textos={textos} declinados={declinados}
                   catalogo={catalogo} interes={interes} setInteres={setInteres}
-                  esCompostaje={esCompostajeIndividual}
+                  esCompostaje={preguntarAnticipados}
                   anticipados={anticipados} setAnticipados={setAnticipados}
                   comentarios={comentarios} setComentarios={setComentarios}
                   entrega={entrega} setEntrega={setEntrega} pedirEntrega={pedirEntrega}

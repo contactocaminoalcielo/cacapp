@@ -15,7 +15,8 @@
 //     el recordatorio "Foto para el cofre". Si el plan no traía otros
 //     recordatorios con imagen, esto además lo hace entrar al primer contacto.
 //   - planes_solo_entrega (COMPETS_SIN_REC): plan sin recordatorios que igual
-//     entra, solo a pedir datos de entrega (0 fotos + formulario de entrega).
+//     entra (0 fotos): ve las ofertas, y el formulario de entrega solo aparece
+//     si tiene o acepta un adicional físico (planes_entrega_solo_adicional).
 import { pool, log } from '../db.js'
 import { cargarConfigImagenes, construirEnlace } from '../reglas-imagenes.js'
 
@@ -87,7 +88,7 @@ export async function jobContactosImagenes() {
       //  · esCofre (cremación individual): se adjunta "Foto para el cofre".
       //    Los que tienen recordatorios ya entraron por req_img_any; el adjunto
       //    de más abajo corre igual, que es lo que hace que se pida esa foto.
-      //  · esSoloEntrega (COMPETS_SIN_REC): entra solo por datos de entrega.
+      //  · esSoloEntrega (COMPETS_SIN_REC): entra sin fotos (ofertas + entrega si compra).
       let soloAdicional = false
       if (c.plan_excluido) {
         if (!c.req_img_adicional) continue
@@ -97,7 +98,7 @@ export async function jobContactosImagenes() {
       } else if (esCofre) {
         if (!cofreRecId) { log('[imagenes/job] plan de cofre sin recordatorio (migración 052 pendiente):', c.servicio_id); continue }
       } else if (esSoloEntrega) {
-        // entra sin fotos: el portal pedirá solo los datos de entrega
+        // entra sin fotos: ofertas, y la entrega solo si hay adicional físico
       } else {
         continue   // sin recordatorios y no es un plan especial → nada que pedir
       }

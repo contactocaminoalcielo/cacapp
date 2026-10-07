@@ -22,6 +22,11 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   planes_foto_cofre:  ['EXCLUSIVO_PRESENCIAL', 'EXCLUSIVO_VIDEOLLAMADA', 'PREMIUM',
                        'EXCLUSIVO_PRESENCIAL_SIN_REC', 'EXCLUSIVO_VIDEOLLAMADA_SIN_REC'],
   planes_solo_entrega: ['COMPETS_SIN_REC'],
+  // planes_entrega_solo_adicional: el portal pide datos de entrega SOLO si hay
+  // un recordatorio ADICIONAL físico (comprado antes o aceptado como oferta en
+  // el mismo portal). COMPETS_SIN_REC es compostaje: no hay cenizas, y la planta
+  // del plan pide su entrega en el portal de elección de planta (David 2026-10-07).
+  planes_entrega_solo_adicional: ['COMPETS_SIN_REC'],
   recordatorio_cofre: 'Foto para el cofre',   // nombre del recordatorio de catálogo (migración 052)
   // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).
   estados_elegibles: ['EN_CUARTO_FRIO'],
