@@ -329,7 +329,12 @@ export async function listarServicios() {
     piezas.forEach(p => {
       p.archivo_url = p.archivo_path ? urlArchivo(p.id) : null
       delete p.archivo_path
-      porServicio[p.servicio_id]?.piezas.push(p)
+      const s = porServicio[p.servicio_id]
+      // Un intento fallido de un digital que el cliente declinó después no es un
+      // error pendiente: manda lo que dijo el cliente (yuca: ERROR del 12-jul y
+      // memorial declinado; se quedaba en "Con error" para siempre).
+      if (!s || (p.estado === 'ERROR' && s.declinadas.includes(p.tipo))) return
+      s.piezas.push(p)
     })
     envios.forEach(e => porServicio[e.servicio_id]?.envios.push(e))
 
@@ -835,7 +840,7 @@ export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnv
 
   // 2) Piezas del servicio: qué lleva (esperadas + creadas) y qué está publicado
   const recIds = TIPOS.map(t => mapa[t]).filter(Boolean)
-  const [{ rows: espRows }, { rows: piezas }] = await Promise.all([
+  const [{ rows: espRows }, { rows: piezasTodas }] = await Promise.all([
     // Una fila por recordatorio del plan, con la marca de declinado (todas sus
     // filas vivas en 'NA' — un servicio puede llevar el mismo recordatorio dos veces)
     pool.query(
@@ -856,6 +861,10 @@ export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnv
   ])
   const esperadasRec = espRows.filter(r => !r.declinado).map(r => r.rec_id)
   const declinadasRec = espRows.filter(r => r.declinado).map(r => r.rec_id)
+  // Mismo criterio que listarServicios: el intento fallido de un digital
+  // declinado no cuenta como pieza viva.
+  const piezas = piezasTodas.filter(p =>
+    !(p.estado === 'ERROR' && declinadasRec.includes(String(mapa[p.tipo] || ''))))
   // Piezas vivas: las que hay que tener publicadas y las que se registran como enviadas.
   const tipos = TIPOS.filter(t =>
     esperadasRec.includes(String(mapa[t] || '')) || piezas.some(p => p.tipo === t))

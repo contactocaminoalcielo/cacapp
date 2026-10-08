@@ -757,9 +757,17 @@ function ServicioCard({
             ) : mem.estado === 'ERROR' ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-red-500 text-[13px]"><AlertTriangle size={15} /> {mem.error || 'Error al generar'}</div>
-                <Button variant="secondary" size="sm" onClick={onGenerar} disabled={busy[s.servicio_id]}>
-                  <RefreshCw size={15} /> Regenerar
-                </Button>
+                {/* Descartar también aquí: si regenerar no puede funcionar (foto
+                    perdida, como la de Lupe en el Supabase viejo), era la única
+                    salida y no existía desde Orbit. */}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" size="sm" onClick={onGenerar} disabled={busy[s.servicio_id]}>
+                    <RefreshCw size={15} /> Regenerar
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onDescartar(mem.id)} disabled={busy[mem.id]}>
+                    <X size={15} /> Descartar
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row gap-3">
