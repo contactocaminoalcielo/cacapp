@@ -15,13 +15,13 @@ import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, parsearErrorDB, today, waLink } from '@/lib/utils'
 import { etiquetaCubiculo } from '@/lib/cubiculos'
 import {
-  cargarVisitasTenjo, crearVisitaTenjo, marcarVisitaTenjo, mensajeGrupoVisitas,
+  cargarVisitasTenjo, crearVisitaTenjo, marcarVisitaTenjo, reprogramarVisitaTenjo, mensajeGrupoVisitas,
   fmtHoraVisita, VISITA_ESTADO_CFG, TIPO_PROCESO_LABEL, FRANJA_VISITA,
 } from '@/lib/tenjo'
 import { confirmarSolicitudVisita } from '@/lib/visitas'
 import {
   CalendarPlus, Users, Copy, Check, CheckCircle2, Ban, Search,
-  Send, AlertTriangle, Clock, CalendarCheck, MessageCircle,
+  Send, AlertTriangle, Clock, CalendarCheck, CalendarClock, MessageCircle,
 } from 'lucide-react'
 
 const fmtFechaLarga = f => f
@@ -62,6 +62,10 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
   // plantilla — lo "dice" el coordinador desde su celular y el hilo se queda
   // con él (ver feedback_canales_whatsapp).
   const [modalAviso,     setModalAviso]     = useState(null) // { numero, texto }
+
+  // Reprogramar: la familia pide cambiar el día. Se mueve la misma visita.
+  const [modalReprog, setModalReprog] = useState(null) // visita SOLICITADA o PROGRAMADA
+  const [formReprog,  setFormReprog]  = useState({ fecha: '', hora: '', motivo: '', novedades: '' })
 
   const cargar = useCallback(async () => {
     try {
@@ -197,6 +201,60 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
     ].join('\n')
   }
 
+  function abrirReprogramar(v) {
+    setModalReprog(v)
+    setFormReprog({
+      fecha:     '',
+      hora:      v.hora_visita ? String(v.hora_visita).slice(0, 5) : (FRANJA_VISITA[v.franja]?.hora_sugerida || ''),
+      motivo:    '',
+      novedades: v.novedades || '',
+    })
+  }
+
+  /** Mueve la visita a la fecha nueva y abre el aviso a la familia, igual que al confirmar. */
+  async function reprogramar() {
+    const v = modalReprog
+    if (!v) return
+    if (!formReprog.fecha) { await showAlert('Indica la nueva fecha de la visita.', { title: 'Fecha requerida' }); return }
+    setSaving(true)
+    try {
+      await reprogramarVisitaTenjo(v, {
+        fecha:     formReprog.fecha,
+        hora:      formReprog.hora,
+        motivo:    formReprog.motivo,
+        novedades: formReprog.novedades,
+        fechaAnteriorLabel: fmtFechaLarga(v.fecha_visita),
+        personalId: personalData?.id,
+      })
+      const cl  = v.servicios?.mascotas?.clientes
+      const rec = Array.isArray(v.servicios?.recogidas) ? v.servicios.recogidas[0] : v.servicios?.recogidas
+      setModalReprog(null)
+      setModalAviso({
+        numero: cl?.whatsapp || rec?.contacto_telefono || '',
+        texto:  mensajeVisitaReprogramada(v, formReprog.fecha, formReprog.hora),
+      })
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'Error reprogramando visita', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
+
+  function mensajeVisitaReprogramada(v, fecha, hora) {
+    const m = v.servicios?.mascotas
+    const nombre = (m?.clientes?.nombre || '').split(' ')[0] || ''
+    const cuando = fmtHoraVisita(hora) ? ` a las *${fmtHoraVisita(hora)}*` : ''
+    return [
+      `Hola${nombre ? ` ${nombre}` : ''}, esperamos que te encuentres bien.`,
+      ``,
+      `Como lo hablamos, tu visita a nuestra planta en Tenjo para acompañar a *${m?.nombre || 'tu mascotica'}* quedó reprogramada para el *${fmtFechaLarga(fecha)}*${cuando}.`,
+      ``,
+      `Cualquier cosa que necesites, respóndenos por aquí.`,
+      ``,
+      `Con cariño,`,
+      `Equipo Camino al Cielo 🤍🐾`,
+    ].join('\n')
+  }
+
   async function rechazarSolicitud(v) {
     const m = v.servicios?.mascotas
     if (!await confirm(
@@ -307,6 +365,12 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
               <CheckCircle2 size={12} /> Realizada
             </Button>
             {canPlan && (
+              <Button size="sm" variant="secondary" disabled={saving} onClick={() => abrirReprogramar(v)}
+                title="Reprogramar a otra fecha">
+                <CalendarClock size={12} /> Reprogramar
+              </Button>
+            )}
+            {canPlan && (
               <Button size="sm" variant="secondary" disabled={saving} onClick={() => cancelarVisita(v)}>
                 <Ban size={12} />
               </Button>
@@ -365,6 +429,10 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
                 setNotaConf(v.novedades || '')
               }}>
               <CalendarCheck size={12} /> Confirmar
+            </Button>
+            <Button size="sm" variant="secondary" disabled={saving} onClick={() => abrirReprogramar(v)}
+              title="La familia pidió otro día">
+              <CalendarClock size={12} /> Reprogramar
             </Button>
             <Button size="sm" variant="secondary" disabled={saving} onClick={() => rechazarSolicitud(v)}>
               <Ban size={12} />
@@ -629,6 +697,66 @@ export default function VisitasTab({ canPlan, personalData, onChanged }) {
           </div>
         </Modal>
       )}
+
+      {/* ── Modal: reprogramar a otra fecha ── */}
+      {modalReprog && (() => {
+        const v = modalReprog
+        const yaEseDia = formReprog.fecha
+          ? visitas.filter(x => x.id !== v.id && x.fecha_visita === formReprog.fecha
+              && ['SOLICITADA', 'PROGRAMADA'].includes(x.estado)).length
+          : 0
+        return (
+          <Modal open onClose={() => setModalReprog(null)}
+            title={`Reprogramar visita — ${v.servicios?.mascotas?.nombre || ''}`}
+            maxWidth="max-w-md"
+            footer={<>
+              <Button variant="secondary" onClick={() => setModalReprog(null)}>Cancelar</Button>
+              <Button onClick={reprogramar} disabled={saving || !formReprog.fecha}>
+                {saving ? 'Guardando…' : 'Reprogramar visita'}
+              </Button>
+            </>}>
+            <div className="space-y-4">
+              <div className="rounded-xl px-3.5 py-3 text-[12px]" style={{ background: '#F5F3FF', border: '1px solid #C4B5FD', color: '#5B21B6' }}>
+                {v.estado === 'SOLICITADA' ? 'La familia había pedido' : 'Estaba programada para'} el <strong>{fmtFechaLarga(v.fecha_visita)}</strong>
+                {fmtHoraVisita(v.hora_visita) ? ` a las ${fmtHoraVisita(v.hora_visita)}` : (FRANJA_VISITA[v.franja] ? ` ${FRANJA_VISITA[v.franja].label}` : '')}.
+                {v.estado === 'SOLICITADA' && ' Al reprogramarla queda confirmada con la nueva fecha.'}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Nueva fecha *</label>
+                  <Input type="date" min={today()} value={formReprog.fecha}
+                    onChange={e => setFormReprog(p => ({ ...p, fecha: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-ink3 block mb-1">Hora</label>
+                  <Input type="time" value={formReprog.hora}
+                    onChange={e => setFormReprog(p => ({ ...p, hora: e.target.value }))} />
+                </div>
+              </div>
+              {yaEseDia > 0 && (
+                <p className="text-[11px] rounded-xl px-3 py-2" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                  Ese día ya hay {yaEseDia} visita{yaEseDia !== 1 ? 's' : ''} más. Revisa que quepa en la jornada.
+                </p>
+              )}
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Motivo (opcional)</label>
+                <Input value={formReprog.motivo}
+                  onChange={e => setFormReprog(p => ({ ...p, motivo: e.target.value }))}
+                  placeholder="Ej: la familia no puede ese día" />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-ink3 block mb-1">Indicaciones para el operario</label>
+                <Textarea value={formReprog.novedades}
+                  onChange={e => setFormReprog(p => ({ ...p, novedades: e.target.value }))} />
+                <p className="text-[10px] text-ink3 mt-1">La fecha anterior y el motivo quedan anotados aquí al guardar.</p>
+              </div>
+              <p className="text-[11px] text-ink3">
+                Al guardar se abre el mensaje para avisarle a la familia la nueva fecha.
+              </p>
+            </div>
+          </Modal>
+        )
+      })()}
 
       {/* ── Modal: avisarle a la familia que quedó confirmada ── */}
       {/* Sale SOLO, pegado a la confirmación, y no como un botón más en la fila:

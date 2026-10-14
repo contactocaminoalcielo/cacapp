@@ -673,6 +673,34 @@ export async function marcarVisitaTenjo(visitaId, { estado, novedad = null, pers
 }
 
 /**
+ * Reprograma una visita viva (SOLICITADA o PROGRAMADA) cuando la familia pide
+ * cambiarla. Se mueve la MISMA fila y no se cancela para crear otra: el índice
+ * de una sola visita viva por servicio (migr. 159) lo exige, y el portal de la
+ * familia sigue mostrando su visita con la fecha nueva.
+ *
+ * Una SOLICITADA queda PROGRAMADA: la fecha nueva se acordó con la familia, ya
+ * está validada. La fecha anterior queda en las novedades, que es lo que lee el
+ * operario.
+ */
+export async function reprogramarVisitaTenjo(visita, { fecha, hora, motivo, novedades, fechaAnteriorLabel, personalId = null } = {}) {
+  const traza = `↻ Reprogramada (antes: ${fechaAnteriorLabel || visita.fecha_visita})${motivo?.trim() ? ` — ${motivo.trim()}` : ''}`
+  const cambios = {
+    fecha_visita: fecha,
+    hora_visita:  hora || null,
+    novedades:    [novedades?.trim(), traza].filter(Boolean).join('\n'),
+  }
+  if (visita.estado === 'SOLICITADA') {
+    cambios.estado         = 'PROGRAMADA'
+    cambios.confirmada_en  = new Date().toISOString()
+    cambios.confirmada_por = personalId || null
+  }
+  const { data, error } = await db.from('visitas_tenjo').update(cambios)
+    .eq('id', visita.id).in('estado', ['SOLICITADA', 'PROGRAMADA']).select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('La visita ya no está activa (se realizó o se canceló). Recarga la pantalla.')
+}
+
+/**
  * Mensaje para el grupo operativo con las visitas programadas de un día.
  * Recibe visitas de cargarVisitasTenjo (con `cubiculo` anexado). Se envía solo
  * o anexado al mensaje de procesos de la jornada (Planificación).
