@@ -17,6 +17,7 @@ import {
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf, totalContrato,
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
   mejorDescuento, aplicarDescuento, valorListaContrato, MOTIVOS_DESCUENTO,
+  MOTIVOS_CANCELACION, MOTIVOS_CANCELACION_MANUALES, resumenPagosAfiliacion,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
 import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil, BadgePercent } from 'lucide-react'
@@ -233,6 +234,7 @@ export default function Presequiales() {
   const [modalRenovar, setModalRenovar] = useState(null)
   const [modalActivar, setModalActivar] = useState(null) // { afiliacion, am }
   const [modalReactivar, setModalReactivar] = useState(null)
+  const [modalCancelar, setModalCancelar] = useState(null) // { afiliacion, amRetirar? }
 
   useEffect(() => { cargar() }, [])
 
@@ -300,7 +302,9 @@ export default function Presequiales() {
     if (q) out = out.filter(f =>
       `${f.a.clientes?.nombre} ${f.a.clientes?.apellido} ${f.a.clientes?.cedula_nit} ${f.a.clientes?.whatsapp} ${f.am.mascotas?.nombre}`
         .toLowerCase().includes(q) ||
-      (f.a.afiliacion_contratos || []).some(c => (c.numero_contrato || '').toLowerCase().includes(q)))
+      (f.a.afiliacion_contratos || []).some(c => (c.numero_contrato || '').toLowerCase().includes(q)) ||
+      (f.a.estado === 'CANCELADA' &&
+        `${MOTIVOS_CANCELACION[f.a.motivo_cancelacion] || ''} ${f.a.detalle_cancelacion || ''}`.toLowerCase().includes(q)))
     return out
   }, [filas, filtro, busqueda, diasAviso]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -405,8 +409,20 @@ export default function Presequiales() {
                     <Td>
                       <div className="font-semibold text-ink">{fmt(ct?.valor)}</div>
                       {f.hermanas > 1 && <div className="text-[10px] text-ink3">por mascota</div>}
+                      {/* Cancelada: lo que importa ya no es el precio sino cuánto alcanzó a pagar */}
+                      {a.estado === 'CANCELADA' && (
+                        <div className="text-[10px] text-ink2 font-semibold">Pagó {fmt(resumenPagosAfiliacion(a).total)} en total</div>
+                      )}
                     </Td>
-                    <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[f.estado] || ''}`}>{f.estado}</span></Td>
+                    <Td>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[f.estado] || ''}`}>{f.estado}</span>
+                      {a.estado === 'CANCELADA' && (
+                        <div className="text-[10px] text-ink3 mt-1 max-w-[180px]">
+                          {MOTIVOS_CANCELACION[a.motivo_cancelacion] || a.motivo_cancelacion || 'Sin motivo registrado'}
+                          {a.cancelada_en && <> · {new Date(a.cancelada_en).toLocaleDateString('es-CO')}</>}
+                        </div>
+                      )}
+                    </Td>
                     <Td onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-end">
                         {porVencer(a) && c?.whatsapp && ['VIGENTE','VENCIDA'].includes(f.estado) && (
@@ -456,42 +472,30 @@ export default function Presequiales() {
           onRenovar={() => setModalRenovar({ afiliacion: ficha })}
           onReactivar={() => setModalReactivar({ afiliacion: ficha })}
           onActivar={am => setModalActivar({ afiliacion: ficha, am })}
-          onCancelar={async () => {
-            const n = mascotasDe(ficha).filter(am => am.estado === 'VIGENTE').length
-            const ok = await confirm(
-              `El contrato ${contratoVigente(ficha)?.numero_contrato} quedará CANCELADO y con él ${n === 1 ? 'la mascota que aún cubre' : `las ${n} mascotas que aún cubre`}. Para sacar solo una mascota y dejar el contrato vivo, usa «Retirar» en la fila de esa mascota. Si el cliente quiere volver, se afilia de nuevo desde cero (contrato 0, cláusulas reactivadas). ¿Continuar?`,
-              { title: 'Cancelar afiliación completa', confirmLabel: 'Sí, cancelar todo' },
-            )
-            if (!ok) return
-            await db.from('afiliaciones').update({ estado: 'CANCELADA' }).eq('id', ficha.id)
-            await cargar()
-          }}
+          onCancelar={() => setModalCancelar({ afiliacion: ficha })}
           onRetirar={async am => {
             // Cancelar UNA mascota, no el contrato: las hermanas siguen cubiertas
             // y la próxima renovación se cobra solo por ellas (ModalRenovar ya
             // cuenta únicamente las VIGENTE). Si era la última viva, el contrato
             // ya no cubre a nadie: se cancela entero, porque dejarlo VIGENTE con
-            // cero mascotas lo deja renovándose sobre nada.
+            // cero mascotas lo deja renovándose sobre nada — y por eso pasa por
+            // el mismo modal de cancelar, que pide el motivo.
             const nombre = am.mascotas?.nombre || 'la mascota'
             const vivas = mascotasDe(ficha).filter(x => x.estado === 'VIGENTE')
-            const ultima = vivas.length <= 1
+            if (vivas.length <= 1) { setModalCancelar({ afiliacion: ficha, amRetirar: am }); return }
             const quedan = vivas.length - 1
             const ct = contratoVigente(ficha)
             const ok = await confirm(
-              ultima
-                ? `${nombre} es la única mascota que le queda cubierta al contrato ${ct?.numero_contrato}: al retirarla, el contrato entero queda CANCELADO. Si el cliente quiere volver, se afilia de nuevo desde cero. ¿Continuar?`
-                : `${nombre} sale del contrato ${ct?.numero_contrato} sin haber usado el servicio. ${quedan === 1 ? 'La otra mascota sigue cubierta' : `Las otras ${quedan} mascotas siguen cubiertas`} y la próxima renovación se cobrará solo por ${quedan === 1 ? 'ella' : 'ellas'}. ¿Continuar?`,
+              `${nombre} sale del contrato ${ct?.numero_contrato} sin haber usado el servicio. ${quedan === 1 ? 'La otra mascota sigue cubierta' : `Las otras ${quedan} mascotas siguen cubiertas`} y la próxima renovación se cobrará solo por ${quedan === 1 ? 'ella' : 'ellas'}. ¿Continuar?`,
               { title: `Retirar a ${nombre} del contrato`, confirmLabel: 'Sí, retirar' },
             )
             if (!ok) return
             const { error } = await db.from('afiliacion_mascotas').update({ estado: 'RETIRADA' }).eq('id', am.id)
             if (error) { await showAlert(error.message, { title: 'No se pudo retirar la mascota' }); return }
             // Rastro en la ficha: quién la sacó y cuándo (mismo sello que Reactivar)
-            const sello = `[${today()}] ${nombre} retirada del contrato por ${personalData?.nombre || 'coordinación'}` +
-              (ultima ? ' — era la última cubierta, el contrato queda CANCELADO' : '')
+            const sello = `[${today()}] ${nombre} retirada del contrato por ${personalData?.nombre || 'coordinación'}`
             await db.from('afiliaciones').update({
               notas: [ficha.notas, sello].filter(Boolean).join('\n'),
-              ...(ultima ? { estado: 'CANCELADA' } : {}),
             }).eq('id', ficha.id)
             await cargar()
           }}
@@ -555,6 +559,13 @@ export default function Presequiales() {
         <ModalReactivar afiliacion={modalReactivar.afiliacion} config={config} personalData={personalData}
           onClose={() => setModalReactivar(null)}
           onSaved={async () => { setModalReactivar(null); await cargar() }} />
+      )}
+
+      {modalCancelar && (
+        <ModalCancelar afiliacion={modalCancelar.afiliacion} amRetirar={modalCancelar.amRetirar}
+          personalData={personalData}
+          onClose={() => setModalCancelar(null)}
+          onSaved={async () => { setModalCancelar(null); await cargar() }} />
       )}
     </div>
   )
@@ -1532,6 +1543,36 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
         <span className="text-[11px] text-ink3">CC {a.clientes?.cedula_nit} · {a.clientes?.whatsapp}{a.clientes?.telefono ? ` · fijo ${a.clientes.telefono}` : ''}</span>
       </div>
 
+      {a.estado === 'CANCELADA' && (
+        <div className="rounded-xl px-3.5 py-3 mb-4 text-[12px] bg-danger-light border border-danger/30">
+          <div className="font-bold text-danger">
+            Cancelada{a.cancelada_en ? ` el ${new Date(a.cancelada_en).toLocaleDateString('es-CO')}` : ''}
+            {' — '}{MOTIVOS_CANCELACION[a.motivo_cancelacion] || a.motivo_cancelacion || 'sin motivo registrado'}
+          </div>
+          {a.detalle_cancelacion && <div className="text-ink2 mt-0.5">{a.detalle_cancelacion}</div>}
+          {!a.motivo_cancelacion && (
+            <div className="text-ink3 mt-0.5">Se canceló antes de que Orbit guardara el motivo (14-oct-2026).</div>
+          )}
+        </div>
+      )}
+
+      {/* Lo pagado en toda la vida del contrato: es lo primero que se pregunta
+          cuando el cliente se va, y antes había que sumarlo a mano. */}
+      {(() => {
+        const p = resumenPagosAfiliacion(a)
+        return (
+          <div className="rounded-xl px-3.5 py-2.5 mb-4 text-[12px] bg-surface2 flex flex-wrap gap-x-5 gap-y-1">
+            <span><span className="text-ink3">Pagado a la fecha:</span> <b className="text-ink">{fmt(p.total)}</b></span>
+            <span className="text-ink3">
+              {p.nContratos} contrato{p.nContratos === 1 ? '' : 's'}
+              {p.nRenovaciones > 0 ? ` (${p.nRenovaciones} renovación${p.nRenovaciones === 1 ? '' : 'es'})` : ''}
+            </span>
+            {p.primerContrato && <span className="text-ink3">Afiliado desde {p.primerContrato}</span>}
+            {p.ultimoPago && <span className="text-ink3">Último pago {p.ultimoPago}</span>}
+          </div>
+        )
+      })()}
+
       {/* Mascotas: cada una se activa por separado */}
       <h4 className="text-[12px] font-bold text-ink uppercase tracking-wide mb-2">Mascotas cubiertas</h4>
       <div className="space-y-1.5 mb-5">
@@ -1709,7 +1750,107 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
         {contratos.length === 0 && <p className="text-[12px] text-ink3">Sin contratos — esto no debería pasar.</p>}
       </div>
 
-      {a.notas && <p className="text-[12px] text-ink3 mt-4"><span className="font-bold">Notas:</span> {a.notas}</p>}
+      {a.notas && <p className="text-[12px] text-ink3 mt-4 whitespace-pre-line"><span className="font-bold">Notas:</span> {a.notas}</p>}
+    </Modal>
+  )
+}
+
+// ─── Cancelar: el cliente se va (migración 175) ──────────────────────────────
+// Antes era un confirm y un UPDATE de estado a secas: de los 92 cancelados que
+// había al 14-oct no se sabe por qué se fue ninguno. Ahora pide el motivo y
+// deja en las notas una foto de lo pagado a la fecha.
+//
+// Dos entradas: «Cancelar afiliación» (cae el contrato entero) y «Retirar» la
+// última mascota viva (`amRetirar`): esa también tumba el contrato, así que
+// también tiene que decir por qué.
+//
+// La fecha la sella el trigger de la 175 si no llega; aquí se manda igual para
+// que la pantalla y la DB digan la misma hora.
+function ModalCancelar({ afiliacion: a, amRetirar = null, personalData, onClose, onSaved }) {
+  const { alert: showAlert } = useConfirm()
+  const [motivo, setMotivo]   = useState('')
+  const [detalle, setDetalle] = useState('')
+  const [saving, setSaving]   = useState(false)
+  const ct = contratoVigente(a)
+  const vivas = mascotasDe(a).filter(am => am.estado === 'VIGENTE')
+  const pagos = resumenPagosAfiliacion(a)
+  const nombreRetiro = amRetirar?.mascotas?.nombre || 'la mascota'
+  const faltaDetalle = motivo === 'OTRO' && !detalle.trim()
+
+  async function guardar() {
+    if (!motivo) { await showAlert('Escoge el motivo de la cancelación.', { title: 'Falta el motivo' }); return }
+    if (faltaDetalle) { await showAlert('Cuéntanos el motivo en el detalle.', { title: 'Falta el detalle' }); return }
+    setSaving(true)
+    try {
+      if (amRetirar) {
+        const { error } = await db.from('afiliacion_mascotas').update({ estado: 'RETIRADA' }).eq('id', amRetirar.id)
+        if (error) throw error
+      }
+      const quien = personalData?.nombre || 'coordinación'
+      const sello = `[${today()}] ` +
+        (amRetirar ? `${nombreRetiro} retirada (era la última cubierta) y contrato CANCELADO` : 'Contrato CANCELADO') +
+        ` por ${quien}: ${MOTIVOS_CANCELACION[motivo]}${detalle.trim() ? ` — ${detalle.trim()}` : ''}.` +
+        ` Pagado a la fecha: ${fmt(pagos.total)} en ${pagos.nContratos} contrato${pagos.nContratos === 1 ? '' : 's'}.`
+      const { error } = await db.from('afiliaciones').update({
+        estado:              'CANCELADA',
+        motivo_cancelacion:  motivo,
+        detalle_cancelacion: detalle.trim() || null,
+        cancelada_por:       personalData?.id || null,
+        cancelada_en:        new Date().toISOString(),
+        notas:               [a.notas, sello].filter(Boolean).join('\n'),
+      }).eq('id', a.id)
+      if (error) throw error
+      await onSaved()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo cancelar la afiliación', variant: 'danger' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} maxWidth="max-w-lg"
+      title={amRetirar ? `Retirar a ${nombreRetiro} y cancelar el contrato` : 'Cancelar afiliación'}
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Volver</Button>
+        <Button variant="danger" onClick={guardar} disabled={saving || !motivo || faltaDetalle}>
+          {saving ? 'Guardando...' : 'Cancelar afiliación'}
+        </Button>
+      </>}>
+      <div className="space-y-4">
+        <div className="rounded-xl px-3.5 py-3 text-[12px] bg-danger-light border border-danger/30 text-ink2">
+          {amRetirar
+            ? <>{nombreRetiro} es la única mascota que le queda cubierta al contrato <b className="font-mono">{ct?.numero_contrato}</b>: al retirarla, el contrato entero queda <b>CANCELADO</b>.</>
+            : <>El contrato <b className="font-mono">{ct?.numero_contrato}</b> queda <b>CANCELADO</b> y con él {vivas.length === 1 ? 'la mascota que aún cubre' : `las ${vivas.length} mascotas que aún cubre`}{vivas.length ? ` (${vivas.map(am => am.mascotas?.nombre).filter(Boolean).join(', ')})` : ''}. Para sacar solo una mascota y dejar el contrato vivo, usa «Retirar» en la fila de esa mascota.</>}
+          {' '}Si el cliente quiere volver, se afilia de nuevo desde cero (contrato 0, cláusulas reactivadas).
+        </div>
+
+        <div className="rounded-xl px-3.5 py-3 text-[12px] bg-surface2">
+          <div className="font-bold text-ink mb-1">Lo que pagó a la fecha</div>
+          <div className="text-ink2">
+            <b>{fmt(pagos.total)}</b> en {pagos.nContratos} contrato{pagos.nContratos === 1 ? '' : 's'}
+            {pagos.primerContrato ? ` · afiliado desde ${pagos.primerContrato}` : ''}
+            {pagos.ultimoPago ? ` · último pago ${pagos.ultimoPago}` : ''}
+          </div>
+          {a.tipo === 'ANUAL' && ct?.fecha_vencimiento && (
+            <div className="text-ink3 mt-0.5">El año pagado iba hasta el {ct.fecha_vencimiento}.</div>
+          )}
+          <div className="text-ink3 mt-0.5">Queda anotado en la ficha junto con el motivo.</div>
+        </div>
+
+        <div>
+          <label className={LABEL}>Motivo *</label>
+          <Select value={motivo} onChange={e => setMotivo(e.target.value)}>
+            <option value="">Escoge el motivo…</option>
+            {MOTIVOS_CANCELACION_MANUALES.map(k => <option key={k} value={k}>{MOTIVOS_CANCELACION[k]}</option>)}
+          </Select>
+        </div>
+        <div>
+          <label className={LABEL}>Detalle{motivo === 'OTRO' ? ' *' : ''}</label>
+          <Textarea value={detalle} onChange={e => setDetalle(e.target.value)}
+            placeholder={motivo === 'CAMBIO_CIUDAD' ? 'Ej: se mudó a Medellín' : 'Lo que contó el cliente'} />
+        </div>
+      </div>
     </Modal>
   )
 }

@@ -288,6 +288,40 @@ export function totalContrato(contrato, nMascotas) {
   return (parseFloat(contrato?.valor) || 0) * (nMascotas || 0)
 }
 
+// ─── Cancelación (migración 175) ─────────────────────────────────────────────
+// VENCIMIENTO no se ofrece en la pantalla: lo pone el trigger cuando cancela el
+// job de vencimientos (que no manda motivo). La pantalla siempre manda uno.
+export const MOTIVOS_CANCELACION = {
+  CAMBIO_CIUDAD:  'Se mudó de ciudad',
+  NO_RENUEVA:     'No quiere renovar',
+  ECONOMICO:      'Motivos económicos',
+  INCONFORME:     'Inconforme con el servicio',
+  OTRO_PROVEEDOR: 'Se fue con otra empresa',
+  OTRO:           'Otro',
+  VENCIMIENTO:    'Venció sin renovar (automático)',
+}
+export const MOTIVOS_CANCELACION_MANUALES = Object.keys(MOTIVOS_CANCELACION).filter(k => k !== 'VENCIMIENTO')
+
+/**
+ * Lo que pagó el titular en toda la vida del contrato: cada contrato de la
+ * cadena (nuevo + renovaciones) a su precio unitario × nº de mascotas — la
+ * MISMA cuenta que la ficha y el «Recaudado» de arriba, para que no haya dos
+ * cifras distintas del mismo contrato.
+ */
+export function resumenPagosAfiliacion(afiliacion) {
+  const n = (afiliacion?.afiliacion_mascotas || []).length
+  const contratos = [...(afiliacion?.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)
+  const total = contratos.reduce((s, c) => s + totalContrato(c, n), 0)
+  const fechas = contratos.map(c => c.fecha_pago || c.fecha_inicio).filter(Boolean).sort()
+  return {
+    total,
+    nContratos: contratos.length,
+    nRenovaciones: contratos.filter(c => c.numero > 0).length,
+    ultimoPago: fechas[fechas.length - 1] || null,
+    primerContrato: contratos[0]?.fecha_inicio || null,
+  }
+}
+
 // ─── Contrato de papel, calcado ──────────────────────────────────────────────
 // Réplica del formato real que usa Camino al Cielo (Versión 2.818), a partir de
 // los 12 contratos firmados que pasó David: encabezado con el nº y "12 MESES",
