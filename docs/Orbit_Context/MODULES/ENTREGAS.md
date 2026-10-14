@@ -24,6 +24,9 @@ Dos caminos, ambos vigentes:
   tope de 500 filas.
 - **Buscar** por mascota, cliente o teléfono, y **filtrar por fechas**. Las dos cosas aplican a las
   dos listas. La fecha es la programada o, si no tiene, el día en que coordinación la publicó.
+  El teléfono se compara también en solo dígitos (WhatsApp, teléfonos del cliente y
+  `telefono_adicional` de la entrega). Mientras hay búsqueda, el vacío grande de "Mis entregas"
+  no se pinta: empujaba las disponibles encontradas debajo del teclado (reporte del 14-oct-2026).
 
 ## 🩸 Incidente del 24-sep: el pool tapado por entregas ya hechas
 Coordinación marcaba `ENTREGADO` en el Tablero y la fila de `entregas` seguía `DISPONIBLE`:

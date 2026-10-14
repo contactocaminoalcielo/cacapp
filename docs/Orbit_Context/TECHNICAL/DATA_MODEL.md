@@ -219,6 +219,24 @@ Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
 - `fn_compostaje_espera_salida(uuid)` / `fn_recalcular_limite_compostaje(uuid)` +
   trigger `trg_item_salida_limite` — el plazo de entrega de los recordatorios (ver BUSINESS_RULES RN085)
 
+### Visitas a la planta — tabla `visitas_tenjo` (migraciones 059 / 159)
+- Estados: `SOLICITADA` (la pidió la familia por el portal) → `PROGRAMADA` → `REALIZADA | CANCELADA`.
+  Índice único parcial `ux_visitas_tenjo_solicitud_viva`: **una sola visita viva por servicio**
+- `fecha_visita` date, `hora_visita` time, `franja` (`MANANA|TARDE`), `personas`, `novedades`,
+  `origen` (`COORDINACION|PORTAL_CLIENTE`), `confirmada_en/por`, `realizada_en/por`
+- **Reprogramar** (14-oct-2026, sin migración) mueve la MISMA fila (fecha + hora) y anota
+  «↻ Reprogramada (antes: …)» en `novedades`; una `SOLICITADA` reprogramada queda `PROGRAMADA`
+
+### Afiliaciones pre-exequiales — cancelación (migración 175)
+- `afiliaciones.cancelada_en` timestamptz · `cancelada_por` uuid → `personal(id)` ·
+  `motivo_cancelacion` text (catálogo `MOTIVOS_CANCELACION` en `src/lib/afiliaciones.js`:
+  `CAMBIO_CIUDAD|NO_RENUEVA|ECONOMICO|INCONFORME|OTRO_PROVEEDOR|OTRO|VENCIMIENTO`) ·
+  `detalle_cancelacion` text
+- **Trigger `trg_afiliacion_sello_cancelacion`** — BEFORE UPDATE OF `estado`: al entrar a
+  `CANCELADA` sella `cancelada_en` y, si nadie puso motivo (el job de vencimientos), deja
+  `VENCIMIENTO`; al salir de `CANCELADA` (Reactivar) limpia los cuatro campos
+- Las 92 canceladas antes del 14-oct-2026 tienen motivo NULL («sin motivo registrado»)
+
 ### Entrega — tabla `entregas` (cobro en la puerta: migración 151)
 - Estados: `PENDIENTE | DISPONIBLE | ASIGNADA | EN_CAMINO | ENTREGADA | FALLIDA | REPROGRAMADA`.
   ⚠️ `PENDIENTE` es un cascarón del trigger `fn_post_crear_servicio`, **no** "lista para entregar"
