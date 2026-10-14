@@ -1922,7 +1922,7 @@ export default function TecnicoApp() {
       mascotas:mascota_id (
         nombre, especie_id,
         especies ( nombre ),
-        clientes:cliente_id ( nombre, apellido, whatsapp )
+        clientes:cliente_id ( nombre, apellido, whatsapp, telefono, telefono2 )
       ),
       planes:plan_id ( nombre )
     )
@@ -2927,8 +2927,11 @@ export default function TecnicoApp() {
   const coincideEntrega = e => {
     const mascota = e.servicios?.mascotas
     const cliente = mascota?.clientes
-    const texto = normalizarBusqueda([mascota?.nombre, cliente?.nombre, cliente?.apellido,
-      cliente?.whatsapp, cliente?.telefono, e.direccion_entrega, e.direccion].filter(Boolean).join(' '))
+    const telefonos = [cliente?.whatsapp, cliente?.telefono, cliente?.telefono2, e.telefono_adicional].filter(Boolean)
+    // Los teléfonos también en solo dígitos: "3001234567" debe encontrar "+57 300 123 4567".
+    const texto = normalizarBusqueda([mascota?.nombre, cliente?.nombre, cliente?.apellido, e.contacto_nombre,
+      ...telefonos, ...telefonos.map(t => String(t).replace(/\D/g, '')),
+      e.direccion_entrega, e.direccion].filter(Boolean).join(' '))
     return palabrasEntrega.every(p => texto.includes(p))
   }
   // Sin fecha programada, la del día en que coordinación la preparó: es la que
@@ -3179,8 +3182,11 @@ export default function TecnicoApp() {
             {(entregas.length > 0 || disponibles.length > 0) && (
               <FiltroFechas desde={entDesde} hasta={entHasta} setDesde={setEntDesde} setHasta={setEntHasta} />
             )}
+            {/* Buscando, el vacío de "propias" no se pinta: sus ~300 px empujaban
+                las disponibles que sí coincidían debajo del teclado, y parecía que
+                el buscador no hacía nada. El conteo de arriba ya dice "0 propias". */}
             {entregasFiltradas.length === 0
-              ? <EmptyState icon="📦"
+              ? palabrasEntrega.length > 0 ? null : <EmptyState icon="📦"
                   texto={entregas.length ? 'Sin entregas con estos filtros' : 'No has tomado ninguna entrega'}
                   sub={entregas.length
                     ? 'Ajusta la búsqueda o el filtro de fechas para ver las demás.'
