@@ -73,7 +73,8 @@ COMMENT ON COLUMN public.planta_elecciones.restos_calcicos_valor IS
 
 -- ─── Precio (configuración) ─────────────────────────────────────────────────
 INSERT INTO public.config_operativa (modulo, clave, valor, descripcion) VALUES
-  ('PLANTAS', 'restos_calcicos_precio', 'null'::jsonb,
+  -- $150.000 (David, 2026-10-15).
+  ('PLANTAS', 'restos_calcicos_precio', '150000'::jsonb,
    'Precio de los restos cálcicos como adicional en el portal de fotos de Compets. NULL = no se ofrecen.')
 ON CONFLICT (modulo, clave) DO NOTHING;
 
