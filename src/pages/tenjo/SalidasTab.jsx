@@ -76,6 +76,28 @@ function Mascota({ item }) {
   )
 }
 
+// La planta que eligió la familia y, sobre todo, si compró los restos
+// cálcicos (migración 176): se separan aquí, al sacar la mascota del cubículo.
+function ChipsPlanta({ item }) {
+  const p = item.planta
+  if (!p?.planta_nombre && !p?.restos_calcicos) return null
+  return (
+    <div className="flex flex-wrap gap-1 mt-1">
+      {p.planta_nombre && (
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+          style={{ background: '#E8F3EB', color: '#1D8A55' }}>🌱 {p.planta_nombre}</span>
+      )}
+      {p.restos_calcicos && (
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+          style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D' }}
+          title="La familia compró los restos cálcicos: separarlos al sacarla y entregarlos con la planta.">
+          ⚠ Restos cálcicos
+        </span>
+      )}
+    </div>
+  )
+}
+
 // Cómo se le entregan los recordatorios a esta familia. Cambia el significado
 // de la fecha de salida, así que se dice en la tabla y no en una nota al pie.
 function ChipEntrega({ item }) {
@@ -374,7 +396,7 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                             </span>
                           )}
                         </Td>
-                        <Td><ChipEntrega item={it} /></Td>
+                        <Td><ChipEntrega item={it} /><ChipsPlanta item={it} /></Td>
                         <Td>
                           <div className="flex items-center gap-1.5 justify-end">
                             <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
@@ -513,7 +535,7 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                     <Td><Mascota item={it} /></Td>
                     <Td><Cubiculo item={it} /></Td>
                     <Td className="text-[11px] font-medium text-ink2">{fmt(it.cubiculo_salida)}</Td>
-                    <Td><ChipEntrega item={it} /></Td>
+                    <Td><ChipEntrega item={it} /><ChipsPlanta item={it} /></Td>
                     <Td className="text-[11px] font-medium text-ink2">
                       {fmt(it.servicios?.fecha_limite_entrega)}
                     </Td>

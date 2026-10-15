@@ -28,6 +28,16 @@ export const CONFIG_DEFAULTS_PLANTAS = {
   arranque_desde:         null,
   max_adicionales:        4,
   dias_ventana_portal:    120,
+  // Precio de los restos cálcicos en el portal de fotos (migración 176).
+  // NULL = no se ofrecen: un precio inventado aquí sería dinero cobrado sin
+  // que nadie lo decidiera.
+  restos_calcicos_precio: null,
+}
+
+/** Precio vigente de los restos cálcicos, o null si no se ofrecen. */
+export function precioRestosCalcicos(cfg) {
+  const n = Number(cfg?.restos_calcicos_precio)
+  return Number.isFinite(n) && n > 0 ? n : null
 }
 
 /** Tokens permitidos en `vars` de la plantilla. Mismo criterio que imágenes. */
@@ -114,6 +124,9 @@ export async function enviarAvisoPlanta({ eleccionId, config = null, personalId 
     const e = rows[0]
     if (!e) return { enviado: false, motivo: 'no_encontrada' }
     if (e.estado === 'ELEGIDA')   return { enviado: false, motivo: 'ya_eligio' }
+    // Eligió en el portal de fotos y el compostaje no se ha cumplido: avisarle
+    // ahora sería mandarle a confirmar una entrega que todavía no existe.
+    if (e.estado === 'RESERVADA') return { enviado: false, motivo: 'compostaje_en_curso' }
     if (e.estado === 'CANCELADA') return { enviado: false, motivo: 'cancelada' }
     if (e.estado === 'ENVIADO')   return { enviado: false, motivo: 'ya_enviado' }
     if (!plantilla) return { enviado: false, motivo: 'sin_plantilla' }
@@ -197,7 +210,7 @@ export async function datosPortalPlanta({ codigo }) {
     const { rows } = await client.query(
       `SELECT pe.id, pe.estado, pe.fecha_cumplida::text AS fecha_cumplida,
               pe.fecha_envio, pe.fecha_eleccion,
-              pe.planta_id, pe.planta_nombre, pe.servicio_id,
+              pe.planta_id, pe.planta_nombre, pe.servicio_id, pe.restos_calcicos,
               m.nombre AS mascota, esp.nombre AS especie,
               c.nombre AS cliente_nombre,
               cu.codigo AS cubiculo,
@@ -217,7 +230,9 @@ export async function datosPortalPlanta({ codigo }) {
       [cod]
     )
     const e = rows[0]
-    if (!e) return { status: 404, body: { ok: false, error: 'no_encontrado' } }
+    // RESERVADA: el compostaje sigue en curso y este enlace todavía no se le ha
+    // mandado a nadie. No hay nada que confirmar aún.
+    if (!e || e.estado === 'RESERVADA') return { status: 404, body: { ok: false, error: 'no_encontrado' } }
 
     const cfg = await cargarConfigPlantas(client)
     const cerrado = e.estado === 'CANCELADA' || fueraDeVentana(e, cfg)
@@ -241,6 +256,11 @@ export async function datosPortalPlanta({ codigo }) {
       ok: true,
       cerrado,
       ya_eligio: e.estado === 'ELEGIDA',
+      // La especie ya se fijó en el portal de fotos (primer contacto): aquí
+      // no se vuelve a preguntar, pero la familia SÍ tiene que confirmar la
+      // entrega. Es distinto de `ya_eligio`, que es "ya confirmó todo".
+      especie_fijada: !!e.planta_id,
+      restos_calcicos: e.restos_calcicos === true,
       servicio: { mascota: e.mascota, especie: e.especie, cubiculo: e.cubiculo,
                   nombre_cliente: (e.cliente_nombre || '').split(' ')[0] || '' },
       // Se sanea también a la SALIDA: la columna es jsonb y pudo escribirla una
@@ -326,7 +346,8 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
     await lockClave(client, `planta:${cod}`)
 
     const { rows } = await client.query(
-      `SELECT pe.id, pe.servicio_id, pe.estado, pe.planta_id,
+      `SELECT pe.id, pe.servicio_id, pe.estado, pe.planta_id, pe.planta_nombre,
+              pe.restos_calcicos,
               pe.fecha_cumplida::text AS fecha_cumplida, pe.fecha_envio,
               m.nombre AS mascota
          FROM public.planta_elecciones pe
@@ -339,7 +360,7 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
       [cod]
     )
     const e = rows[0]
-    if (!e) { await client.query('ROLLBACK'); return { status: 404, body: { ok: false, error: 'no_encontrado' } } }
+    if (!e || e.estado === 'RESERVADA') { await client.query('ROLLBACK'); return { status: 404, body: { ok: false, error: 'no_encontrado' } } }
 
     const cfg = await cargarConfigPlantas(client)
     if (e.estado === 'CANCELADA' || fueraDeVentana(e, cfg)) {
@@ -491,14 +512,19 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
     const claveDedupe = comprados.length
       ? `planta:extras:${e.id}:${[...ids].sort().join(',')}`
       : `planta:eleccion:${e.id}`
+    // La especie pudo fijarse meses antes, en el portal de fotos: el nombre se
+    // toma de la fila para que la alerta de la entrega no salga sin especie.
+    const especie = plantaNombre || e.planta_nombre
+    const conRestos = e.restos_calcicos === true
+      ? ' ⚠ LLEVA RESTOS CÁLCICOS: entregarlos junto con la planta.' : ''
     await client.query(
       `INSERT INTO public.alertas_operativas
          (servicio_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
        VALUES ($1, $2, 'PLANTA_ELEGIDA', $3, $4, $5, $6, $7::jsonb)
        ON CONFLICT DO NOTHING`,
       [e.servicio_id, MOD,
-       totalExtras > 0 ? 'ALTA' : 'MEDIA',
-       `${e.mascota}: planta elegida${plantaNombre ? ` — ${plantaNombre}` : ''}.` + detalleExtras,
+       totalExtras > 0 || conRestos ? 'ALTA' : 'MEDIA',
+       `${e.mascota}: planta elegida${especie ? ` — ${especie}` : ''}.` + detalleExtras + conRestos,
        totalExtras > 0
          ? 'Los extras ya quedaron sumados al total del servicio. Preparar la planta y confirmar el cobro en la entrega.'
          : 'Preparar la planta de la especie elegida.',
@@ -514,4 +540,166 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
   } finally {
     client.release()
   }
+}
+
+// ─── Primer contacto: el paso de la planta en el portal de fotos ────────────
+// Migración 176. La familia de Compets elige la especie y, si quiere, compra
+// los restos cálcicos desde la solicitud de imágenes, meses antes de que se
+// cumpla el compostaje. Se guarda en la MISMA fila de `planta_elecciones`
+// (estado RESERVADA); el job la despierta al cumplirse el compostaje.
+
+/**
+ * Lo que el portal de fotos muestra en el paso de la planta, o null si a este
+ * servicio no le aplica o ya no queda nada por decidir.
+ */
+export async function plantaParaPortalFotos(client, { servicioId, tipoProceso }) {
+  if (tipoProceso !== 'COMPOSTAJE_INDIVIDUAL') return null
+  const cfg = await cargarConfigPlantas(client)
+  const { rows } = await client.query(
+    `SELECT estado, planta_id, planta_nombre, restos_calcicos
+       FROM public.planta_elecciones WHERE servicio_id = $1`, [servicioId]
+  )
+  const e = rows[0]
+  if (e?.estado === 'CANCELADA') return null
+
+  const opciones = e?.planta_id ? [] : await catalogo(client, 'elegible')
+  const precio = precioRestosCalcicos(cfg)
+  const ofrecerRestos = !e?.restos_calcicos && precio != null
+  if (!opciones.length && !ofrecerRestos) return null
+
+  return {
+    // Sin precios: la especie va incluida en el plan.
+    opciones: opciones.map(({ id, nombre, descripcion, imagen_url }) => ({ id, nombre, descripcion, imagen_url })),
+    elegida: e?.planta_id ? { planta_id: e.planta_id, nombre: e.planta_nombre } : null,
+    // El precio va solo para MOSTRARLO; al cobrar se vuelve a leer de config.
+    restos_calcicos: ofrecerRestos ? { precio } : null,
+  }
+}
+
+/**
+ * Guarda el paso de la planta del portal de fotos. Corre DENTRO de la
+ * transacción del portal (quien llama hace BEGIN/COMMIT).
+ *
+ * payload: `{ planta_id, restos_calcicos: boolean }` — nunca un precio.
+ * Devuelve `{ ok:false, error }` si falta la especie (el portal responde 422),
+ * o `{ ok:true, planta, restos_valor }`.
+ */
+export async function reservarPlantaPortalFotos(client, { servicioId, codigo, mascota, payload }) {
+  const p = payload && typeof payload === 'object' ? payload : {}
+  const cfg = await cargarConfigPlantas(client)
+  const { rows } = await client.query(
+    `SELECT id, estado, planta_id, planta_nombre, restos_calcicos
+       FROM public.planta_elecciones WHERE servicio_id = $1 FOR UPDATE`, [servicioId]
+  )
+  const e = rows[0]
+  if (e?.estado === 'CANCELADA') return { ok: true, planta: null, restos_valor: 0 }
+
+  // ── Especie: solo si todavía no hay una ──
+  let plantaId = e?.planta_id || null
+  let plantaNombre = e?.planta_nombre || null
+  let especieNueva = false
+  if (!plantaId) {
+    const opciones = await catalogo(client, 'elegible')
+    if (opciones.length) {
+      const elegida = opciones.find(o => o.id === uuidOrNull(p.planta_id))
+      if (!elegida) return { ok: false, error: 'planta_requerida' }
+      plantaId = elegida.id
+      plantaNombre = elegida.nombre
+      especieNueva = true
+    }
+  }
+
+  // ── Restos cálcicos: el precio sale de config, y solo de config ──
+  const precio = precioRestosCalcicos(cfg)
+  const compraRestos = p.restos_calcicos === true && !e?.restos_calcicos && precio != null
+  if (!especieNueva && !compraRestos) return { ok: true, planta: null, restos_valor: 0 }
+
+  let eleccionId = e?.id
+  if (!eleccionId) {
+    const { rows: ins } = await client.query(
+      `INSERT INTO public.planta_elecciones
+         (servicio_id, estado, codigo, enlace, planta_id, planta_nombre, fecha_eleccion)
+       VALUES ($1, 'RESERVADA', $2, $3, $4, $5, CASE WHEN $4::uuid IS NULL THEN NULL ELSE now() END)
+       RETURNING id`,
+      [servicioId, codigo, construirEnlacePlanta(codigo), plantaId, plantaNombre]
+    )
+    eleccionId = ins[0].id
+  } else if (especieNueva) {
+    await client.query(
+      `UPDATE public.planta_elecciones
+          SET planta_id = $2, planta_nombre = $3, fecha_eleccion = COALESCE(fecha_eleccion, now())
+        WHERE id = $1`,
+      [eleccionId, plantaId, plantaNombre]
+    )
+  }
+
+  // ── Dinero: mismo criterio que los extras y Ofertas (migración 078) ──
+  let restosValor = 0, valorAntes = null, valorDespues = null
+  if (compraRestos) {
+    // `AND restos_calcicos = false`: el candado anti doble cobro si la familia
+    // reenvía. Sin fila devuelta no se suma nada al servicio.
+    const { rows: rc } = await client.query(
+      `UPDATE public.planta_elecciones
+          SET restos_calcicos = true, restos_calcicos_valor = $2, restos_calcicos_en = now()
+        WHERE id = $1 AND restos_calcicos = false
+        RETURNING id`,
+      [eleccionId, precio]
+    )
+    if (rc[0]) {
+      restosValor = precio
+      const { rows: sv } = await client.query(
+        `UPDATE public.servicios
+            SET valor_total = COALESCE(valor_total, 0) + $2,
+                valor_adicionales = CASE WHEN valor_adicionales IS NULL
+                                         THEN NULL ELSE valor_adicionales + $2 END,
+                estado_pago = CASE
+                  WHEN COALESCE(valor_pagado, 0) >= COALESCE(valor_total, 0) + $2 THEN 'COMPLETO'
+                  WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
+                  ELSE 'PENDIENTE' END
+          WHERE id = $1
+        RETURNING valor_total`,
+        [servicioId, precio]
+      )
+      const despues = Number(sv[0]?.valor_total)
+      if (Number.isFinite(despues)) { valorDespues = despues; valorAntes = despues - precio }
+    }
+  }
+
+  // ── Que se nos vea: novedad en la ficha ──
+  const precioTxt = `$${restosValor.toLocaleString('es-CO')}`
+  const partes = []
+  if (especieNueva) partes.push(`Desde el portal de fotos, la familia eligió la planta "${plantaNombre}" para ${mascota}.`)
+  if (restosValor) partes.push(`Compró los RESTOS CÁLCICOS de ${mascota} (${precioTxt}). Pendiente de cobro.`)
+  await client.query(
+    `INSERT INTO public.novedades_servicio
+       (servicio_id, tipo_novedad, descripcion, valor_ajuste, valor_antes, valor_despues, motivo_valor)
+     VALUES ($1, 'NOTA', $2, $3, $4, $5, $6)`,
+    [servicioId, partes.join(' '), restosValor || null, valorAntes, valorDespues,
+     valorAntes == null ? null : 'ADICIONAL']
+  )
+
+  // ── Y la alerta de los restos: es lo que no se puede pasar por alto ──
+  if (restosValor) {
+    await client.query(
+      `INSERT INTO public.alertas_operativas
+         (servicio_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+       VALUES ($1, $2, 'RESTOS_CALCICOS', 'ALTA', $3, $4, $5, $6::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [servicioId, MOD,
+       `${mascota}: la familia compró los restos cálcicos (${precioTxt}).`,
+       'Separar los restos cálcicos al sacar la mascota del cubículo y entregarlos con la planta. Confirmar el cobro en la entrega.',
+       `restos:${servicioId}`,
+       JSON.stringify({ eleccion_id: eleccionId, valor: restosValor })]
+    )
+    await client.query(
+      `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, datos)
+       SELECT p.id, 'RESTOS_CALCICOS', 'Lleva restos cálcicos', $1, $2::jsonb
+       FROM public.personal p JOIN public.roles_personal r ON r.id = p.rol_principal_id
+       WHERE r.nombre IN ('COORDINADOR','ADMIN') AND p.activo`,
+      [`${mascota}: la familia compró los restos cálcicos (${precioTxt}). Se entregan con la planta.`,
+       JSON.stringify({ servicio_id: servicioId })]
+    )
+  }
+
+  return { ok: true, planta: especieNueva ? plantaNombre : null, restos_valor: restosValor }
 }

@@ -27,7 +27,7 @@ async function cargarPlantas(servicioId) {
   if (!/^[0-9a-f-]{36}$/i.test(String(servicioId || ''))) return { eleccion: null, extras: [] }
   try {
     const [e, x] = await Promise.all([
-      pool.query(`SELECT pe.estado, pe.planta_nombre, pe.fecha_eleccion, pl.nombre AS planta
+      pool.query(`SELECT pe.estado, pe.planta_nombre, pe.fecha_eleccion, pe.restos_calcicos, pe.restos_calcicos_valor, pl.nombre AS planta
                     FROM public.planta_elecciones pe LEFT JOIN public.plantas pl ON pl.id = pe.planta_id
                    WHERE pe.servicio_id = $1 LIMIT 1`, [servicioId]),
       pool.query(`SELECT nombre, cantidad, precio_unitario, total FROM public.planta_adicionales
@@ -99,6 +99,8 @@ export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, 
       nombre: `Planta adicional: ${p.nombre}${(Number(p.cantidad) || 1) > 1 ? ` ×${p.cantidad}` : ''}`,
       valor: Number(p.total) || 0,
     })),
+    ...(plantas?.eleccion?.restos_calcicos
+      ? [{ nombre: 'Restos cálcicos', valor: Number(plantas.eleccion.restos_calcicos_valor) || 0 }] : []),
   ].filter(l => l.valor > 0)
   const totalAdicionales = lineasCobro.reduce((s, l) => s + l.valor, 0)
   const saldo = Math.min(totalAdicionales, saldoServicio)
@@ -150,6 +152,7 @@ ${(plantas?.eleccion || extras.length) ? `
     ${campo('Especie elegida por la familia', especie || 'Sin elegir')}
     ${campo('Fecha de elección', especie ? fechaLarga(plantas.eleccion?.fecha_eleccion) : '—')}
   </div>
+  ${plantas?.eleccion?.restos_calcicos ? `<p style="margin-top:2mm;font-weight:700;color:#92400E">Lleva restos cálcicos de la mascota</p>` : ''}
   ${extras.length ? `<table class="tabla" style="margin-top:2.5mm"><tbody>${extras.map(p =>
     `<tr><td>${esc(p.nombre)}${(Number(p.cantidad) || 1) > 1 ? ` <span class="tag">×${esc(p.cantidad)}</span>` : ''}</td><td class="der">${fmtCOP(p.total)}</td></tr>`).join('')}</tbody></table>` : ''}
 </div>` : ''}

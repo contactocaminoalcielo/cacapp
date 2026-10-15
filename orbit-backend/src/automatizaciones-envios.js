@@ -117,7 +117,10 @@ const FUENTES = {
       FROM public.planta_elecciones pe
       JOIN public.servicios s     ON s.id = pe.servicio_id
       JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
-      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id`,
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+     -- RESERVADA (migración 176) es una elección del portal de fotos, no un
+     -- envío: el aviso todavía no existe.
+     WHERE pe.estado <> 'RESERVADA'`,
 
   mitad_compostaje: `
     SELECT av.id, av.servicio_id,

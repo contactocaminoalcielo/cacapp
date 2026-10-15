@@ -48,7 +48,7 @@ async function cargarPlantas(servicioId) {
   try {
     const [rEleccion, rExtras] = await Promise.all([
       db.from('planta_elecciones')
-        .select('estado, planta_nombre, fecha_eleccion, plantas:planta_id ( nombre )')
+        .select('estado, planta_nombre, fecha_eleccion, restos_calcicos, restos_calcicos_valor, plantas:planta_id ( nombre )')
         .eq('servicio_id', servicioId).maybeSingle(),
       db.from('planta_adicionales')
         .select('nombre, cantidad, precio_unitario, total')
@@ -287,6 +287,14 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
       'Especie elegida por la familia', especie || 'Sin elegir',
       'Fecha de elección',              especie ? fechaEleccion : '—',
     )
+    // Migración 176: se compran en el portal de fotos y se entregan con la
+    // planta. Escrito aquí para que el mensajero no salga sin ellos.
+    if (plantaEleccion?.restos_calcicos) {
+      espacio(6)
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(146, 64, 14)
+      t('Lleva restos cálcicos de la mascota', M + 2, y)
+      y += 5
+    }
     if (plantasExtra.length) {
       espacio(8)
       pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(140, 140, 140)
@@ -332,6 +340,8 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
       nombre: `Planta adicional: ${p.nombre}${(Number(p.cantidad) || 1) > 1 ? `  ×${p.cantidad}` : ''}`,
       valor:  Number(p.total) || 0,
     })),
+    ...(plantaEleccion?.restos_calcicos
+      ? [{ nombre: 'Restos cálcicos', valor: Number(plantaEleccion.restos_calcicos_valor) || 0 }] : []),
   ].filter(l => l.valor > 0)
   const totalAdicionales = lineasCobro.reduce((s, l) => s + l.valor, 0)
   const saldo = Math.min(totalAdicionales, saldoServicio)

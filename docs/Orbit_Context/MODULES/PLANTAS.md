@@ -84,3 +84,29 @@ en duelo. **Sin iconos de librería**: cada especie tiene su ilustración SVG, e
 
 `activo`, `plantilla`, `max_envios_por_corrida`, `arranque_desde`, `max_adicionales`,
 `dias_ventana_portal`.
+
+## Desde el primer contacto (migración 176, 2026-10-15)
+
+Reporte de coordinación: la especie y los **restos cálcicos** se piden desde el portal de
+fotos (`/#/fotos/CODIGO`), no meses después.
+
+- **Paso «La planta de {mascota}»** en `FotosCliente.jsx`, solo para `COMPOSTAJE_INDIVIDUAL`
+  (los tres Compets), entre las ofertas y la entrega. La especie es obligatoria si hay
+  opciones; los restos son un sí/no explícito con su precio a la vista.
+- **Precio de los restos:** `config_operativa PLANTAS/restos_calcicos_precio`, editable en
+  Configuración → Plantas. NULL/vacío = no se ofrecen. El navegador solo manda
+  `planta: { planta_id, restos_calcicos }`.
+- **Misma fila de `planta_elecciones`**, estado nuevo **RESERVADA** (sin `fecha_cumplida`).
+  El job, al cumplirse el compostaje, la pasa a PENDIENTE y le pone la fecha: el aviso de
+  WhatsApp **sigue saliendo**, porque ahí se confirma la dirección de la planta y se vende la
+  segunda. Ese portal ya no pregunta la especie (`especie_fijada`).
+- **Cobro de los restos:** mismo patrón que los extras (valor_total, valor_adicionales si no
+  es NULL, estado_pago recalculado), candado `restos_calcicos = false` contra doble cobro.
+- **Dónde se ve la alerta «lleva restos cálcicos»:** campana de coordinadores
+  (`RESTOS_CALCICOS`), novedad en la ficha, banner en la ficha y en el detalle del Kanban,
+  chip en Tenjo → Salidas (y en su PDF/WhatsApp), certificado de entrega (línea de cobro) y
+  `alertas_operativas` ALTA (`restos:{servicio}`).
+- **Compras:** Configuración → Plantas → «Quién ya eligió» resume cuántas plantas de cada
+  especie y cuántos restos faltan por entregar.
+- Una PWA en caché que no conoce el paso no manda `planta` y **no se le exige**: el backend
+  solo valida la especie si el paso llegó.

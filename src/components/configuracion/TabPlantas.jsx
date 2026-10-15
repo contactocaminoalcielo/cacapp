@@ -266,6 +266,7 @@ function AvisoAutomatico() {
       max_adicionales:     map.max_adicionales ?? 4,
       dias_ventana:        map.dias_ventana_portal ?? 120,
       arranque_desde:      map.arranque_desde || '',
+      restos_precio:       map.restos_calcicos_precio ?? '',
     })
     setLoad(false)
   }
@@ -287,6 +288,8 @@ function AvisoAutomatico() {
         ['max_adicionales',        parseInt(cfg.max_adicionales) || 4],
         ['dias_ventana_portal',    parseInt(cfg.dias_ventana) || 120],
         ['arranque_desde',         cfg.arranque_desde || null],
+        // Vacío o 0 → NULL: los restos no se ofrecen (migración 176).
+        ['restos_calcicos_precio', Number(cfg.restos_precio) > 0 ? Number(cfg.restos_precio) : null],
       ]
       for (const [clave, valor] of updates) {
         const { error } = await db.from('config_operativa')
@@ -345,6 +348,10 @@ function AvisoAutomatico() {
         <div><label className={LBL}>No avisar antes de</label>
           <Input type="date" value={cfg.arranque_desde || ''} onChange={e => setCfg(p => ({ ...p, arranque_desde: e.target.value }))} />
           <p className="text-[10px] text-gray-400 mt-1">Deja vacío para incluir todo lo cumplido.</p></div>
+        <div><label className={LBL}>Precio restos cálcicos</label>
+          <Input type="number" min="0" step="1000" value={cfg.restos_precio}
+            onChange={e => setCfg(p => ({ ...p, restos_precio: e.target.value }))} placeholder="Sin ofrecer" />
+          <p className="text-[10px] text-gray-400 mt-1">Se ofrece en el portal de fotos de Compets. Vacío = no se ofrece.</p></div>
       </div>
 
       {err && <div className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium">{err}</div>}
@@ -359,15 +366,24 @@ function AvisoAutomatico() {
 // ─── 3. Tablero ──────────────────────────────────────────────────────────────
 function Tablero() {
   const [rows, setRows] = useState([])
+  const [porComprar, setPorComprar] = useState(null)
   const [load, setLoad] = useState(true)
   const [msg, setMsg]   = useState('')
 
   useEffect(() => { cargar() }, [])
   async function cargar() {
     setLoad(true)
-    const { data } = await db.from('v_plantas_pendientes')
-      .select('*').order('fecha_cumplida', { ascending: false }).limit(200)
+    const [{ data }, { data: abiertas }] = await Promise.all([
+      db.from('v_plantas_pendientes')
+        .select('*').order('fecha_cumplida', { ascending: false, nullsFirst: true }).limit(200),
+      // Lo que falta por entregar, sin tope: es la base de la compra de plantas,
+      // materas y de los restos que hay que separar (migración 176).
+      db.from('v_plantas_pendientes')
+        .select('planta_nombre, restos_calcicos')
+        .neq('servicio_estado', 'ENTREGADO').neq('estado', 'CANCELADA'),
+    ])
     setRows(data || [])
+    setPorComprar(resumirCompra(abiertas || []))
     setLoad(false)
   }
 
@@ -383,7 +399,29 @@ function Tablero() {
   return (
     <div className="pt-6 border-t" style={{ borderColor: '#E5E7EB' }}>
       <h3 className="text-[14px] font-bold text-gray-800 mb-1">Quién ya eligió</h3>
-      <p className="text-[12px] text-gray-500 mb-4">Compostajes cumplidos, su aviso y lo que compró la familia.</p>
+      <p className="text-[12px] text-gray-500 mb-4">
+        Lo elegido en el portal de fotos (desde el primer contacto) y al cumplirse el compostaje,
+        su aviso y lo que compró la familia.
+      </p>
+      {porComprar && porComprar.total > 0 && (
+        <div className="mb-4 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1.5">
+            Pendiente de entregar · base para la compra de plantas y materas
+          </div>
+          <div className="flex flex-wrap gap-2 text-[12px]">
+            {porComprar.especies.map(([nombre, n]) => (
+              <span key={nombre} className="px-2 py-0.5 rounded-full font-semibold"
+                style={{ background: nombre === 'Sin elegir' ? '#F3F4F6' : '#E8F3EB', color: nombre === 'Sin elegir' ? '#6B7280' : '#1D8A55' }}>
+                {nombre === 'Sin elegir' ? nombre : `🌱 ${nombre}`}: {n}
+              </span>
+            ))}
+            {porComprar.restos > 0 && (
+              <span className="px-2 py-0.5 rounded-full font-bold"
+                style={{ background: '#FEF3C7', color: '#92400E' }}>⚠ Restos cálcicos: {porComprar.restos}</span>
+            )}
+          </div>
+        </div>
+      )}
       {msg && <div className="mb-3 text-[12px] font-medium text-gray-700">{msg}</div>}
 
       {load ? <div className="text-center py-8 text-gray-400">Cargando...</div> : (
@@ -402,16 +440,23 @@ function Tablero() {
                       {r.cubiculo && <div className="text-[11px] text-gray-400">{r.cubiculo}</div>}</Td>
                     <Td><div className="text-[12px]">{r.propietario}</div>
                       <div className="text-[11px] text-gray-400">{r.whatsapp}</div></Td>
-                    <Td>{r.fecha_cumplida}</Td>
+                    <Td>{r.fecha_cumplida || <span className="text-gray-400">En compostaje</span>}</Td>
                     <Td>
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold"
                             style={{ background: e.bg, color: e.color }}>{e.label || r.estado}</span>
                       {r.error && <div className="text-[10px] text-red-600 max-w-[180px]">{r.error}</div>}
                     </Td>
                     <Td>{r.planta_nombre || <span className="text-gray-400">—</span>}</Td>
-                    <Td>{r.extras_comprados > 0
-                      ? <span className="font-semibold text-gray-900">{r.extras_comprados} · {fmt(r.valor_extras)}</span>
-                      : <span className="text-gray-400">—</span>}</Td>
+                    <Td>
+                      {r.extras_comprados > 0
+                        ? <div className="font-semibold text-gray-900">{r.extras_comprados} · {fmt(r.valor_extras)}</div>
+                        : !r.restos_calcicos && <span className="text-gray-400">—</span>}
+                      {r.restos_calcicos && (
+                        <div className="text-[11px] font-bold" style={{ color: '#92400E' }}>
+                          ⚠ Restos cálcicos{Number(r.restos_calcicos_valor) > 0 ? ` · ${fmt(r.restos_calcicos_valor)}` : ''}
+                        </div>
+                      )}
+                    </Td>
                     <Td>
                       {['PENDIENTE', 'ERROR'].includes(r.estado) && (
                         <button onClick={() => reenviar(r.eleccion_id)}
@@ -424,7 +469,7 @@ function Tablero() {
                 )
               })}
               {!rows.length && <Tr><Td colSpan={7}><div className="text-center py-6 text-gray-400 text-[13px]">
-                Nadie ha cumplido los meses de compostaje todavía.
+                Ninguna familia ha elegido planta todavía.
               </div></Td></Tr>}
             </tbody>
           </Table>
@@ -432,4 +477,19 @@ function Tablero() {
       )}
     </div>
   )
+}
+
+/** Cuántas plantas de cada especie y cuántos restos faltan por entregar. */
+function resumirCompra(filas) {
+  const porEspecie = new Map()
+  let restos = 0
+  for (const r of filas) {
+    const k = r.planta_nombre || 'Sin elegir'
+    porEspecie.set(k, (porEspecie.get(k) || 0) + 1)
+    if (r.restos_calcicos) restos++
+  }
+  // "Sin elegir" al final: no se puede comprar lo que nadie escogió.
+  const especies = [...porEspecie.entries()]
+    .sort(([a, x], [b, y]) => (a === 'Sin elegir') - (b === 'Sin elegir') || y - x)
+  return { especies, restos, total: filas.length }
 }

@@ -64,8 +64,11 @@ export async function jobEleccionPlanta({ dryRun = false } = {}) {
             <= public.fn_hoy_bogota()
         AND ($1::date IS NULL
              OR (i.fecha_compostaje_inicio + (i.meses_compostaje * INTERVAL '1 month'))::date >= $1::date)
+        -- Una RESERVADA (eligió en el portal de fotos, migración 176) SÍ es
+        -- candidata: es justo la que hay que despertar ahora.
         AND NOT EXISTS (SELECT 1 FROM public.planta_elecciones pe
-                         WHERE pe.servicio_id = i.servicio_id)
+                         WHERE pe.servicio_id = i.servicio_id
+                           AND pe.estado <> 'RESERVADA')
       ORDER BY i.fecha_compostaje_inicio ASC`,
     [arranque]
   )
@@ -88,11 +91,20 @@ export async function jobEleccionPlanta({ dryRun = false } = {}) {
         )
         const codigo = cod[0]?.codigo_fotos
         if (!codigo) throw new Error('sin código de portal')
+        // La RESERVADA se despierta conservando lo que la familia ya decidió
+        // (especie, restos cálcicos): solo se le pone la fecha y pasa a
+        // PENDIENTE para que salga el aviso. Cualquier otro estado no se toca.
         await client2.query(
           `INSERT INTO public.planta_elecciones
              (servicio_id, lote_item_id, estado, codigo, enlace, whatsapp_destino, fecha_cumplida)
            VALUES ($1, $2, 'PENDIENTE', $3, $4, $5, $6)
-           ON CONFLICT (servicio_id) DO NOTHING`,
+           ON CONFLICT (servicio_id) DO UPDATE
+              SET estado           = 'PENDIENTE',
+                  lote_item_id     = EXCLUDED.lote_item_id,
+                  fecha_cumplida   = EXCLUDED.fecha_cumplida,
+                  enlace           = EXCLUDED.enlace,
+                  whatsapp_destino = COALESCE(EXCLUDED.whatsapp_destino, planta_elecciones.whatsapp_destino)
+            WHERE planta_elecciones.estado = 'RESERVADA'`,
           [c.servicio_id, c.lote_item_id, codigo, construirEnlacePlanta(codigo),
            c.whatsapp || null, c.fecha_cumplida]
         )

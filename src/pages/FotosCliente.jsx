@@ -108,6 +108,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [ofertaFotos,   setOfertaFotos]  = useState({})     // { [id]: [File|null] }
   const [ofertaTextos,  setOfertaTextos] = useState({})     // { [id]: { label: [...] } }
   const [confirmando,   setConfirmando]  = useState(false)  // secuencia de confirmaciones finales
+  // ── Planta del compostaje (Compets, migración 176) ──
+  // `plantaInfo` lo manda el backend solo si a este servicio le aplica:
+  // { opciones:[{id,nombre,…}], elegida:{nombre}|null, restos_calcicos:{precio}|null }
+  const [plantaInfo,    setPlantaInfo]   = useState(null)
+  const [plantaSel,     setPlantaSel]    = useState('')
+  const [restos,        setRestos]       = useState(null)   // true | false | null (sin responder)
   const [avisoAutoriza, setAvisoAutoriza] = useState(0)     // sube → la casilla se sacude
   const casillaRef = useRef(null)
 
@@ -128,10 +134,20 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // pregunta del compostaje: en el celular nadie bajaba hasta ahí, el botón de
   // enviar se quedaba gris y las familias escribían que "no las dejaba enviar"
   // (David 2026-10-07). Como paso, no se puede pasar de largo.
-  const pasoEntrega  = pedirEntrega ? items.length + ofertas.length : -1
-  const totalPasos   = items.length + ofertas.length + (pedirEntrega ? 1 : 0) + 1
+  //
+  // La planta (Compets) va después de las ofertas y antes de la entrega: la
+  // especie y los restos cálcicos se deciden aquí, desde el primer contacto,
+  // para que coordinación sepa qué comprar y no se le pasen los restos.
+  const hayPasoPlanta = !!plantaInfo
+  const pasoPlanta   = hayPasoPlanta ? items.length + ofertas.length : -1
+  const pasoEntrega  = pedirEntrega ? items.length + ofertas.length + (hayPasoPlanta ? 1 : 0) : -1
+  const totalPasos   = items.length + ofertas.length + (hayPasoPlanta ? 1 : 0) + (pedirEntrega ? 1 : 0) + 1
   const esFinal      = paso === totalPasos - 1
   const enEntrega    = paso === pasoEntrega
+  const enPlanta     = paso === pasoPlanta
+  const pideEspecie  = !!plantaInfo?.opciones?.length
+  const ofreceRestos = !!plantaInfo?.restos_calcicos
+  const plantaLista  = !hayPasoPlanta || ((!pideEspecie || !!plantaSel) && (!ofreceRestos || restos != null))
   const ofertaIdx    = paso - items.length
   const ofertaActual = (ofertaIdx >= 0 && ofertaIdx < ofertas.length) ? ofertas[ofertaIdx] : null
   const enOferta     = !!ofertaActual
@@ -164,9 +180,10 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const respActual      = ofertaActual ? ofertaResp[ofertaActual.id] : undefined
   // El recordatorio actual queda "resuelto" si subió la(s) foto(s)/datos o si lo declinó.
   const itemActualListo = !itemActual || declinados.has(itemActual.id) || itemListo(itemActual, fotos, textos)
-  const puedeEnviar  = todoListo && ofertasListas && entregaReqOk && autorizo
+  const puedeEnviar  = todoListo && ofertasListas && plantaLista && entregaReqOk && autorizo
   // ¿Se puede pasar del paso actual? (recordatorio, oferta o entrega)
   const pasoActualListo = enOferta ? (respActual != null && ofertaActualListo)
+                        : enPlanta ? plantaLista
                         : enEntrega ? entregaReqOk
                         : itemActualListo
 
@@ -202,6 +219,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
     if (iItem >= 0) return ir(iItem)
     const of = ofertas.find(o => !ofertaResuelta(o))
     if (of) return ir(pasoDeOferta(of))
+    if (!plantaLista) return ir(pasoPlanta)
     if (!entregaReqOk && pasoEntrega >= 0) return ir(pasoEntrega)
     if (!autorizo) {
       casillaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -245,6 +263,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
       setOfertaResp({})
       setOfertaFotos({})
       setOfertaTextos(Object.fromEntries(ofs.map(of => [of.id, iniTextos(of.recordatorio)])))
+      setPlantaInfo(r.planta || null)
+      setPlantaSel('')
+      setRestos(null)
 
       const fi = {}
       it.forEach(item => {
@@ -345,6 +366,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
         entrega: entregaLlena ? entrega : undefined,
         autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
         ofertas: ofertasPayload.length ? ofertasPayload : undefined,
+        // Solo ids y un sí/no: el precio de los restos lo pone el backend.
+        planta: hayPasoPlanta ? { planta_id: plantaSel || null, restos_calcicos: restos === true } : undefined,
         // Compat: un backend viejo solo entiende `oferta` (singular). El nuevo
         // ignora esta clave cuando `ofertas` viene como array, así que mandar
         // ambas hace que el orden de despliegue no importe.
@@ -356,6 +379,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
         throw new Error('Faltan imágenes o datos: ' + (r.faltantes || []).join(', '))
       if (r.error === 'entrega_incompleta')
         throw new Error('Por favor completa los datos de entrega: dirección, quién recibe y teléfono.')
+      if (r.error === 'planta_requerida')
+        throw new Error(`Por favor elige la planta de ${mascota}.`)
       if (r.error === 'ya_procesado') { setFase('ya_procesado'); return }
       if (r.error === 'fuera_de_ventana') { setFase('fuera_ventana'); return }
       // Esta pantalla se quedó con el código viejo y el backend ya exige la
@@ -469,6 +494,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   onTextosChange={v => setOfertaTextos(p => ({ ...p, [ofertaActual.id]: v }))}
                 />
               )}
+              {enPlanta && (
+                <PasoPlanta mascota={mascota} info={plantaInfo}
+                  elegida={plantaSel} onElegir={setPlantaSel}
+                  restos={restos} onRestos={setRestos} />
+              )}
               {enEntrega && (
                 <PasoEntrega mascota={mascota} entrega={entrega} setEntrega={setEntrega} />
               )}
@@ -485,6 +515,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   ofertas={ofertas} ofertaResp={ofertaResp}
                   onIrOferta={of => ir(pasoDeOferta(of))}
                   onQuiereOferta={of => quiereOferta(of)}
+                  plantaInfo={plantaInfo} plantaSel={plantaSel} restos={restos}
+                  onIrPlanta={() => ir(pasoPlanta)}
                   onGoTo={ir}
                 />
               )}
@@ -518,7 +550,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
                       ? (faltaResponder
                           ? `Responde si deseas ${ofertas.length > 1 ? 'las ofertas' : 'la oferta'} para poder enviar.`
                           : 'Falta subir la foto del recordatorio que aceptaste.')
-                      : !entregaReqOk
+                      : !plantaLista
+                      ? `Falta elegir la planta de ${mascota}. Toca el botón y te llevamos.`
+                    : !entregaReqOk
                         ? 'Faltan los datos de entrega. Toca el botón y te llevamos.'
                         : 'Falta marcar la autorización de datos. Toca el botón y te llevamos.'}
                 </p>
@@ -544,7 +578,13 @@ export default function FotosCliente({ codigo: codigoProp }) {
                     Sube la foto de tu nuevo recordatorio para continuar.
                   </p>
                 )
-              ) : enEntrega ? (!entregaReqOk && (
+              ) : enPlanta ? (!plantaLista && (
+                <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
+                  {pideEspecie && !plantaSel
+                    ? 'Elige la planta para continuar.'
+                    : 'Cuéntanos si deseas los restos cálcicos para continuar.'}
+                </p>
+              )) : enEntrega ? (!entregaReqOk && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
                   Completa la dirección, quién recibe y el teléfono para continuar.
                 </p>
@@ -968,6 +1008,137 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
   )
 }
 
+// ── PasoPlanta ────────────────────────────────────────────────────────────────
+// Compets (migración 176): la especie en la que seguirá la mascota y, si la
+// familia quiere, sus restos cálcicos. Se pregunta desde el primer contacto
+// para que nada de esto se decida a última hora. La especie va incluida en el
+// plan; los restos son un adicional con su precio a la vista.
+function PasoPlanta({ mascota, info, elegida, onElegir, restos, onRestos }) {
+  const opciones = info?.opciones || []
+  const precio   = info?.restos_calcicos?.precio
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: APAGADO }}>
+          La planta de {mascota}
+        </p>
+        <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>
+          {opciones.length ? `¿En cuál planta quieres que siga ${mascota}?` : `${mascota} y su planta`}
+        </h2>
+        {opciones.length > 0 && (
+          <p className="text-[14px] text-gray-500 mt-2 leading-relaxed">
+            Al terminar el compostaje, {mascota} seguirá su ciclo en la planta que elijas.
+            Va incluida en tu plan.
+          </p>
+        )}
+      </div>
+
+      {info?.elegida && (
+        <div className="rounded-2xl border-2 px-5 py-4 flex items-center gap-3" style={{ borderColor: G_MID, background: G_LITE }}>
+          <Ilustracion nombre={info.elegida.nombre} vivo tam={40} />
+          <p className="text-[15px]" style={{ color: G }}>Ya elegiste <strong>{info.elegida.nombre}</strong>.</p>
+        </div>
+      )}
+
+      {opciones.length > 0 && (
+        <div className="space-y-3" role="radiogroup" aria-label={`Planta de ${mascota}`}>
+          {opciones.map(p => {
+            const sel = elegida === p.id
+            return (
+              <motion.button key={p.id} type="button" role="radio" aria-checked={sel}
+                onClick={() => onElegir(p.id)} whileTap={{ scale: 0.98 }}
+                className="w-full rounded-3xl border-2 p-4 flex items-center gap-4 text-left transition-all"
+                style={{ borderColor: sel ? G : BORD, background: sel ? G_LITE : 'white' }}>
+                {p.imagen_url
+                  ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                         className="w-[64px] h-[80px] rounded-2xl object-cover flex-shrink-0" />
+                  : <div className="flex-shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={64} /></div>}
+                <div className="flex-1 min-w-0">
+                  <p className="font-serif text-[20px] leading-tight" style={{ color: sel ? HONDO : TINTA }}>{p.nombre}</p>
+                  {p.descripcion && <p className="text-[13px] text-gray-500 mt-1 leading-snug">{p.descripcion}</p>}
+                  <p className="text-[13px] font-semibold mt-1.5" style={{ color: sel ? G : APAGADO }}>
+                    {sel ? 'Elegida' : 'Tocar para elegir'}
+                  </p>
+                </div>
+                <div className="w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0"
+                  style={{ background: sel ? G : 'white', borderColor: sel ? G : BORD }}>
+                  {sel && <Check size={13} color="#fff" strokeWidth={3} />}
+                </div>
+              </motion.button>
+            )
+          })}
+        </div>
+      )}
+
+      {precio != null && (
+        <div className="bg-white rounded-3xl border-2 overflow-hidden"
+          style={{ borderColor: restos === true ? G : restos === false ? R_MID : BORD }}>
+          <div className="p-6 space-y-4">
+            <div>
+              <p className="text-[16px] font-bold text-gray-800">Restos cálcicos de {mascota}</p>
+              <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
+                Al terminar el compostaje quedan los restos cálcicos de {mascota}. Si lo deseas,
+                te los entregamos junto con su planta.
+              </p>
+            </div>
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-[24px] font-bold" style={{ color: G }}>{pesos(precio)}</span>
+              <span className="text-[13px] text-gray-500">adicional, se cobra en la entrega</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <motion.button type="button" onClick={() => onRestos(false)} whileTap={{ scale: 0.97 }}
+                className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
+                style={restos === false
+                  ? { borderColor: R, color: R, background: R_LITE }
+                  : { borderColor: BORD, color: '#6B7280', background: 'white' }}>
+                {restos === false && <X size={16} strokeWidth={3} />}
+                No, gracias
+              </motion.button>
+              <motion.button type="button" onClick={() => onRestos(true)} whileTap={{ scale: 0.97 }}
+                className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
+                style={restos === true
+                  ? { borderColor: G, background: G, color: '#fff' }
+                  : { borderColor: G, background: 'white', color: G }}>
+                {restos === true && <Check size={16} strokeWidth={3} />}
+                {restos === true ? 'Los quiero' : 'Sí, los quiero'}
+              </motion.button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Lo que decidió en el paso de la planta, en la revisión final.
+function ResumenPlanta({ mascota, info, elegida, restos, onEditar }) {
+  const especie = info?.elegida?.nombre || (info?.opciones || []).find(o => o.id === elegida)?.nombre
+  const precio  = info?.restos_calcicos?.precio
+  const falta   = (!!info?.opciones?.length && !elegida) || (precio != null && restos == null)
+  return (
+    <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: falta ? '#F59E0B' : BORD }}>
+      <div className="px-5 py-3 border-b flex items-center justify-between gap-3" style={{ borderColor: BORD }}>
+        <p className="text-[13px] font-bold uppercase tracking-widest" style={{ color: APAGADO }}>La planta de {mascota}</p>
+        <button onClick={onEditar} className="text-[13px] font-bold px-4 py-2 rounded-xl flex-shrink-0" style={{ background: G_LITE, color: G }}>
+          {falta ? 'Completar' : 'Editar'}
+        </button>
+      </div>
+      <div className="px-5 py-4 space-y-1.5 text-[15px] text-gray-800">
+        <p>🌱 {especie || <span className="text-amber-600 font-semibold">Sin elegir</span>}</p>
+        {precio != null && (
+          <p>
+            Restos cálcicos:{' '}
+            {restos === true
+              ? <strong style={{ color: G }}>Sí · {pesos(precio)} se suman a tu servicio</strong>
+              : restos === false ? <span className="text-gray-500">No los deseas</span>
+              : <span className="text-amber-600 font-semibold">Sin responder</span>}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── PasoEntrega ───────────────────────────────────────────────────────────────
 // Paso propio del wizard (ver `pasoEntrega`): no se puede pasar sin dirección,
 // quién recibe y teléfono.
@@ -1014,7 +1185,7 @@ function PasoEntrega({ mascota, entrega, setEntrega }) {
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, pedirEntrega, onIrEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, pedirEntrega, onIrEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, plantaInfo, plantaSel, restos, onIrPlanta, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
 
   return (
@@ -1104,6 +1275,10 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
             )
           })}
         </div>
+      )}
+
+      {plantaInfo && (
+        <ResumenPlanta mascota={mascota} info={plantaInfo} elegida={plantaSel} restos={restos} onEditar={onIrPlanta} />
       )}
 
       {/* Interés en un adicional → SOLO crea una solicitud para coordinación */}

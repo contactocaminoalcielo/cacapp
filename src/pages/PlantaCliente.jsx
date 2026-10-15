@@ -224,6 +224,9 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const mascota     = bonito(datos?.servicio?.mascota) || 'tu mascota'
   const nombreCli   = bonito(datos?.servicio?.nombre_cliente)
   const yaEligio    = !!datos?.ya_eligio
+  // La especie pudo quedar fijada desde el portal de fotos (migración 176): no
+  // se vuelve a preguntar, pero la entrega sí hay que confirmarla aquí.
+  const especieFijada = yaEligio || !!datos?.especie_fijada
   const opciones    = datos?.opciones || []
   const disponibles = datos?.adicionales || []
   const comprados   = datos?.comprados || []
@@ -231,12 +234,12 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   const hayExtras   = Object.keys(extras).length > 0
   // Teclear en el formulario ya vale como confirmación; mirar la tarjeta, no.
   const entregaLista = editandoEntrega ? nucleoOk(entrega) : entregaConfirmada
-  const puedeEnviar  = (yaEligio ? hayExtras : !!elegida) && entregaLista && autorizo
+  const puedeEnviar  = (yaEligio ? hayExtras : (especieFijada || !!elegida)) && entregaLista && autorizo
   const setE = (k, v) => setEntrega(p => ({ ...p, [k]: v }))
 
   // Un botón apagado sin decir por qué es una pantalla que no se deja usar.
   // Se nombra lo PRIMERO que falta, no todo a la vez.
-  const pista = (!yaEligio && !elegida) ? 'Elige una planta para continuar'
+  const pista = (!especieFijada && !elegida) ? 'Elige una planta para continuar'
     : !entregaLista ? (editandoEntrega
         ? 'Faltan tus datos de entrega — toca aquí y te llevo'
         : 'Falta confirmar tus datos de entrega — toca aquí y te llevo')
@@ -251,7 +254,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
    * botón apagado no resuelve eso — esconde el motivo justo cuando hace falta.
    */
   function irAloQueFalta() {
-    const falta = (!yaEligio && !elegida) ? 'eleccion' : 'entrega'
+    const falta = (!especieFijada && !elegida) ? 'eleccion' : 'entrega'
     const nodo = falta === 'eleccion' ? refEleccion.current : refEntrega.current
     if (!nodo) return
     nodo.scrollIntoView({ behavior: quieto ? 'auto' : 'smooth', block: 'center' })
@@ -281,7 +284,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
     try {
       const r = await portalElegirPlanta(codigo, {
         autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
-        planta_id: yaEligio ? undefined : elegida,
+        planta_id: especieFijada ? undefined : elegida,
         adicionales: Object.entries(extras).map(([planta_id, cantidad]) => ({ planta_id, cantidad })),
         // Se manda siempre, aunque no haya cambiado: el backend refresca
         // `datos_entrega_recibidos_en` y esa fecha es la prueba de que la
@@ -470,12 +473,13 @@ export default function PlantaCliente({ codigo: codigoProp }) {
         <div className="lg:grid lg:grid-cols-[1.02fr_0.98fr] lg:gap-12 lg:items-start">
           <div ref={refEleccion} className={senalado === 'eleccion' ? 'vv-senala' : ''}>
             {/* ── Elección de especie ── */}
-            {yaEligio ? (
+            {especieFijada ? (
               <div className="vv-vidrio mt-10 rounded-[28px] px-4 py-4 flex items-center gap-3.5">
                 <Ilustracion nombre={datos?.eleccion?.planta_nombre} vivo tam={44} />
                 <p className="text-[14px] leading-relaxed" style={{ color: TINTA }}>
                   Ya elegiste <strong style={{ color: SELVA }}>{datos?.eleccion?.planta_nombre}</strong>.
-                  Si necesitas cambiarla, escríbenos por WhatsApp.
+                  {datos?.restos_calcicos && <> Con ella te llevamos los restos cálcicos de {mascota}.</>}
+                  {' '}Si necesitas cambiarla, escríbenos por WhatsApp.
                 </p>
               </div>
             ) : (

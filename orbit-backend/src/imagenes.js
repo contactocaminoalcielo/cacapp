@@ -22,6 +22,7 @@ import {
 import { enviarPlantillaGenerica, consultarEstadoMensajeOperativo } from './whatsapp.js'
 import { LINEA_WA_NUMERO } from './linea-wa.js'
 import { sanitizarEntrega, entregaNucleoOk } from './entrega.js'
+import { plantaParaPortalFotos, reservarPlantaPortalFotos } from './plantas.js'
 import { autorizacionDelPayload, registrarAutorizacion, titularDeServicio, FALTA_AUTORIZACION }
   from './autorizaciones.js'
 
@@ -376,6 +377,15 @@ export async function datosPortal({ codigo }) {
     // best-effort y no bloquea la respuesta del portal.
     await registrarVistasOfertas(client, s.id, ofertas)
 
+    // Compets: especie de la planta + restos cálcicos desde el primer contacto
+    // (migración 176). Si algo falla aquí el portal sigue sin ese paso: las
+    // fotos son lo principal y no pueden quedar bloqueadas por la planta.
+    let planta = null
+    if (!yaRecibido && !fueraDeVentana) {
+      try { planta = await plantaParaPortalFotos(client, { servicioId: s.id, tipoProceso: s.tipo_proceso }) }
+      catch (e) { log('[imagenes/portal] paso de planta omitido:', e.message) }
+    }
+
     return { status: 200, body: {
       ok: true,
       ya_recibido: yaRecibido,
@@ -388,6 +398,7 @@ export async function datosPortal({ codigo }) {
       // una. Mientras siga viva alguna versión vieja, se les manda la primera
       // en vez de dejarlas sin anuncio.
       oferta: ofertas[0] || null,
+      planta,
       limites: { max_mb: parseInt(config.max_mb) || 8, mimes: config.mimes_permitidos || [] },
     } }
   } finally { client.release() }
@@ -513,6 +524,41 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     if (tieneEntregaFisica && !entregaNucleoOk(entrega)) {
       await client.query('ROLLBACK')
       return { status: 422, body: { ok: false, error: 'entrega_incompleta' } }
+    }
+
+    // Planta y restos cálcicos (Compets, migración 176). Solo si el portal
+    // mandó el paso: una PWA en caché que no lo conoce no debe quedar
+    // bloqueada pidiendo una especie que ni siquiera le mostró.
+    // Aislado: si la planta revienta (p.ej. la migración aún no está), las
+    // fotos se reciben igual y la falla queda en una alerta ALTA.
+    const esCompostajeInd = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
+    const plantaPay = payload.planta && typeof payload.planta === 'object' ? payload.planta : null
+    if (esCompostajeInd && plantaPay) {
+      const { rows: mr } = await client.query(
+        `SELECT m.nombre FROM public.servicios s JOIN public.mascotas m ON m.id_mascota = s.mascota_id WHERE s.id = $1`,
+        [s.id]
+      )
+      const mascota = mr[0]?.nombre || 'la mascota'
+      const res = await aislado(client, 'planta del primer contacto', () =>
+        reservarPlantaPortalFotos(client, { servicioId: s.id, codigo: cod, mascota, payload: plantaPay }))
+      if (res.ok && res.valor?.ok === false) {
+        await client.query('ROLLBACK')
+        return { status: 422, body: { ok: false, error: res.valor.error } }
+      }
+      if (!res.ok) {
+        await aislado(client, 'alerta de planta fallida', () => client.query(
+          `INSERT INTO public.alertas_operativas
+             (servicio_id, lote_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+           VALUES ($1, NULL, $2, 'PLANTA_PRIMER_CONTACTO', 'ALTA', $3, $4, $5, $6::jsonb)
+           ON CONFLICT DO NOTHING`,
+          [s.id, MOD,
+           `${mascota}: la familia respondió el paso de la planta pero no se pudo guardar.`,
+           'Registrar a mano la especie y, si los pidió, los restos cálcicos (ver metadata).',
+           `planta-fallida:${s.id}`,
+           JSON.stringify({ planta_id: plantaPay.planta_id || null, restos_calcicos: plantaPay.restos_calcicos === true,
+                            error: res.error?.message || null })]
+        ))
+      }
     }
 
     // Persistir cada recordatorio. Los declinados → 'NA' (no entran a producción);

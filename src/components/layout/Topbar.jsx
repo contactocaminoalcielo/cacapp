@@ -42,6 +42,8 @@ const TIPO_ICON = {
   REASIGNACION_REMOVIDO: '📋',
   CENIZAS_LISTAS:        '⚱️',
   COMPOSTAJE_LISTO:      '🌿',
+  RESTOS_CALCICOS:       '⚠️',
+  PLANTAS_PENDIENTES:    '🌱',
 }
 
 /**

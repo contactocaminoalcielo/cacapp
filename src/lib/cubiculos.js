@@ -246,6 +246,31 @@ export function finCompostaje(fechaStr, meses = 2) {
  * aparecer jamás en la hoja de trabajo de la planta. Metida en `enCurso` el
  * único síntoma sería un contador que sube. Aquí se ve y se puede corregir.
  */
+/**
+ * Le pega a cada item la planta que eligió la familia y si compró los restos
+ * cálcicos (migración 176): al sacar la mascota del cubículo es cuando hay que
+ * separarlos. Consulta aparte, y si falla (migración sin aplicar) la tabla de
+ * salidas sigue saliendo igual, solo sin estos chips.
+ */
+async function adjuntarPlanta(items) {
+  const ids = [...new Set(items.map(it => it.servicio_id).filter(Boolean))]
+  if (!ids.length) return
+  const porServicio = new Map()
+  try {
+    for (let i = 0; i < ids.length; i += 80) {
+      const { data, error } = await db.from('planta_elecciones')
+        .select('servicio_id, planta_nombre, restos_calcicos')
+        .in('servicio_id', ids.slice(i, i + 80))
+      if (error) throw error
+      for (const r of data || []) porServicio.set(r.servicio_id, r)
+    }
+  } catch (e) {
+    console.warn('[salidas] sin datos de planta:', e?.message || e)
+    return
+  }
+  for (const it of items) it.planta = porServicio.get(it.servicio_id) || null
+}
+
 export async function cargarSalidasCompostaje({ desde } = {}) {
   const esCompostaje = it => it?.servicios?.planes?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
   const conCalculo = it => {
@@ -269,6 +294,7 @@ export async function cargarSalidasCompostaje({ desde } = {}) {
   ])
 
   const hoy = hoyLocalISO()
+  await adjuntarPlanta([...(dentro || []), ...(fuera || [])])
   const adentro = (dentro || []).filter(esCompostaje).map(conCalculo)
   const leToca = it => it.salida_programada
     ? it.salida_programada <= hoy

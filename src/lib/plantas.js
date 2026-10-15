@@ -12,6 +12,8 @@ export const BUCKET_PLANTAS = 'plantas'
 export const MAX_MB_PLANTA  = 5
 
 export const ESTADO_ELECCION = {
+  // Eligió en el portal de fotos (primer contacto); el compostaje sigue en curso.
+  RESERVADA: { label: 'Elegida al inicio', color: '#5B4BB5', bg: '#F1EEFC', border: '#CFC6F5' },
   PENDIENTE: { label: 'Por avisar',  color: '#9A5500', bg: '#FFF3DC', border: '#FFD980' },
   ENVIADO:   { label: 'Avisado',     color: '#3B6FBF', bg: '#EEF3FB', border: '#C5D8F5' },
   ELEGIDA:   { label: 'Ya eligió',   color: '#1D8A55', bg: '#E8F3EB', border: '#A0D4B0' },
@@ -113,7 +115,7 @@ export async function borrarPlanta(id) {
 /** Devuelve `{ eleccion, adicionales }` o null si el servicio no tiene aviso. */
 export async function eleccionDeServicio(servicioId) {
   const { data, error } = await db.from('planta_elecciones')
-    .select('id, estado, codigo, enlace, fecha_cumplida, fecha_envio, fecha_eleccion, planta_nombre, error')
+    .select('id, estado, codigo, enlace, fecha_cumplida, fecha_envio, fecha_eleccion, planta_nombre, error, restos_calcicos, restos_calcicos_valor')
     .eq('servicio_id', servicioId)
     .maybeSingle()
   if (error || !data) return null

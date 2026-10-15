@@ -158,6 +158,12 @@ export async function generarPdfSalidas(tipo, items) {
         : (partes[0] || '—')
       pdf.text(txt, c.x, y)
     })
+    // Restos cálcicos comprados (migración 176): se separan al sacarla. Va
+    // debajo del nombre, en ámbar, para que el operario no lo pase por alto.
+    if (it.planta?.restos_calcicos) {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6); pdf.setTextColor(146, 64, 14)
+      pdf.text('+ RESTOS CÁLCICOS', M, y + 2.8)
+    }
     y += 7.5
   })
 
@@ -198,12 +204,14 @@ export function textoSalidasWa(tipo, items) {
     return `${cabeza}\n\nNinguna por ahora.`
   }
 
+  // Los restos cálcicos se separan al sacarla: que el operario lo lea en la lista.
+  const restos = it => it.planta?.restos_calcicos ? ' · ⚠ *RESTOS CÁLCICOS*' : ''
   const lineas = items.map(it => porSacar
     ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · cumplió ${fmt(it.fechaCumple)}`
-      + (it.salida_programada ? ` · sale ${fmt(it.salida_programada)}` : '')
+      + (it.salida_programada ? ` · sale ${fmt(it.salida_programada)}` : '') + restos(it)
     : aplazadas
     ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · saldrá ${fmt(it.salida_programada)}`
-      + (it.salida_programada_motivo ? ` · ${it.salida_programada_motivo}` : '')
+      + (it.salida_programada_motivo ? ` · ${it.salida_programada_motivo}` : '') + restos(it)
     : `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · salió ${fmt(it.cubiculo_salida)}`
       + (it.servicios?.fecha_limite_entrega ? ` · entrega ${fmt(it.servicios.fecha_limite_entrega)}` : ''))
 

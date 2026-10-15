@@ -1693,6 +1693,18 @@ export default function Kanban() {
     ])
 
     setDetalle({ ...svcFull, recogida: rec, cuartoFrio: cf, contactos: cts || [], tenjoItems: tenjoItems || [] })
+
+    // Compets: especie y restos cálcicos elegidos en el portal de fotos
+    // (migración 176). Aparte y sin bloquear: si la consulta falla, el detalle
+    // sale igual. Lleva el servicio_id para no pintarlo en otro servicio si se
+    // cambió de tarjeta antes de que respondiera.
+    if (s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL') {
+      db.from('planta_elecciones')
+        .select('servicio_id, estado, planta_nombre, restos_calcicos, restos_calcicos_valor')
+        .eq('servicio_id', s.servicio_id).maybeSingle()
+        .then(({ data }) => { if (data) setDetalle(d => d ? { ...d, planta: data } : d) })
+        .catch(() => {})
+    }
     setRecordatorios(recs || [])
     setNovedades(novs || [])
     setNuevoComentario('')
@@ -4559,6 +4571,32 @@ export default function Kanban() {
                     {selected.recordatorios_anticipados ? 'Producir mientras el compostaje avanza.' : 'No producir hasta terminar el compostaje (~2 meses).'}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── Planta del compostaje y restos cálcicos (migración 176) ── */}
+            {detalle?.planta?.servicio_id === selected.servicio_id
+              && (detalle.planta.planta_nombre || detalle.planta.restos_calcicos) && (
+              <div className="rounded-xl border-2 px-3 py-2.5 space-y-1"
+                style={detalle.planta.restos_calcicos
+                  ? { borderColor: '#FCD34D', background: '#FFFBEB' }
+                  : { borderColor: '#A0D4B0', background: '#F0FFF4' }}>
+                {detalle.planta.planta_nombre && (
+                  <div className="text-[11px] font-bold" style={{ color: '#15803D' }}>
+                    🌱 Planta elegida: {detalle.planta.planta_nombre}
+                  </div>
+                )}
+                {detalle.planta.restos_calcicos && (
+                  <div>
+                    <div className="text-[11px] font-bold" style={{ color: '#92400E' }}>
+                      ⚠ Lleva restos cálcicos adicionales
+                      {Number(detalle.planta.restos_calcicos_valor) > 0 && ` · ${fmt(detalle.planta.restos_calcicos_valor)}`}
+                    </div>
+                    <div className="text-[10px]" style={{ color: '#78350F' }}>
+                      Separarlos al sacar la mascota del cubículo y entregarlos con la planta.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

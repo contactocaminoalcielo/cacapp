@@ -357,7 +357,17 @@ export default function FichaServicio({ servicioId, onClose }) {
                     <span className="text-[13px] font-bold text-gray-900">🌱 {e.planta_nombre}</span>
                   )}
                 </div>
-                <Dato label="Cumplió el compostaje">{e.fecha_cumplida ? fmtD(e.fecha_cumplida) : null}</Dato>
+                {/* Migración 176: es lo que no se puede pasar por alto al sacar
+                    la mascota del cubículo ni al entregar la planta. */}
+                {e.restos_calcicos && (
+                  <div className="my-2 rounded-lg px-2.5 py-2 text-[12px] font-bold"
+                    style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D' }}>
+                    ⚠ Lleva restos cálcicos adicionales
+                    {Number(e.restos_calcicos_valor) > 0 && <span className="font-semibold"> · {fmt(e.restos_calcicos_valor)}</span>}
+                    <div className="text-[10.5px] font-medium mt-0.5">Separarlos al sacar la mascota del cubículo y entregarlos con la planta.</div>
+                  </div>
+                )}
+                <Dato label="Cumplió el compostaje">{e.fecha_cumplida ? fmtD(e.fecha_cumplida) : (e.estado === 'RESERVADA' ? 'En curso' : null)}</Dato>
                 <Dato label="Aviso enviado">{e.fecha_envio ? fmtTS(e.fecha_envio) : null}</Dato>
                 <Dato label="Eligió el">{e.fecha_eleccion ? fmtTS(e.fecha_eleccion) : null}</Dato>
                 <Dato label="Enlace">{e.enlace}</Dato>
