@@ -18,7 +18,7 @@ import {
   ESTADO_EVIDENCIA, listarEvidencias, imagenEvidencia, guardarAjustesEvidencia,
   enviarEvidencia, marcarEvidenciaManual, descartarEvidencia,
 } from '@/lib/evidenciaInicio'
-import { Loader2, Send, Download, CheckCircle, Trash2, RefreshCw, ImageIcon, AlertCircle } from 'lucide-react'
+import { Loader2, Send, Download, CheckCircle, Trash2, RefreshCw, RotateCw, ImageIcon, AlertCircle } from 'lucide-react'
 
 const FILTROS = [
   ['PENDIENTES', 'Por enviar'],
@@ -325,8 +325,15 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
                         className="w-full accent-[#3D5A27]" />
                     </div>
                   ))}
-                  <button onClick={() => setFoto(f.clave, { zoom: 1, posX: 50, posY: 50 })}
-                    className="text-[11px] text-gray-400 hover:text-gray-600 underline">Restablecer encuadre</button>
+                  <div className="flex items-center justify-between">
+                    {/* Fotos que el celular guardó de lado */}
+                    <button onClick={() => setFoto(f.clave, { rot: ((f.rot || 0) + 90) % 360 })}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-gray-200 text-[11px] font-semibold text-ink2 hover:bg-surface2">
+                      <RotateCw size={12} /> Girar{f.rot ? ` (${f.rot}°)` : ''}
+                    </button>
+                    <button onClick={() => setFoto(f.clave, { zoom: 1, posX: 50, posY: 50, rot: 0 })}
+                      className="text-[11px] text-gray-400 hover:text-gray-600 underline">Restablecer encuadre</button>
+                  </div>
                 </>
               )}
             </div>

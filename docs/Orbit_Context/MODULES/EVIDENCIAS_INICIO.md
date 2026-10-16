@@ -24,9 +24,11 @@ nuestro recuerdo») sobre papel crema con el dorado del logo.
 ## Envío
 - `enviarPlantillaConImagen` (whatsapp.js) solo funciona con `WHATSAPP_OPERATIONAL_TRANSPORT=META`.
 - Sin plantilla configurada: **Descargar** + **Ya la envié a mano** (queda `medio_envio = MANUAL`).
-- Plantilla sugerida (UTILITY, es_MX, cabecera IMAGEN): «Hola {{1}} 🌿 Con mucho cariño te compartimos
-  el inicio del proceso de compostaje de {{2}}. Desde hoy comienza su regreso a la tierra. Estamos
-  aquí para acompañarte. — Camino al Cielo».
+- Plantilla elegida por David (UTILITY, es_MX, cabecera IMAGEN): «Hola {{1}} 🌿 Con mucho cariño te
+  compartimos que hoy iniciamos el proceso de compostaje de {{2}}. Lo acompañamos con todo el respeto
+  y el amor que merece. Gracias por confiar en nosotros. — Camino al Cielo».
+- El pie del marco dice «Inicio de su proceso de compostaje · fecha» (editable; vacío = solo fecha).
+  David no quiere «regreso a la tierra».
 
 ## Arranque
 `arranque_desde = 2026-10-16`: los procesos iniciados antes no se preparan (ya se mandaron a mano).

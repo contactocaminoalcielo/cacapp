@@ -67,8 +67,17 @@ function imgFoto(f) {
   const zoom = num(f.zoom, 1, 3, 1)
   const posX = num(f.posX, 0, 100, 50)
   const posY = num(f.posY, 0, 100, 50)
-  return `<div class="foto"><img src="${f.dataUri}" alt=""
+  const rot = [0, 90, 180, 270].includes(Number(f.rot)) ? Number(f.rot) : 0
+  if (!rot) {
+    return `<div class="foto"><img src="${f.dataUri}" alt=""
     style="object-position:${posX}% ${posY}%;transform:scale(${zoom});transform-origin:${posX}% ${posY}%"></div>`
+  }
+  // Girada: una foto que el celular guardó de lado. A 90°/270° el ancho y el
+  // alto se cruzan, por eso la imagen se mide contra el recuadro (cqw/cqh).
+  const lado = rot % 180 !== 0
+  return `<div class="foto"><img src="${f.dataUri}" alt="" style="inset:auto;left:50%;top:50%;
+    width:${lado ? '100cqh' : '100%'};height:${lado ? '100cqw' : '100%'};
+    object-position:${posX}% ${posY}%;transform:translate(-50%,-50%) rotate(${rot}deg) scale(${zoom})"></div>`
 }
 
 /**
@@ -114,7 +123,7 @@ body{position:relative;font-family:'Nunito',sans-serif;color:${HONDO};
 .filete.d{background:linear-gradient(270deg,transparent,${DORADO})}
 .fotos{position:absolute;top:${zona.top}px;left:${zona.left}px;right:${zona.right}px;bottom:${zona.bottom}px;
   display:flex;flex-direction:${direccion};gap:${dos ? 26 : 0}px}
-.foto{position:relative;flex:1;border-radius:26px;overflow:hidden;background:#E9E2D2;
+.foto{position:relative;flex:1;container-type:size;border-radius:26px;overflow:hidden;background:#E9E2D2;
   border:10px solid #fff;box-shadow:0 22px 46px -22px rgba(47,93,69,.55), 0 0 0 1px rgba(196,168,122,.45)}
 .foto img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .pie{position:absolute;left:0;right:0;

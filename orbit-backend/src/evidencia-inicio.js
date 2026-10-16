@@ -179,6 +179,7 @@ function aplicarAjustes(fila, ajustes = {}) {
       zoom: clamp(a.zoom, 1, 3, f.zoom ?? 1),
       posX: clamp(a.posX, 0, 100, f.posX ?? 50),
       posY: clamp(a.posY, 0, 100, f.posY ?? 50),
+      rot: [0, 90, 180, 270].includes(Number(a.rot)) ? Number(a.rot) : (f.rot || 0),
     }
   })
   const frase = typeof ajustes.frase === 'string' ? ajustes.frase.trim().slice(0, 60) : fila.frase
