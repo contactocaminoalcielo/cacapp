@@ -2,8 +2,9 @@
 // (migración 178) y, cuando Meta la aprueba, la deja configurada en Orbit.
 //
 // Corre DENTRO del contenedor del backend: usa sus credenciales y su base.
-//   docker cp ejemplo.jpg orbit-backend:/tmp/ejemplo.jpg
-//   docker exec -w /app orbit-backend node scripts/crear-plantilla-evidencia.mjs crear /tmp/ejemplo.jpg
+//   docker exec -w /app orbit-backend node scripts/crear-plantilla-evidencia.mjs crear
+//   (sin archivo: dibuja el ejemplo aquí mismo con el marco real y dos fotos de
+//    una evidencia ya hecha; con una ruta, usa esa imagen)
 //   docker exec -w /app orbit-backend node scripts/crear-plantilla-evidencia.mjs estado
 //
 // Se crea en la WABA del agente que tiene la línea de familias (LINEA_WA_ID):
@@ -12,6 +13,29 @@ import fs from 'node:fs'
 import { pool } from '../src/db.js'
 import { LINEA_WA_ID } from '../src/linea-wa.js'
 import { crearPlantilla, subirCabecera, listarPlantillas } from '../src/whatsapp-plantillas.js'
+import { renderImagen, cerrarPdf } from '../src/pdf.js'
+import { htmlMarcoEvidencia, FORMATOS } from '../src/pdf-plantillas/marco-evidencia.js'
+
+// Ejemplo para la revisión de Meta: Godzilla, compostaje del 15-oct-2026.
+const EJEMPLO = {
+  mascota: 'Godzilla', fecha: '2026-10-15T22:37:37Z',
+  fotos: [
+    'https://db.orbitacac.com/storage/v1/object/public/evidencias/tenjo/dd1cfc4e-fbdd-4e25-ba27-3f243693d9dc/1792103842074.jpg',
+    'https://db.orbitacac.com/storage/v1/object/public/evidencias/tenjo/dd1cfc4e-fbdd-4e25-ba27-3f243693d9dc/1792103844119.jpg',
+  ],
+}
+
+async function imagenDeEjemplo() {
+  const fotos = []
+  for (const url of EJEMPLO.fotos) {
+    const r = await fetch(url)
+    if (!r.ok) throw new Error(`No se pudo bajar la foto de ejemplo (${r.status})`)
+    fotos.push({ dataUri: 'data:image/jpeg;base64,' + Buffer.from(await r.arrayBuffer()).toString('base64') })
+  }
+  const { ancho, alto } = FORMATOS.horizontal
+  const html = htmlMarcoEvidencia({ fotos, mascota: EJEMPLO.mascota, fecha: EJEMPLO.fecha, formato: 'horizontal' })
+  return renderImagen({ html, ancho, alto })
+}
 
 const NOMBRE = 'evidencia_inicio_compostaje'
 const IDIOMA = 'es_MX'
@@ -30,7 +54,7 @@ async function agenteDeFamilias() {
 }
 
 async function crear() {
-  if (!rutaImagen || !fs.existsSync(rutaImagen)) throw new Error('Falta la imagen de ejemplo (ruta dentro del contenedor)')
+  const imagen = rutaImagen ? fs.readFileSync(rutaImagen) : await imagenDeEjemplo()
   const agente = await agenteDeFamilias()
   console.log(`Agente: ${agente.nombre} (#${agente.id})`)
 
@@ -38,7 +62,7 @@ async function crear() {
   // envío lleva su propio marco, y una cabecera fija haría que un envío manual
   // desde la bandeja le mandara a otra familia la foto del ejemplo.
   const sub = await subirCabecera({
-    base64: fs.readFileSync(rutaImagen).toString('base64'),
+    base64: imagen.toString('base64'),
     mime: 'image/jpeg', nombre: 'ejemplo-evidencia.jpg', agenteId: agente.id, guardar: false,
   })
   if (!sub.body.ok) throw new Error('Subida de la imagen: ' + sub.body.error)
@@ -81,5 +105,6 @@ try {
   console.error('ERROR:', e.message)
   process.exitCode = 1
 } finally {
+  await cerrarPdf().catch(() => {})
   await pool.end().catch(() => {})
 }
