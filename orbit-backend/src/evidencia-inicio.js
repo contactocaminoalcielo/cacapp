@@ -139,7 +139,8 @@ export async function listarEvidencias({ estado = 'POR_REVISAR', limite = 100 } 
   const estados = estado === 'TODAS' ? ['POR_REVISAR', 'ENVIADO', 'ERROR', 'DESCARTADA']
     : estado === 'PENDIENTES' ? ['POR_REVISAR', 'ERROR'] : [estado]
   const { rows } = await pool.query(
-    `SELECT e.id, e.servicio_id, e.estado, e.fecha_inicio, e.fotos, e.frase, e.leyenda, e.formato,
+    `SELECT e.id, e.servicio_id, e.estado, e.fecha_inicio, e.fecha_marco::text AS fecha_marco,
+            e.fotos, e.frase, e.leyenda, e.formato,
             e.error, e.fecha_envio, e.medio_envio, e.created_at,
             m.nombre AS mascota,
             TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
@@ -186,7 +187,11 @@ function aplicarAjustes(fila, ajustes = {}) {
   // La leyenda SÍ puede quedar vacía: entonces el pie lleva solo la fecha.
   const leyenda = typeof ajustes.leyenda === 'string' ? ajustes.leyenda.trim().slice(0, 70) : fila.leyenda
   const formato = ['horizontal', 'vertical'].includes(ajustes.formato) ? ajustes.formato : fila.formato
-  return { fotos, frase: frase || fila.frase, leyenda: leyenda ?? null, formato: formato || 'horizontal' }
+  // Fecha del marco (migración 179). '' o null = volver a la del proceso.
+  const fechaMarco = 'fecha' in ajustes
+    ? (fechaValida(ajustes.fecha) ? ajustes.fecha : null)
+    : (fila.fecha_marco || null)
+  return { fotos, frase: frase || fila.frase, leyenda: leyenda ?? null, formato: formato || 'horizontal', fechaMarco }
 }
 
 export async function guardarAjustes({ id, ajustes = {} }) {
@@ -198,8 +203,10 @@ export async function guardarAjustes({ id, ajustes = {} }) {
   if (!nuevo.fotos.some(f => f.incluir !== false))
     return { status: 422, body: { ok: false, error: 'Deja al menos una foto en el marco.' } }
   await pool.query(
-    `UPDATE public.evidencias_familia SET fotos = $2::jsonb, frase = $3, formato = $4, leyenda = $5 WHERE id = $1`,
-    [id, JSON.stringify(nuevo.fotos), nuevo.frase, nuevo.formato, nuevo.leyenda]
+    `UPDATE public.evidencias_familia
+        SET fotos = $2::jsonb, frase = $3, formato = $4, leyenda = $5, fecha_marco = $6::date
+      WHERE id = $1`,
+    [id, JSON.stringify(nuevo.fotos), nuevo.frase, nuevo.formato, nuevo.leyenda, nuevo.fechaMarco]
   )
   return { status: 200, body: { ok: true, ...nuevo } }
 }
@@ -213,8 +220,9 @@ export async function guardarAjustes({ id, ajustes = {} }) {
 export async function imagenEvidencia({ id, ajustes = null }) {
   const fila = await filaEvidencia(id)
   if (!fila) return { status: 404, body: { ok: false, error: 'no_encontrada' } }
-  const { fotos, frase, leyenda, formato } = ajustes ? aplicarAjustes(fila, ajustes) : {
+  const { fotos, frase, leyenda, formato, fechaMarco } = ajustes ? aplicarAjustes(fila, ajustes) : {
     fotos: lista(fila.fotos), frase: fila.frase, leyenda: fila.leyenda, formato: fila.formato,
+    fechaMarco: fila.fecha_marco || null,
   }
   const usadas = fotos.filter(f => f.incluir !== false).slice(0, 2)
   if (!usadas.length) return { status: 422, body: { ok: false, error: 'Deja al menos una foto en el marco.' } }
@@ -226,7 +234,9 @@ export async function imagenEvidencia({ id, ajustes = null }) {
     conDatos.push({ ...f, dataUri })
   }
   const { ancho, alto } = FORMATOS[formato] || FORMATOS.horizontal
-  const html = htmlMarcoEvidencia({ fotos: conDatos, mascota: fila.mascota, fecha: fila.fecha_inicio, frase, leyenda, formato })
+  const html = htmlMarcoEvidencia({
+    fotos: conDatos, mascota: fila.mascota, fecha: fechaMarco || fila.fecha_inicio, frase, leyenda, formato,
+  })
   const buffer = await renderImagen({ html, ancho, alto })
   return { status: 200, buffer, nombre: `Evidencia ${fila.mascota || ''}.jpg`.trim() }
 }
@@ -336,7 +346,7 @@ export async function descartarEvidencia({ id, personalId = null }) {
 async function filaEvidencia(id) {
   if (!uuidOrNull(id)) return null
   const { rows } = await pool.query(
-    `SELECT e.*, m.nombre AS mascota, c.nombre AS cliente_nombre, c.whatsapp,
+    `SELECT e.*, e.fecha_marco::text AS fecha_marco, m.nombre AS mascota, c.nombre AS cliente_nombre, c.whatsapp,
             TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario
        FROM public.evidencias_familia e
        JOIN public.servicios s     ON s.id = e.servicio_id
@@ -374,6 +384,13 @@ function uuidOrNull(v) {
   const s = String(v || '')
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s) ? s : null
 }
+/** 'YYYY-MM-DD' de un día real y razonable (no se imprime un 2099 por un dedazo). */
+function fechaValida(v) {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
+  const d = new Date(`${v}T12:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v && d.getUTCFullYear() >= 2024 && d.getUTCFullYear() <= 2100
+}
+
 function normalizarFecha(v) {
   const s = String(v ?? '').trim().replace(/^"|"$/g, '')
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null

@@ -145,6 +145,11 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
   const [frase, setFrase]     = useState(evidencia.frase || 'Siempre en nuestro recuerdo')
   const [leyenda, setLeyenda] = useState(evidencia.leyenda ?? 'Inicio de su proceso de compostaje')
   const [formato, setFormato] = useState(evidencia.formato || 'horizontal')
+  // Fecha del marco (migr. 179): por defecto el día en que se inició el proceso.
+  const fechaProceso = evidencia.fecha_inicio
+    ? new Date(evidencia.fecha_inicio).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
+    : ''
+  const [fecha, setFecha] = useState(evidencia.fecha_marco || fechaProceso)
   const [vista, setVista]     = useState(null)   // object URL
   const [cargando, setCargando] = useState(true)
   const [errVista, setErrVista] = useState('')
@@ -152,7 +157,8 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
   const urlRef = useRef(null)
   const pedido = useRef(0)
 
-  const ajustes = { fotos, frase, leyenda, formato }
+  // Si coincide con la del proceso no se guarda como cambio: queda NULL.
+  const ajustes = { fotos, frase, leyenda, formato, fecha: fecha && fecha !== fechaProceso ? fecha : '' }
   const algunaFoto = fotos.some(f => f.incluir !== false)
 
   // La vista previa es la imagen real del backend. Se pide 450 ms después del
@@ -286,6 +292,16 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
             <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Leyenda junto a la fecha</label>
             <Input value={leyenda} maxLength={70} disabled={!editable} placeholder="Vacío = solo la fecha"
               onChange={e => setLeyenda(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Fecha del marco</label>
+            <div className="flex items-center gap-2">
+              <Input type="date" value={fecha} disabled={!editable} onChange={e => setFecha(e.target.value)} />
+              {editable && fecha !== fechaProceso && fechaProceso && (
+                <button onClick={() => setFecha(fechaProceso)}
+                  className="text-[11px] text-gray-400 hover:text-gray-600 underline whitespace-nowrap">Usar la del proceso</button>
+              )}
+            </div>
           </div>
           <div>
             <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Formato</label>

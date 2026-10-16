@@ -52,7 +52,10 @@ const RAMA = tam => `
 
 /** «16 de octubre de 2026», en hora de Bogotá. */
 export function fechaLargaBogota(v) {
-  const d = v ? new Date(v) : new Date()
+  // Un día suelto ('2026-10-15') se ancla al mediodía: a medianoche UTC, en
+  // Bogotá sería el día anterior.
+  const s = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T12:00:00Z` : v
+  const d = s ? new Date(s) : new Date()
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Bogota' })
 }
