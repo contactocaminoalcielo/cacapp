@@ -1,6 +1,11 @@
 // Pestaña "Salidas" — el cierre físico del compostaje.
 //
-// Dos listas, que es como se trabaja en planta:
+// Las listas, que es como se trabaja en planta:
+//   · APERTURA FINAL — en la planta el área de compostaje se abre jueves o
+//     viernes cada 15 días. Para un día de apertura: qué mascotas salen (las
+//     cumplidas, las que cumplen antes y las programadas para ese día) y
+//     cuáles cumplen 1 a 7 días DESPUÉS y conviene adelantar — si no, esperan
+//     a la siguiente apertura, dos semanas más (reporte de Tenjo, 2026-10-16).
 //   · POR SACAR — ya se cumplió su tiempo (ingreso + 2, 2.5 o 3 meses, según el
 //     cubículo) y la mascota sigue adentro. Es la lista de trabajo del día.
 //   · YA SALIERON — con su fecha de salida, corregible.
@@ -42,6 +47,41 @@ const fmtJornada = f => f
 const desdePorDefecto = () => {
   const d = new Date(); d.setDate(d.getDate() - 60)
   return hoyLocalISO(d)
+}
+
+// Cuántos días después de la apertura cumple una mascota para ofrecer
+// adelantarla. Más allá, mejor que espere a la siguiente apertura.
+const VENTANA_ADELANTAR = 7
+const CLAVE_APERTURA = 'tenjo.salidas.apertura'
+
+const diasEntre = (desde, hasta) =>
+  Math.round((new Date(hasta + 'T12:00:00') - new Date(desde + 'T12:00:00')) / 86400000)
+
+/** El próximo jueves (hoy si hoy es jueves): el día típico de apertura. */
+function proximoJueves() {
+  const d = new Date(); d.setHours(12, 0, 0, 0)
+  d.setDate(d.getDate() + ((4 - d.getDay() + 7) % 7))
+  return hoyLocalISO(d)
+}
+
+/** La fecha de apertura que dejó elegida este equipo, si aún no pasó. */
+function aperturaInicial() {
+  try {
+    const v = localStorage.getItem(CLAVE_APERTURA)
+    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v) && v >= hoyLocalISO()) return v
+  } catch { /* sin almacenamiento: se usa el próximo jueves */ }
+  return proximoJueves()
+}
+
+/** Cómo sale cada mascota en la apertura, dicho para el operario y el PDF. */
+function tipoSalida(it, hoy) {
+  const prog = it.salida_programada
+  const cumple = it.fechaCumple
+  if (prog && cumple && prog < cumple) return { texto: `Adelantada ${diasEntre(prog, cumple)} d`, color: '#5B4BB5', bg: '#F1EEFC' }
+  if (prog && cumple && prog > cumple) return { texto: `Aplazada al ${fmt(prog)}`, color: '#9A5500', bg: '#FFF3DC' }
+  if (prog) return { texto: `Programada ${fmt(prog)}`, color: '#3B6FBF', bg: '#EEF3FB' }
+  if (cumple && cumple <= hoy) return { texto: 'Ya cumplió', color: '#1D8A55', bg: '#E8F3EB' }
+  return { texto: `Cumple el ${fmt(cumple)}`, color: '#1D8A55', bg: '#E8F3EB' }
 }
 
 const diasDesde = fecha => {
@@ -124,14 +164,14 @@ function ChipEntrega({ item }) {
 // Bajar el PDF y compartir el listado. wa.me NO adjunta archivos: por el enlace
 // viaja el texto (`textoSalidasWa`) y el PDF se adjunta a mano si hace falta.
 // Mismo patrón que el mensaje al grupo de Jornada y Visitas.
-function Acciones({ tipo, items }) {
+function Acciones({ tipo, items, opts }) {
   return (
     <div className="flex items-center gap-1.5">
       <Button size="sm" variant="secondary" disabled={!items.length}
-        onClick={() => generarPdfSalidas(tipo, items)}>
+        onClick={() => generarPdfSalidas(tipo, items, opts)}>
         <FileDown size={12} className="mr-1" /> PDF
       </Button>
-      <a href={`https://wa.me/?text=${encodeURIComponent(textoSalidasWa(tipo, items))}`}
+      <a href={`https://wa.me/?text=${encodeURIComponent(textoSalidasWa(tipo, items, opts))}`}
         target="_blank" rel="noreferrer"
         className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white transition-colors ${
           items.length ? '' : 'pointer-events-none opacity-40'}`}
@@ -154,6 +194,13 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const [fechaForm,   setFechaForm]   = useState('')
   const [modalAplazar, setModalAplazar] = useState(null) // { items: [] }
   const [motivoForm,   setMotivoForm]   = useState('')
+  const [apertura,     setApertura]     = useState(aperturaInicial)
+  const [selAdel,      setSelAdel]      = useState(() => new Set())
+
+  function cambiarApertura(v) {
+    setApertura(v); setSelAdel(new Set())
+    try { if (v) localStorage.setItem(CLAVE_APERTURA, v) } catch { /* solo comodidad */ }
+  }
 
   const cargar = useCallback(async () => {
     try {
@@ -179,6 +226,43 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const sinFecha = datos?.sinFecha || []
 
   const seleccionados = useMemo(() => porSacar.filter(it => sel.has(it.id)), [porSacar, sel])
+
+  // ── Apertura final ──
+  // Sale en la apertura toda mascota cuya salida (la programada, o si no la
+  // tiene, el día que cumple) cae ese día o antes. Candidatas a adelantar: las
+  // que cumplen 1 a 7 días DESPUÉS de la apertura y no tienen fecha propia.
+  const { salenApertura, candidatas } = useMemo(() => {
+    const hoy = hoyLocalISO()
+    const adentro = [...porSacar, ...aplazadas, ...enCurso]
+    const salida = it => it.salida_programada || it.fechaCumple
+    const salen = adentro
+      .filter(it => salida(it) && salida(it) <= apertura)
+      .map(it => { const t = tipoSalida(it, hoy); return { ...it, tipoSalida: t.texto, tipoCfg: t } })
+      .sort((a, b) => String(a.cubiculos?.codigo || a.cubiculo_codigo || '').localeCompare(String(b.cubiculos?.codigo || b.cubiculo_codigo || '')))
+    const cand = adentro
+      .filter(it => !it.salida_programada && it.fechaCumple && it.fechaCumple > apertura
+        && diasEntre(apertura, it.fechaCumple) <= VENTANA_ADELANTAR)
+      .sort((a, b) => a.fechaCumple.localeCompare(b.fechaCumple))
+    return { salenApertura: salen, candidatas: cand }
+  }, [porSacar, aplazadas, enCurso, apertura])
+
+  const candSel = candidatas.filter(it => selAdel.has(it.id))
+
+  async function adelantar(items) {
+    if (!items.length || !apertura) return
+    setSaving(true)
+    try {
+      for (const it of items) {
+        await programarSalida(it.id, apertura,
+          `Adelantada a la apertura final del ${fmt(apertura)} (cumplía el ${fmt(it.fechaCumple)})`,
+          personalData?.id)
+      }
+      setSelAdel(new Set())
+      await cargar(); onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo adelantar', variant: 'danger' })
+    } finally { setSaving(false) }
+  }
 
   // Las aplazadas agrupadas por su fecha de salida: cada fecha es una jornada
   // ("esto es lo que sale el 7 de octubre"), con su propio PDF y WhatsApp.
@@ -287,7 +371,7 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Por sacar hoy" value={porSacar.length} valueColor={porSacar.length > 0 ? '#C03030' : '#9CA3AF'} />
-        <StatCard label="Aplazadas" value={aplazadas.length} valueColor={aplazadas.length > 0 ? '#9A5500' : '#9CA3AF'} />
+        <StatCard label="Programadas" value={aplazadas.length} valueColor={aplazadas.length > 0 ? '#9A5500' : '#9CA3AF'} />
         <StatCard label="Aún en compostaje" value={enCurso.length} valueColor="#1D8A55" />
         <StatCard label="Salieron en el rango" value={salieron.length} valueColor="#3B6FBF" />
         <StatCard label="Seleccionadas" value={seleccionados.length} valueColor={seleccionados.length > 0 ? '#9A5500' : '#9CA3AF'} />
@@ -321,6 +405,114 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
           </div>
         </div>
       )}
+
+      {/* ── APERTURA FINAL ── */}
+      <div className="bg-surface border-2 rounded-2xl shadow-sm" style={{ borderColor: '#C5D8F5' }}>
+        <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+          <CalendarClock size={15} style={{ color: '#3B6FBF' }} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[15px] text-ink">Apertura final</div>
+            <div className="text-[11px] text-ink3 mt-0.5">
+              Las que salen ese día: ya cumplidas, las que cumplen antes y las programadas para esa fecha.
+            </div>
+          </div>
+          <label className="text-[11px] text-ink3 font-semibold">Día de apertura</label>
+          <Input type="date" className="w-40" value={apertura} min={hoyLocalISO()}
+            onChange={e => cambiarApertura(e.target.value)} />
+          <Acciones tipo="APERTURA" items={salenApertura} opts={{ fecha: apertura }} />
+        </div>
+
+        <div className="px-5 py-2.5 text-[12px] font-semibold capitalize" style={{ color: '#3B6FBF', background: '#F5F8FD' }}>
+          {fmtJornada(apertura)} · salen {salenApertura.length} mascota{salenApertura.length !== 1 ? 's' : ''}
+        </div>
+        {salenApertura.length === 0 ? (
+          <div className="py-8 text-center text-ink3 text-sm">Ninguna mascota sale en esta apertura.</div>
+        ) : (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Mascota</Th><Th>Cubículo</Th><Th>Ingresó</Th><Th>Se cumple</Th><Th>Salida</Th><Th>Recordatorios</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {salenApertura.map(it => (
+                  <Tr key={it.id}>
+                    <Td><Mascota item={it} /></Td>
+                    <Td><Cubiculo item={it} /></Td>
+                    <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
+                    <Td className="text-ink3 text-[11px]">{fmt(it.fechaCumple)}</Td>
+                    <Td>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                        style={{ background: it.tipoCfg.bg, color: it.tipoCfg.color }}>{it.tipoSalida}</span>
+                    </Td>
+                    <Td><ChipEntrega item={it} /><ChipsPlanta item={it} /></Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        )}
+
+        {/* Las que se quedarían por pocos días: si no se adelantan, esperan a la
+            siguiente apertura, dos semanas después. */}
+        {candidatas.length > 0 && (
+          <div className="border-t" style={{ borderColor: '#C5D8F5' }}>
+            <div className="px-5 py-2.5 flex items-center gap-2 flex-wrap" style={{ background: '#F1EEFC' }}>
+              <CalendarPlus size={13} style={{ color: '#5B4BB5' }} />
+              <span className="text-[12px] font-bold" style={{ color: '#5B4BB5' }}>
+                Cumplen 1 a {VENTANA_ADELANTAR} días después: ¿adelantarlas a esta apertura?
+              </span>
+              <div className="flex-1" />
+              <button className="text-[11px] font-semibold text-ink3 hover:text-primary-dark"
+                onClick={() => setSelAdel(selAdel.size === candidatas.length ? new Set() : new Set(candidatas.map(i => i.id)))}>
+                {selAdel.size === candidatas.length ? 'Quitar selección' : 'Seleccionar todas'}
+              </button>
+              <Button size="sm" disabled={!candSel.length || saving} onClick={() => adelantar(candSel)}>
+                <CalendarPlus size={12} className="mr-1" /> Adelantar {candSel.length || ''}
+              </Button>
+            </div>
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th className="w-8"></Th>
+                    <Th>Mascota</Th><Th>Cubículo</Th><Th>Ingresó</Th><Th>Se cumple</Th><Th>Le faltarían</Th><Th></Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidatas.map(it => {
+                    const faltan = diasEntre(apertura, it.fechaCumple)
+                    return (
+                      <Tr key={it.id}>
+                        <Td>
+                          <input type="checkbox" className="accent-violet-600" checked={selAdel.has(it.id)}
+                            onChange={() => setSelAdel(p => { const n = new Set(p); n.has(it.id) ? n.delete(it.id) : n.add(it.id); return n })} />
+                        </Td>
+                        <Td><Mascota item={it} /></Td>
+                        <Td><Cubiculo item={it} /></Td>
+                        <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
+                        <Td className="text-[11px] font-medium text-ink2">{fmt(it.fechaCumple)}</Td>
+                        <Td>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                            style={{ background: '#F1EEFC', color: '#5B4BB5' }}>
+                            {faltan} día{faltan !== 1 ? 's' : ''}
+                          </span>
+                        </Td>
+                        <Td>
+                          <Button size="sm" variant="secondary" disabled={saving} onClick={() => adelantar([it])}>
+                            Adelantar
+                          </Button>
+                        </Td>
+                      </Tr>
+                    )
+                  })}
+                </tbody>
+              </Table>
+            </TableWrap>
+          </div>
+        )}
+      </div>
 
       {/* ── POR SACAR ── */}
       <div className="bg-surface border-2 rounded-2xl shadow-sm"
@@ -429,9 +621,9 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
           <div className="px-5 py-4 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: '#FDE68A' }}>
             <CalendarPlus size={15} style={{ color: '#9A5500' }} />
             <div className="flex-1 min-w-0">
-              <div className="font-semibold text-[15px] text-ink">Salida aplazada</div>
+              <div className="font-semibold text-[15px] text-ink">Salida programada</div>
               <div className="text-[11px] text-ink3 mt-0.5">
-                Saldrán en la fecha que decidió el operario. Ese día pasan solas a «Por sacar».
+                Aplazadas y adelantadas: saldrán en la fecha que se decidió. Ese día pasan solas a «Por sacar».
               </div>
             </div>
             <Acciones tipo="APLAZADAS" items={aplazadas} />
@@ -461,6 +653,7 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                       <Th>Cubículo</Th>
                       <Th>Ingresó</Th>
                       <Th>Se cumple</Th>
+                      <Th>Tipo</Th>
                       <Th>Motivo</Th>
                       <Th></Th>
                     </tr>
@@ -472,6 +665,17 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                         <Td><Cubiculo item={it} /></Td>
                         <Td className="text-ink3 text-[11px]">{fmt(it.fecha_compostaje_inicio)}</Td>
                         <Td className="text-ink3 text-[11px]">{fmt(it.fechaCumple)}</Td>
+                        <Td>
+                          {(() => {
+                            const t = tipoSalida(it, hoyLocalISO())
+                            return (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                                style={{ background: t.bg, color: t.color }}>
+                                {t.texto.startsWith('Aplazada') ? 'Aplazada' : t.texto}
+                              </span>
+                            )
+                          })()}
+                        </Td>
                         <Td className="text-[11px] text-ink2 max-w-[220px]">
                           <span className="line-clamp-2">{it.salida_programada_motivo || '—'}</span>
                         </Td>

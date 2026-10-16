@@ -38,13 +38,26 @@ const clienteTxt = it => {
  * @param {'POR_SACAR'|'APLAZADAS'|'SALIERON'} tipo
  * @param {Array} items  filas de cargarSalidasCompostaje
  */
-export async function generarPdfSalidas(tipo, items) {
+// «jueves, 23 de octubre» — el día de la apertura final, con su día de semana.
+const fmtDia = f => f
+  ? new Date(f + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
+  : '—'
+
+/**
+ * @param tipo  'POR_SACAR' | 'APLAZADAS' | 'SALIERON' | 'APERTURA'
+ * @param opts  { fecha } — para APERTURA, el día de la apertura final.
+ *              Cada item de APERTURA trae `tipoSalida` ya escrito
+ *              ("Ya cumplió", "Adelantada 3 d"…), calculado en la pestaña.
+ */
+export async function generarPdfSalidas(tipo, items, opts = {}) {
   const { default: jsPDF } = await import('jspdf')
   const pdf = new jsPDF('p', 'mm', 'a4')
   const W = 210, H = 297, M = 14
   const porSacar  = tipo === 'POR_SACAR'
   const aplazadas = tipo === 'APLAZADAS'
-  const titulo = porSacar ? 'MASCOTAS POR SACAR DEL CUBÍCULO'
+  const apertura  = tipo === 'APERTURA'
+  const titulo = apertura ? `SALIDAS DE LA APERTURA FINAL — ${fmtDia(opts.fecha).toUpperCase()}`
+    : porSacar ? 'MASCOTAS POR SACAR DEL CUBÍCULO'
     : aplazadas ? 'MASCOTAS CON LA SALIDA APLAZADA'
     : 'MASCOTAS QUE YA SALIERON DEL CUBÍCULO'
   const hoyTxt = new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
@@ -54,7 +67,16 @@ export async function generarPdfSalidas(tipo, items) {
   // En el recorte van las TRES fechas que pidió David: ingreso, cumplimiento
   // del compostaje y salida (la programada por el operario; «—» si sale con el
   // recorte de hoy sin fecha aparte).
-  const COLS = porSacar
+  const COLS = apertura
+    ? [
+        { k: 'mascota',  label: 'Mascota',   x: M,       w: 28 },
+        { k: 'cliente',  label: 'Familia',   x: M + 28,  w: 38 },
+        { k: 'cubiculo', label: 'Cubículo',  x: M + 66,  w: 24 },
+        { k: 'ingreso',  label: 'Ingresó',   x: M + 90,  w: 24 },
+        { k: 'cumple',   label: 'Se cumple', x: M + 114, w: 24 },
+        { k: 'tipoSalida', label: 'Salida',  x: M + 138, w: 44 },
+      ]
+    : porSacar
     ? [
         { k: 'mascota',  label: 'Mascota',   x: M,       w: 30 },
         { k: 'cliente',  label: 'Familia',   x: M + 30,  w: 42 },
@@ -91,6 +113,7 @@ export async function generarPdfSalidas(tipo, items) {
       case 'sale':     return it.salida_programada ? fmt(it.salida_programada) : (porSacar ? 'Hoy' : '—')
       case 'motivo':   return it.salida_programada_motivo || '—'
       case 'entrega':  return fmt(it.servicios?.fecha_limite_entrega)
+      case 'tipoSalida': return it.tipoSalida || '—'
       default:         return '—'
     }
   }
@@ -183,18 +206,23 @@ export async function generarPdfSalidas(tipo, items) {
   pie()
 
   const sello = new Date().toISOString().slice(0, 10)
-  pdf.save(`${porSacar ? 'por-sacar' : aplazadas ? 'aplazadas' : 'salieron'}-compostaje-${sello}.pdf`)
+  pdf.save(apertura
+    ? `apertura-final-${opts.fecha || sello}.pdf`
+    : `${porSacar ? 'por-sacar' : aplazadas ? 'aplazadas' : 'salieron'}-compostaje-${sello}.pdf`)
 }
 
 /**
  * El texto que sí viaja por wa.me. WhatsApp no adjunta archivos desde un
  * enlace, así que el listado va escrito; el PDF se adjunta a mano si hace falta.
  */
-export function textoSalidasWa(tipo, items) {
+export function textoSalidasWa(tipo, items, opts = {}) {
   const porSacar  = tipo === 'POR_SACAR'
   const aplazadas = tipo === 'APLAZADAS'
+  const apertura  = tipo === 'APERTURA'
   const hoyTxt = new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
-  const cabeza = porSacar
+  const cabeza = apertura
+    ? `🌿 *Salidas de la apertura final* — ${fmtDia(opts.fecha)}`
+    : porSacar
     ? `🌿 *Por sacar del cubículo* — ${hoyTxt}`
     : aplazadas
     ? `📅 *Salida aplazada* — ${hoyTxt}`
@@ -206,7 +234,9 @@ export function textoSalidasWa(tipo, items) {
 
   // Los restos cálcicos se separan al sacarla: que el operario lo lea en la lista.
   const restos = it => it.planta?.restos_calcicos ? ' · ⚠ *RESTOS CÁLCICOS*' : ''
-  const lineas = items.map(it => porSacar
+  const lineas = items.map(it => apertura
+    ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · ${it.tipoSalida || ''}` + restos(it)
+    : porSacar
     ? `• ${mascotaTxt(it)} — ${cubiculoTxt(it)} · cumplió ${fmt(it.fechaCumple)}`
       + (it.salida_programada ? ` · sale ${fmt(it.salida_programada)}` : '') + restos(it)
     : aplazadas
