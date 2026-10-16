@@ -43,6 +43,7 @@ const TIPO_ICON = {
   CENIZAS_LISTAS:        '⚱️',
   COMPOSTAJE_LISTO:      '🌿',
   RESTOS_CALCICOS:       '⚠️',
+  EVIDENCIAS_POR_REVISAR: '📸',
   PLANTAS_PENDIENTES:    '🌱',
 }
 

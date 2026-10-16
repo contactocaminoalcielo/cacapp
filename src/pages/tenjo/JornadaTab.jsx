@@ -13,6 +13,7 @@ import { db } from '@/lib/supabase'
 import { FECHA_CORTE } from '@/lib/constants'
 import { orbitApi } from '@/lib/orbitApi'
 import { subirEvidencia } from '@/lib/evidencias'
+import { prepararEvidencia } from '@/lib/evidenciaInicio'
 import { petEmoji, parsearErrorDB, today, waLink } from '@/lib/utils'
 import {
   varianteProceso, VARIANTE_LABEL, validarItemCierre, nombreDia,
@@ -219,6 +220,10 @@ export default function JornadaTab({ config, personalData, canPlan, personal, on
     // Primer proceso iniciado → el lote pasa a EN_EJECUCION (best-effort)
     await db.from('lotes_tenjo').update({ estado: 'EN_EJECUCION' })
       .eq('id', item.lote_id).eq('estado', 'CONFIRMADO')
+    // Deja lista la evidencia enmarcada para que coordinación la revise y se la
+    // mande a la familia (migr. 178). No espera ni bloquea: si falla, la pestaña
+    // Evidencias la prepara igual al abrirse.
+    prepararEvidencia(item.servicio_id)
     setModalIniciar(null); setRespId(''); setIniEvid({})
     await cargar(); onChanged?.()
   }

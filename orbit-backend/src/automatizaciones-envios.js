@@ -122,6 +122,22 @@ const FUENTES = {
      -- envío: el aviso todavía no existe.
      WHERE pe.estado <> 'RESERVADA'`,
 
+  // Migración 178. POR_REVISAR no es un envío fallido: espera a una persona.
+  evidencia_inicio: `
+    SELECT e.id, e.servicio_id,
+           COALESCE(e.fecha_envio, e.created_at) AS fecha,
+           CASE e.estado WHEN 'POR_REVISAR' THEN 'PENDIENTE' WHEN 'DESCARTADA' THEN 'CANCELADO' ELSE e.estado END AS estado,
+           e.error, e.intentos::int AS intentos,
+           m.nombre AS mascota, ${PROPIETARIO} AS destinatario,
+           COALESCE(e.whatsapp_destino, c.whatsapp) AS destino,
+           e.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           (CASE WHEN e.medio_envio = 'MANUAL' THEN 'Enviada a mano' ELSE 'Inicio del compostaje' END) AS detalle,
+           jsonb_build_object('estado_real', e.estado) AS extra
+      FROM public.evidencias_familia e
+      JOIN public.servicios s     ON s.id = e.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id`,
+
   mitad_compostaje: `
     SELECT av.id, av.servicio_id,
            COALESCE(av.fecha_envio, av.created_at) AS fecha,
@@ -259,6 +275,8 @@ export async function listarEnvios({ clave, estado = 'todos', q = null, dias = 3
 function relanzable(clave, r) {
   const no = motivo => ({ relanzable: false, no_relanzable: motivo })
   if (clave === 'aviso_cliente') return no('Lo manda una persona por wa.me')
+  // Necesita que una persona mire el marco: se reenvía desde Tenjo → Evidencias.
+  if (clave === 'evidencia_inicio') return no('Se revisa y envía desde Tenjo → Evidencias')
   if (r.estado === 'CANCELADO')  return no('Cancelado')
   if (r.acuse === 'failed')      return { relanzable: true }
   if (r.estado === 'ENVIADO') {

@@ -120,6 +120,39 @@ export async function renderPdf({ html, formato = 'Letter', apaisado = false, ma
   }
 }
 
+/**
+ * Igual que `renderPdf` pero devuelve una IMAGEN (JPEG) del tamaño exacto
+ * pedido. La usan los marcos de las evidencias (migración 178): mismo
+ * navegador, mismo semáforo, misma pestaña sin red.
+ */
+export async function renderImagen({ html, ancho, alto, calidad = 88 }) {
+  await turno()
+  const t0 = Date.now()
+  let page = null
+  try {
+    const b = await obtenerNavegador()
+    page = await b.newPage()
+    await page.setRequestInterception(true)
+    page.on('request', req => {
+      const u = req.url()
+      if (u.startsWith('data:') || u.startsWith('about:')) req.continue()
+      else { log(MOD, 'bloqueada petición de red desde la imagen:', u.slice(0, 120)); req.abort() }
+    })
+    await page.setViewport({ width: ancho, height: alto, deviceScaleFactor: 1 })
+    await page.setContent(html, { waitUntil: 'load', timeout: TIMEOUT_MS })
+    await page.evaluateHandle('document.fonts.ready')
+    const img = await page.screenshot({
+      type: 'jpeg', quality: calidad,
+      clip: { x: 0, y: 0, width: ancho, height: alto },
+    })
+    log(MOD, `imagen ${ancho}×${alto} en ${Date.now() - t0} ms, ${(img.length / 1024).toFixed(0)} KB`)
+    return Buffer.from(img)
+  } finally {
+    if (page) await page.close().catch(() => {})
+    soltar()
+  }
+}
+
 /** Para el /health o un smoke test: ¿hay Chromium y arranca? */
 export async function estadoPdf() {
   const ruta = rutaChromium()

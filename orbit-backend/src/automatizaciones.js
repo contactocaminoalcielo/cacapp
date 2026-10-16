@@ -91,6 +91,22 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'evidencia_inicio',
+    nombre: 'Evidencias del inicio del compostaje',
+    descripcion: 'Al iniciar el compostaje se preparan las fotos del cubículo enmarcadas. Coordinación las revisa y las envía con un clic desde Tenjo → Evidencias: no salen solas.',
+    quien: 'A la familia',
+    cron: 'Al iniciar el proceso, con revisión',
+    interruptor: { modulo: 'EVIDENCIA_INICIO', clave: 'activo' },
+    plantillaCfg: { modulo: 'EVIDENCIA_INICIO', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.evidencias_familia',
+      fecha: 'fecha_envio',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      pendiente: "estado = 'POR_REVISAR'",
+    },
+  },
+  {
     clave: 'mitad_compostaje',
     nombre: 'Mitad del compostaje + visita a la planta',
     descripcion: 'A la mitad del proceso de cada mascota: «va con normalidad» y la invitación a visitar el cubículo.',

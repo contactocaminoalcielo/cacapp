@@ -21,6 +21,8 @@ import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
+import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, enviarEvidencia,
+         marcarEnviadaManual, descartarEvidencia } from './evidencia-inicio.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
@@ -1430,6 +1432,55 @@ app.post('/portal/visita/:codigo', async (req, res) => {
   } catch (e) {
     errorInterno(res, 'portal/visita POST', e)
   }
+})
+
+// ── Evidencias del inicio del compostaje (migración 178) ──
+// Coordinación revisa, ajusta el marco y envía. Nada sale solo.
+const rolEvidencias = requireRol('COORDINADOR', 'ADMIN')
+
+app.get('/evidencias', requireAuth, rolEvidencias, async (req, res) => {
+  try { res.json(await listarEvidencias({ estado: req.query.estado || 'PENDIENTES' })) }
+  catch (e) { errorInterno(res, 'evidencias GET', e) }
+})
+
+// La Jornada lo llama al iniciar el proceso (cualquier rol de planta): solo
+// PREPARA la fila para revisión, no le escribe a la familia.
+app.post('/evidencias/preparar', requireAuth, async (req, res) => {
+  try { res.json(await prepararEvidencias({ servicioId: req.body?.servicio_id || null })) }
+  catch (e) { errorInterno(res, 'evidencias/preparar', e) }
+})
+
+// Vista previa (con ajustes sin guardar) o la imagen final para descargar.
+app.post('/evidencias/:id/imagen', requireAuth, rolEvidencias, async (req, res) => {
+  try {
+    const r = await imagenEvidencia({ id: req.params.id, ajustes: req.body?.ajustes || null })
+    if (r.status !== 200) return res.status(r.status).json(r.body)
+    res.set('Content-Type', 'image/jpeg')
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(r.nombre)}"`)
+    res.send(r.buffer)
+  } catch (e) { errorInterno(res, 'evidencias/imagen', e) }
+})
+
+app.put('/evidencias/:id', requireAuth, rolEvidencias, async (req, res) => {
+  try { const r = await guardarAjustes({ id: req.params.id, ajustes: req.body || {} }); res.status(r.status).json(r.body) }
+  catch (e) { errorInterno(res, 'evidencias PUT', e) }
+})
+
+app.post('/evidencias/:id/enviar', requireAuth, rolEvidencias, async (req, res) => {
+  try {
+    const r = await enviarEvidencia({ id: req.params.id, ajustes: req.body?.ajustes || null, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'evidencias/enviar', e) }
+})
+
+app.post('/evidencias/:id/manual', requireAuth, rolEvidencias, async (req, res) => {
+  try { const r = await marcarEnviadaManual({ id: req.params.id, personalId: req.personal.id }); res.status(r.status).json(r.body) }
+  catch (e) { errorInterno(res, 'evidencias/manual', e) }
+})
+
+app.post('/evidencias/:id/descartar', requireAuth, rolEvidencias, async (req, res) => {
+  try { const r = await descartarEvidencia({ id: req.params.id, personalId: req.personal.id }); res.status(r.status).json(r.body) }
+  catch (e) { errorInterno(res, 'evidencias/descartar', e) }
 })
 
 // Reenviar/forzar el aviso de una elección sin esperar al cron (lo decide una persona).

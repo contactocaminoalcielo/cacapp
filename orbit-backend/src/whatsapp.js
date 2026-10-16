@@ -281,6 +281,29 @@ export async function enviarPlantillaGHL({
  * @param mensaje      texto ya resuelto (lo que verá el cliente)
  * @returns {{ messageId, contactId }}
  */
+/**
+ * Plantilla con IMAGEN de cabecera generada al vuelo (los bytes, no una URL):
+ * las evidencias enmarcadas del inicio del compostaje (migración 178). La
+ * imagen se sube a Meta en cada envío — Meta no reutiliza la de la aprobación.
+ *
+ * Solo por Meta directo: el puente de GHL no sabe mandar una cabecera de
+ * imagen, y fallar claro es mejor que mandar la plantilla sin la foto.
+ */
+export async function enviarPlantillaConImagen({
+  telefono, plantillaNombre, idioma = 'es_MX', bodyParams = [],
+  imagen, fromNumberId = LINEA_WA_ID, personalId = null,
+}) {
+  if (transporteWhatsAppOperativo() !== 'META') {
+    throw new Error('Las plantillas con imagen solo salen por Meta directo (WHATSAPP_OPERATIONAL_TRANSPORT=META).')
+  }
+  if (!imagen?.buffer) throw new Error('Falta la imagen de la cabecera')
+  return enviarPlantillaMetaDirecta({
+    telefono, plantillaNombre, idioma, bodyParams,
+    cabecera: { archivo: imagen.buffer, mime: imagen.mime || 'image/jpeg', nombre_archivo: imagen.nombre || 'evidencia.jpg' },
+    fromNumberId, personalId,
+  })
+}
+
 export async function enviarPlantillaGenerica({
   telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
   mensaje, bodyParams = [], headerParams = [], fromNumberId = LINEA_WA_ID,

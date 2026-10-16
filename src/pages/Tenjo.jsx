@@ -24,6 +24,7 @@ import ControlTab from '@/pages/tenjo/ControlTab'
 import CubiculosTab from '@/pages/tenjo/CubiculosTab'
 import SalidasTab from '@/pages/tenjo/SalidasTab'
 import VisitasTab from '@/pages/tenjo/VisitasTab'
+import EvidenciasTab from '@/pages/tenjo/EvidenciasTab'
 import { addDiasHabiles, parsearErrorDB, petEmoji, today } from '@/lib/utils'
 import { Truck, RefreshCw, Plus, CheckCircle2, Flame, FileText, Printer, Clock, History } from 'lucide-react'
 import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
@@ -219,12 +220,17 @@ export default function Tenjo() {
   // conteo va en la pestaña porque si no, nadie entra a mirar: la familia ya
   // recibió un "te confirmamos por WhatsApp" y está esperando.
   const [visitasPedidas,    setVisitasPedidas]    = useState(0)
+  // Evidencias del inicio del compostaje por revisar (migr. 178). Mismo
+  // criterio que las visitas: si el conteo no se ve, nadie entra a mirar.
+  const [evidPendientes,    setEvidPendientes]    = useState(0)
 
   const canPlan = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
   // Pestañas que puede ver cada rol. El PRODUCTOR queda limitado a Jornada y Operación.
   const tabsVisibles = esProductor
     ? ['jornada', 'operacion']
-    : ['planificacion', 'jornada', 'candidatas', 'control', 'salidas', 'cubiculos', 'visitas', 'operacion']
+    : ['planificacion', 'jornada', 'candidatas', 'control', 'salidas', 'cubiculos', 'visitas',
+       // Revisar y enviar a la familia es de coordinación.
+       ...(canPlan ? ['evidencias'] : []), 'operacion']
 
   useEffect(() => {
     cargar()
@@ -314,6 +320,8 @@ export default function Tenjo() {
       // 159 la consulta falla y el resto de la pantalla sigue viva.
       db.from('visitas_tenjo').select('id', { count: 'exact', head: true }).eq('estado', 'SOLICITADA')
         .then(({ count, error }) => setVisitasPedidas(error ? 0 : (count || 0)))
+      db.from('evidencias_familia').select('id', { count: 'exact', head: true }).in('estado', ['POR_REVISAR', 'ERROR'])
+        .then(({ count, error }) => setEvidPendientes(error ? 0 : (count || 0)))
 
       // ── Planificación (Fase 1): config + candidatas desde v_candidatos_tenjo ──
       const cfg = await cargarConfigTenjo()
@@ -514,6 +522,11 @@ export default function Tenjo() {
                 🚶 Visitas{visitasPedidas > 0 ? ` (${visitasPedidas})` : ''}
               </TabsTrigger>
             )}
+            {tabsVisibles.includes('evidencias') && (
+              <TabsTrigger value="evidencias">
+                📸 Evidencias{evidPendientes > 0 ? ` (${evidPendientes})` : ''}
+              </TabsTrigger>
+            )}
             {tabsVisibles.includes('operacion') && <TabsTrigger value="operacion">🚚 Operación</TabsTrigger>}
           </TabsList>
 
@@ -561,6 +574,10 @@ export default function Tenjo() {
 
           <TabsContent value="visitas">
             <VisitasTab canPlan={canPlan} personalData={personalData} onChanged={cargar} />
+          </TabsContent>
+
+          <TabsContent value="evidencias">
+            {tab === 'evidencias' && <EvidenciasTab onChanged={cargar} />}
           </TabsContent>
 
           <TabsContent value="operacion">
