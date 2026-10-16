@@ -143,6 +143,7 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
   const editable = ['POR_REVISAR', 'ERROR'].includes(evidencia.estado)
   const [fotos, setFotos]     = useState(() => (evidencia.fotos || []).map(f => ({ ...f })))
   const [frase, setFrase]     = useState(evidencia.frase || 'Siempre en nuestro recuerdo')
+  const [leyenda, setLeyenda] = useState(evidencia.leyenda ?? 'Inicio de su proceso de compostaje')
   const [formato, setFormato] = useState(evidencia.formato || 'horizontal')
   const [vista, setVista]     = useState(null)   // object URL
   const [cargando, setCargando] = useState(true)
@@ -151,7 +152,7 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
   const urlRef = useRef(null)
   const pedido = useRef(0)
 
-  const ajustes = { fotos, frase, formato }
+  const ajustes = { fotos, frase, leyenda, formato }
   const algunaFoto = fotos.some(f => f.incluir !== false)
 
   // La vista previa es la imagen real del backend. Se pide 450 ms después del
@@ -280,6 +281,11 @@ function EditorEvidencia({ evidencia, hayPlantilla, onClose, onListo }) {
             <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Frase</label>
             <Input value={frase} maxLength={60} disabled={!editable}
               onChange={e => setFrase(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Leyenda junto a la fecha</label>
+            <Input value={leyenda} maxLength={70} disabled={!editable} placeholder="Vacío = solo la fecha"
+              onChange={e => setLeyenda(e.target.value)} />
           </div>
           <div>
             <label className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block mb-1">Formato</label>

@@ -76,7 +76,9 @@ function imgFoto(f) {
  * @param fotos    [{ dataUri, zoom 1–3, posX 0–100, posY 0–100 }] — 1 ó 2
  * @param formato  'horizontal' | 'vertical'
  */
-export function htmlMarcoEvidencia({ fotos = [], mascota, fecha, frase, formato = 'horizontal' }) {
+export const LEYENDA_DEFECTO = 'Inicio de su proceso de compostaje'
+
+export function htmlMarcoEvidencia({ fotos = [], mascota, fecha, frase, leyenda, formato = 'horizontal' }) {
   const vertical = formato === 'vertical'
   const { ancho, alto } = FORMATOS[vertical ? 'vertical' : 'horizontal']
   const lista = fotos.slice(0, 2)
@@ -139,7 +141,7 @@ body{position:relative;font-family:'Nunito',sans-serif;color:${HONDO};
 
   <div class="pie">
     <div class="nombre">${esc(nombre)}</div>
-    <div class="sub">Comienza su regreso a la tierra · <b>${esc(fechaLargaBogota(fecha))}</b></div>
+    <div class="sub">${String(leyenda ?? LEYENDA_DEFECTO).trim() ? `${esc(String(leyenda ?? LEYENDA_DEFECTO).trim())} · ` : ''}<b>${esc(fechaLargaBogota(fecha))}</b></div>
   </div>
 
   ${LOGO ? `<div class="logo"><img src="${LOGO}" alt=""></div>` : ''}

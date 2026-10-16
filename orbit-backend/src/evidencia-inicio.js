@@ -32,6 +32,7 @@ export const CONFIG_DEFAULTS_EVIDENCIA = {
   fotos_por_proceso: { COMPOSTAJE_INDIVIDUAL: ['cubiculo_1', 'cubiculo_2'] },
   planes_excluidos:  ['COMPETS_PRESENCIAL'],
   frase:             'Siempre en nuestro recuerdo',
+  leyenda:           'Inicio de su proceso de compostaje',
 }
 
 const ETIQUETAS = {
@@ -109,11 +110,12 @@ export async function prepararEvidencias({ servicioId = null } = {}) {
     if (!fotos.length) continue
     const { rowCount } = await pool.query(
       `INSERT INTO public.evidencias_familia
-         (servicio_id, lote_item_id, tipo_proceso, fecha_inicio, fotos, frase, whatsapp_destino)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+         (servicio_id, lote_item_id, tipo_proceso, fecha_inicio, fotos, frase, leyenda, whatsapp_destino)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
        ON CONFLICT (servicio_id) DO NOTHING`,
       [r.servicio_id, r.lote_item_id, r.tipo_proceso, r.fecha_inicio_proceso,
-       JSON.stringify(fotos), String(cfg.frase || CONFIG_DEFAULTS_EVIDENCIA.frase), r.whatsapp || null]
+       JSON.stringify(fotos), String(cfg.frase || CONFIG_DEFAULTS_EVIDENCIA.frase),
+       String(cfg.leyenda ?? CONFIG_DEFAULTS_EVIDENCIA.leyenda), r.whatsapp || null]
     )
     creadas += rowCount
   }
@@ -137,7 +139,7 @@ export async function listarEvidencias({ estado = 'POR_REVISAR', limite = 100 } 
   const estados = estado === 'TODAS' ? ['POR_REVISAR', 'ENVIADO', 'ERROR', 'DESCARTADA']
     : estado === 'PENDIENTES' ? ['POR_REVISAR', 'ERROR'] : [estado]
   const { rows } = await pool.query(
-    `SELECT e.id, e.servicio_id, e.estado, e.fecha_inicio, e.fotos, e.frase, e.formato,
+    `SELECT e.id, e.servicio_id, e.estado, e.fecha_inicio, e.fotos, e.frase, e.leyenda, e.formato,
             e.error, e.fecha_envio, e.medio_envio, e.created_at,
             m.nombre AS mascota,
             TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
@@ -180,8 +182,10 @@ function aplicarAjustes(fila, ajustes = {}) {
     }
   })
   const frase = typeof ajustes.frase === 'string' ? ajustes.frase.trim().slice(0, 60) : fila.frase
+  // La leyenda SÍ puede quedar vacía: entonces el pie lleva solo la fecha.
+  const leyenda = typeof ajustes.leyenda === 'string' ? ajustes.leyenda.trim().slice(0, 70) : fila.leyenda
   const formato = ['horizontal', 'vertical'].includes(ajustes.formato) ? ajustes.formato : fila.formato
-  return { fotos, frase: frase || fila.frase, formato: formato || 'horizontal' }
+  return { fotos, frase: frase || fila.frase, leyenda: leyenda ?? null, formato: formato || 'horizontal' }
 }
 
 export async function guardarAjustes({ id, ajustes = {} }) {
@@ -193,8 +197,8 @@ export async function guardarAjustes({ id, ajustes = {} }) {
   if (!nuevo.fotos.some(f => f.incluir !== false))
     return { status: 422, body: { ok: false, error: 'Deja al menos una foto en el marco.' } }
   await pool.query(
-    `UPDATE public.evidencias_familia SET fotos = $2::jsonb, frase = $3, formato = $4 WHERE id = $1`,
-    [id, JSON.stringify(nuevo.fotos), nuevo.frase, nuevo.formato]
+    `UPDATE public.evidencias_familia SET fotos = $2::jsonb, frase = $3, formato = $4, leyenda = $5 WHERE id = $1`,
+    [id, JSON.stringify(nuevo.fotos), nuevo.frase, nuevo.formato, nuevo.leyenda]
   )
   return { status: 200, body: { ok: true, ...nuevo } }
 }
@@ -208,8 +212,8 @@ export async function guardarAjustes({ id, ajustes = {} }) {
 export async function imagenEvidencia({ id, ajustes = null }) {
   const fila = await filaEvidencia(id)
   if (!fila) return { status: 404, body: { ok: false, error: 'no_encontrada' } }
-  const { fotos, frase, formato } = ajustes ? aplicarAjustes(fila, ajustes) : {
-    fotos: lista(fila.fotos), frase: fila.frase, formato: fila.formato,
+  const { fotos, frase, leyenda, formato } = ajustes ? aplicarAjustes(fila, ajustes) : {
+    fotos: lista(fila.fotos), frase: fila.frase, leyenda: fila.leyenda, formato: fila.formato,
   }
   const usadas = fotos.filter(f => f.incluir !== false).slice(0, 2)
   if (!usadas.length) return { status: 422, body: { ok: false, error: 'Deja al menos una foto en el marco.' } }
@@ -221,7 +225,7 @@ export async function imagenEvidencia({ id, ajustes = null }) {
     conDatos.push({ ...f, dataUri })
   }
   const { ancho, alto } = FORMATOS[formato] || FORMATOS.horizontal
-  const html = htmlMarcoEvidencia({ fotos: conDatos, mascota: fila.mascota, fecha: fila.fecha_inicio, frase, formato })
+  const html = htmlMarcoEvidencia({ fotos: conDatos, mascota: fila.mascota, fecha: fila.fecha_inicio, frase, leyenda, formato })
   const buffer = await renderImagen({ html, ancho, alto })
   return { status: 200, buffer, nombre: `Evidencia ${fila.mascota || ''}.jpg`.trim() }
 }

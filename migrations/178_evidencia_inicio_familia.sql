@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS public.evidencias_familia (
   -- [{clave,label,url,incluir,zoom,posX,posY}] — las fotos y su encuadre.
   fotos             jsonb NOT NULL DEFAULT '[]'::jsonb,
   frase             text,
+  -- Línea del pie, antes de la fecha. Vacía = solo la fecha.
+  leyenda           text,
   formato           text NOT NULL DEFAULT 'horizontal' CHECK (formato IN ('horizontal','vertical')),
   whatsapp_destino  text,
   linea_wa          text,
@@ -81,7 +83,9 @@ INSERT INTO public.config_operativa (modulo, clave, valor, descripcion) VALUES
   ('EVIDENCIA_INICIO', 'planes_excluidos', '["COMPETS_PRESENCIAL"]'::jsonb,
    'Planes que nunca reciben la evidencia aunque el servicio diga acompañamiento EVIDENCIA.'),
   ('EVIDENCIA_INICIO', 'frase', '"Siempre en nuestro recuerdo"'::jsonb,
-   'Frase por defecto del marco (se puede cambiar en cada envío).')
+   'Frase por defecto del marco (se puede cambiar en cada envío).'),
+  ('EVIDENCIA_INICIO', 'leyenda', '"Inicio de su proceso de compostaje"'::jsonb,
+   'Línea del pie antes de la fecha (se puede cambiar o dejar vacía en cada envío).')
 ON CONFLICT (modulo, clave) DO NOTHING;
 
 -- ─── GRANTs + RLS (patrón de la 149) ────────────────────────────────────────
