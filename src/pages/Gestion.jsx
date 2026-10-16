@@ -712,6 +712,40 @@ function TabMascotas({ isAdmin, canEdit }) {
 }
 
 // --- ALIADOS TAB ---
+// La localidad del aliado es texto libre (CSV, formularios viejos): se compara
+// sin tildes ni mayúsculas contra el catálogo, igual que `normalizar_localidad`
+// en la DB (migración 177), para que "ENGATIVA" y "Engativá" sean la misma.
+const sinTildes = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+const ALIAS_LOCALIDAD = Object.fromEntries([
+  ...LOCALIDADES_BOGOTA.map(l => [sinTildes(l), l]),
+  ['candelaria', 'La Candelaria'], ['martires', 'Los Mártires'],
+  ['rafael uribe', 'Rafael Uribe Uribe'], ['santafe', 'Santa Fe'],
+])
+function localidadAliado(a) {
+  const ciudad = sinTildes(a.ciudad)
+  if (ciudad && !ciudad.startsWith('bogota')) return 'Fuera de Bogotá'
+  return ALIAS_LOCALIDAD[sinTildes(a.localidad)] || 'Sin localidad'
+}
+const OPCS_LOCALIDAD_ALIADO = [...LOCALIDADES_BOGOTA, 'Fuera de Bogotá', 'Sin localidad'].map(v => ({ v, label: v }))
+
+// Meses a mostrar en "Servicios por mes": desde el corte del histórico (antes
+// no hay datos confiables) y como mucho los últimos 12.
+function mesesServiciosAliado() {
+  const hoy = new Date()
+  const fin = hoy.getFullYear() * 12 + hoy.getMonth()
+  const [ac, mc] = FECHA_CORTE.split('-').map(Number)
+  const ini = Math.max(ac * 12 + (mc - 1), fin - 11)
+  const meses = []
+  for (let k = ini; k <= fin; k++) {
+    const y = Math.floor(k / 12), m = k % 12
+    meses.push({
+      clave: `${y}-${String(m + 1).padStart(2, '0')}`,
+      label: new Date(y, m, 1).toLocaleDateString('es-CO', { month: 'short', year: '2-digit' }),
+    })
+  }
+  return meses
+}
+
 function TabAliados({ isAdmin, canEdit }) {
   const { confirm, alert: showAlert } = useConfirm()
   const [data, setData] = useState([])
@@ -722,8 +756,60 @@ function TabAliados({ isAdmin, canEdit }) {
   const [modalImport, setModalImport] = useState(false)
   const { q, setQ, filtered } = useSearch(data, ['nombre','contacto_nombre','ciudad'])
   const [filtroVip, setFiltroVip] = useState('TODOS')   // TODOS | VIP | NO_VIP
-  const visibles = filtered.filter(a => filtroVip === 'TODOS' || !!a.vip === (filtroVip === 'VIP'))
+  const [filtroLocalidad, setFiltroLocalidad] = useState(() => new Set())  // vacío = todas
+  const visibles = filtered
+    .filter(a => filtroVip === 'TODOS' || !!a.vip === (filtroVip === 'VIP'))
+    .filter(a => filtroLocalidad.size === 0 || filtroLocalidad.has(localidadAliado(a)))
   const nVip = data.filter(a => a.vip).length
+  // Vista: directorio de aliados o conteo de servicios por mes
+  const [vista, setVista] = useState('DIRECTORIO')     // DIRECTORIO | MESES
+  const meses = useMemo(mesesServiciosAliado, [])
+  const [porMes, setPorMes] = useState(null)           // { [id_aliado]: { [YYYY-MM]: n } }
+  const [cargandoMes, setCargandoMes] = useState(false)
+
+  // Servicios referidos por cada aliado (aliado_origen_id), sin cancelados.
+  // Paginado con dbTodo: el servidor corta en 1000 filas sin avisar.
+  async function cargarPorMes() {
+    setCargandoMes(true)
+    try {
+      const filas = await dbTodo(() => db.from('servicios')
+        .select('id, aliado_origen_id, fecha_ingreso')
+        .not('aliado_origen_id', 'is', null)
+        .neq('estado', 'CANCELADO')
+        .gte('fecha_ingreso', `${meses[0].clave}-01`)
+        .gte('fecha_ingreso', FECHA_CORTE)
+        .order('id'))
+      const acc = {}
+      for (const f of filas) {
+        const mes = String(f.fecha_ingreso || '').slice(0, 7)
+        const fila = acc[f.aliado_origen_id] ||= {}
+        fila[mes] = (fila[mes] || 0) + 1
+      }
+      setPorMes(acc)
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo cargar el conteo' })
+    } finally { setCargandoMes(false) }
+  }
+  useEffect(() => { if (vista === 'MESES' && !porMes) cargarPorMes() }, [vista])
+
+  const totalAliado = id => meses.reduce((n, m) => n + (porMes?.[id]?.[m.clave] || 0), 0)
+  const filasMes = vista === 'MESES' && porMes
+    ? [...visibles].sort((a, b) => totalAliado(b.id_aliado) - totalAliado(a.id_aliado) || a.nombre.localeCompare(b.nombre))
+    : []
+  const totalMes = clave => visibles.reduce((n, a) => n + (porMes?.[a.id_aliado]?.[clave] || 0), 0)
+
+  function exportarPorMes() {
+    const headers = ['Aliado', 'Localidad', 'Ciudad', 'VIP', ...meses.map(m => m.clave), 'Total']
+    const rows = filasMes.map(a => [a.nombre, localidadAliado(a), a.ciudad || '', a.vip ? 'Sí' : 'No',
+      ...meses.map(m => porMes?.[a.id_aliado]?.[m.clave] || 0), totalAliado(a.id_aliado)])
+    const csv = [headers, ...rows]
+      .map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = `servicios_por_aliado_${today()}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
 
   const primeraCarga = useRef(true)
   useEffect(() => {
@@ -785,11 +871,20 @@ function TabAliados({ isAdmin, canEdit }) {
   }
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex items-center gap-1 bg-[#F0F0F0] rounded-full p-0.5">
+          {[['DIRECTORIO', 'Directorio'], ['MESES', 'Servicios por mes']].map(([v, l]) => (
+            <button key={v} onClick={() => setVista(v)}
+              className={`text-[11px] font-bold px-3 py-1 rounded-full transition-colors ${vista === v ? 'bg-white text-ink shadow-sm' : 'text-[#555] hover:text-ink'}`}>
+              {l}
+            </button>
+          ))}
+        </div>
         <div className="relative flex-1 max-w-xs">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink3" />
           <Input className="pl-8" placeholder="Buscar..." value={q} onChange={e => setQ(e.target.value)} />
         </div>
+        <FiltroChecklist label="Todas las localidades" opciones={OPCS_LOCALIDAD_ALIADO} seleccion={filtroLocalidad} onChange={setFiltroLocalidad} className="w-44" />
         <div className="flex items-center gap-1">
           {[['TODOS', 'Todos', data.length], ['VIP', 'VIP', nVip], ['NO_VIP', 'No VIP', data.length - nVip]].map(([valor, etiqueta, n]) => (
             <button key={valor} onClick={() => setFiltroVip(valor)}
@@ -800,7 +895,12 @@ function TabAliados({ isAdmin, canEdit }) {
             </button>
           ))}
         </div>
-        {(canEdit || isAdmin) && (
+        {vista === 'MESES' && (
+          <Button size="sm" variant="secondary" onClick={exportarPorMes} disabled={!porMes}>
+            <FileDown size={14} /> Exportar CSV
+          </Button>
+        )}
+        {vista === 'DIRECTORIO' && (canEdit || isAdmin) && (
           <>
             {isAdmin && (
               <Button size="sm" variant="secondary" onClick={() => setModalImport(true)}>
@@ -811,9 +911,46 @@ function TabAliados({ isAdmin, canEdit }) {
           </>
         )}
       </div>
-      {loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
+      {vista === 'MESES' ? (
+        loading || cargandoMes || !porMes ? <div className="text-center py-8 text-ink3">Contando servicios...</div> : (
+          <>
+            <p className="text-[11px] text-ink3 mb-2">
+              Servicios que refirió cada aliado, por mes de ingreso. No cuenta cancelados. El histórico arranca el {FECHA_CORTE.split('-').reverse().join('/')}.
+            </p>
+            <TableWrap><Table>
+              <thead><tr>
+                <Th>Aliado</Th><Th>Localidad</Th>
+                {meses.map(m => <Th key={m.clave} className="text-right capitalize">{m.label}</Th>)}
+                <Th className="text-right">Total</Th>
+              </tr></thead>
+              <tbody>
+                {filasMes.map(a => (
+                  <Tr key={a.id_aliado}>
+                    <Td className="font-semibold text-ink">
+                      {a.nombre}
+                      {a.vip && <span className="ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FFF3DC] text-[#9A5500]">VIP</span>}
+                      {a.activo === false && <span className="ml-1.5 text-[9px] font-bold text-ink3">inactivo</span>}
+                    </Td>
+                    <Td className="text-[11px] text-ink3 whitespace-nowrap">{localidadAliado(a)}</Td>
+                    {meses.map(m => {
+                      const n = porMes[a.id_aliado]?.[m.clave] || 0
+                      return <Td key={m.clave} className={`text-right tabular-nums ${n ? 'text-ink font-semibold' : 'text-gray-300'}`}>{n || '—'}</Td>
+                    })}
+                    <Td className="text-right tabular-nums font-bold text-ink">{totalAliado(a.id_aliado)}</Td>
+                  </Tr>
+                ))}
+              </tbody>
+              <tfoot><tr className="bg-gray-50 border-t border-gray-200">
+                <Td className="font-bold text-ink">Total ({visibles.length} aliados)</Td><Td />
+                {meses.map(m => <Td key={m.clave} className="text-right tabular-nums font-bold text-ink">{totalMes(m.clave)}</Td>)}
+                <Td className="text-right tabular-nums font-bold text-ink">{meses.reduce((n, m) => n + totalMes(m.clave), 0)}</Td>
+              </tr></tfoot>
+            </Table></TableWrap>
+          </>
+        )
+      ) : loading ? <div className="text-center py-8 text-ink3">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>VIP</Th><Th>Saldo</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Contacto</Th><Th>WhatsApp</Th><Th>Ciudad</Th><Th>Localidad</Th><Th>VIP</Th><Th>Saldo</Th>{(canEdit || isAdmin) && <Th></Th>}</tr></thead>
           <tbody>
             {visibles.map(a => (
               <Tr key={a.id_aliado}>
@@ -821,6 +958,7 @@ function TabAliados({ isAdmin, canEdit }) {
                 <Td className="text-ink3">{a.contacto_nombre}</Td>
                 <Td className="text-ink3">{a.whatsapp}</Td>
                 <Td className="text-ink3">{a.ciudad}</Td>
+                <Td className="text-ink3 text-[12px] whitespace-nowrap">{localidadAliado(a)}</Td>
                 <Td><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${a.vip ? 'bg-[#FFF3DC] text-[#9A5500]' : 'bg-[#F0F0F0] text-[#555]'}`}>{a.vip ? 'VIP' : 'No'}</span></Td>
                 <Td className="font-semibold text-ink">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(a.saldo_comision||0)}</Td>
                 {(canEdit || isAdmin) && (
