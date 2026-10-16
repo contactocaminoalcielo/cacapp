@@ -192,6 +192,10 @@ export function limpiarUrlInstagram(url) {
   return s
 }
 
+// Lo ya terminado (enviados, memoriales declinados) se recorta a los N más
+// recientes para que la respuesta no crezca sin fin. Lo PENDIENTE nunca se recorta.
+const TOPE_HISTORIAL = 1000
+
 // ── Candidatos a memorial: imagen lista, plan no excluido, sin memorial activo ──
 export async function listarCandidatos() {
   const client = await pool.connect()
@@ -227,14 +231,16 @@ export async function listarCandidatos() {
          AND (p.codigo IS NULL OR NOT (p.codigo = ANY($1::text[])))
          AND (mem.id IS NULL OR mem.estado IN ('ERROR', 'DESCARTADO'))
        -- fecha_imagenes_recibidas es DATE: hasta ~30 servicios comparten el mismo
-       -- día. Sin desempate, el orden entre empatados es arbitrario y el LIMIT
-       -- corta filas distintas en cada carga (ver listarServicios).
+       -- día. Sin desempate, el orden entre empatados es arbitrario (ver listarServicios).
        ORDER BY COALESCE(d.declinado, false) ASC, s.fecha_imagenes_recibidas DESC,
-                s.created_at DESC, s.id DESC
-       LIMIT 300`,
+                s.created_at DESC, s.id DESC`,
       [excl, recMemorial]
     )
-    return rows
+    // Los "por generar" son trabajo pendiente: van TODOS. Antes un LIMIT 300
+    // cortaba los más viejos sin avisar. Solo se recorta la cola de declinados
+    // (historia, no trabajo), que vienen al final por el ORDER BY.
+    let declinados = 0
+    return rows.filter(r => !r.memorial_declinado || ++declinados <= TOPE_HISTORIAL)
   } finally { client.release() }
 }
 
@@ -248,7 +254,7 @@ export async function listarServicios() {
     const tipoPorRec = {}
     TIPOS.forEach(t => { if (mapa[t]) tipoPorRec[mapa[t]] = t })
 
-    const { rows: servicios } = await client.query(
+    const { rows: todos } = await client.query(
       `SELECT s.id AS servicio_id,
               to_char(s.fecha_imagenes_recibidas, 'YYYY-MM-DD') AS fecha_imagenes,
               m.nombre AS mascota, COALESCE(al.vip, false) AS aliado_vip,
@@ -257,7 +263,10 @@ export async function listarServicios() {
               p.codigo AS plan_codigo, p.nombre AS plan_nombre,
               f.foto_url,
               COALESCE(e.rec_ids, '{}') AS rec_ids,
-              COALESCE(na.rec_ids, '{}') AS rec_ids_na
+              COALESCE(na.rec_ids, '{}') AS rec_ids_na,
+              EXISTS (SELECT 1 FROM public.digitales_envios de
+                       WHERE de.servicio_id = s.id
+                         AND COALESCE(de.estado, 'ENVIADO') = 'ENVIADO') AS enviado
        FROM public.servicios s
        JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
        LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
@@ -278,14 +287,19 @@ export async function listarServicios() {
          AND (e.rec_ids IS NOT NULL
               OR na.rec_ids IS NOT NULL
               OR EXISTS (SELECT 1 FROM public.piezas_digitales pd WHERE pd.servicio_id = s.id))
-       -- El LIMIT de 200 escondía todo lo anterior a ~14-jul (127 servicios) y,
-       -- peor, fecha_imagenes_recibidas es DATE: los ~27 servicios que comparten
-       -- el día del corte quedaban en orden arbitrario, así que unos entraban y
-       -- otros no en CADA carga ("a veces aparece"). Desempate estable + tope alto.
-       ORDER BY s.fecha_imagenes_recibidas DESC, s.created_at DESC, s.id DESC
-       LIMIT 1000`,
+       -- fecha_imagenes_recibidas es DATE: ~27 servicios comparten cada día y sin
+       -- desempate el orden entre ellos es arbitrario. Desempate estable.
+       ORDER BY s.fecha_imagenes_recibidas DESC, s.created_at DESC, s.id DESC`,
       [recIds.length ? recIds : ['00000000-0000-0000-0000-000000000000'], uuidOrNull(mapa.MEMORIAL)]
     )
+    // 🩸 2026-10-16 — Había un LIMIT 1000 sobre TODO: al pasar de 1000 servicios
+    // los más viejos se caían de la pantalla, y los más viejos son justo los
+    // pendientes que llevan más tiempo esperando (antes, con el LIMIT 200, ya se
+    // perdió seguimiento así). Ahora lo que no se ha enviado va SIEMPRE completo;
+    // solo el historial de enviados se recorta a los TOPE_HISTORIAL más recientes,
+    // que es lo que hace crecer la respuesta sin fin.
+    let enviados = 0
+    const servicios = todos.filter(s => !s.enviado || ++enviados <= TOPE_HISTORIAL)
 
     const ids = servicios.map(s => s.servicio_id)
     let piezas = [], envios = []
@@ -323,6 +337,7 @@ export async function listarServicios() {
         (s.rec_ids_na || []).includes(String(mapa[t] || '')) && !s.esperadas.includes(t))
       delete s.rec_ids
       delete s.rec_ids_na
+      delete s.enviado
       s.piezas = []
       s.envios = []
     })
