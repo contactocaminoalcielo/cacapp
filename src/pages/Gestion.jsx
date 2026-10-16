@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Modal } from '@/components/ui/dialog'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { LocalidadSelect, LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import { HorarioEditor } from '@/components/ui/horario-editor'
 import { db, dbTodo } from '@/lib/supabase'
 import { agruparRefresco } from '@/lib/realtime'
@@ -1229,7 +1229,7 @@ const PAGO_COLOR = {
 // no hay ninguno, pero el día que lo haya el síntoma sería invisible).
 const selectHistorial = (filtraEspecie = false) => `
   id, estado, fecha_ingreso, valor_pagado, estado_pago,
-  canal_entrada, ciudad_recogida, punto_recogida,
+  canal_entrada, ciudad_recogida, punto_recogida, localidad_servicio,
   aliado_origen_id, ${COLS_CONSISTENCIA_COMISION},
   mascotas:mascota_id${filtraEspecie ? '!inner' : ''}(
     nombre, peso_kg, raza,
@@ -1284,6 +1284,7 @@ function TabHistorialServicios({ canEdit }) {
   const [filtroTecnico, setFiltroTecnico] = useState(() => new Set())
   const [filtroUsuario, setFiltroUsuario] = useState(() => new Set())  // ids de personal + '__none__'
   const [filtroEspecie, setFiltroEspecie] = useState(() => new Set())  // especies.id
+  const [filtroLocalidad, setFiltroLocalidad] = useState(() => new Set())  // texto de `localidad_servicio`
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const PAGE_SIZE = 100
@@ -1317,6 +1318,12 @@ function TabHistorialServicios({ canEdit }) {
     [catPersonal]
   )
   const opcsEspecie = useMemo(() => catEspecies.map(e => ({ v: e.id, label: e.nombre })), [catEspecies])
+  // `localidad_servicio` es un campo calculado en la DB (migración 177): siempre
+  // responde una de estas, así que "Sin localidad" cabe en el mismo `in`.
+  const opcsLocalidad = useMemo(
+    () => [...LOCALIDADES_BOGOTA, 'Fuera de Bogotá', 'Sin localidad'].map(v => ({ v, label: v })),
+    []
+  )
 
   // El filtro por especie pega sobre la tabla embebida, y eso solo muerde si el
   // select lleva `!inner`. Se calcula una vez y se usa en los dos sitios que
@@ -1336,11 +1343,13 @@ function TabHistorialServicios({ canEdit }) {
     const vAliado  = valoresParaConsulta(filtroAliado,  opcsAliado.length)
     const vTecnico = valoresParaConsulta(filtroTecnico, opcsTecnico.length)
     const vUsuario = valoresParaConsulta(filtroUsuario, opcsUsuario.length)
+    const vLocalidad = valoresParaConsulta(filtroLocalidad, opcsLocalidad.length)
     if (vEstado)  base = base.in('estado', vEstado)
     if (vPago)    base = base.in('estado_pago', vPago)
     if (vPlan)    base = base.in('plan_id', vPlan)
     if (vAliado)  base = base.in('aliado_origen_id', vAliado)
     if (vTecnico) base = base.in('tecnico_id', vTecnico)
+    if (vLocalidad) base = base.in('localidad_servicio', vLocalidad)
     // "Sin registrar" es un NULL, no un id: no cabe dentro del `in` y hay que
     // pedirlo aparte. Marcado junto con personas, las dos condiciones van en OR.
     if (vUsuario) {
@@ -1398,7 +1407,7 @@ function TabHistorialServicios({ canEdit }) {
     return () => clearTimeout(t)
   }, [busqueda])
 
-  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie, desde, hasta, busquedaDebounced])
+  useEffect(() => { cargar(0) }, [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie, filtroLocalidad, desde, hasta, busquedaDebounced])
 
   async function exportarCSV() {
     setExporting(true)
@@ -1410,7 +1419,7 @@ function TabHistorialServicios({ canEdit }) {
         .order('fecha_ingreso', { ascending: false })
         .order('id', { ascending: false })
     ))
-    const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Técnico','Registró','Estado','Estado pago','Valor total','Valor pagado']
+    const headers = ['Fecha','Cliente','WhatsApp','Tel 2','Tel 3','Email','Mascota','Especie','Raza','Peso kg','Plan','Aliado','Ciudad','Localidad','Técnico','Registró','Estado','Estado pago','Valor total','Valor pagado']
     const rows = filas.map(s => {
       const cli = s.mascotas?.clientes || {}
       const tec = s.tecnico
@@ -1425,6 +1434,7 @@ function TabHistorialServicios({ canEdit }) {
         s.planes?.nombre || '',
         s.aliados?.nombre || '',
         s.ciudad_recogida || '',
+        s.localidad_servicio || '',
         tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '',
         s.registrador ? `${s.registrador.nombre} ${s.registrador.apellido || ''}`.trim() : '',
         ESTADO_LABEL[s.estado] || s.estado || '',
@@ -1629,14 +1639,14 @@ function TabHistorialServicios({ canEdit }) {
 
   // Un Set vacío es falsy… no lo es: `new Set()` es un objeto y siempre da true.
   // Hay que mirar el `.size` o "Limpiar filtros" quedaría puesto para siempre.
-  const marcados = [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie]
+  const marcados = [filtroEstado, filtroPago, filtroPlan, filtroAliado, filtroTecnico, filtroUsuario, filtroEspecie, filtroLocalidad]
     .reduce((a, s) => a + s.size, 0)
   const hayFiltros = marcados > 0 || desde || hasta || busqueda
   function limpiarFiltros() {
     setBusqueda('')
     setFiltroEstado(new Set()); setFiltroPago(new Set()); setFiltroPlan(new Set())
     setFiltroAliado(new Set()); setFiltroTecnico(new Set()); setFiltroUsuario(new Set())
-    setFiltroEspecie(new Set()); setDesde(''); setHasta('')
+    setFiltroEspecie(new Set()); setFiltroLocalidad(new Set()); setDesde(''); setHasta('')
   }
 
   return (
@@ -1657,6 +1667,7 @@ function TabHistorialServicios({ canEdit }) {
         <FiltroChecklist label="Todos los estados"  opciones={opcsEstado}  seleccion={filtroEstado}  onChange={setFiltroEstado}  className="w-40" />
         <FiltroChecklist label="Todo pago"          opciones={opcsPago}    seleccion={filtroPago}    onChange={setFiltroPago}    className="w-36" />
         <FiltroChecklist label="Todas las especies" opciones={opcsEspecie} seleccion={filtroEspecie} onChange={setFiltroEspecie} className="w-40" />
+        <FiltroChecklist label="Todas las localidades" opciones={opcsLocalidad} seleccion={filtroLocalidad} onChange={setFiltroLocalidad} className="w-44" />
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-bold text-ink3 whitespace-nowrap">Desde</span>
           <Input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="w-36" />
@@ -1737,7 +1748,11 @@ function TabHistorialServicios({ canEdit }) {
                       </Td>
                       <Td className="text-[12px] text-ink2 whitespace-nowrap">{s.planes?.nombre || '—'}</Td>
                       <Td className="text-[11px] text-ink3">{s.aliados?.nombre || '—'}</Td>
-                      <Td className="text-[11px] text-ink3 whitespace-nowrap">{s.ciudad_recogida || '—'}</Td>
+                      <Td className="text-[11px] text-ink3 whitespace-nowrap">
+                        <div>{s.ciudad_recogida || '—'}</div>
+                        {s.localidad_servicio && s.localidad_servicio !== 'Sin localidad' && s.localidad_servicio !== 'Fuera de Bogotá' &&
+                          <div className="text-[10px]">{s.localidad_servicio}</div>}
+                      </Td>
                       <Td className="text-[11px] text-ink3 whitespace-nowrap">{tec ? `${tec.nombre} ${tec.apellido || ''}`.trim() : '—'}</Td>
                       <Td className="text-[11px] text-ink3 whitespace-nowrap">{s.registrador ? `${s.registrador.nombre} ${s.registrador.apellido || ''}`.trim() : '—'}</Td>
                       <Td>
