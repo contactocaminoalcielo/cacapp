@@ -33,6 +33,9 @@ import {
 import { imagenesRecientes, revisarImagenes, revisarAudios } from './whatsapp-media.js'
 import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 import { construirEnlace } from './reglas-imagenes.js'
+import {
+  prospectoAbiertoPorNumero, contextoProspectoParaAgente, registrarInteresDesdeAgente, crearProspecto,
+} from './crm.js'
 
 const MOD = '[agente-wa]'
 
@@ -273,6 +276,27 @@ const HERRAMIENTAS = [{
     },
     required: ['especie', 'peso_kg'],
   },
+}, {
+  name: 'registrar_interes_comercial',
+  description:
+    'Deja en el CRM lo que aprendiste de esta clínica que todavía NO es aliada: quién es, qué ' +
+    'tanto le interesa y si quiere que el área comercial la llame. Úsala cada vez que aprendas ' +
+    'algo nuevo o la clínica pida una llamada — es lo ÚNICO que ve el comercial. No le digas a ' +
+    'la clínica que estás "registrando" nada: solo confírmale lo que acordaron.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      nombre_clinica:  { type: 'string', description: 'Nombre de la veterinaria, tal como lo dicen.' },
+      contacto_nombre: { type: 'string', description: 'Quién está escribiendo (nombre y, si lo dice, cargo).' },
+      ciudad:          { type: 'string' },
+      localidad:       { type: 'string', description: 'Localidad o barrio en Bogotá, si lo mencionan.' },
+      interes:         { type: 'string', enum: ['ALTO', 'MEDIO', 'BAJO', 'NINGUNO'], description: 'ALTO: quiere afiliarse o una llamada ya. NINGUNO: dijo que no.' },
+      resumen:         { type: 'string', description: 'Dos o tres líneas para el comercial: qué preguntó, qué objeciones puso, cuántos casos ven al mes si lo dijeron.' },
+      quiere_llamada:  { type: 'boolean', description: 'true solo si aceptó o pidió que la llame un asesor.' },
+      hora_preferida:  { type: 'string', description: 'La franja que pidió para la llamada ("mañana en la tarde").' },
+    },
+    required: ['interes', 'resumen'],
+  },
 }]
 
 // Catálogo que usa la pantalla para decidir qué capacidades puede concederle
@@ -327,6 +351,13 @@ export const HERRAMIENTAS_DISPONIBLES = [
     resumen: 'Lee los precios actuales por especie y peso, sin modificar la operación.',
     propia_del_negocio: true,
     orden: 7,
+  },
+  {
+    clave: 'registrar_interes_comercial',
+    nombre: 'Registrar interés comercial (CRM)',
+    resumen: 'Anota en el CRM lo que dijo un prospecto y agenda la llamada del área comercial.',
+    propia_del_negocio: true,
+    orden: 8,
   },
 ]
 
@@ -530,6 +561,19 @@ async function enviarEnlaceRegistro({ contacto, phoneNumberId = null }) {
 
   log(MOD, `enlace PERSONAL a ${contacto} (${datos.nombre})`)
   return { ok: true, tipo: 'PERSONAL', veterinaria: datos.nombre, enlace: datos.enlace }
+}
+
+async function prospectoDesdeWhatsapp(contacto, phoneNumberId) {
+  const num = String(contacto || '').replace(/\D/g, '')
+  if (!num) return
+  const { rows: [c] } = await pool.query(
+    `SELECT nombre_perfil FROM public.whatsapp_contactos WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2) LIMIT 1`,
+    [num, phoneNumberId])
+  const r = await crearProspecto({
+    nombre: c?.nombre_perfil || `WhatsApp ${num.slice(-10)}`, whatsapp: num,
+    fuente_detalle: 'Pidió el enlace de afiliación por WhatsApp',
+  }, null, { fuente: 'WHATSAPP' })
+  if (r.status === 201) log(MOD, `${num} entró al CRM como prospecto`)
 }
 
 async function clasificarConversacion({ entrada, contacto, phoneNumberId = null, agenteId = null }) {
@@ -1472,18 +1516,39 @@ function textoDe(contenido) {
  * Decide si el agente debe intervenir. Fail-closed en todo:
  * apagado, línea no asignada o tope alcanzado ⇒ no responde y no cuesta nada.
  */
-async function agenteParaLinea(phoneNumberId) {
-  const { rows } = await pool.query(
-    `SELECT id, clave, nombre, categoria, objetivo, idioma, activo, instrucciones,
+const COLUMNAS_AGENTE = `id, clave, nombre, categoria, objetivo, idioma, activo, instrucciones,
             proveedor, modelo, effort, max_turnos, agente_desde,
             memoria_mensajes, phone_number_ids, seguimiento_enlace_minutos, espera_ms, espera_max_ms,
-            sombra_modelo, sombra_effort
+            sombra_modelo, sombra_effort`
+
+async function agenteParaLinea(phoneNumberId, contacto = null) {
+  const { rows } = await pool.query(
+    `SELECT ${COLUMNAS_AGENTE}
        FROM public.agente_wa
       WHERE activo AND $1 = ANY(phone_number_ids)
       LIMIT 1`,
     [phoneNumberId]
   )
-  return rows[0] || null
+  const duenio = rows[0] || null
+  if (!duenio || !contacto) return duenio
+
+  // 🔑 CRM (migración 180): un agente DELEGADO no posee la línea —el sistema
+  // entero asume un agente por línea—; el dueño le pasa la conversación cuando
+  // el número es un PROSPECTO abierto del CRM. Las aliadas y los números
+  // desconocidos siguen con el dueño. Si el delegado está apagado o falla la
+  // consulta, responde el dueño: nunca se queda nadie sin respuesta por esto.
+  try {
+    const { rows: [delegado] } = await pool.query(
+      `SELECT ${COLUMNAS_AGENTE} FROM public.agente_wa
+        WHERE activo AND delegado_de = $1 ORDER BY id LIMIT 1`, [duenio.id])
+    if (!delegado) return duenio
+    const prospecto = await prospectoAbiertoPorNumero(contacto)
+    if (!prospecto) return duenio
+    return { ...delegado, phone_number_ids: duenio.phone_number_ids }
+  } catch (e) {
+    log(MOD, 'no se pudo decidir el agente delegado —', e.message)
+    return duenio
+  }
 }
 
 /**
@@ -1521,7 +1586,7 @@ export async function responderSiAplica({ phoneNumberId, contacto, tipo, waMessa
     // Si después el agente se callara, ella vería su mensaje leído y sin
     // respuesta — peor que no haberlo marcado. Solo se acusa lo que se va a
     // contestar.
-    const agente = await agenteParaLinea(phoneNumberId)
+    const agente = await agenteParaLinea(phoneNumberId, num)
     if (!agente) return
 
     // ── Bloqueado (migración 131) ──
@@ -1617,7 +1682,7 @@ export async function mantenerEscribiendo({ phoneNumberId, contacto, waMessageId
     const num = String(contacto || '').replace(/\D/g, '')
     if (!num || !waMessageId) return parar
 
-    const agente = await agenteParaLinea(phoneNumberId)
+    const agente = await agenteParaLinea(phoneNumberId, num)
     if (!agente) return parar
     if (await laLlevaUnHumano(num, phoneNumberId)) return parar
 
@@ -1682,7 +1747,7 @@ async function atender(clave) {
 
 /** Una respuesta completa a lo que se acumuló de un número. */
 async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessageId, pendientesDesde = null }) {
-  const agente = await agenteParaLinea(phoneNumberId)
+  const agente = await agenteParaLinea(phoneNumberId, num)
   if (!agente) return
 
   // ── ¿La lleva una persona? ──
@@ -2480,6 +2545,14 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     // registrando el servicio" y saqué la conclusión equivocada — Sonnet
     // verificaba y Haiku no, pero es que NINGUNO sabía si el número era de una
     // clínica registrada, que es justo lo que decide si hay que verificar.
+    if ((!mensajePrueba || contextoDe) && agente.categoria === 'VENTAS') {
+      const p = await prospectoAbiertoPorNumero(contextoDe || contacto).catch(() => null)
+      const nota = contextoProspectoParaAgente(p)
+      if (nota) {
+        const ultimo = messages[messages.length - 1]
+        ultimo.content = [...aBloques(ultimo.content), { type: 'text', text: `<sistema>${nota}</sistema>` }]
+      }
+    }
     if ((!mensajePrueba || contextoDe) && agente.clave === 'VETERINARIAS') {
       const nota = await contextoDeLaConversacion(contextoDe || contacto, phoneNumberId).catch(() => null)
       if (nota) {
@@ -2557,6 +2630,12 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
         try {
           if (bloque.nombre === 'enviar_enlace_registro') {
             out = await enviarEnlaceRegistro({ contacto, phoneNumberId })
+            // Una clínica que no está registrada y pide el enlace es un
+            // PROSPECTO: entra al embudo del CRM para que comercial la siga.
+            // Si ya estaba, `crearProspecto` responde 409 y no pasa nada.
+            if (out.tipo === 'AFILIACION' && !mensajePrueba) {
+              prospectoDesdeWhatsapp(contacto, phoneNumberId).catch(e => log(MOD, 'no se pudo crear el prospecto —', e.message))
+            }
             if (out.tipo === 'ESCALAR') {
               await clasificarConversacion({
                 entrada: { etiqueta: 'CONVENIO', motivo: 'Clínica no habilitada: pidió registrar y no se le pudo dar enlace' },
@@ -2580,6 +2659,11 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
             }).catch(() => {})
           } else if (bloque.nombre === 'consultar_tarifas') {
             out = await consultarTarifas({ entrada: bloque.entrada })
+          } else if (bloque.nombre === 'registrar_interes_comercial') {
+            // En un ensayo ('PRUEBA') no se escribe en el CRM: el número no existe.
+            out = mensajePrueba
+              ? { ok: true, nota: 'Ensayo: no se registró nada en el CRM.' }
+              : await registrarInteresDesdeAgente({ contacto, entrada: bloque.entrada || {} })
           } else if (bloque.nombre === 'enviar_interactivo') {
             // OJO: esta herramienta ENVÍA de verdad, no devuelve texto para que
             // el modelo lo incluya. Por eso el resultado se lo dice explícito:

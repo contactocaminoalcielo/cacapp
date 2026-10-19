@@ -77,6 +77,7 @@ import {
 } from './whatsapp-campanas.js'
 import { enviarDocumentoOperativo, transporteWhatsAppOperativo } from './whatsapp.js'
 import { lineaDePublico, PUBLICOS_WA } from './linea-wa.js'
+import { crearRouterCrm, recibirLead, evaluarHitos, ROLES_CRM } from './crm.js'
 import {
   listarStock, listarMovimientos, verificarSaldos,
   registrarMovimiento, revertirMovimiento, importarCatalogo,
@@ -96,7 +97,9 @@ const protegerCarga = (rol) => (req, res, next) => {
   if (req.method === 'OPTIONS') return next()
   requireAuth(req, res, () => rol(req, res, next))
 }
-const cargaBandeja = protegerCarga(requireRol('COORDINADOR', 'ADMIN'))
+// COMERCIAL entra a estas cargas (adjuntos y materiales desde el CRM); la ruta
+// final vuelve a mirar el rol y lo encierra en la línea de veterinarias.
+const cargaBandeja = protegerCarga(requireRol('COORDINADOR', 'ADMIN', 'COMERCIAL'))
 const cargaAgente  = protegerCarga(requireRol('COORDINADOR', 'ADMIN'))
 
 // ⚠️ ORDEN CRÍTICO — va ANTES del express.json() global.
@@ -135,6 +138,10 @@ app.use('/whatsapp/plantillas-cabecera', cargaBandeja, express.json({ limit: '90
 // Los PDFs de marca reciben los datos del documento y, a veces, la firma
 // dibujada en base64 (≈ 100-300 kB): no cabe en el límite por defecto.
 app.use('/pdf', express.json({ limit: '8mb' }))
+// CRM: las fotos del establecimiento y la importación de bases de datos.
+const cargaCrm = protegerCarga(requireRol(...ROLES_CRM))
+app.use('/crm/fotos', cargaCrm, express.json({ limit: '12mb' }))
+app.use('/crm/prospectos/importar', cargaCrm, express.json({ limit: '25mb' }))
 
 app.use(express.json())
 
@@ -226,7 +233,69 @@ app.get('/webhook/whatsapp/eventos', requireAuth, requireRol('COORDINADOR', 'ADM
 // La línea de vets es de coordinación: mismo rol que el resto de la operación.
 const rolBandeja = requireRol('COORDINADOR', 'ADMIN')
 
-app.get('/whatsapp/conversaciones', requireAuth, rolBandeja, async (req, res) => {
+/**
+ * La bandeja para el área COMERCIAL (CRM, migración 180): entra, pero SOLO a la
+ * línea de veterinarias. Las conversaciones de familias no son de su trabajo y
+ * son datos personales de gente en duelo.
+ *
+ * No se confía en lo que mande el navegador: si pide otra línea u otro agente
+ * es un 403, y si no pide ninguna se le FIJA la de veterinarias — sin eso,
+ * "listar conversaciones" sin filtro le devolvería las de todas las líneas.
+ * Coordinación y admin pasan como siempre.
+ */
+let cacheLineaVets = { hasta: 0, linea: null, agentes: [], vet: null }
+async function lineaParaComercial() {
+  if (Date.now() < cacheLineaVets.hasta) return cacheLineaVets
+  const { rows } = await pool.query(
+    `SELECT id, clave, phone_number_ids FROM public.agente_wa WHERE clave IN ('VETERINARIAS','VENTAS')`)
+  const vet = rows.find(r => r.clave === 'VETERINARIAS')
+  cacheLineaVets = {
+    hasta: Date.now() + 60000, linea: vet?.phone_number_ids?.[0] || null,
+    agentes: rows.map(r => String(r.id)), vet: vet ? String(vet.id) : null,
+  }
+  return cacheLineaVets
+}
+const rolBandejaCom = (opciones = {}) => async (req, res, next) => {
+  const rol = req.personal?.rol
+  if (rol === 'COORDINADOR' || rol === 'ADMIN') return next()
+  if (rol !== 'COMERCIAL') return res.status(403).json({ error: 'Requiere rol: COORDINADOR o ADMIN' })
+  try {
+    const { linea, agentes, vet } = await lineaParaComercial()
+    if (!linea) return res.status(503).json({ ok: false, error: 'La línea de veterinarias no está configurada' })
+    const cuerpo = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : null
+    for (const f of [req.query, cuerpo]) {
+      if (!f) continue
+      if (f.linea && String(f.linea) !== linea) return res.status(403).json({ ok: false, error: 'Solo la línea de veterinarias' })
+      for (const k of ['agenteId', 'agente_id']) {
+        if (f[k] != null && f[k] !== '' && !agentes.includes(String(f[k]))) {
+          return res.status(403).json({ ok: false, error: 'Solo los agentes de veterinarias y ventas' })
+        }
+      }
+    }
+    req.query.linea = linea
+    if (cuerpo) cuerpo.linea = linea
+    // Listas por agente (materiales, interactivos): sin agente, las de vets.
+    if (opciones.agente && !req.query.agenteId) req.query.agenteId = vet
+    if (opciones.material) {
+      if (req.params.id) {
+        const { rows: [m] } = await pool.query(`SELECT agente_id FROM public.whatsapp_materiales WHERE id = $1`, [Number(req.params.id) || 0])
+        if (m && !agentes.includes(String(m.agente_id))) return res.status(403).json({ ok: false, error: 'Ese material es de otro agente' })
+      }
+      if (cuerpo && req.method === 'POST' && (cuerpo.agente_id == null || cuerpo.agente_id === '')) cuerpo.agente_id = vet
+    }
+    if (opciones.media) {
+      const { rows: [m] } = await pool.query(`SELECT phone_number_id FROM public.whatsapp_mensajes WHERE id = $1`, [Number(req.params.mensajeId) || 0])
+      if (m && m.phone_number_id !== linea) return res.status(403).json({ ok: false, error: 'Ese archivo es de otra línea' })
+    }
+    next()
+  } catch (e) {
+    log('[wa-bandeja/comercial] ERROR', e.message)
+    res.status(500).json({ ok: false, error: 'No se pudo validar la línea' })
+  }
+}
+const bandejaCom = rolBandejaCom()
+
+app.get('/whatsapp/conversaciones', requireAuth, bandejaCom, async (req, res) => {
   try {
     // `linea` filtra la bandeja: con varias líneas, verlas mezcladas es
     // exactamente lo que no se quiere. Sin ella se ven todas.
@@ -237,7 +306,7 @@ app.get('/whatsapp/conversaciones', requireAuth, rolBandeja, async (req, res) =>
   }
 })
 
-app.get('/whatsapp/conversaciones/:contacto', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/conversaciones/:contacto', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await hilo({
       contacto: req.params.contacto, linea: req.query.linea || null, limite: req.query.limite,
@@ -249,7 +318,7 @@ app.get('/whatsapp/conversaciones/:contacto', requireAuth, rolBandeja, async (re
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await marcarLeido({ contacto: req.params.contacto, linea: req.body?.linea || null })
     res.status(r.status).json(r.body)
@@ -259,7 +328,7 @@ app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, rolBandeja, as
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await enviarTexto({
       contacto: req.params.contacto, linea: req.body?.linea || null,
@@ -341,7 +410,7 @@ app.post('/whatsapp/esperas/:id/cerrar', requireAuth, rolBandeja, async (req, re
   }
 })
 
-app.get('/whatsapp/etiquetas', requireAuth, rolBandeja, async (_req, res) => {
+app.get('/whatsapp/etiquetas', requireAuth, bandejaCom, async (_req, res) => {
   try {
     res.json(await listarEtiquetas())
   } catch (e) {
@@ -350,7 +419,7 @@ app.get('/whatsapp/etiquetas', requireAuth, rolBandeja, async (_req, res) => {
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await etiquetar({
       contacto: req.params.contacto, linea: req.body?.linea || null, clave: req.body?.clave,
@@ -363,7 +432,7 @@ app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, rolBandeja
   }
 })
 
-app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, rolBandeja, async (req, res) => {
+app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await desetiquetar({
       contacto: req.params.contacto, linea: req.query.linea || null, clave: req.params.clave,
@@ -377,7 +446,7 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, r
 
 // Encender o apagar el agente en UNA conversación (migración 105). Manda sobre
 // las reglas automáticas: "de esta clínica me encargo yo" no dura doce horas.
-app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await cambiarAgente({
       contacto: req.params.contacto, linea: req.body?.linea || null,
@@ -453,7 +522,7 @@ app.post('/voz/turno', express.json({ limit: '25mb' }), async (req, res) => {
 // Son el único modo de escribirle a alguien fuera de la ventana de 24h. Viven
 // en la WABA (`WHATSAPP_WABA_ID`), no en Orbit: la lista siempre viene de Meta,
 // que es quien manda sobre el estado de aprobación.
-app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/plantillas', requireAuth, bandejaCom, async (req, res) => {
   try {
     // La bandeja pregunta por LÍNEA (que es lo que tiene a mano) y no por
     // agente: con la línea se sabe la WABA, y con la WABA sus plantillas.
@@ -465,7 +534,7 @@ app.get('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
   } catch (e) { errorInterno(res, 'wa-plantillas/listar', e) }
 })
 
-app.post('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/plantillas', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await crearPlantilla({
       nombre: req.body?.nombre, idioma: req.body?.idioma,
@@ -480,7 +549,7 @@ app.post('/whatsapp/plantillas', requireAuth, rolBandeja, async (req, res) => {
 // editar una aprobada"— y por eso el módulo solo sabía borrar y recrear.
 // Comprobado el 2026-08-19: se puede. Vuelve a revisión, pero conserva el
 // nombre, y con él el mapeo de datos.
-app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await editarPlantilla({
       id: req.body?.id, nombre: req.params.nombre, categoria: req.body?.categoria,
@@ -491,7 +560,7 @@ app.post('/whatsapp/plantillas/:nombre/editar', requireAuth, rolBandeja, async (
   } catch (e) { errorInterno(res, 'wa-plantillas/editar', e) }
 })
 
-app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, res) => {
+app.delete('/whatsapp/plantillas/:nombre', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await borrarPlantilla({ nombre: req.params.nombre, agenteId: req.query.agenteId || null })
     res.status(r.status).json(r.body)
@@ -500,7 +569,7 @@ app.delete('/whatsapp/plantillas/:nombre', requireAuth, rolBandeja, async (req, 
 
 // Qué dato de Orbit va en cada {{n}} (migración 097). El catálogo es cerrado:
 // se guarda una clave, nunca una expresión escrita desde la pantalla.
-app.get('/whatsapp/plantillas-campos', requireAuth, rolBandeja, (_req, res) => {
+app.get('/whatsapp/plantillas-campos', requireAuth, bandejaCom, (_req, res) => {
   const r = camposDisponibles()
   res.status(r.status).json(r.body)
 })
@@ -508,7 +577,7 @@ app.get('/whatsapp/plantillas-campos', requireAuth, rolBandeja, (_req, res) => {
 // El archivo de una cabecera de imagen/video/PDF. Meta NO acepta una URL al dar
 // de alta la plantilla (`error_subcode 2388273`): hay que subirlo antes y pasar
 // el `handle` que devuelve.
-app.post('/whatsapp/plantillas-cabecera', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/plantillas-cabecera', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await subirCabecera({
       base64: req.body?.base64, mime: req.body?.mime, nombre: req.body?.nombre,
@@ -525,14 +594,14 @@ app.post('/whatsapp/plantillas-cabecera', requireAuth, rolBandeja, async (req, r
 
 // Buscar el servicio del que salen los datos, por mascota/familia/código. Sin
 // esto, enviar empieza por pegar un UUID y acaba escribiéndose todo a mano.
-app.get('/whatsapp/plantillas-servicios', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/plantillas-servicios', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await buscarServicios({ q: req.query.q })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/servicios', e) }
 })
 
-app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await variablesDe({
       plantilla: req.params.nombre, idioma: req.query.idioma,
@@ -542,7 +611,7 @@ app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async
   } catch (e) { errorInterno(res, 'wa-plantillas/variables', e) }
 })
 
-app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async (req, res) => {
+app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await guardarVariables({
       plantilla: req.params.nombre, idioma: req.body?.idioma,
@@ -558,7 +627,7 @@ app.put('/whatsapp/plantillas/:nombre/variables', requireAuth, rolBandeja, async
 
 // Qué archivo lleva la cabecera AL ENVIAR. Aparte del mapeo de variables: son
 // dos decisiones distintas y juntarlas hacía que guardar una borrara la otra.
-app.put('/whatsapp/plantillas/:nombre/cabecera', requireAuth, rolBandeja, async (req, res) => {
+app.put('/whatsapp/plantillas/:nombre/cabecera', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await asignarCabecera({
       plantilla: req.params.nombre, idioma: req.body?.idioma,
@@ -572,7 +641,7 @@ app.put('/whatsapp/plantillas/:nombre/cabecera', requireAuth, rolBandeja, async 
 
 // Medios de cada tarjeta AL ENVIAR. Los handles usados al crear la plantilla
 // no se pueden reutilizar para mandar el mensaje real.
-app.put('/whatsapp/plantillas/:nombre/tarjetas', requireAuth, rolBandeja, async (req, res) => {
+app.put('/whatsapp/plantillas/:nombre/tarjetas', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await guardarTarjetas({
       agenteId: req.body?.agenteId || null,
@@ -585,7 +654,7 @@ app.put('/whatsapp/plantillas/:nombre/tarjetas', requireAuth, rolBandeja, async 
 })
 
 // Lista blanca del agente: existir en la WABA no concede permiso al modelo.
-app.put('/whatsapp/plantillas/:nombre/agente', requireAuth, rolBandeja, async (req, res) => {
+app.put('/whatsapp/plantillas/:nombre/agente', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await guardarPlantillaDeAgente({
       agenteId: req.body?.agenteId, plantilla: req.params.nombre,
@@ -596,7 +665,7 @@ app.put('/whatsapp/plantillas/:nombre/agente', requireAuth, rolBandeja, async (r
   } catch (e) { errorInterno(res, 'wa-plantillas/agente', e) }
 })
 
-app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await valoresPara({
       plantilla: req.params.nombre, idioma: req.query.idioma, servicioId: req.params.servicioId,
@@ -606,7 +675,7 @@ app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, rolBand
   } catch (e) { errorInterno(res, 'wa-plantillas/valores', e) }
 })
 
-app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, bandejaCom, async (req, res) => {
   try {
     const r = await enviarPlantilla({
       nombre: req.params.nombre,
@@ -707,7 +776,7 @@ app.delete('/whatsapp/campanas/:id', requireAuth, rolBandeja, async (req, res) =
 // conversaciones con clínicas y familias. Se sirven aquí, con sesión y rol, y
 // por eso la bandeja los pide con fetch + Bearer y los pinta desde un blob (un
 // <img src> no puede mandar cabeceras).
-app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandejaCom({ media: true }), async (req, res) => {
   try {
     const m = await leerMedia(req.params.mensajeId)
     if (!m) return res.status(404).json({ ok: false, error: 'No hay archivo para ese mensaje' })
@@ -730,7 +799,7 @@ app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandeja, async (req, res) 
 // ── Mensajes interactivos: botones, menus y boton de enlace (migracion 100) ──
 // El catalogo lo edita David; aqui solo se lista y se envia.
 
-app.get('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/interactivos', requireAuth, rolBandejaCom({ agente: true }), async (req, res) => {
   try {
     const r = await listarInteractivos(req.query.agenteId ? Number(req.query.agenteId) : null)
     res.status(r.status).json(r.body)
@@ -751,8 +820,8 @@ async function rutaArchivo(req, res) {
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/archivo', e) }
 }
-app.post('/whatsapp/archivo', requireAuth, rolBandeja, rutaArchivo)
-app.post('/whatsapp/imagen',  requireAuth, rolBandeja, rutaArchivo)
+app.post('/whatsapp/archivo', requireAuth, bandejaCom, rutaArchivo)
+app.post('/whatsapp/imagen',  requireAuth, bandejaCom, rutaArchivo)
 
 app.post('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
   try {
@@ -782,7 +851,7 @@ app.post('/whatsapp/conversaciones/:contacto/interactivo', requireAuth, rolBande
 // El catálogo lo edita David y el agente manda de él. Salió de una vet pidiendo
 // el brochure, que hubo que mandarle a mano por la otra línea.
 
-app.get('/whatsapp/materiales', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/materiales', requireAuth, rolBandejaCom({ agente: true }), async (req, res) => {
   try {
     const r = await listarMateriales(req.query.agenteId ? Number(req.query.agenteId) : null)
     res.status(r.status).json(r.body)
@@ -792,7 +861,7 @@ app.get('/whatsapp/materiales', requireAuth, rolBandeja, async (req, res) => {
 // Los bytes, para poder ver el archivo antes de mandárselo a una clínica. Con
 // sesión y rol, igual que los adjuntos: no hay URL pública de nada que salga
 // por esta línea.
-app.get('/whatsapp/materiales/:id/archivo', requireAuth, rolBandeja, async (req, res) => {
+app.get('/whatsapp/materiales/:id/archivo', requireAuth, rolBandejaCom({ material: true }), async (req, res) => {
   try {
     const m = await leerMaterial(req.params.id)
     if (!m) return res.status(404).json({ ok: false, error: 'Ese material ya no existe' })
@@ -803,14 +872,14 @@ app.get('/whatsapp/materiales/:id/archivo', requireAuth, rolBandeja, async (req,
   } catch (e) { errorInterno(res, 'wa/material-archivo', e) }
 })
 
-app.post('/whatsapp/materiales', requireAuth, rolBandeja, async (req, res) => {
+app.post('/whatsapp/materiales', requireAuth, rolBandejaCom({ material: true }), async (req, res) => {
   try {
     const r = await guardarMaterial({ id: req.body?.id || null, datos: req.body || {} })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/material-guardar', e) }
 })
 
-app.delete('/whatsapp/materiales/:id', requireAuth, rolBandeja, async (req, res) => {
+app.delete('/whatsapp/materiales/:id', requireAuth, rolBandejaCom({ material: true }), async (req, res) => {
   try {
     const r = await borrarMaterial({ id: req.params.id })
     res.status(r.status).json(r.body)
@@ -1176,6 +1245,27 @@ app.post('/jobs/mitad-compostaje', requireJob, async (req, res) => {
     res.json(await jobMitadCompostaje({ dryRun: req.query.dry === '1' }))
   } catch (e) {
     log('[mitad/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── CRM comercial de veterinarias (migración 180) ──
+// Prospectos que llegan solos (formularios, anuncios vía Make/Zapier). Sin
+// sesión: autentica con CRM_LEADS_TOKEN, por cabecera o por ?token=.
+app.post('/crm-leads', async (req, res) => {
+  try {
+    const r = await recibirLead(req.body || {}, String(req.headers['x-crm-token'] || req.query.token || ''))
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'crm/leads', e) }
+})
+app.use('/crm', crearRouterCrm({ requireAuth, requireRol, errorInterno }))
+
+// Hitos de veterinarias: propone (y envía los de modo AUTOMÁTICO). Cron diario.
+app.post('/jobs/crm-hitos', requireJob, async (_req, res) => {
+  try {
+    res.json(await evaluarHitos({ enviarAutomaticos: true }))
+  } catch (e) {
+    log('[crm/hitos] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

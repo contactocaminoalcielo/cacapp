@@ -169,7 +169,8 @@ export default function AgenteWhatsapp() {
 
   const alternarEncendido = async () => {
     const encender = !agente.activo
-    if (encender && !(agente.phone_number_ids || []).length) {
+    // El delegado (ventas) no tiene línea propia: usa la de su dueño.
+    if (encender && !(agente.phone_number_ids || []).length && !agente.delegado_de) {
       setError('Asigna al menos una línea antes de encenderlo, o no responderá a nadie.')
       return
     }

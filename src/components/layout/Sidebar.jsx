@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LayoutGrid, PlusCircle, Calendar,
   Snowflake, Leaf, Layers, Camera, Package2,
   Users, Star, Heart, BarChart3, Settings, X, LogOut, Receipt, Wallet, Award, HeartPulse, Film, Tag,
-  MessageCircle, MessageSquare, Bot, FileText, Boxes, Radio, ShoppingBag } from 'lucide-react'
+  MessageCircle, MessageSquare, Bot, FileText, Boxes, Radio, ShoppingBag, Handshake } from 'lucide-react'
 import { useBadges } from '@/contexts/BadgesContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { filterNavGroups } from '@/lib/roles'
@@ -32,6 +32,14 @@ const ALL_NAV_GROUPS = [
       { path: '/produccion',     label: 'Producción',     icon: Layers,  badge: 'produccion' },
       { path: '/inventario',     label: 'Inventario',      icon: Boxes },
       { path: '/imagenes',       label: 'Imágenes',       icon: Camera,  badge: 'imagenes' },
+    ],
+  },
+  {
+    // El CRM se abre como un sistema aparte (su propio menú); desde aquí solo
+    // se entra. Ver src/pages/crm/CrmApp.jsx.
+    label: 'COMERCIAL',
+    items: [
+      { path: '/crm', label: 'CRM veterinarias', icon: Handshake },
     ],
   },
   {

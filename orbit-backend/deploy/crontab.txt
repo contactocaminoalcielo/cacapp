@@ -61,3 +61,9 @@
 # UNIQUE(servicio_id). Sin plantilla aprobada no envia: deja PENDIENTE y avisa.
 # 07:25, despues de la eleccion de planta para no pelear por el pool.
 25 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/mitad-compostaje >> /var/log/orbit-backend-cron.log 2>&1
+
+# CRM comercial (migr. 180) — hitos de veterinarias (primer servicio, N servicios,
+# N en el mes, reactivacion). Solo mira hitos cruzados en los ultimos 7 dias.
+# Los de modo PROPONER quedan en "Por enviar" del CRM; solo los AUTOMATICO salen
+# solos. Idempotente: UNIQUE(regla, aliado, periodo). 08:10, en horario de la clinica.
+10 8 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/crm-hitos >> /var/log/orbit-backend-cron.log 2>&1

@@ -53,7 +53,8 @@ export function ChatWaProvider({ children }) {
   const { personalData } = useAuth()
   // La bandeja es de coordinación. Sin esto, PRODUCTOR y OPERARIO recibirían un
   // 403 cada diez segundos — el mismo criterio que ya usa BadgesContext.
-  const vigila = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
+  // COMERCIAL también (CRM, migr. 180): el backend le fija la línea de vets.
+  const vigila = ['COORDINADOR', 'ADMIN', 'COMERCIAL'].includes(personalData?.rol)
 
   const [conversaciones, setConversaciones] = useState([])
   const [bandejaCargada, setBandejaCargada] = useState(false)

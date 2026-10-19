@@ -163,7 +163,7 @@ function Ficha({ a, i, onError }) {
               <Phone className="w-3 h-3 shrink-0" />
               {numeros.length
                 ? `${numeros.length} línea${numeros.length > 1 ? 's' : ''} asignada${numeros.length > 1 ? 's' : ''}`
-                : 'sin línea asignada'}
+                : a.delegado_de ? 'atiende prospectos en la línea de su agente dueño' : 'sin línea asignada'}
               <span className="text-gray-300">·</span>
               {a.voz_activa
                 ? <><Mic className="w-3 h-3" /> con voz</>

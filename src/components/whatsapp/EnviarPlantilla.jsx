@@ -249,7 +249,8 @@ function Formulario({ p, contacto, linea, campos, agenteId, onEnviada }) {
       })
       // No hay confirmación aparte: el mensaje aparece en el hilo, que es donde
       // se estaba mirando. Un modal de "Listo" encima taparía justo eso.
-      onEnviada?.()
+      // El nombre viaja para quien lo registre (la bitácora del CRM).
+      onEnviada?.(p.name)
     } catch (e) {
       setError(e.message)
     } finally {

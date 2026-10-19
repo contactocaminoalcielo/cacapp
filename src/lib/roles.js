@@ -18,6 +18,8 @@ const ACCESO_TOTAL = {
     '/compras-recordatorios',
     // Enciende y apaga los envíos automáticos: ADMIN/COORDINADOR y nadie más.
     '/automatizaciones',
+    // CRM comercial de veterinarias (migr. 180). Se abre como sistema aparte.
+    '/crm',
   ]),
 }
 
@@ -48,6 +50,15 @@ export const ROLE_CONFIG = {
     isTecnico:  false,
     redirectTo: '/tenjo',
     routes:     new Set(['/tenjo']),
+  },
+  // Área comercial (migr. 180): vive en el CRM. Gestión solo para CONSULTAR
+  // (allí no tiene permisos de edición: `canEdit` es de coordinación/admin).
+  // El Tablero NO: es operativo y casi todo en él escribe; los servicios de
+  // las aliadas los consulta desde el CRM (Servicios y la ficha de cada vet).
+  COMERCIAL: {
+    isTecnico:  false,
+    redirectTo: '/crm',
+    routes:     new Set(['/crm', '/gestion']),
   },
 }
 

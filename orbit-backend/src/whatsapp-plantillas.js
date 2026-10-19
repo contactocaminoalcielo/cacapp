@@ -960,6 +960,9 @@ const CAMPOS = [
   { clave: 'aliado.contacto',  grupo: 'Veterinaria', etiqueta: 'Persona de contacto', col: 'aliado_contacto', ejemplo: 'Dra. Liliana', fuentes: ['ALIADO'] },
   { clave: 'aliado.ciudad',    grupo: 'Veterinaria', etiqueta: 'Ciudad',              col: 'aliado_ciudad',   ejemplo: 'Bogotá',       fuentes: ['ALIADO'] },
   { clave: 'aliado.whatsapp',  grupo: 'Veterinaria', etiqueta: 'WhatsApp',            col: 'aliado_whatsapp', ejemplo: '573001234567', fuentes: ['ALIADO'] },
+  { clave: 'aliado.servicios_total', grupo: 'Veterinaria', etiqueta: 'Servicios enviados (total)', col: 'aliado_servicios_total', ejemplo: '50', fuentes: ['ALIADO'] },
+  { clave: 'aliado.servicios_mes',   grupo: 'Veterinaria', etiqueta: 'Servicios este mes',        col: 'aliado_servicios_mes',   ejemplo: '8',  fuentes: ['ALIADO'] },
+  { clave: 'aliado.servicios_mes_anterior', grupo: 'Veterinaria', etiqueta: 'Servicios el mes pasado', col: 'aliado_servicios_mes_anterior', ejemplo: '6', fuentes: ['ALIADO'] },
 ]
 
 /** Un campo sin `fuentes` sale de un servicio: es de dónde salían todos. */
@@ -1041,7 +1044,16 @@ const RESOLVER_ALIADO = `
          a.contacto_nombre  AS aliado_contacto,
          a.ciudad           AS aliado_ciudad,
          a.whatsapp         AS aliado_whatsapp,
-         a.whatsapp         AS contacto
+         a.whatsapp         AS contacto,
+         -- Para los hitos del CRM (migración 180): "ya van {{n}} servicios".
+         (SELECT count(*) FROM public.servicios s
+           WHERE s.aliado_origen_id = a.id_aliado AND s.estado <> 'CANCELADO') AS aliado_servicios_total,
+         (SELECT count(*) FROM public.servicios s
+           WHERE s.aliado_origen_id = a.id_aliado AND s.estado <> 'CANCELADO'
+             AND date_trunc('month', s.fecha_ingreso) = date_trunc('month', (now() AT TIME ZONE 'America/Bogota')::date)) AS aliado_servicios_mes,
+         (SELECT count(*) FROM public.servicios s
+           WHERE s.aliado_origen_id = a.id_aliado AND s.estado <> 'CANCELADO'
+             AND date_trunc('month', s.fecha_ingreso) = date_trunc('month', (now() AT TIME ZONE 'America/Bogota')::date) - interval '1 month') AS aliado_servicios_mes_anterior
     FROM public.aliados a
    WHERE a.id_aliado = $1`
 

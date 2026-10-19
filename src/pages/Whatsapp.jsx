@@ -36,7 +36,10 @@ import {
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
 const POLL_MS = 10000
 
-export default function Whatsapp() {
+// `lineaFija`: la bandeja incrustada en el CRM comercial. Solo esa línea, sin
+// selector y sin cabecera de Orbit. `abrirContacto` abre ese hilo al entrar
+// (desde la ficha de una veterinaria).
+export default function Whatsapp({ embebido = false, lineaFija = null, abrirContacto = null }) {
   const { todasConversaciones, bandejaCargada, errorBandeja, refrescarConversaciones } = useChatWa()
   // `todas` es lo que devuelve el backend; `convs` es lo que se pinta, ya
   // filtrado por la línea elegida. Ver más abajo.
@@ -64,7 +67,7 @@ export default function Whatsapp() {
   // líneas y son DOS conversaciones. `lineaActiva` es la de la que está abierta,
   // y viaja en cada llamada para que la respuesta salga por donde llegó.
   const [filtroLinea, setFiltroLinea] = useState(
-    () => localStorage.getItem('orbit.wa.bandeja') || null
+    () => lineaFija || localStorage.getItem('orbit.wa.bandeja') || null
   )
   const [lineaActiva, setLineaActiva] = useState(null)
   const [nombreLinea, setNombreLinea] = useState({})
@@ -245,6 +248,7 @@ export default function Whatsapp() {
 
   // Las líneas que aparecen en la bandeja, en orden estable.
   const lineas = useMemo(() => {
+    if (lineaFija) return [lineaFija]
     const vistas = []
     for (const c of todas) {
       if (c.phone_number_id && !vistas.includes(c.phone_number_id)) vistas.push(c.phone_number_id)
@@ -255,17 +259,32 @@ export default function Whatsapp() {
       if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)
       return a.localeCompare(b)
     })
-  }, [todas])
+  }, [todas, lineaFija])
 
   // Nunca existe una bandeja combinada. Al llegar la lista se restaura la
   // última línea elegida si todavía existe; de lo contrario se abre la primera.
   useEffect(() => {
-    if (!lineas.length) return
+    if (!lineas.length || lineaFija) return
     if (!filtroLinea || !lineas.includes(filtroLinea)) {
       setFiltroLinea(lineas[0])
       localStorage.setItem('orbit.wa.bandeja', lineas[0])
     }
-  }, [lineas, filtroLinea])
+  }, [lineas, filtroLinea, lineaFija])
+
+  // Abrir el hilo pedido por la ficha del CRM, una sola vez y en cuanto la
+  // lista exista. Si el número no tiene conversación todavía, se abre vacío
+  // por la línea fija y desde ahí se le puede mandar una plantilla.
+  const yaAbrio = useRef(false)
+  useEffect(() => {
+    if (!abrirContacto || yaAbrio.current || !bandejaCargada) return
+    yaAbrio.current = true
+    const t10 = String(abrirContacto).replace(/\D/g, '').slice(-10)
+    const c = todas.find(x => String(x.contacto).slice(-10) === t10 && (!lineaFija || x.phone_number_id === lineaFija))
+    let num = String(abrirContacto).replace(/\D/g, '')
+    if (num.length === 10) num = '57' + num
+    abrir(c?.contacto || num, c?.phone_number_id || lineaFija)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abrirContacto, bandejaCargada, todas])
 
   function elegirLinea(id) {
     if (id === filtroLinea) return
@@ -322,10 +341,10 @@ export default function Whatsapp() {
 
   return (
     <div>
-      <Topbar />
-      <div className="p-4 sm:p-6">
+      {!embebido && <Topbar />}
+      <div className={embebido ? 'p-0' : 'p-4 sm:p-6'}>
         <div className="flex rounded-2xl border border-gray-200 bg-white overflow-hidden"
-             style={{ height: 'calc(100vh - 150px)', minHeight: 420 }}>
+             style={{ height: embebido ? 'calc(100vh - 120px)' : 'calc(100vh - 150px)', minHeight: 420 }}>
 
           {/* ── Lista de conversaciones ── */}
           <aside className={`${activo ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 flex-col border-r border-gray-200 flex-shrink-0`}>

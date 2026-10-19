@@ -50,6 +50,7 @@ const AgentesIA          = lazy(() => import('@/pages/AgentesIA'))
 const CostosIA           = lazy(() => import('@/pages/CostosIA'))
 const Automatizaciones   = lazy(() => import('@/pages/Automatizaciones'))
 const PlantillasWhatsapp = lazy(() => import('@/pages/PlantillasWhatsapp'))
+const CrmApp             = lazy(() => import('@/pages/crm/CrmApp'))
 
 function FullScreenLoader() {
   return (
@@ -293,6 +294,20 @@ function InnerApp() {
       }>
         <TecnicoApp />
       </Suspense>
+    )
+  }
+
+  // CRM comercial (/crm/*): parte de Orbit pero con su propio armazón y menú,
+  // como un sistema aparte. Sin el AppShell de Orbit a propósito.
+  if ((location.pathname === '/crm' || location.pathname.startsWith('/crm/')) && config.routes.has('/crm')) {
+    return (
+      <ChatWaProvider>
+        <Suspense fallback={<FullScreenLoader />}>
+          <Routes>
+            <Route path="/crm/*" element={<CrmApp />} />
+          </Routes>
+        </Suspense>
+      </ChatWaProvider>
     )
   }
 

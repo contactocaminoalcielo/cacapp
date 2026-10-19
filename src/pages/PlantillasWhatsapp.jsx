@@ -21,6 +21,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
+import { crm } from '@/lib/crmApi'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -61,7 +62,9 @@ const VACIA = {
   cuerpo: '', pie: '', botones: [],
 }
 
-export default function PlantillasWhatsapp() {
+// `embebido`: dentro del CRM comercial. Sin cabecera de Orbit, solo con los
+// agentes de veterinarias y sin envíos masivos (eso es de coordinación).
+export default function PlantillasWhatsapp({ embebido = false }) {
   const { alert: showAlert, confirm } = useConfirm()
   const [plantillas, setPlantillas] = useState([])
   const [waba, setWaba] = useState('')
@@ -93,9 +96,11 @@ export default function PlantillasWhatsapp() {
   // —la otra empresa— una plantilla enviada por la línea que no es no da ningún
   // error: llega, y llega desde el número equivocado.
   useEffect(() => {
-    listarAgentes()
+    (embebido ? crm.agentes() : listarAgentes())
       .then(r => {
-        const lista = r.agentes || []
+        // En el CRM, solo los agentes con línea propia: el delegado (ventas)
+        // usa las plantillas de la línea de su dueño.
+        const lista = (r.agentes || []).filter(a => !embebido || !a.delegado_de)
         setAgentes(lista)
         setAgenteId(prev => {
           if (prev && lista.some(a => a.id === prev)) return prev
@@ -188,11 +193,11 @@ export default function PlantillasWhatsapp() {
 
   return (
     <>
-      <Topbar titulo="Plantillas de WhatsApp" />
+      {!embebido && <Topbar titulo="Plantillas de WhatsApp" />}
 
       <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
         <div className="flex gap-1 p-1 bg-gray-100/70 rounded-xl w-fit">
-          {[['plantillas', 'Plantillas', MessageSquare], ['campanas', 'Envíos masivos', Megaphone]].map(([v, txt, Icono]) => (
+          {[['plantillas', 'Plantillas', MessageSquare], ['campanas', 'Envíos masivos', Megaphone]].filter(([v]) => !embebido || v !== 'campanas').map(([v, txt, Icono]) => (
             <button key={v} onClick={() => setPestana(v)}
                     className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[12.5px] font-semibold transition
                       ${pestana === v ? 'bg-white text-[#1A5CD8] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>

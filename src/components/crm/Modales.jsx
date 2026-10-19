@@ -1,0 +1,329 @@
+// Los tres registros que más se hacen en el CRM: una gestión (lo que pasó),
+// un seguimiento (lo que toca) y un ticket (lo que la vet reclama).
+import { useEffect, useState } from 'react'
+import { Modal } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  crm, TIPOS_GESTION, RESULTADOS, TICKET_CATEGORIAS, TICKET_TIPOS, PRIORIDADES,
+  aInputFechaHora, desdeInputFechaHora, atajoFecha,
+} from '@/lib/crmApi'
+import { useCrm } from './CrmContext'
+import { Campo, ACENTO } from './ui'
+
+const ATAJOS = [['1h', 'En 1 hora'], ['tarde', 'Esta tarde'], ['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
+
+function SelectorFecha({ valor, onCambio }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {ATAJOS.map(([k, t]) => (
+          <button key={k} type="button" onClick={() => onCambio(aInputFechaHora(atajoFecha(k)))}
+            className="px-2.5 py-1 rounded-full text-[11.5px] font-semibold border border-gray-200 text-gray-600 hover:border-teal-600 hover:text-teal-700">
+            {t}
+          </button>
+        ))}
+      </div>
+      <Input type="datetime-local" value={valor} onChange={e => onCambio(e.target.value)} />
+    </div>
+  )
+}
+
+/**
+ * Registrar una gestión. El caso más común es la LLAMADA: qué resultado tuvo,
+ * qué se habló, qué quedó pactado y cuándo se vuelve a llamar.
+ */
+export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = null, tipoInicial = 'LLAMADA', onGuardado }) {
+  const { equipo, refrescarAlertas } = useCrm()
+  const [tipo, setTipo] = useState(tipoInicial)
+  const [resultado, setResultado] = useState('')
+  const [resumen, setResumen] = useState('')
+  const [compromiso, setCompromiso] = useState('')
+  const [duracion, setDuracion] = useState('')
+  const [conSiguiente, setConSiguiente] = useState(true)
+  const [siguiente, setSiguiente] = useState({ tipo: 'LLAMADA', fecha: aInputFechaHora(atajoFecha('3d')), titulo: '', responsable_id: '' })
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!abierto) return
+    setTipo(tipoInicial); setResultado(''); setResumen(''); setCompromiso(''); setDuracion(''); setError(null)
+    setConSiguiente(true)
+    setSiguiente({ tipo: 'LLAMADA', fecha: aInputFechaHora(atajoFecha('3d')), titulo: '', responsable_id: '' })
+  }, [abierto, tipoInicial])
+
+  // "No contestó" casi siempre es volver a intentar pronto.
+  useEffect(() => {
+    if (['NO_CONTESTO', 'OCUPADO', 'BUZON'].includes(resultado)) {
+      setSiguiente(s => ({ ...s, fecha: aInputFechaHora(atajoFecha(resultado === 'OCUPADO' ? 'tarde' : 'manana')) }))
+    }
+  }, [resultado])
+
+  async function guardar() {
+    setGuardando(true); setError(null)
+    try {
+      await crm.registrarGestion({
+        ...destino, tipo, resultado: resultado || null,
+        resumen: resumen || (resultado ? RESULTADOS[resultado] : ''),
+        compromiso, duracion_min: duracion || null,
+        seguimiento_id: seguimiento?.id || null,
+        siguiente: conSiguiente ? {
+          tipo: siguiente.tipo, programado_para: desdeInputFechaHora(siguiente.fecha),
+          titulo: siguiente.titulo || null, responsable_id: siguiente.responsable_id || null,
+        } : null,
+      })
+      refrescarAlertas()
+      onGuardado?.()
+      onCerrar()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title={seguimiento ? `Gestionar: ${seguimiento.titulo}` : 'Registrar gestión'}
+      maxWidth="max-w-xl"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={guardar} disabled={guardando || (!resumen.trim() && !resultado)} style={{ background: ACENTO }}>
+            {guardando ? 'Guardando…' : 'Guardar gestión'}
+          </Button>
+        </div>
+      </>}>
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-1.5">
+          {['LLAMADA', 'WHATSAPP', 'VISITA', 'REUNION', 'EMAIL', 'NOTA'].map(t => (
+            <button key={t} type="button" onClick={() => setTipo(t)}
+              className={`px-3 py-1.5 rounded-lg text-[12.5px] font-semibold border transition
+                ${tipo === t ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              style={tipo === t ? { background: ACENTO } : undefined}>
+              {TIPOS_GESTION[t].emoji} {TIPOS_GESTION[t].label}
+            </button>
+          ))}
+        </div>
+        {tipo !== 'NOTA' && (
+          <Campo label="Resultado">
+            <Select value={resultado} onChange={e => setResultado(e.target.value)}>
+              <option value="">— Elige —</option>
+              {Object.entries(RESULTADOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </Select>
+          </Campo>
+        )}
+        <Campo label="¿Qué se habló?">
+          <Textarea rows={4} value={resumen} onChange={e => setResumen(e.target.value)}
+            placeholder="Ej: Habló la Dra. Paula. Este mes les han llegado pocos casos; preguntó por la comisión de agosto…" />
+        </Campo>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Campo label="Compromiso / acuerdo" className="sm:col-span-2">
+            <Input value={compromiso} onChange={e => setCompromiso(e.target.value)} placeholder="Ej: le enviamos el tarifario hoy" />
+          </Campo>
+          {tipo === 'LLAMADA' && (
+            <Campo label="Duración (min)">
+              <Input type="number" min="0" value={duracion} onChange={e => setDuracion(e.target.value)} />
+            </Campo>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+          <label className="flex items-center gap-2 text-[13px] font-semibold text-gray-700">
+            <input type="checkbox" checked={conSiguiente} onChange={e => setConSiguiente(e.target.checked)} />
+            Programar el siguiente seguimiento
+          </label>
+          {conSiguiente && (
+            <div className="space-y-3">
+              <SelectorFecha valor={siguiente.fecha} onCambio={v => setSiguiente(s => ({ ...s, fecha: v }))} />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Campo label="Tipo">
+                  <Select value={siguiente.tipo} onChange={e => setSiguiente(s => ({ ...s, tipo: e.target.value }))}>
+                    {['LLAMADA', 'WHATSAPP', 'VISITA', 'REUNION', 'TAREA'].map(t => <option key={t} value={t}>{TIPOS_GESTION[t]?.label || 'Tarea'}</option>)}
+                  </Select>
+                </Campo>
+                <Campo label="Qué hacer" className="sm:col-span-2">
+                  <Input value={siguiente.titulo} onChange={e => setSiguiente(s => ({ ...s, titulo: e.target.value }))}
+                    placeholder="Ej: confirmar si mandó los 2 servicios" />
+                </Campo>
+              </div>
+              {equipo.length > 1 && (
+                <Campo label="Responsable">
+                  <Select value={siguiente.responsable_id} onChange={e => setSiguiente(s => ({ ...s, responsable_id: e.target.value }))}>
+                    <option value="">Yo</option>
+                    {equipo.map(p => <option key={p.id} value={p.id}>{p.nombre} · {p.rol.toLowerCase()}</option>)}
+                  </Select>
+                </Campo>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/** Crear o reprogramar un seguimiento sin registrar gestión. */
+export function SeguimientoModal({ abierto, onCerrar, destino, existente = null, onGuardado }) {
+  const { equipo, refrescarAlertas } = useCrm()
+  const [f, setF] = useState({})
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!abierto) return
+    setError(null)
+    setF(existente
+      ? { tipo: existente.tipo, titulo: existente.titulo, notas: '', fecha: aInputFechaHora(existente.programado_para), responsable_id: existente.responsable_id || '' }
+      : { tipo: 'LLAMADA', titulo: '', notas: '', fecha: aInputFechaHora(atajoFecha('manana')), responsable_id: '' })
+  }, [abierto, existente])
+
+  async function guardar() {
+    setGuardando(true); setError(null)
+    try {
+      if (existente) {
+        await crm.cambiarSeguimiento(existente.id, { accion: 'reprogramar', programado_para: desdeInputFechaHora(f.fecha), nota: f.notas || null })
+      } else {
+        await crm.crearSeguimiento({ ...destino, tipo: f.tipo, titulo: f.titulo, notas: f.notas,
+          programado_para: desdeInputFechaHora(f.fecha), responsable_id: f.responsable_id || null })
+      }
+      refrescarAlertas()
+      onGuardado?.()
+      onCerrar()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title={existente ? 'Reprogramar seguimiento' : 'Programar seguimiento'} maxWidth="max-w-lg"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={guardar} disabled={guardando || (!existente && !f.titulo?.trim())} style={{ background: ACENTO }}>
+            {guardando ? 'Guardando…' : 'Guardar'}
+          </Button>
+        </div>
+      </>}>
+      <div className="space-y-4">
+        {!existente && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Campo label="Tipo">
+              <Select value={f.tipo || 'LLAMADA'} onChange={e => setF(x => ({ ...x, tipo: e.target.value }))}>
+                {['LLAMADA', 'WHATSAPP', 'VISITA', 'REUNION', 'TAREA'].map(t => <option key={t} value={t}>{TIPOS_GESTION[t]?.label || 'Tarea'}</option>)}
+              </Select>
+            </Campo>
+            <Campo label="Qué hacer" className="sm:col-span-2">
+              <Input value={f.titulo || ''} onChange={e => setF(x => ({ ...x, titulo: e.target.value }))} placeholder="Ej: llamar a la Dra. para presentar planes" />
+            </Campo>
+          </div>
+        )}
+        <Campo label="Cuándo"><SelectorFecha valor={f.fecha || ''} onCambio={v => setF(x => ({ ...x, fecha: v }))} /></Campo>
+        <Campo label={existente ? 'Motivo del cambio (opcional)' : 'Notas'}>
+          <Textarea rows={2} value={f.notas || ''} onChange={e => setF(x => ({ ...x, notas: e.target.value }))} />
+        </Campo>
+        {!existente && equipo.length > 1 && (
+          <Campo label="Responsable">
+            <Select value={f.responsable_id || ''} onChange={e => setF(x => ({ ...x, responsable_id: e.target.value }))}>
+              <option value="">Yo</option>
+              {equipo.map(p => <option key={p.id} value={p.id}>{p.nombre} · {p.rol.toLowerCase()}</option>)}
+            </Select>
+          </Campo>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+/** Abrir un ticket (PQRS de la veterinaria). */
+export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
+  const { equipo } = useCrm()
+  const [vets, setVets] = useState([])
+  const [buscar, setBuscar] = useState('')
+  const [f, setF] = useState({})
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!abierto) return
+    setError(null); setBuscar('')
+    setF({ aliado_id: aliado?.id_aliado || '', tipo: 'RECLAMO', categoria: 'COMISION', prioridad: 'MEDIA', canal: 'LLAMADA', asunto: '', descripcion: '', responsable_id: '', servicio_id: '' })
+    if (!aliado) crm.cartera().then(r => setVets(r.aliados || [])).catch(() => {})
+  }, [abierto, aliado])
+
+  const opciones = vets.filter(v => !buscar.trim() || v.nombre.toLowerCase().includes(buscar.trim().toLowerCase())).slice(0, 50)
+
+  async function guardar() {
+    setGuardando(true); setError(null)
+    try {
+      const r = await crm.crearTicket({ ...f, responsable_id: f.responsable_id || null, servicio_id: f.servicio_id || null })
+      onCreado?.(r.ticket)
+      onCerrar()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title="Nuevo ticket" maxWidth="max-w-xl"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={guardar} disabled={guardando || !f.aliado_id || !f.asunto?.trim()} style={{ background: ACENTO }}>
+            {guardando ? 'Creando…' : 'Crear ticket'}
+          </Button>
+        </div>
+      </>}>
+      <div className="space-y-4">
+        {aliado ? (
+          <div className="text-[13px] text-gray-600">Veterinaria: <b>{aliado.nombre}</b></div>
+        ) : (
+          <Campo label="Veterinaria">
+            <Input value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Buscar veterinaria…" />
+            <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-gray-100">
+              {opciones.map(v => (
+                <button key={v.id_aliado} type="button" onClick={() => { setF(x => ({ ...x, aliado_id: v.id_aliado })); setBuscar(v.nombre) }}
+                  className={`w-full text-left px-3 py-1.5 text-[12.5px] hover:bg-gray-50 ${f.aliado_id === v.id_aliado ? 'bg-teal-50 font-semibold' : ''}`}>
+                  {v.nombre} <span className="text-gray-400">{v.localidad || v.ciudad || ''}</span>
+                </button>
+              ))}
+            </div>
+          </Campo>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Campo label="Tipo">
+            <Select value={f.tipo || ''} onChange={e => setF(x => ({ ...x, tipo: e.target.value }))}>
+              {Object.entries(TICKET_TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </Select>
+          </Campo>
+          <Campo label="Categoría">
+            <Select value={f.categoria || ''} onChange={e => setF(x => ({ ...x, categoria: e.target.value }))}>
+              {Object.entries(TICKET_CATEGORIAS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </Select>
+          </Campo>
+          <Campo label="Prioridad">
+            <Select value={f.prioridad || ''} onChange={e => setF(x => ({ ...x, prioridad: e.target.value }))}>
+              {Object.entries(PRIORIDADES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </Select>
+          </Campo>
+          <Campo label="Canal">
+            <Select value={f.canal || ''} onChange={e => setF(x => ({ ...x, canal: e.target.value }))}>
+              {['LLAMADA', 'WHATSAPP', 'VISITA', 'EMAIL', 'PORTAL', 'OTRO'].map(c => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()}</option>)}
+            </Select>
+          </Campo>
+        </div>
+        <Campo label="Asunto">
+          <Input value={f.asunto || ''} onChange={e => setF(x => ({ ...x, asunto: e.target.value }))} placeholder="Ej: No le han pagado la comisión de septiembre" />
+        </Campo>
+        <Campo label="Lo que manifestó la veterinaria">
+          <Textarea rows={4} value={f.descripcion || ''} onChange={e => setF(x => ({ ...x, descripcion: e.target.value }))} />
+        </Campo>
+        {equipo.length > 1 && (
+          <Campo label="Responsable">
+            <Select value={f.responsable_id || ''} onChange={e => setF(x => ({ ...x, responsable_id: e.target.value }))}>
+              <option value="">Yo</option>
+              {equipo.map(p => <option key={p.id} value={p.id}>{p.nombre} · {p.rol.toLowerCase()}</option>)}
+            </Select>
+          </Campo>
+        )}
+        <p className="text-[11.5px] text-gray-400">El plazo de respuesta se fija solo según la prioridad (configurable en Ajustes).</p>
+      </div>
+    </Modal>
+  )
+}

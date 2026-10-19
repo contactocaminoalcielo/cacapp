@@ -43,7 +43,7 @@ export async function listarAgentes() {
   const { rows } = await pool.query(
     `SELECT a.id, a.clave, a.nombre, a.etiqueta_menu, a.activo, a.categoria,
             a.objetivo, a.proveedor, a.modelo, a.effort,
-            a.phone_number_ids, a.waba_id, a.voz_activa, a.voz_id, a.actualizado_en,
+            a.phone_number_ids, a.waba_id, a.voz_activa, a.voz_id, a.actualizado_en, a.delegado_de,
             (SELECT count(*)::int FROM public.agente_wa_conocimiento k
               WHERE k.agente_id = a.id AND k.activo)                        AS piezas,
             (SELECT count(*)::int FROM public.agente_wa_reglas r
@@ -61,7 +61,7 @@ export async function obtenerAgente({ clave = 'VETERINARIAS' } = {}) {
   const { rows } = await pool.query(
     `SELECT id, clave, nombre, etiqueta_menu, activo, categoria, objetivo, idioma,
             instrucciones, proveedor, modelo, effort, max_turnos, memoria_mensajes,
-            phone_number_ids, waba_id, espera_ms, espera_max_ms,
+            phone_number_ids, waba_id, espera_ms, espera_max_ms, delegado_de,
             seguimiento_enlace_minutos, seguimiento_enlace_texto, creado_en, actualizado_en
        FROM public.agente_wa WHERE clave = $1`,
     [clave]
@@ -146,7 +146,7 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
   const vals   = []
   const set    = (col, val) => { vals.push(val); campos.push(`${col} = $${vals.length}`) }
   const { rows: [actual] } = await pool.query(
-    `SELECT proveedor, modelo, phone_number_ids FROM public.agente_wa WHERE clave = $1`, [clave]
+    `SELECT proveedor, modelo, phone_number_ids, delegado_de FROM public.agente_wa WHERE clave = $1`, [clave]
   )
   if (!actual) return { status: 404, body: { ok: false, error: `No existe el agente ${clave}` } }
 
@@ -290,7 +290,9 @@ export async function guardarAgente({ clave = 'VETERINARIAS', datos = {}, person
 
   if (datos.activo === true) {
     const lineasFinales = datos.phone_number_ids ?? actual.phone_number_ids ?? []
-    if (!lineasFinales.length) {
+    // Un agente DELEGADO (migr. 180, el de ventas) no posee línea: atiende por
+    // la de su dueño cuando este le pasa la conversación.
+    if (!lineasFinales.length && !actual.delegado_de) {
       return { status: 400, body: { ok: false, error: 'No se puede encender un agente sin una línea asignada' } }
     }
     const estado = (await estadoDeProveedores()).find(p => p.proveedor === proveedorFinal)
