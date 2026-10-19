@@ -35,7 +35,8 @@ function SelectorFecha({ valor, onCambio }) {
  * Registrar una gestión. El caso más común es la LLAMADA: qué resultado tuvo,
  * qué se habló, qué quedó pactado y cuándo se vuelve a llamar.
  */
-export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = null, tipoInicial = 'LLAMADA', onGuardado }) {
+// `sinSiguiente`: la cuenta pidió no ser contactada; se registra lo que pasó, pero no se programa nada.
+export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = null, tipoInicial = 'LLAMADA', onGuardado, sinSiguiente = false }) {
   const { equipo, refrescarAlertas } = useCrm()
   const [tipo, setTipo] = useState(tipoInicial)
   const [resultado, setResultado] = useState('')
@@ -50,9 +51,9 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
   useEffect(() => {
     if (!abierto) return
     setTipo(tipoInicial); setResultado(''); setResumen(''); setCompromiso(''); setDuracion(''); setError(null)
-    setConSiguiente(true)
+    setConSiguiente(!sinSiguiente)
     setSiguiente({ tipo: 'LLAMADA', fecha: aInputFechaHora(atajoFecha('3d')), titulo: '', responsable_id: '' })
-  }, [abierto, tipoInicial])
+  }, [abierto, tipoInicial, sinSiguiente])
 
   // "No contestó" casi siempre es volver a intentar pronto.
   useEffect(() => {
@@ -126,6 +127,7 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
           )}
         </div>
 
+        {sinSiguiente ? <p className="text-[12px] text-red-600">🚫 Marcada como no contactar: no se programa seguimiento.</p> : (
         <div className="rounded-xl border border-gray-200 p-3 space-y-3">
           <label className="flex items-center gap-2 text-[13px] font-semibold text-gray-700">
             <input type="checkbox" checked={conSiguiente} onChange={e => setConSiguiente(e.target.checked)} />
@@ -156,6 +158,7 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
             </div>
           )}
         </div>
+        )}
       </div>
     </Modal>
   )
@@ -325,5 +328,89 @@ export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
         <p className="text-[11.5px] text-gray-400">El plazo de respuesta se fija solo según la prioridad (configurable en Ajustes).</p>
       </div>
     </Modal>
+  )
+}
+
+const MOTIVOS_BLOQUEO = [
+  'No quiere saber nada de la empresa',
+  'Pidió no recibir publicidad ni llamadas',
+  'Trabaja con otra funeraria y pidió no insistir',
+  'Tuvo una mala experiencia con nosotros',
+  'La clínica cerró',
+]
+
+/**
+ * Marcar o quitar "No contactar". Bloquea publicidad y gestión comercial
+ * (campañas, plantillas, hitos, seguimientos, agente de ventas). La operación
+ * sigue: si manda un servicio, se le atiende y le llegan recibos y avisos.
+ */
+export function BloqueoModal({ abierto, onCerrar, destino, nombre, bloqueada, onListo }) {
+  const [motivo, setMotivo] = useState('')
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
+  useEffect(() => { if (abierto) { setMotivo(''); setError(null) } }, [abierto])
+
+  async function guardar() {
+    setGuardando(true); setError(null)
+    try {
+      const fn = destino.aliado_id ? crm.bloqueoAliado : crm.bloqueoProspecto
+      await fn(destino.aliado_id || destino.prospecto_id, { bloquear: !bloqueada, motivo })
+      onListo?.()
+      onCerrar()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title={bloqueada ? `Volver a contactar: ${nombre}` : `No contactar: ${nombre}`} maxWidth="max-w-lg"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          {bloqueada
+            ? <Button onClick={guardar} disabled={guardando} style={{ background: ACENTO }}>{guardando ? 'Guardando…' : 'Desbloquear'}</Button>
+            : <Button variant="danger" onClick={guardar} disabled={guardando || !motivo.trim()}>{guardando ? 'Guardando…' : 'Marcar no contactar'}</Button>}
+        </div>
+      </>}>
+      {bloqueada ? (
+        <div className="space-y-3 text-[13px] text-gray-700">
+          <p>Vuelve a recibir campañas, plantillas, hitos y seguimientos. Queda anotado en la bitácora.</p>
+          <Campo label="¿Por qué se desbloquea? (opcional)">
+            <Input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Ej: nos volvió a escribir interesada" />
+          </Campo>
+        </div>
+      ) : (
+        <div className="space-y-3 text-[13px] text-gray-700">
+          <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-[12.5px] text-red-800 space-y-1">
+            <p><b>Deja de recibir:</b> campañas masivas, plantillas y recursos del CRM, mensajes de hitos, llamadas programadas y el agente de ventas.</p>
+            <p>Se cancelan sus seguimientos pendientes{destino.prospecto_id ? ' y el prospecto pasa a Perdido' : ''}.</p>
+          </div>
+          <p className="text-[12px] text-gray-500"><b>La operación sigue igual:</b> si manda un servicio, le llegan el aviso de recogida, el recibo y el certificado. Si nos escribe, se le responde.</p>
+          <Campo label="¿Por qué no quiere ser contactada?">
+            <Textarea rows={3} value={motivo} onChange={e => setMotivo(e.target.value)} />
+          </Campo>
+          <div className="flex flex-wrap gap-1.5">
+            {MOTIVOS_BLOQUEO.map(m => (
+              <button key={m} type="button" onClick={() => setMotivo(m)}
+                className="px-2.5 py-1 rounded-full border border-gray-200 text-[11.5px] text-gray-600 hover:bg-gray-50">{m}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+/** Franja roja en la ficha de quien pidió no ser contactada. */
+export function AvisoNoContactar({ ficha, onDesbloquear }) {
+  if (!ficha?.no_contactar) return null
+  return (
+    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="text-[13px] text-red-800">
+        <b>🚫 No contactar.</b> {ficha.no_contactar_motivo}
+        <span className="text-red-600/70 text-[12px]"> · desde {new Date(ficha.no_contactar_desde).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })}</span>
+        <div className="text-[11.5px] text-red-700/80">No recibe publicidad ni gestión comercial. Si manda un servicio, la operación la atiende normal.</div>
+      </div>
+      {onDesbloquear && <Button size="sm" variant="secondary" onClick={onDesbloquear}>Desbloquear</Button>}
+    </div>
   )
 }

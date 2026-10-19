@@ -20,6 +20,7 @@ const ORDENES = {
 
 // A quién llamar primero: las que valen (volumen previo) y se están yendo.
 function puntaje(v) {
+  if (v.no_contactar) return -1   // pidió no ser contactada: al final de la cola
   const vol = (Number(v.s90) || 0) + (Number(v.s90_180) || 0)
   const r = { ALTO: 3, MEDIO: 2, BAJO: 1 }[v.riesgo] || 0
   return vol * r + (v.sin_contacto ? 5 : 0) + (v.tickets_abiertos ? 8 : 0)
@@ -51,7 +52,8 @@ export default function Cartera() {
       const inactiva = v.estado === 'inactivo' || (v.estado === 'activo' && v.activo === false)
       if (segmento === 'INACTIVAS') { if (!inactiva) return false }
       else if (inactiva) return false
-      if (segmento && segmento !== 'INACTIVAS' && v.segmento !== segmento) return false
+      if (segmento === 'NO_CONTACTAR') { if (!v.no_contactar) return false }
+      else if (segmento && segmento !== 'INACTIVAS' && v.segmento !== segmento) return false
       if (localidad && v.localidad !== localidad) return false
       if (responsable === 'SIN' && v.comercial_id) return false
       if (responsable && responsable !== 'SIN' && v.comercial_id !== responsable) return false
@@ -107,6 +109,12 @@ export default function Cartera() {
             {SEGMENTOS[s].label} · {conteo[s]}
           </button>
         ))}
+        {datos.some(v => v.no_contactar) && (
+          <button onClick={() => setParams({ segmento: 'NO_CONTACTAR' })}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold border ${segmento === 'NO_CONTACTAR' ? 'bg-red-600 text-white border-transparent' : 'bg-white border-red-200 text-red-600'}`}>
+            🚫 No contactar · {datos.filter(v => v.no_contactar).length}
+          </button>
+        )}
         <button onClick={() => setParams({ segmento: 'INACTIVAS' })}
           className={`px-3 py-1.5 rounded-full text-[12px] font-semibold border ${segmento === 'INACTIVAS' ? 'bg-gray-700 text-white' : 'bg-white border-gray-200 text-gray-400'}`}>
           Desactivadas
@@ -166,7 +174,8 @@ function Lista({ filas }) {
                   {v.foto_id ? <FotoCrm id={v.foto_id} className="w-9 h-9 rounded-lg flex-shrink-0" />
                     : <span className="w-9 h-9 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center font-bold text-[13px] flex-shrink-0">{v.nombre[0]}</span>}
                   <span className="min-w-0">
-                    <span className="font-semibold text-gray-900 flex items-center gap-1.5">{v.nombre} {v.vip && <Chip color="#B45309">VIP</Chip>} <ClaseChip clase={v.clase} /></span>
+                    <span className="font-semibold text-gray-900 flex items-center gap-1.5">{v.nombre} {v.vip && <Chip color="#B45309">VIP</Chip>} <ClaseChip clase={v.clase} />
+                      {v.no_contactar && <Chip color="#DC2626" title={v.no_contactar_motivo}>🚫 No contactar</Chip>}</span>
                     <span className="block text-[11px] text-gray-400 truncate">{[v.localidad, v.barrio].filter(Boolean).join(' · ') || v.ciudad || '—'}{v.comercial_nombre ? ` · ${v.comercial_nombre}` : ''}</span>
                   </span>
                 </Link>
@@ -216,8 +225,8 @@ function Kanban({ filas }) {
               {de.slice(0, 120).map(v => (
                 <Link key={v.id_aliado} to={`/crm/veterinarias/${v.id_aliado}`}
                   className="block bg-white rounded-xl border border-gray-100 p-2.5 shadow-sm hover:shadow-md transition no-underline">
-                  <div className="text-[12.5px] font-semibold text-gray-900 truncate">{v.nombre}</div>
-                  <div className="text-[11px] text-gray-400 truncate">{v.localidad || v.ciudad || '—'}</div>
+                  <div className="text-[12.5px] font-semibold text-gray-900 truncate">{v.no_contactar ? '🚫 ' : ''}{v.nombre}</div>
+                  <div className="text-[11px] text-gray-400 truncate">{v.no_contactar ? 'No contactar' : (v.localidad || v.ciudad || '—')}</div>
                   <div className="flex items-center justify-between mt-1.5">
                     <span className="text-[11px] text-gray-500">{v.s90} en 90 d · {v.ultimo ? haceDias(v.dias_sin) : 'nunca'}</span>
                     <TendenciaChip tendencia={v.tendencia} variacion={v.variacion} />

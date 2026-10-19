@@ -132,7 +132,7 @@ tk AS (
 )
 SELECT a.id_aliado, a.nombre, a.ciudad, a.localidad, a.barrio, a.direccion, a.telefono, a.whatsapp,
        a.contacto_nombre, a.vip, a.activo, a.estado, a.modalidad_comision, a.comercial_id,
-       a.horario, a.created_at,
+       a.horario, a.created_at, a.no_contactar, a.no_contactar_motivo, a.no_contactar_desde,
        TRIM(CONCAT_WS(' ', pc.nombre, pc.apellido)) AS comercial_nombre,
        COALESCE(agg.total, 0) AS total, COALESCE(agg.s30, 0) AS s30, COALESCE(agg.s90, 0) AS s90,
        COALESCE(agg.s90_180, 0) AS s90_180, COALESCE(agg.mes_actual, 0) AS mes_actual,
@@ -472,11 +472,11 @@ export async function resumenGeneral(personal) {
 
   const sum = (k) => filas.reduce((a, f) => a + (Number(f[k]) || 0), 0)
   const caidas = filas
-    .filter(f => (Number(f.s90_180) || 0) >= 3 && f.tendencia === 'CAE')
+    .filter(f => !f.no_contactar && (Number(f.s90_180) || 0) >= 3 && f.tendencia === 'CAE')
     .sort((a, b) => (a.s90 - a.s90_180) - (b.s90 - b.s90_180))
     .slice(0, 8)
   const enRiesgo = filas
-    .filter(f => f.riesgo === 'ALTO' && f.segmento !== 'DORMIDA')
+    .filter(f => !f.no_contactar && f.riesgo === 'ALTO' && f.segmento !== 'DORMIDA')
     .sort((a, b) => (Number(b.s90_180) + Number(b.s90)) - (Number(a.s90_180) + Number(a.s90)))
     .slice(0, 8)
   const top = [...filas].sort((a, b) => b.mes_actual - a.mes_actual || b.s90 - a.s90).slice(0, 8)
@@ -498,7 +498,8 @@ export async function resumenGeneral(personal) {
         servicios_mes_anterior: sum('mes_anterior'),
         // Lo que se espera en 30 días sumando la probabilidad de cada una.
         activas_esperadas_30: Math.round(filas.reduce((a, f) => a + f.probabilidad / 100, 0)),
-        sin_contacto: filas.filter(f => f.sin_contacto && Number(f.total) > 0).length,
+        sin_contacto: filas.filter(f => !f.no_contactar && f.sin_contacto && Number(f.total) > 0).length,
+        no_contactar: filas.filter(f => f.no_contactar).length,
         comision_pendiente: sum('comision_pendiente'),
       },
       embudo: embudo.rows,
@@ -551,15 +552,15 @@ async function buscarDuplicado(client, { nombre, telefono, whatsapp, excluir = n
   const tels = [tel10(telefono), tel10(whatsapp)].filter(t => t && t.length === 10)
   if (tels.length) {
     const { rows: [al] } = await client.query(
-      `SELECT id_aliado, nombre FROM public.aliados
+      `SELECT id_aliado, nombre, no_contactar FROM public.aliados
         WHERE public.wa_tel10(whatsapp) = ANY($1) OR public.wa_tel10(telefono) = ANY($1) OR public.wa_tel10(telefono_2) = ANY($1)
         LIMIT 1`, [tels])
-    if (al) return { tipo: 'ALIADO', id: al.id_aliado, nombre: al.nombre }
+    if (al) return { tipo: 'ALIADO', id: al.id_aliado, nombre: al.nombre, no_contactar: al.no_contactar }
     const { rows: [pr] } = await client.query(
-      `SELECT id, nombre FROM public.crm_prospectos
+      `SELECT id, nombre, no_contactar FROM public.crm_prospectos
         WHERE (public.wa_tel10(whatsapp) = ANY($1) OR public.wa_tel10(telefono) = ANY($1))
           AND ($2::uuid IS NULL OR id <> $2) LIMIT 1`, [tels, excluir])
-    if (pr) return { tipo: 'PROSPECTO', id: pr.id, nombre: pr.nombre }
+    if (pr) return { tipo: 'PROSPECTO', id: pr.id, nombre: pr.nombre, no_contactar: pr.no_contactar }
   }
   if (nombre) {
     const { rows: [pr] } = await client.query(
@@ -875,6 +876,10 @@ export async function crearSeguimiento(d = {}, personalId, { client = pool, orig
   if (!cuando) return { status: 422, body: { ok: false, error: 'Falta la fecha y hora del seguimiento' } }
   const titulo = txt(d.titulo, 200)
   if (!titulo) return { status: 422, body: { ok: false, error: 'Falta el título del seguimiento' } }
+  if (!ticketId) {
+    const b = await bloqueoDe({ aliadoId, prospectoId }, client)
+    if (b) return { status: 423, body: { ok: false, error: `${b.nombre} pidió no ser contactada (${b.motivo}). Desbloquéala primero si cambió de opinión.` } }
+  }
   const { rows: [s] } = await client.query(
     `INSERT INTO public.crm_seguimientos
        (aliado_id, prospecto_id, ticket_id, tipo, titulo, notas, programado_para, responsable_id, origen, creado_por)
@@ -1165,11 +1170,85 @@ async function contactoDe({ aliadoId, prospectoId }) {
   return p ? { nombre: p.nombre, numero: aWhatsapp(p.whatsapp || p.telefono) } : null
 }
 
+// ─── No contactar (migración 181) ───────────────────────────────────────────
+/** El bloqueo de la ficha, o null. Mira la fila Y el número (otra ficha con ese teléfono). */
+export async function bloqueoDe({ aliadoId = null, prospectoId = null, numero = null }, client = pool) {
+  const { rows: [b] } = await client.query(
+    `SELECT nombre, no_contactar_motivo AS motivo FROM public.aliados WHERE $1::uuid IS NOT NULL AND id_aliado = $1 AND no_contactar
+      UNION ALL
+     SELECT nombre, no_contactar_motivo FROM public.crm_prospectos WHERE $2::uuid IS NOT NULL AND id = $2 AND no_contactar
+      LIMIT 1`, [aliadoId, prospectoId])
+  if (b) return b
+  if (numero) {
+    const { rows: [x] } = await client.query(`SELECT public.fn_crm_no_contactar($1) AS si`, [String(numero)])
+    if (x?.si) return { nombre: 'Ese número', motivo: 'está marcado como no contactar' }
+  }
+  return null
+}
+
+/**
+ * Bloquear: deja de recibir publicidad y gestión comercial. Al hacerlo se
+ * cancelan sus seguimientos pendientes y se descartan sus hitos por enviar; un
+ * prospecto abierto pasa a PERDIDO. La operación (recogidas, recibos,
+ * certificados) NO se toca: si manda un servicio, se le atiende igual.
+ */
+export async function cambiarBloqueo({ aliadoId = null, prospectoId = null, bloquear, motivo }, personalId) {
+  const tabla = aliadoId ? 'aliados' : 'crm_prospectos'
+  const pk = aliadoId ? 'id_aliado' : 'id'
+  const id = uuid(aliadoId || prospectoId)
+  if (!id) return { status: 400, body: { ok: false, error: 'Ficha inválida' } }
+  const m = txt(motivo, 500)
+  if (bloquear && !m) return { status: 422, body: { ok: false, error: 'Escribe por qué no quiere ser contactada' } }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: [f] } = await client.query(
+      `UPDATE public.${tabla}
+          SET no_contactar = $2, no_contactar_motivo = CASE WHEN $2 THEN $3 ELSE NULL END,
+              no_contactar_desde = CASE WHEN $2 THEN now() ELSE NULL END,
+              no_contactar_por = CASE WHEN $2 THEN $4::uuid ELSE NULL END
+        WHERE ${pk} = $1 RETURNING nombre`, [id, !!bloquear, m, personalId])
+    if (!f) { await client.query('ROLLBACK'); return { status: 404, body: { ok: false, error: 'No existe esa ficha' } } }
+    const col = aliadoId ? 'aliado_id' : 'prospecto_id'
+    let cancelados = 0, descartados = 0
+    if (bloquear) {
+      cancelados = (await client.query(
+        `UPDATE public.crm_seguimientos SET estado = 'CANCELADO', completado_en = now(), completado_por = $2
+          WHERE ${col} = $1 AND estado = 'PENDIENTE'`, [id, personalId])).rowCount
+      if (aliadoId) {
+        descartados = (await client.query(
+          `UPDATE public.crm_hitos_envios SET estado = 'DESCARTADO', resuelto_en = now(), resuelto_por = $2,
+                  error = 'No contactar'
+            WHERE aliado_id = $1 AND estado IN ('PROPUESTO','ERROR')`, [id, personalId])).rowCount
+      } else {
+        await client.query(
+          `UPDATE public.crm_prospectos SET etapa = 'PERDIDO', etapa_desde = now(),
+                  motivo_perdida = 'No quiere ser contactado: ' || $2
+            WHERE id = $1 AND etapa NOT IN ('GANADO','PERDIDO')`, [id, m])
+      }
+    }
+    await client.query(
+      `INSERT INTO public.crm_actividades (${col}, tipo, resumen, origen, realizado_por)
+       VALUES ($1, 'SISTEMA', $2, 'SISTEMA', $3)`,
+      [id, bloquear
+        ? `🚫 Marcada como NO CONTACTAR: ${m}${cancelados ? ` · ${cancelados} seguimiento(s) cancelado(s)` : ''}${descartados ? ` · ${descartados} hito(s) descartado(s)` : ''}`
+        : `✅ Desbloqueada: se puede volver a contactar${m ? ` (${m})` : ''}`, personalId])
+    await client.query('COMMIT')
+    log(MOD, `${tabla} ${id} ${bloquear ? 'BLOQUEADA' : 'desbloqueada'} por ${personalId}`)
+    return { status: 200, body: { ok: true, cancelados, descartados } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
+}
+
 /** Plantilla aprobada a una vet o prospecto, por la línea de veterinarias. */
 export async function enviarPlantillaCrm(d = {}, personalId) {
   const aliadoId = uuid(d.aliado_id), prospectoId = uuid(d.prospecto_id)
   const c = await contactoDe({ aliadoId, prospectoId })
   if (!c?.numero) return { status: 422, body: { ok: false, error: 'No tiene WhatsApp en la ficha' } }
+  const b = await bloqueoDe({ aliadoId, prospectoId, numero: c.numero })
+  if (b) return { status: 423, body: { ok: false, error: `No se envía: ${b.nombre} pidió no ser contactada (${b.motivo}).` } }
   const { agenteId, linea } = await lineaVeterinarias()
   const idioma = txt(d.idioma, 10) || 'es_MX'
   let valores = {}
@@ -1194,6 +1273,8 @@ export async function enviarMaterialCrm(d = {}, personalId) {
   const aliadoId = uuid(d.aliado_id), prospectoId = uuid(d.prospecto_id)
   const c = await contactoDe({ aliadoId, prospectoId })
   if (!c?.numero) return { status: 422, body: { ok: false, error: 'No tiene WhatsApp en la ficha' } }
+  const b = await bloqueoDe({ aliadoId, prospectoId, numero: c.numero })
+  if (b) return { status: 423, body: { ok: false, error: `No se envía: ${b.nombre} pidió no ser contactada (${b.motivo}).` } }
   const { agenteId, linea } = await lineaVeterinarias()
   const r = await enviarMaterial({
     contacto: c.numero, linea, clave: d.clave, agenteId: Number(d.agente_id) || agenteId,
@@ -1295,7 +1376,7 @@ export async function evaluarHitos({ enviarAutomaticos = true } = {}) {
     for (const c of cands) {
       const { rows: [e] } = await pool.query(
         `INSERT INTO public.crm_hitos_envios (regla_id, aliado_id, periodo, valor)
-         SELECT $1, $2, $3, $4 FROM public.aliados a WHERE a.id_aliado = $2 AND a.activo
+         SELECT $1, $2, $3, $4 FROM public.aliados a WHERE a.id_aliado = $2 AND a.activo AND NOT a.no_contactar
          ON CONFLICT (regla_id, aliado_id, periodo) DO NOTHING RETURNING id`,
         [r.id, c.aliado_id, c.periodo, c.valor])
       if (!e) continue
@@ -1509,7 +1590,7 @@ export async function prospectoAbiertoPorNumero(contacto) {
   const { rows: [p] } = await pool.query(
     `SELECT * FROM public.crm_prospectos
       WHERE (public.wa_tel10(whatsapp) = $1 OR public.wa_tel10(telefono) = $1)
-        AND etapa NOT IN ('GANADO','PERDIDO')
+        AND etapa NOT IN ('GANADO','PERDIDO') AND NOT no_contactar
       ORDER BY updated_at DESC LIMIT 1`, [t])
   return p || null
 }
@@ -1622,6 +1703,8 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   r.post('/prospectos/:id/mover', responder('prospecto-mover', req => moverProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/convertir', responder('prospecto-convertir', req => convertirProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/plantilla', responder('prospecto-plantilla', req => enviarPlantillaCrm({ ...req.body, prospecto_id: req.params.id, aliado_id: null }, P(req).id)))
+  r.post('/aliados/:id/bloqueo', responder('bloqueo', req => cambiarBloqueo({ aliadoId: req.params.id, bloquear: !!req.body?.bloquear, motivo: req.body?.motivo }, P(req).id)))
+  r.post('/prospectos/:id/bloqueo', responder('prospecto-bloqueo', req => cambiarBloqueo({ prospectoId: req.params.id, bloquear: !!req.body?.bloquear, motivo: req.body?.motivo }, P(req).id)))
   r.post('/prospectos/:id/material', responder('prospecto-material', req => enviarMaterialCrm({ ...req.body, prospecto_id: req.params.id, aliado_id: null }, P(req).id)))
 
   r.get('/actividades', responder('actividades', async req => ({ ok: true, actividades: await listarActividades({

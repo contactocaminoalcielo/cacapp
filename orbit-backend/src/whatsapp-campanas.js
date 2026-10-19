@@ -64,6 +64,8 @@ const AUDIENCIAS = [
              public.fn_wa_internacional(a.whatsapp) AS contacto
         FROM public.aliados a
        WHERE a.activo
+         -- Las que pidieron no ser contactadas (CRM, migración 181) no reciben publicidad.
+         AND NOT a.no_contactar
          AND public.fn_wa_internacional(a.whatsapp) IS NOT NULL
          AND ($1::text    IS NULL OR a.ciudad ILIKE '%' || $1 || '%')
          AND ($2::boolean IS NULL OR COALESCE(a.vip, false) = $2)
@@ -646,6 +648,17 @@ async function unLatido() {
       }
       Object.assign(dados, v.valores)
       if (v.contacto) contacto = v.contacto
+    }
+
+    // 🔒 No contactar (migración 181): se mira AL ENVIAR y por número, no al
+    // armar la lista. Así respeta un bloqueo puesto con la campaña en curso, y
+    // también a una veterinaria que venga en un archivo importado sin id.
+    const { rows: [bloq] } = await pool.query(`SELECT public.fn_crm_no_contactar($1) AS si`, [String(contacto || '')])
+    if (bloq?.si) {
+      await pool.query(
+        `UPDATE public.whatsapp_campana_destinos SET estado='OMITIDO', error=$2 WHERE id=$1`,
+        [d.id, 'Pidió no ser contactada (CRM)'])
+      continue
     }
 
     const r = await mandarPlantilla({

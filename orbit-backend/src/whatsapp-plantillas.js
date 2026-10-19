@@ -1045,6 +1045,7 @@ const RESOLVER_ALIADO = `
          a.ciudad           AS aliado_ciudad,
          a.whatsapp         AS aliado_whatsapp,
          a.whatsapp         AS contacto,
+         a.no_contactar     AS no_contactar,
          -- Para los hitos del CRM (migración 180): "ya van {{n}} servicios".
          (SELECT count(*) FROM public.servicios s
            WHERE s.aliado_origen_id = a.id_aliado AND s.estado <> 'CANCELADO') AS aliado_servicios_total,
@@ -1185,6 +1186,8 @@ export async function valoresDeFuente({ plantilla, idioma = 'es_MX', fuente, ref
   const { body: { variables } } = await variablesDe({ plantilla, idioma, agenteId })
   const { rows: [datos] } = await pool.query(f.sql, [refId])
   if (!datos) return { ok: false, error: `Ya no existe esa ${f.etiqueta}` }
+  // CRM (migración 181): una veterinaria marcada "no contactar" no recibe envíos masivos.
+  if (datos.no_contactar) return { ok: false, error: 'Pidió no ser contactada (CRM)' }
 
   const valores = {}
   const sinDato = []

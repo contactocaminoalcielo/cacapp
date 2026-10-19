@@ -125,7 +125,7 @@ export default function Prospectos() {
                     <div key={p.id} draggable onDragStart={() => { arrastrando.current = p }}
                       onClick={() => navegar(`/crm/prospectos/${p.id}`)}
                       className="bg-white rounded-xl border border-gray-100 p-2.5 shadow-sm hover:shadow-md cursor-pointer transition">
-                      <div className="text-[12.5px] font-semibold text-gray-900 truncate">{p.nombre}</div>
+                      <div className="text-[12.5px] font-semibold text-gray-900 truncate">{p.no_contactar ? '🚫 ' : ''}{p.nombre}</div>
                       <div className="text-[11px] text-gray-400 truncate">{[p.contacto_nombre, p.localidad || p.ciudad].filter(Boolean).join(' · ') || '—'}</div>
                       <div className="flex items-center justify-between mt-1.5 gap-1">
                         <Chip color="#64748B">{FUENTES[p.fuente] || p.fuente}</Chip>
@@ -362,7 +362,7 @@ function Importar({ abierto, onCerrar, onListo }) {
           {resultado.duplicadas.length > 0 && (
             <div className="max-h-48 overflow-y-auto rounded-xl border border-gray-100 p-2 text-[12px]">
               {resultado.duplicadas.map((d, i) => (
-                <div key={i} className="py-0.5">Fila {d.fila}: <b>{d.nombre}</b> → ya {d.con?.tipo === 'ALIADO' ? 'es aliada' : 'es prospecto'} como “{d.con?.nombre}”</div>
+                <div key={i} className="py-0.5">Fila {d.fila}: <b>{d.nombre}</b> → ya {d.con?.tipo === 'ALIADO' ? 'es aliada' : 'es prospecto'} como “{d.con?.nombre}”{d.con?.no_contactar && <span className="text-red-600 font-semibold"> · 🚫 no contactar</span>}</div>
               ))}
             </div>
           )}

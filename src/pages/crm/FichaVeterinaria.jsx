@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Phone, MessageCircle, PhoneCall, CalendarPlus, LifeBuoy, Send, Paperclip, Pencil,
-  MapPin, Clock, Instagram, Globe, Mail, Link2, Check, CheckCircle2, RotateCcw, XCircle,
+  MapPin, Clock, Instagram, Globe, Mail, Link2, Check, CheckCircle2, RotateCcw, XCircle, Ban,
 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import {
@@ -14,7 +14,7 @@ import {
   Cargando, ErrorCaja, SegmentoChip, TendenciaChip, Probabilidad, ClaseChip, RiesgoChip, Seccion, Vacio,
   Chip, EstadoTicketChip, PrioridadChip, Pestanas, EtapaChip, ACENTO,
 } from '@/components/crm/ui'
-import { RegistrarGestion, SeguimientoModal, TicketModal } from '@/components/crm/Modales'
+import { RegistrarGestion, SeguimientoModal, TicketModal, BloqueoModal, AvisoNoContactar } from '@/components/crm/Modales'
 import Copiloto from '@/components/crm/Copiloto'
 import Fotos, { FotoCrm } from '@/components/crm/Fotos'
 import { EnviarPlantillaCrm, EnviarMaterialCrm } from '@/components/crm/EnviarWhatsapp'
@@ -86,6 +86,7 @@ export default function FichaVeterinaria() {
               {a.vip && <Chip color="#B45309">VIP</Chip>}
               {m.riesgo && m.riesgo !== 'BAJO' && <RiesgoChip riesgo={m.riesgo} />}
               {a.estado !== 'activo' && <Chip color="#DC2626">{a.estado}</Chip>}
+              {a.no_contactar && <Chip color="#DC2626">🚫 No contactar</Chip>}
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-gray-500">
               {a.contacto_nombre && <span>👤 {a.contacto_nombre}{a.contacto_cargo ? ` · ${a.contacto_cargo}` : ''}</span>}
@@ -102,16 +103,19 @@ export default function FichaVeterinaria() {
             <div className="mt-4 flex flex-wrap gap-2">
               {telHref(tel) && <AccionLink href={telHref(tel)} icono={Phone} principal>Llamar</AccionLink>}
               <AccionBoton icono={PhoneCall} onClick={() => { setSegSel(null); setModal('gestion') }}>Registrar gestión</AccionBoton>
-              <AccionBoton icono={CalendarPlus} onClick={() => { setSegSel(null); setModal('seguimiento') }}>Programar</AccionBoton>
+              {!a.no_contactar && <AccionBoton icono={CalendarPlus} onClick={() => { setSegSel(null); setModal('seguimiento') }}>Programar</AccionBoton>}
               {wa && <AccionLink to={`/crm/bandeja?contacto=${String(wa).replace(/\D/g, '')}`} icono={MessageCircle}>Chat WhatsApp</AccionLink>}
-              <AccionBoton icono={Send} onClick={() => setModal('plantilla')}>Plantilla</AccionBoton>
-              <AccionBoton icono={Paperclip} onClick={() => setModal('material')}>Recurso</AccionBoton>
+              {!a.no_contactar && <AccionBoton icono={Send} onClick={() => setModal('plantilla')}>Plantilla</AccionBoton>}
+              {!a.no_contactar && <AccionBoton icono={Paperclip} onClick={() => setModal('material')}>Recurso</AccionBoton>}
               <AccionBoton icono={LifeBuoy} onClick={() => setModal('ticket')}>Ticket</AccionBoton>
               <AccionBoton icono={Pencil} onClick={() => setModal('editar')}>Editar ficha</AccionBoton>
+              {!a.no_contactar && <AccionBoton icono={Ban} onClick={() => setModal('bloqueo')}>No contactar</AccionBoton>}
             </div>
           </div>
         </div>
       </div>
+
+      <AvisoNoContactar ficha={a} onDesbloquear={() => setModal('bloqueo')} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* ── Columna principal ── */}
@@ -280,12 +284,14 @@ export default function FichaVeterinaria() {
         </div>
       </div>
 
-      <RegistrarGestion abierto={modal === 'gestion'} onCerrar={() => setModal(null)} destino={destino} seguimiento={segSel} onGuardado={cargar} />
+      <RegistrarGestion abierto={modal === 'gestion'} onCerrar={() => setModal(null)} destino={destino} seguimiento={segSel} onGuardado={cargar} sinSiguiente={a.no_contactar} />
       <SeguimientoModal abierto={modal === 'seguimiento'} onCerrar={() => setModal(null)} destino={destino} existente={segSel} onGuardado={cargar} />
       <TicketModal abierto={modal === 'ticket'} onCerrar={() => setModal(null)} aliado={a} onCreado={cargar} />
       <EnviarPlantillaCrm abierto={modal === 'plantilla'} onCerrar={() => setModal(null)} destino={destino} whatsapp={a.whatsapp} onEnviada={cargar} />
       <EnviarMaterialCrm abierto={modal === 'material'} onCerrar={() => setModal(null)} destino={destino} onEnviado={cargar} />
       <EditarFicha abierto={modal === 'editar'} onCerrar={() => setModal(null)} aliado={a} onGuardado={cargar} />
+      <BloqueoModal abierto={modal === 'bloqueo'} onCerrar={() => setModal(null)} destino={destino} nombre={a.nombre}
+        bloqueada={a.no_contactar} onListo={() => { refrescarAlertas(); cargar() }} />
     </div>
   )
 }

@@ -26,7 +26,7 @@ export default function Agenda() {
     crm.cartera().then(r => {
       const peso = v => ((Number(v.s90) || 0) + (Number(v.s90_180) || 0)) * ({ ALTO: 3, MEDIO: 2 }[v.riesgo] || 0)
       setSugeridas((r.aliados || [])
-        .filter(v => v.estado === 'activo' && Number(v.total) > 0 && ['ALTO', 'MEDIO'].includes(v.riesgo) && !v.proximo_seguimiento && v.sin_contacto)
+        .filter(v => v.estado === 'activo' && !v.no_contactar && Number(v.total) > 0 && ['ALTO', 'MEDIO'].includes(v.riesgo) && !v.proximo_seguimiento && v.sin_contacto)
         .sort((a, b) => peso(b) - peso(a)).slice(0, 12))
     }).catch(() => {})
   }, [])

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Phone, PhoneCall, CalendarPlus, MessageCircle, Send, Paperclip, Trophy, XCircle, Pencil, CheckCircle2, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Phone, PhoneCall, CalendarPlus, MessageCircle, Send, Paperclip, Trophy, XCircle, Pencil, CheckCircle2, RotateCcw, Ban } from 'lucide-react'
 import { crm, ETAPAS, FUENTES, TIPOS_GESTION, fechaCorta, fechaHora, relativo, telHref } from '@/lib/crmApi'
 import { Modal } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { Cargando, ErrorCaja, Seccion, Vacio, Chip, Campo, EtapaChip, ACENTO } from '@/components/crm/ui'
-import { RegistrarGestion, SeguimientoModal } from '@/components/crm/Modales'
+import { RegistrarGestion, SeguimientoModal, BloqueoModal, AvisoNoContactar } from '@/components/crm/Modales'
 import Copiloto from '@/components/crm/Copiloto'
 import Fotos from '@/components/crm/Fotos'
 import { EnviarPlantillaCrm, EnviarMaterialCrm } from '@/components/crm/EnviarWhatsapp'
@@ -65,6 +65,7 @@ export default function FichaProspecto() {
           <EtapaChip clave={p.etapa} />
           <Chip color="#64748B">{FUENTES[p.fuente]}{p.fuente_detalle ? ` · ${p.fuente_detalle}` : ''}</Chip>
           <Chip color={ACENTO}>{p.probabilidad_efectiva}% prob.</Chip>
+          {p.no_contactar && <Chip color="#DC2626">🚫 No contactar</Chip>}
         </div>
         <div className="text-[12.5px] text-gray-500 mt-1">
           {[p.contacto_nombre && `👤 ${p.contacto_nombre}${p.contacto_cargo ? ` · ${p.contacto_cargo}` : ''}`, [p.direccion, p.barrio, p.localidad, p.ciudad].filter(Boolean).join(', ')].filter(Boolean).join(' · ') || 'Sin datos de contacto'}
@@ -93,16 +94,19 @@ export default function FichaProspecto() {
         <div className="mt-4 flex flex-wrap gap-2">
           {telHref(p.telefono || p.whatsapp) && <a href={telHref(p.telefono || p.whatsapp)} className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-white text-[12.5px] font-semibold no-underline" style={{ background: ACENTO }}><Phone size={14} /> Llamar</a>}
           <Accion icono={PhoneCall} onClick={() => { setSegSel(null); setModal('gestion') }}>Registrar gestión</Accion>
-          <Accion icono={CalendarPlus} onClick={() => { setSegSel(null); setModal('seguimiento') }}>Programar</Accion>
+          {!p.no_contactar && <Accion icono={CalendarPlus} onClick={() => { setSegSel(null); setModal('seguimiento') }}>Programar</Accion>}
           {wa && <Link to={`/crm/bandeja?contacto=${String(wa).replace(/\D/g, '')}`} className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-gray-200 bg-white text-[12.5px] font-semibold text-gray-700 no-underline hover:border-teal-600"><MessageCircle size={14} /> Chat WhatsApp</Link>}
-          <Accion icono={Send} onClick={() => setModal('plantilla')}>Plantilla</Accion>
-          <Accion icono={Paperclip} onClick={() => setModal('material')}>Recurso</Accion>
+          {!p.no_contactar && <Accion icono={Send} onClick={() => setModal('plantilla')}>Plantilla</Accion>}
+          {!p.no_contactar && <Accion icono={Paperclip} onClick={() => setModal('material')}>Recurso</Accion>}
           <Accion icono={Pencil} onClick={() => setModal('editar')}>Editar</Accion>
           {!cerrado && <Accion icono={Trophy} onClick={() => setModal('ganar')}>Convertir en aliada</Accion>}
           {!cerrado && <Accion icono={XCircle} onClick={() => { setMotivo(''); setModal('perder') }}>Perdido</Accion>}
+          {!p.no_contactar && <Accion icono={Ban} onClick={() => setModal('bloqueo')}>No contactar</Accion>}
         </div>
-        {p.etapa === 'PERDIDO' && <div className="mt-3 text-[12.5px] text-red-600">Perdido: {p.motivo_perdida} · <button className="underline" onClick={() => mover('CONTACTADO')}>Reabrir</button></div>}
+        {p.etapa === 'PERDIDO' && <div className="mt-3 text-[12.5px] text-red-600">Perdido: {p.motivo_perdida}{!p.no_contactar && <> · <button className="underline" onClick={() => mover('CONTACTADO')}>Reabrir</button></>}</div>}
       </div>
+
+      <AvisoNoContactar ficha={p} onDesbloquear={() => setModal('bloqueo')} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
@@ -157,11 +161,13 @@ export default function FichaProspecto() {
         </div>
       </div>
 
-      <RegistrarGestion abierto={modal === 'gestion'} onCerrar={() => setModal(null)} destino={destino} seguimiento={segSel} onGuardado={cargar} />
+      <RegistrarGestion abierto={modal === 'gestion'} onCerrar={() => setModal(null)} destino={destino} seguimiento={segSel} onGuardado={cargar} sinSiguiente={p.no_contactar} />
       <SeguimientoModal abierto={modal === 'seguimiento'} onCerrar={() => setModal(null)} destino={destino} existente={segSel} onGuardado={cargar} />
       <EnviarPlantillaCrm abierto={modal === 'plantilla'} onCerrar={() => setModal(null)} destino={destino} whatsapp={wa} onEnviada={cargar} />
       <EnviarMaterialCrm abierto={modal === 'material'} onCerrar={() => setModal(null)} destino={destino} onEnviado={cargar} />
       <Ganar prospecto={modal === 'ganar' ? p : null} onCerrar={() => setModal(null)} onListo={r => { if (r?.aliado_id) navegar(`/crm/veterinarias/${r.aliado_id}`); else cargar() }} />
+      <BloqueoModal abierto={modal === 'bloqueo'} onCerrar={() => setModal(null)} destino={destino} nombre={p.nombre}
+        bloqueada={p.no_contactar} onListo={() => { refrescarAlertas(); cargar() }} />
       <EditarProspecto abierto={modal === 'editar'} prospecto={p} equipo={equipo} onCerrar={() => setModal(null)} onGuardado={cargar} />
       <Modal open={modal === 'perder'} onClose={() => setModal(null)} title="Marcar perdido" maxWidth="max-w-md"
         footer={<><span /><Button variant="danger" disabled={!motivo.trim()} onClick={async () => {

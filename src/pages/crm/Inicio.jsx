@@ -67,7 +67,8 @@ export default function Inicio() {
               </button>
             ))}
           </div>
-          <p className="text-[11.5px] text-gray-400 mt-3">{c.sin_contacto} veterinarias con servicios llevan demasiado tiempo sin una gestión comercial.</p>
+          <p className="text-[11.5px] text-gray-400 mt-3">{c.sin_contacto} veterinarias con servicios llevan demasiado tiempo sin una gestión comercial.
+            {c.no_contactar > 0 && <> · <Link to="/crm/veterinarias?segmento=NO_CONTACTAR" className="text-red-500">{c.no_contactar} marcadas “no contactar”</Link></>}</p>
         </Seccion>
 
         <Seccion titulo="Embudo de prospectos" accion={<Link to="/crm/prospectos" className="text-[12px] font-semibold" style={{ color: ACENTO }}>Abrir tablero</Link>}>

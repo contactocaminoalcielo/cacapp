@@ -61,6 +61,8 @@ export const crm = {
 
   copiloto:     datos => orbitApi('/crm/copiloto', { method: 'POST', body: datos }),
   agentes:      () => orbitApi('/crm/agentes'),
+  bloqueoAliado:    (id, datos) => orbitApi(`/crm/aliados/${id}/bloqueo`, { method: 'POST', body: datos }),
+  bloqueoProspecto: (id, datos) => orbitApi(`/crm/prospectos/${id}/bloqueo`, { method: 'POST', body: datos }),
 }
 
 // ─── Catálogos y etiquetas ──────────────────────────────────────────────────
