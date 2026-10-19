@@ -259,7 +259,16 @@ function resumenDeterminista(f, extras = {}) {
     if (f.segmento === 'DORMIDA') out.push('Está dormida: hay que reactivarla con una llamada o visita.')
     else if (f.segmento === 'EN_RIESGO') out.push('Está en riesgo de perderse: ya superó con creces su ritmo habitual.')
     else if (f.segmento === 'ENFRIANDOSE') out.push('Se está enfriando: buen momento para un contacto de cortesía.')
-    else if (f.proximo_esperado) out.push(`Por su ritmo, el próximo servicio se espera alrededor del ${f.proximo_esperado}.`)
+    else if (f.proximo_esperado) {
+      const [y, mm, dd] = f.proximo_esperado.split('-').map(Number)
+      const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+      const cuando = `${dd} de ${meses[mm - 1]}`
+      // Si la fecha esperada ya pasó, decirlo así: "se espera el 11 de oct" un
+      // 19 de oct se lee como un error y esconde lo importante (va atrasada).
+      out.push(new Date(Date.UTC(y, mm - 1, dd)) < new Date(Date.now() - 86400000)
+        ? `Por su ritmo ya debería haber mandado otro servicio (se esperaba hacia el ${cuando}).`
+        : `Por su ritmo, el próximo servicio se espera hacia el ${cuando}.`)
+    }
     out.push(`Probabilidad de que mande en los próximos 30 días: ${f.probabilidad}%.`)
   }
   if (n(f.comision_pendiente) > 0) {
