@@ -356,7 +356,10 @@ export async function fichaAliado(id) {
         WHERE s.aliado_origen_id = $1 ORDER BY q.created_at DESC LIMIT 30`, [aliadoId]),
     pool.query(
       `SELECT contacto, phone_number_id, ultimo_mensaje_en, ultimo_entrante_en, ventana_abierta, sin_leer, ultimo_texto
-         FROM public.v_whatsapp_conversaciones WHERE aliado_id = $1
+         FROM public.v_whatsapp_conversaciones
+        -- Solo la línea de veterinarias: la misma clínica también recibe por la
+        -- de familias (recibos, digitales) y esa no es del área comercial.
+        WHERE aliado_id = $1 AND phone_number_id = (SELECT (phone_number_ids)[1] FROM public.agente_wa WHERE clave = 'VETERINARIAS')
         ORDER BY ultimo_mensaje_en DESC NULLS LAST LIMIT 3`, [aliadoId]).catch(() => ({ rows: [] })),
     pool.query(`SELECT id, numero, etapa, fuente, created_at FROM public.crm_prospectos WHERE aliado_id = $1 LIMIT 1`, [aliadoId]),
   ])
@@ -1609,6 +1612,7 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
            LEFT JOIN LATERAL (SELECT ventana_abierta, sin_leer, ultimo_texto FROM public.v_whatsapp_conversaciones v
                                WHERE v.contacto = c.contacto AND v.phone_number_id = c.phone_number_id) v ON true
           WHERE public.wa_tel10(c.contacto) IN (public.wa_tel10($1), public.wa_tel10($2))
+            AND c.phone_number_id = (SELECT (phone_number_ids)[1] FROM public.agente_wa WHERE clave = 'VETERINARIAS')
           ORDER BY ultimo_mensaje_en DESC NULLS LAST LIMIT 3`, [p.whatsapp || '', p.telefono || '']).catch(() => ({ rows: [] })),
     ])
     return { status: 200, body: { ok: true, prospecto: { ...p, probabilidad_efectiva: p.probabilidad ?? PROB_ETAPA[p.etapa] },
