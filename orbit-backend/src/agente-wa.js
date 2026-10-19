@@ -35,6 +35,7 @@ import { enlacePersonalAliado, enlaceAfiliacion } from './aliados.js'
 import { construirEnlace } from './reglas-imagenes.js'
 import {
   prospectoAbiertoPorNumero, contextoProspectoParaAgente, registrarInteresDesdeAgente, crearProspecto,
+  traspasoVivo, extenderTraspaso, pasarAComercial, devolverAOperacion, contextoAliadaParaVentas, reportarReclamo,
 } from './crm.js'
 
 const MOD = '[agente-wa]'
@@ -297,6 +298,48 @@ const HERRAMIENTAS = [{
     },
     required: ['interes', 'resumen'],
   },
+}, {
+  name: 'pasar_a_comercial',
+  description:
+    'Pasa ESTA conversación al área comercial cuando el tema es comercial: quiere afiliarse o ser '
+    + 'aliada, pregunta cómo funcionan las comisiones (porcentajes, VIP, cuándo se pagan), quiere un '
+    + 'convenio, planes o precios especiales para la clínica, o beneficios de la alianza.\n\n'
+    + '⚠️ NO la uses si piden una recogida, preguntan por un servicio en curso, una entrega o un '
+    + 'certificado: eso lo atiendes tú. Si en el mismo mensaje hay las dos cosas, atiende primero la '
+    + 'recogida.\n\nNO escribas nada al usarla: el área comercial responde este mismo mensaje.',
+  input_schema: {
+    type: 'object',
+    properties: { motivo: { type: 'string', description: 'Una línea: qué tema comercial trae. Ej: "pregunta por comisión VIP".' } },
+    required: ['motivo'],
+  },
+}, {
+  name: 'devolver_a_operacion',
+  description:
+    'Devuelve ESTA conversación al agente de operación cuando la clínica pide una recogida, pregunta '
+    + 'por un servicio en curso, una entrega o un certificado, o cuando el tema comercial ya terminó.\n\n'
+    + 'NO escribas nada al usarla: el agente de operación responde este mismo mensaje.',
+  input_schema: {
+    type: 'object',
+    properties: { motivo: { type: 'string', description: 'Una línea: por qué vuelve a operación.' } },
+    required: ['motivo'],
+  },
+}, {
+  name: 'reportar_reclamo',
+  description:
+    'Registra un RECLAMO de la clínica cuando algo concreto salió mal: no le han pagado una comisión, '
+    + 'un pago o una factura, una recogida o entrega tardía, un certificado con error, mala atención. '
+    + 'Crea un caso prioritario y alerta al equipo para que lo revise.\n\n'
+    + 'Úsala solo con un reclamo, no con una pregunta ("¿cómo se paga la comisión?" no es reclamo). '
+    + 'Después dile que quedó registrado y que el equipo lo revisa y le responde. No prometas fechas ni montos.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      categoria: { type: 'string', enum: ['COMISION', 'PAGO', 'FACTURACION', 'RECOGIDA', 'ENTREGA', 'CERTIFICADO', 'RECORDATORIOS', 'ATENCION', 'OTRO'] },
+      asunto:    { type: 'string', description: 'Una línea. Ej: "No le han pagado la comisión de septiembre".' },
+      detalle:   { type: 'string', description: 'Lo que dijo, con mascotas, fechas o montos si los mencionó.' },
+    },
+    required: ['categoria', 'asunto'],
+  },
 }]
 
 // Catálogo que usa la pantalla para decidir qué capacidades puede concederle
@@ -358,6 +401,27 @@ export const HERRAMIENTAS_DISPONIBLES = [
     resumen: 'Anota en el CRM lo que dijo un prospecto y agenda la llamada del área comercial.',
     propia_del_negocio: true,
     orden: 8,
+  },
+  {
+    clave: 'pasar_a_comercial',
+    nombre: 'Pasar al agente comercial',
+    resumen: 'Entrega la conversación al agente comercial cuando el tema es afiliación, comisiones o convenio.',
+    propia_del_negocio: true,
+    orden: 9,
+  },
+  {
+    clave: 'devolver_a_operacion',
+    nombre: 'Devolver a operación',
+    resumen: 'Devuelve la conversación al agente de veterinarias cuando piden un servicio.',
+    propia_del_negocio: true,
+    orden: 10,
+  },
+  {
+    clave: 'reportar_reclamo',
+    nombre: 'Reportar reclamo (ticket)',
+    resumen: 'Abre un ticket prioritario y alerta al equipo cuando la clínica reclama algo concreto.',
+    propia_del_negocio: true,
+    orden: 11,
   },
 ]
 
@@ -501,9 +565,19 @@ export async function construirHerramientas(agente = null) {
     })
   }
 
-  // Las dos del negocio, solo si este agente las tiene encendidas.
+  // Pasar al comercial solo si hay un agente delegado ENCENDIDO que la reciba:
+  // ofrecerla con el comercial apagado sería prometer un traspaso que no ocurre.
+  let hayComercial = false
+  if (tiene('pasar_a_comercial') && agenteId) {
+    const { rows: [d] } = await pool.query(
+      `SELECT 1 FROM public.agente_wa WHERE activo AND delegado_de = $1 LIMIT 1`, [agenteId])
+    hayComercial = !!d
+  }
+
+  // Las del negocio, solo si este agente las tiene encendidas.
   const propias = HERRAMIENTAS
     .filter(h => tiene(h.name))
+    .filter(h => h.name !== 'pasar_a_comercial' || hayComercial)
     .map(h => ({ ...h, description: texto(h.name, h.description) }))
 
   if (!etiquetas.length || !tiene('clasificar_conversacion')) return [...propias, ...extra]
@@ -1542,6 +1616,13 @@ async function agenteParaLinea(phoneNumberId, contacto = null) {
       `SELECT ${COLUMNAS_AGENTE} FROM public.agente_wa
         WHERE activo AND delegado_de = $1 ORDER BY id LIMIT 1`, [duenio.id])
     if (!delegado) return duenio
+    // Por TEMA (migración 182): el agente de veterinarias le pasó esta
+    // conversación. Cada vez que se usa, la red de seguridad se corre.
+    const t = await traspasoVivo(phoneNumberId, String(contacto).replace(/\D/g, ''))
+    if (t && t.agente_id === delegado.id) {
+      extenderTraspaso(t.id).catch(() => {})
+      return { ...delegado, phone_number_ids: duenio.phone_number_ids, traspasoId: t.id }
+    }
     const prospecto = await prospectoAbiertoPorNumero(contacto)
     if (!prospecto) return duenio
     return { ...delegado, phone_number_ids: duenio.phone_number_ids }
@@ -1892,6 +1973,19 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
     log(MOD, `reintentando ${num} tras: ${r.error}`)
     await new Promise(res => setTimeout(res, 1500))
     r = await ejecutar({ agente, contacto: num, phoneNumberId, origen: 'WHATSAPP', pendientesDesde })
+  }
+
+  // ── Traspaso (migración 182) ──
+  // El agente pasó la conversación al otro: su texto se descarta (no debe
+  // anunciar nada) y el que la recibe contesta el MISMO mensaje. Una sola vez:
+  // si el segundo también quisiera devolverla, se queda con ella este turno.
+  if (r.traspaso) {
+    const otro = await agenteParaLinea(phoneNumberId, num)
+    if (otro && otro.id !== agente.id) {
+      log(MOD, `${num}: ${agente.clave} → ${otro.clave} (${r.traspaso})`)
+      r = await ejecutar({ agente: otro, contacto: num, phoneNumberId, origen: 'WHATSAPP', pendientesDesde })
+      if (r.traspaso) log(MOD, `${num}: ${otro.clave} quiso devolverla en el mismo turno — se ignora`)
+    }
   }
 
   // No había nada nuevo que contestar. Silencio correcto, no fallo.
@@ -2496,6 +2590,8 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
   // precios distintos, y entre el mas caro y el mas barato hay 20 veces.
   let entradaFresca = 0
   let contextoFamilia = null
+  // Si este turno pasó la conversación al otro agente (migración 182).
+  let traspaso = null
 
   try {
     const [system, herramientas] = await Promise.all([
@@ -2548,6 +2644,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
     if ((!mensajePrueba || contextoDe) && agente.categoria === 'VENTAS') {
       const p = await prospectoAbiertoPorNumero(contextoDe || contacto).catch(() => null)
       const nota = contextoProspectoParaAgente(p)
+        || await contextoAliadaParaVentas(phoneNumberId, String(contextoDe || contacto).replace(/\D/g, '')).catch(() => null)
       if (nota) {
         const ultimo = messages[messages.length - 1]
         ultimo.content = [...aBloques(ultimo.content), { type: 'text', text: `<sistema>${nota}</sistema>` }]
@@ -2659,6 +2756,24 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
             }).catch(() => {})
           } else if (bloque.nombre === 'consultar_tarifas') {
             out = await consultarTarifas({ entrada: bloque.entrada })
+          } else if (bloque.nombre === 'pasar_a_comercial' || bloque.nombre === 'devolver_a_operacion') {
+            if (mensajePrueba) {
+              out = { ok: true, nota: 'Ensayo: en la línea real, el otro agente respondería este mensaje.' }
+            } else if (bloque.nombre === 'pasar_a_comercial') {
+              const { rows: [d] } = await pool.query(
+                `SELECT id FROM public.agente_wa WHERE activo AND delegado_de = $1 ORDER BY id LIMIT 1`, [agente.id])
+              out = await pasarAComercial({
+                phoneNumberId, contacto, desdeAgenteId: agente.id, haciaAgenteId: d?.id || null,
+                motivo: bloque.entrada?.motivo,
+              })
+            } else {
+              out = await devolverAOperacion({ phoneNumberId, contacto, motivo: bloque.entrada?.motivo })
+            }
+            if (out.ok && !mensajePrueba) traspaso = bloque.nombre
+          } else if (bloque.nombre === 'reportar_reclamo') {
+            out = mensajePrueba
+              ? { ok: true, nota: 'Ensayo: en la línea real se abriría un ticket y una alerta.' }
+              : await reportarReclamo({ contacto, entrada: bloque.entrada || {} })
           } else if (bloque.nombre === 'registrar_interes_comercial') {
             // En un ensayo ('PRUEBA') no se escribe en el CRM: el número no existe.
             out = mensajePrueba
@@ -2735,6 +2850,10 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       }
       messages.push(motor.mensajeResultados(resultados))
 
+      // La conversación cambió de agente: este no dice nada más. El que la
+      // recibe responde el MISMO mensaje (lo hace `responder`).
+      if (traspaso) break
+
       // Si la vuelta SOLO hizo TRÁMITE, no hay nada que devolverle al modelo y
       // la vuelta siguiente costaría un contexto entero (18.000 tokens) para
       // devolver un texto vacío — o peor.
@@ -2785,7 +2904,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       }).catch(e => log(MOD, 'sombra: no se pudo comparar —', e.message))
     }
 
-    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId }
+    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId, traspaso }
   } catch (e) {
     fallo = e.message
     log(MOD, 'ERROR ejecutando —', e.message)

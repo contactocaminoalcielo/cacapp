@@ -1643,6 +1643,173 @@ export async function registrarInteresDesdeAgente({ contacto, entrada = {} }) {
     : { ok: false, error: r.body?.error }
 }
 
+// ─── Traspasos entre agentes (migración 182) ────────────────────────────────
+/** La ficha (aliada o prospecto) de un número, para dejar las cosas en su bitácora. */
+async function fichaPorNumero(contacto) {
+  const t = tel10(contacto)
+  if (!t || t.length !== 10) return {}
+  const { rows: [a] } = await pool.query(
+    `SELECT id_aliado, nombre, vip, modalidad_comision, estado, activo FROM public.aliados
+      WHERE public.wa_tel10(whatsapp) = $1 OR public.wa_tel10(telefono) = $1 OR public.wa_tel10(telefono_2) = $1
+      ORDER BY activo DESC NULLS LAST LIMIT 1`, [t])
+  if (a) return { aliado: a }
+  const { rows: [pr] } = await pool.query(
+    `SELECT id, nombre, etapa FROM public.crm_prospectos
+      WHERE public.wa_tel10(whatsapp) = $1 OR public.wa_tel10(telefono) = $1
+      ORDER BY updated_at DESC LIMIT 1`, [t])
+  return pr ? { prospecto: pr } : {}
+}
+
+async function diasTraspaso() {
+  const { rows: [r] } = await pool.query(
+    `SELECT valor FROM public.config_operativa WHERE modulo = 'CRM' AND clave = 'dias_traspaso_comercial'`)
+  return Math.max(1, Number(r?.valor) || 7)
+}
+
+/**
+ * El traspaso vivo de una conversación, si lo hay. Vencido = como si no
+ * existiera (vuelve a operación); se cierra al leerlo para dejar rastro.
+ */
+export async function traspasoVivo(phoneNumberId, contacto) {
+  const { rows: [t] } = await pool.query(
+    `SELECT * FROM public.agente_wa_traspasos
+      WHERE phone_number_id = $1 AND contacto = $2 AND cerrado_en IS NULL`, [phoneNumberId, contacto])
+  if (!t) return null
+  if (new Date(t.hasta) < new Date()) {
+    await pool.query(
+      `UPDATE public.agente_wa_traspasos SET cerrado_en = now(), cerrado_motivo = 'Venció sin mensajes' WHERE id = $1`, [t.id])
+    return null
+  }
+  return t
+}
+
+/** Cada respuesta del comercial corre la red de seguridad. */
+export async function extenderTraspaso(id) {
+  const dias = await diasTraspaso()
+  await pool.query(
+    `UPDATE public.agente_wa_traspasos SET hasta = now() + make_interval(days => $2) WHERE id = $1 AND cerrado_en IS NULL`,
+    [id, dias])
+}
+
+/** Veterinarias → comercial. */
+export async function pasarAComercial({ phoneNumberId, contacto, desdeAgenteId, haciaAgenteId, motivo }) {
+  if (!haciaAgenteId) return { ok: false, error: 'El agente comercial no está disponible: atiéndela tú.' }
+  const dias = await diasTraspaso()
+  await pool.query(
+    `INSERT INTO public.agente_wa_traspasos (phone_number_id, contacto, agente_id, desde_agente_id, motivo, hasta)
+     VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6))
+     ON CONFLICT (phone_number_id, contacto) WHERE cerrado_en IS NULL
+     DO UPDATE SET agente_id = EXCLUDED.agente_id, motivo = EXCLUDED.motivo, hasta = EXCLUDED.hasta`,
+    [phoneNumberId, contacto, haciaAgenteId, desdeAgenteId, txt(motivo, 300), dias])
+  const f = await fichaPorNumero(contacto)
+  const resumen = `🤖 El agente de veterinarias pasó la conversación al agente comercial: ${txt(motivo, 300) || 'tema comercial'}`
+  if (f.aliado || f.prospecto) {
+    await pool.query(
+      `INSERT INTO public.crm_actividades (aliado_id, prospecto_id, tipo, resumen, origen)
+       VALUES ($1, $2, 'WHATSAPP', $3, 'AGENTE')`, [f.aliado?.id_aliado || null, f.prospecto?.id || null, resumen])
+  }
+  // Una aliada hablando de algo comercial es una oportunidad: que el área
+  // comercial lo vea en su Agenda (uno solo pendiente por cuenta, sin duplicar).
+  if (f.aliado) {
+    await pool.query(
+      `INSERT INTO public.crm_seguimientos (aliado_id, tipo, titulo, notas, programado_para, origen)
+       SELECT $1, 'WHATSAPP', $2, $3, now() + interval '2 hours', 'AGENTE'
+        WHERE NOT EXISTS (SELECT 1 FROM public.crm_seguimientos
+                           WHERE aliado_id = $1 AND estado = 'PENDIENTE' AND origen = 'AGENTE')
+          AND NOT EXISTS (SELECT 1 FROM public.aliados WHERE id_aliado = $1 AND no_contactar)`,
+      [f.aliado.id_aliado, 'Revisar conversación comercial por WhatsApp', txt(motivo, 300)])
+  }
+  log(MOD, `${contacto} → agente comercial (${txt(motivo, 80) || 'sin motivo'})`)
+  return { ok: true, nota: 'Listo: el área comercial le responde este mismo mensaje. NO escribas nada más.' }
+}
+
+/** Comercial → veterinarias. Solo existe si hubo traspaso: un prospecto es del comercial. */
+export async function devolverAOperacion({ phoneNumberId, contacto, motivo }) {
+  const { rowCount } = await pool.query(
+    `UPDATE public.agente_wa_traspasos SET cerrado_en = now(), cerrado_motivo = $3
+      WHERE phone_number_id = $1 AND contacto = $2 AND cerrado_en IS NULL`,
+    [phoneNumberId, contacto, txt(motivo, 300) || 'Devuelta a operación'])
+  if (!rowCount) {
+    return { ok: false, error: 'Esta clínica es un prospecto y la atiendes tú. Si pide una recogida, tómala con registrar_solicitud.' }
+  }
+  const f = await fichaPorNumero(contacto)
+  if (f.aliado || f.prospecto) {
+    await pool.query(
+      `INSERT INTO public.crm_actividades (aliado_id, prospecto_id, tipo, resumen, origen)
+       VALUES ($1, $2, 'WHATSAPP', $3, 'AGENTE')`,
+      [f.aliado?.id_aliado || null, f.prospecto?.id || null, `🤖 El agente comercial devolvió la conversación a operación: ${txt(motivo, 300) || ''}`.trim()])
+  }
+  log(MOD, `${contacto} → de vuelta a operación (${txt(motivo, 80) || ''})`)
+  return { ok: true, nota: 'Listo: el agente de operación le responde este mismo mensaje. NO escribas nada más.' }
+}
+
+/** Lo que sabe el comercial de una aliada que le pasaron. */
+export async function contextoAliadaParaVentas(phoneNumberId, contacto) {
+  const f = await fichaPorNumero(contacto)
+  if (!f.aliado) return null
+  const t = await traspasoVivo(phoneNumberId, contacto)
+  const a = f.aliado
+  return `Este número es de la veterinaria ALIADA "${a.nombre}" (ya registrada${a.vip ? ', VIP' : ''}; comisión `
+    + `${a.modalidad_comision === 'FACTURACION_MENSUAL' ? 'por facturación mensual' : 'descontada en cada servicio'}). `
+    + `No le ofrezcas afiliarse.${t?.motivo ? ` Te la pasaron por: ${t.motivo}.` : ''} No des cifras de comisiones `
+    + 'pendientes: si reclama un pago, usa reportar_reclamo.'
+}
+
+const CATEGORIAS_RECLAMO = ['COMISION', 'PAGO', 'FACTURACION', 'RECOGIDA', 'ENTREGA', 'CERTIFICADO', 'RECORDATORIOS', 'ATENCION', 'OTRO']
+
+/**
+ * Un reclamo dicho por WhatsApp: ticket ALTA + alerta para revisarlo. Si ya hay
+ * un ticket abierto del mismo tema en las últimas 48 h, se le suma como nota en
+ * vez de abrir otro (la vet insiste en el mismo reclamo).
+ */
+export async function reportarReclamo({ contacto, entrada = {} }) {
+  const categoria = CATEGORIAS_RECLAMO.includes(entrada.categoria) ? entrada.categoria : 'OTRO'
+  const asunto = txt(entrada.asunto, 200) || 'Reclamo por WhatsApp'
+  const detalle = txt(entrada.detalle, 3000)
+  const f = await fichaPorNumero(contacto)
+
+  if (!f.aliado) {
+    // Sin aliada no hay ticket (el ticket cuelga de una veterinaria): queda en la
+    // bitácora del prospecto, si lo es, y como alerta para el área comercial.
+    if (f.prospecto) {
+      await pool.query(
+        `INSERT INTO public.crm_actividades (prospecto_id, tipo, resultado, resumen, origen)
+         VALUES ($1, 'WHATSAPP', 'QUEJA', $2, 'AGENTE')`, [f.prospecto.id, `Reclamo: ${asunto}${detalle ? ` — ${detalle}` : ''}`])
+      await pool.query(
+        `INSERT INTO public.crm_seguimientos (prospecto_id, tipo, titulo, notas, programado_para, origen)
+         VALUES ($1, 'LLAMADA', $2, $3, now(), 'AGENTE')`, [f.prospecto.id, `Revisar reclamo: ${asunto}`, detalle])
+    }
+    return { ok: true, nota: 'Quedó registrado para el equipo. Dile que lo revisan y le responden; no prometas fechas ni montos.' }
+  }
+
+  const { rows: [abierto] } = await pool.query(
+    `SELECT id, numero FROM public.crm_tickets
+      WHERE aliado_id = $1 AND categoria = $2 AND estado NOT IN ('RESUELTO','CERRADO')
+        AND created_at > now() - interval '48 hours'
+      ORDER BY created_at DESC LIMIT 1`, [f.aliado.id_aliado, categoria])
+  if (abierto) {
+    await pool.query(
+      `INSERT INTO public.crm_ticket_eventos (ticket_id, tipo, texto) VALUES ($1, 'COMENTARIO', $2)`,
+      [abierto.id, `🤖 La veterinaria volvió a escribir por WhatsApp: ${asunto}${detalle ? ` — ${detalle}` : ''}`])
+    return { ok: true, ticket: abierto.numero,
+      nota: `Ya había un caso abierto (#${abierto.numero}); se le sumó lo que dijo. Dile que el equipo ya lo está revisando.` }
+  }
+
+  const r = await crearTicket({
+    aliado_id: f.aliado.id_aliado, tipo: 'RECLAMO', categoria, prioridad: 'ALTA', canal: 'WHATSAPP',
+    asunto, descripcion: `${detalle || asunto}\n\n(Registrado por el agente de WhatsApp)`,
+  }, null)
+  if (r.status !== 201) return { ok: false, error: r.body?.error || 'No se pudo registrar' }
+  // La alerta: aparece en la Agenda y suena en la campana del CRM ya mismo.
+  await crearSeguimiento({
+    ticket_id: r.body.ticket.id, aliado_id: f.aliado.id_aliado, tipo: 'TAREA',
+    titulo: `Revisar reclamo #${r.body.ticket.numero}: ${asunto}`, programado_para: new Date().toISOString(), notas: detalle,
+  }, null, { origen: 'AGENTE' })
+  log(MOD, `reclamo de ${f.aliado.nombre} → ticket #${r.body.ticket.numero} (${categoria})`)
+  return { ok: true, ticket: r.body.ticket.numero,
+    nota: `Quedó registrado como caso #${r.body.ticket.numero}. Dile que el equipo lo revisa y le responde; no prometas fechas ni montos.` }
+}
+
 // ─── Rutas ──────────────────────────────────────────────────────────────────
 export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   const r = express.Router()
