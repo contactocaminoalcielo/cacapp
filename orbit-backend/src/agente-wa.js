@@ -353,10 +353,11 @@ const HERRAMIENTAS = [{
   input_schema: {
     type: 'object',
     properties: {
-      resumen:     { type: 'string', description: 'Una línea con lo que necesita, en primera persona de la familia. Ej: "Necesito cremación para mi perrita Luna de 13 años, unos 12 kg."' },
+      mensaje:     { type: 'string', description: 'Lo que le dices a la familia, 2-3 líneas cálidas (si perdió a su mascota, condolencias): que esta línea es solo para clínicas y que tocando el botón la atienden de inmediato. SIN enlaces: el botón lo pone el sistema.' },
+      resumen:     { type: 'string', description: 'Una línea con lo que necesita, en primera persona de la familia. Va escrito en su mensaje a atención al cliente. Ej: "Necesito cremación para mi perrita Luna de 13 años, unos 12 kg."' },
       veterinaria: { type: 'string', description: 'La veterinaria donde está la mascota o que la refirió, si la mencionó. Vacío si no.' },
     },
-    required: ['resumen'],
+    required: ['mensaje', 'resumen'],
   },
 }]
 
@@ -2071,6 +2072,10 @@ async function responder({ num, tipos, mensajeIds = [], phoneNumberId, waMessage
     }
   }
 
+  // La respuesta ya salió desde una herramienta (el botón a atención al cliente).
+  // Si además escribió texto, se envía; si no, NO es un silencio: no se alerta.
+  if (!r.texto && r.enviado) return r.hastaId || null
+
   // No había nada nuevo que contestar. Silencio correcto, no fallo.
   if (r.nadaQueResponder) {
     log(MOD, `${num} sin nada nuevo que responder`)
@@ -2675,6 +2680,9 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
   let contextoFamilia = null
   // Si este turno pasó la conversación al otro agente (migración 182).
   let traspaso = null
+  // Si una herramienta ya le escribió a la persona y no hay nada más que decir
+  // (derivar_familia manda su mensaje con el botón, migración 184).
+  let enviado = false
 
   try {
     const [system, herramientas] = await Promise.all([
@@ -2857,6 +2865,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
             out = mensajePrueba
               ? { ok: true, enlace: 'https://wa.me/573193585508?text=Hola', nota: 'Ensayo: en la línea real se marcaría la conversación como PARTICULAR.' }
               : await derivarFamilia({ phoneNumberId, contacto, entrada: bloque.entrada || {} })
+            if (out.enviado) enviado = true
           } else if (bloque.nombre === 'reportar_reclamo') {
             out = mensajePrueba
               ? { ok: true, nota: 'Ensayo: en la línea real se abriría un ticket y una alerta.' }
@@ -2940,6 +2949,8 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       // La conversación cambió de agente: este no dice nada más. El que la
       // recibe responde el MISMO mensaje (lo hace `responder`).
       if (traspaso) break
+      // Ya le llegó el mensaje completo: otra vuelta solo podría repetirlo.
+      if (enviado) break
 
       // Si la vuelta SOLO hizo TRÁMITE, no hay nada que devolverle al modelo y
       // la vuelta siguiente costaría un contexto entero (18.000 tokens) para
@@ -2967,7 +2978,9 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       if (soloTramite && textos.length) break
     }
 
-    salida = textos.join('\n\n').trim() || null
+    // Con el botón de atención al cliente ya enviado, su propio mensaje ES la
+    // respuesta: un texto aparte la duplicaría.
+    salida = enviado ? null : (textos.join('\n\n').trim() || null)
     if (agente.clave === 'FAMILIAS' && salida) {
       const protegida = protegerSalidaFamilias(salida, contextoFamilia)
       salida = protegida.texto
@@ -2991,7 +3004,7 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
       }).catch(e => log(MOD, 'sombra: no se pudo comparar —', e.message))
     }
 
-    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId, traspaso }
+    return { texto: salida, tokensEntrada: tokIn, tokensSalida: tokOut, herramientas: usadas, cache, hastaId, traspaso, enviado }
   } catch (e) {
     fallo = e.message
     log(MOD, 'ERROR ejecutando —', e.message)

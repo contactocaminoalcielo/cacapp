@@ -1898,14 +1898,29 @@ export async function derivarFamilia({ phoneNumberId, contacto, entrada = {} }) 
       referida = { prospecto: vet }
     }
   }
-  log(MOD, `${num}: familia derivada a atención al cliente${vet ? ` (refirió: ${vet} → ${referida?.aliada ? 'aliada ' + referida.aliada : 'prospecto'})` : ''}`)
-  return {
-    ok: true,
-    enlace,
-    nota: 'Respóndele con calidez (puede estar en duelo), en 2-3 líneas: esta línea es exclusiva para clínicas '
-      + 'veterinarias y para atenderle de inmediato escriba a nuestra línea de atención al cliente en este enlace, '
-      + 'que ya lleva su mensaje. Pega el enlace EXACTO. NO le des precios ni le pidas datos aquí.',
+  log(MOD, `${num}: familia derivada a atención al cliente${vet ? ` (refirió: ${vet} → ${referida?.aliada ? 'aliada ' + referida.aliada : referida?.dudosa ? 'dudosa' : 'prospecto'})` : ''}`)
+
+  // El enlace lo manda el SISTEMA como botón, con el mensaje del agente encima.
+  // Pedirle al modelo que lo pegara salió mal en el ensayo: lo recortó a
+  // "wa.me/573193585508" y la familia perdía el mensaje ya escrito.
+  const cuerpo = txt(entrada.mensaje, 900)
+    || 'Esta línea es exclusiva para clínicas veterinarias. Para atenderte de inmediato, toca el botón y '
+      + 'escríbenos a nuestra línea de atención al cliente: tu mensaje ya va escrito. 🐾'
+  const env = await enviarSobre({
+    contacto: num, linea: phoneNumberId, tipo: 'interactive', personalId: null,
+    texto: `${cuerpo} [botón: Atención al cliente]`,
+    payload: { type: 'interactive', interactive: {
+      type: 'cta_url', body: { text: cuerpo },
+      action: { name: 'cta_url', parameters: { display_text: 'Atención al cliente', url: enlace } },
+    } },
+  }).catch(e => ({ body: { ok: false, error: e.message } }))
+  if (env?.body?.ok) {
+    return { ok: true, enviado: true,
+      nota: 'Tu mensaje y el botón a atención al cliente YA le llegaron. NO escribas nada más.' }
   }
+  log(MOD, `${num}: no salió el botón de atención al cliente — ${env?.body?.error || '?'}`)
+  return { ok: true, enviado: false, enlace,
+    nota: 'No se pudo mandar el botón. Escríbele tu mensaje y pega este enlace COMPLETO, carácter por carácter: ' + enlace }
 }
 
 // ─── Rutas ──────────────────────────────────────────────────────────────────
