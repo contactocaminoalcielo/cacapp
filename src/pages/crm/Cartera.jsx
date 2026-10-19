@@ -89,9 +89,9 @@ export default function Cartera() {
           <Download size={14} /> Exportar
         </button>
         <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
-          {[['lista', List], ['kanban', LayoutGrid]].map(([v, I]) => (
-            <button key={v} onClick={() => setVista(v)} className={`h-9 px-3 ${vista === v ? 'text-white' : 'text-gray-500'}`}
-              style={vista === v ? { background: ACENTO } : undefined} aria-label={v}><I size={15} /></button>
+          {[['lista', List, 'Lista'], ['kanban', LayoutGrid, 'Tablero']].map(([v, I, t]) => (
+            <button key={v} onClick={() => setVista(v)} className={`h-9 px-3 inline-flex items-center gap-1.5 text-[12.5px] font-semibold ${vista === v ? 'text-white' : 'text-gray-500'}`}
+              style={vista === v ? { background: ACENTO } : undefined}><I size={15} /> {t}</button>
           ))}
         </div>
       </Cabecera>

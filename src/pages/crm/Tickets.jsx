@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Modal } from '@/components/ui/dialog'
-import { Cabecera, Cargando, ErrorCaja, Vacio, PrioridadChip, EstadoTicketChip, Chip, Campo, ACENTO } from '@/components/crm/ui'
+import { Cabecera, Cargando, ErrorCaja, PrioridadChip, EstadoTicketChip, Chip, Campo, ACENTO } from '@/components/crm/ui'
 import { TicketModal, SeguimientoModal } from '@/components/crm/Modales'
 import { useCrm } from '@/components/crm/CrmContext'
 
@@ -74,7 +74,8 @@ export default function Tickets() {
         </label>
       </div>
 
-      {!lista.length ? <Vacio>No hay tickets todavía. Cuando una veterinaria reclame algo, ábrelo aquí o desde su ficha.</Vacio> : (
+      {!lista.length && <p className="text-[12.5px] text-gray-500 mb-3">No hay tickets todavía. Cuando una veterinaria reclame algo, ábrelo con «Nuevo ticket» o desde su ficha.</p>}
+      {(
         <div className="flex gap-3 overflow-x-auto pb-4">
           {estados.map(e => {
             const de = filtrados.filter(t => t.estado === e.clave)

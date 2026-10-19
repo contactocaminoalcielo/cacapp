@@ -85,21 +85,24 @@ export default function Prospectos() {
           <input type="checkbox" checked={verCerrados} onChange={e => setVerCerrados(e.target.checked)} /> Ver ganados y perdidos
         </label>
         <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
-          {[['kanban', LayoutGrid], ['lista', List]].map(([v, I]) => (
-            <button key={v} onClick={() => setVista(v)} className={`h-10 px-3 ${vista === v ? 'text-white' : 'text-gray-500'}`}
-              style={vista === v ? { background: ACENTO } : undefined} aria-label={v}><I size={15} /></button>
+          {[['kanban', LayoutGrid, 'Tablero'], ['lista', List, 'Lista']].map(([v, I, t]) => (
+            <button key={v} onClick={() => setVista(v)} className={`h-10 px-3 inline-flex items-center gap-1.5 text-[12.5px] font-semibold ${vista === v ? 'text-white' : 'text-gray-500'}`}
+              style={vista === v ? { background: ACENTO } : undefined}><I size={15} /> {t}</button>
           ))}
         </div>
       </div>
 
-      {!lista.length ? (
-        <div className="bg-white rounded-2xl border border-dashed border-gray-200 p-10 text-center">
-          <FileSpreadsheet size={32} className="mx-auto text-gray-300" />
-          <p className="text-[14px] font-semibold text-gray-700 mt-3">Todavía no hay prospectos</p>
-          <p className="text-[12.5px] text-gray-500 mt-1">Importa una base de datos de veterinarias (Excel o CSV) o créalos uno a uno.<br />
-            Las clínicas que se preregistran en el portal y las que escriben pidiendo afiliarse entran solas.</p>
+      {!lista.length && (
+        <div className="bg-white rounded-2xl border border-dashed border-gray-200 px-5 py-4 mb-4 flex items-center gap-4">
+          <FileSpreadsheet size={28} className="text-gray-300 flex-shrink-0" />
+          <div>
+            <p className="text-[13.5px] font-semibold text-gray-700">Todavía no hay prospectos</p>
+            <p className="text-[12.5px] text-gray-500">Importa una base de datos de veterinarias (Excel o CSV) o créalos uno a uno. Las clínicas que se
+              preregistran en el portal y las que escriben pidiendo afiliarse entran solas.</p>
+          </div>
         </div>
-      ) : vista === 'kanban' ? (
+      )}
+      {vista === 'kanban' ? (
         <div className="flex gap-3 overflow-x-auto pb-4">
           {etapasVisibles.map(e => {
             const de = filtrados.filter(p => p.etapa === e.clave).sort((a, b) => a.orden - b.orden)
