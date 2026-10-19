@@ -18,9 +18,10 @@ import {
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
   mejorDescuento, aplicarDescuento, valorListaContrato, MOTIVOS_DESCUENTO,
   MOTIVOS_CANCELACION, MOTIVOS_CANCELACION_MANUALES, resumenPagosAfiliacion,
+  pagadoContrato, estadoCuotas, mensajeCuotaWa,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
-import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil, BadgePercent } from 'lucide-react'
+import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil, BadgePercent, Wallet, Trash2 } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
 // año) y VITALICIO (un pago, cubierta de por vida). Reglas y formato del número
@@ -44,6 +45,7 @@ import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, Ro
 const FILTROS = [
   { key: 'VIGENTES',  label: 'Vigentes' },
   { key: 'POR_VENCER', label: 'Por vencer' },
+  { key: 'CUOTAS',    label: 'Cuotas por cobrar' },
   { key: 'VENCIDAS',  label: 'Vencidas' },
   { key: 'ACTIVADAS', label: 'Activadas' },
   { key: 'CANCELADAS', label: 'Canceladas' },
@@ -94,6 +96,17 @@ const edadTexto = m => {
   return e == null ? null : `${e} año${e === 1 ? '' : 's'}`
 }
 const datosMascotaTexto = m => [pesoTexto(m), edadTexto(m)].filter(Boolean).join(' · ')
+
+// Contrato vigente en cuotas con saldo (migr. 183) — null si va de contado o ya
+// está pagado. Una cancelada no se cobra: el cliente se fue.
+const cuotasPendientes = a => {
+  if (a.estado === 'CANCELADA') return null
+  const ct = contratoVigente(a)
+  const est = ct && estadoCuotas(ct, mascotasDe(a).length)
+  return est?.proxima ? { ct, est } : null
+}
+// La cuota que vence en esta ventana (o ya venció) es la que hay que cobrar ya
+const DIAS_AVISO_CUOTA = 5
 
 const diasPara = fechaISO => {
   if (!fechaISO) return null
@@ -246,7 +259,7 @@ export default function Presequiales() {
         db.from('afiliaciones')
           .select(`*,
             clientes(id_cliente,nombre,apellido,whatsapp,telefono,email,cedula_nit,direccion,ciudad),
-            afiliacion_contratos(*),
+            afiliacion_contratos(*, afiliacion_pagos(*)),
             afiliacion_mascotas(id,estado,fecha_activacion,servicio_activado_id,created_at,
               mascotas(id_mascota,nombre,raza,peso_kg,fallecida,edad_anios,edad_declarada_en,especie_id,especies(nombre)))`)
           .order('created_at', { ascending: false }),
@@ -293,6 +306,11 @@ export default function Presequiales() {
     let out = filas
     if (filtro === 'VIGENTES')   out = filas.filter(f => f.estado === 'VIGENTE')
     if (filtro === 'POR_VENCER') out = filas.filter(f => porVencer(f.a) && ['VIGENTE', 'VENCIDA'].includes(f.estado))
+    // Se cobra por contrato, no por mascota: una sola fila por contrato, la
+    // cuota más atrasada primero.
+    if (filtro === 'CUOTAS') out = filas
+      .filter(f => f.indice === 1 && cuotasPendientes(f.a))
+      .sort((x, y) => cuotasPendientes(x.a).est.proxima.fecha.localeCompare(cuotasPendientes(y.a).est.proxima.fecha))
     if (filtro === 'VENCIDAS')   out = filas.filter(f => f.estado === 'VENCIDA')
     if (filtro === 'ACTIVADAS')  out = filas.filter(f => f.estado === 'ACTIVADA')
     // Una mascota RETIRADA está cancelada aunque su contrato siga vivo: sin esto
@@ -314,11 +332,15 @@ export default function Presequiales() {
   const vigentes   = filas.filter(f => f.estado === 'VIGENTE').length
   const nPorVencer = filas.filter(f => porVencer(f.a) && ['VIGENTE', 'VENCIDA'].includes(f.estado)).length
   const activadas  = filas.filter(f => f.estado === 'ACTIVADA').length
-  // Recaudado: cada contrato de la cadena vale su precio unitario × nº de mascotas
+  // Recaudado: cada contrato de la cadena vale su precio unitario × nº de
+  // mascotas; uno en cuotas vale solo lo abonado (migr. 183).
   const recaudado = data.reduce((acc, a) => {
     const n = mascotasDe(a).length
-    return acc + (a.afiliacion_contratos || []).reduce((s, c) => s + totalContrato(c, n), 0)
+    return acc + (a.afiliacion_contratos || []).reduce((s, c) => s + pagadoContrato(c, n), 0)
   }, 0)
+  const conCuotas = data.map(cuotasPendientes).filter(Boolean)
+  const porCobrar = conCuotas.reduce((s, x) => s + x.est.saldo, 0)
+  const nCuotasUrgentes = conCuotas.filter(x => x.est.proxima.dias <= DIAS_AVISO_CUOTA).length
 
   return (
     <div>
@@ -332,10 +354,11 @@ export default function Presequiales() {
         </>
       } />
       <div className="p-4 sm:p-7">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
           <StatCard label="Mascotas cubiertas" value={vigentes} valueColor="#1D8A55" />
           <StatCard label="Por vencer" value={nPorVencer} valueColor="#9A5500" />
           <StatCard label="Recaudado" value={fmt(recaudado)} valueColor="#3B6FBF" />
+          <StatCard label={`Saldo en cuotas (${conCuotas.length})`} value={fmt(porCobrar)} valueColor="#B42318" />
           <StatCard label="Activadas" value={activadas} valueColor="#5B21B6" />
         </div>
 
@@ -346,6 +369,7 @@ export default function Presequiales() {
                 className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${filtro === f.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
                 onClick={() => setFiltro(f.key)}>
                 {f.label}{f.key === 'POR_VENCER' && nPorVencer > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-[#9A5500] text-white text-[10px]">{nPorVencer}</span>}
+                {f.key === 'CUOTAS' && nCuotasUrgentes > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-danger text-white text-[10px]" title={`Cuotas vencidas o que vencen en ${DIAS_AVISO_CUOTA} días`}>{nCuotasUrgentes}</span>}
               </button>
             ))}
           </div>
@@ -370,6 +394,7 @@ export default function Presequiales() {
                 const c = a.clientes, m = am.mascotas
                 const nc = NIVEL_COLORS[a.nivel] || {}
                 const dias = a.tipo === 'ANUAL' ? diasPara(ct?.fecha_vencimiento) : null
+                const cp = cuotasPendientes(a)?.est
                 return (
                   <Tr key={am.id} className="cursor-pointer" onClick={() => setFicha(a)}>
                     <Td>
@@ -413,6 +438,13 @@ export default function Presequiales() {
                       {a.estado === 'CANCELADA' && (
                         <div className="text-[10px] text-ink2 font-semibold">Pagó {fmt(resumenPagosAfiliacion(a).total)} en total</div>
                       )}
+                      {cp && (
+                        <div className={`text-[10px] font-bold ${cp.proxima.dias < 0 ? 'text-danger' : cp.proxima.dias <= DIAS_AVISO_CUOTA ? 'text-[#9A5500]' : 'text-ink3'}`}>
+                          Cuota {cp.proxima.numero}/{cp.cuotas} · {cp.proxima.fecha}
+                          {cp.proxima.dias < 0 ? ` (vencida hace ${-cp.proxima.dias} d)` : cp.proxima.dias === 0 ? ' (hoy)' : ''}
+                          <div className="font-semibold">Saldo {fmt(cp.saldo)}</div>
+                        </div>
+                      )}
                     </Td>
                     <Td>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[f.estado] || ''}`}>{f.estado}</span>
@@ -425,6 +457,13 @@ export default function Presequiales() {
                     </Td>
                     <Td onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-end">
+                        {cp && c?.whatsapp && (filtro === 'CUOTAS' || cp.proxima.dias <= DIAS_AVISO_CUOTA) && (
+                          <a href={waLink(c.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: ct, estado: cp }))} target="_blank" rel="noopener noreferrer"
+                            title={`Recordarle por WhatsApp la cuota ${cp.proxima.numero} (${fmt(cp.proxima.monto)})`}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-danger bg-danger-light hover:opacity-80">
+                            <Wallet size={11} /> Cobrar cuota
+                          </a>
+                        )}
                         {porVencer(a) && c?.whatsapp && ['VIGENTE','VENCIDA'].includes(f.estado) && (
                           <a href={waLink(c.whatsapp, mensajeRenovacion(a, ct, config))} target="_blank" rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
@@ -985,6 +1024,10 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [fechaPago, setFechaPago] = useState(today())
   const [comprobanteFile, setComprobanteFile] = useState(null)
   const [notas, setNotas] = useState('')
+  // Vitalicio diferido (migr. 183): nº de cuotas y lo que abona hoy. El
+  // método, la fecha y el comprobante de arriba pasan a ser los de ese abono.
+  const [cuotas, setCuotas] = useState(1)
+  const [abonoInicial, setAbonoInicial] = useState('')
 
   // Precio de configuración al cambiar tipo/nivel (editable si el coordinador lo pisa)
   useEffect(() => {
@@ -1032,7 +1075,12 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const valorNum = parseFloat(valor) || 0
   const dcto = useDescuentoSugerido({ escenario: 'NUEVA', nMascotas, config })
   const valorNeto = aplicarDescuento(valorNum, dcto.pct)
-  const puedeGuardar = clienteListo && nMascotas > 0 && valorNum > 0 && !saving
+  const diferido = tipo === 'VITALICIO' && cuotas > 1
+  const totalPlan = valorNeto * nMascotas
+  const cuotaSugerida = diferido ? Math.round(totalPlan / cuotas) : 0
+  const abonoNum = abonoInicial === '' ? cuotaSugerida : (parseFloat(abonoInicial) || 0)
+  const abonoInvalido = diferido && (abonoNum <= 0 || abonoNum > totalPlan)
+  const puedeGuardar = clienteListo && nMascotas > 0 && valorNum > 0 && !abonoInvalido && !saving
 
   const previewCodigo = (clienteListo && !saving) ? generarNumeroContrato({
     fechaInicio,
@@ -1113,7 +1161,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         const numeroContrato = generarNumeroContrato({
           fechaInicio, cliente: cliente || formCliente, nivel, tipo, numero: 0,
         })
-        const { error: e2 } = await db.from('afiliacion_contratos').insert({
+        const { data: contrato, error: e2 } = await db.from('afiliacion_contratos').insert({
           afiliacion_id: afil.id, numero: 0, numero_contrato: numeroContrato,
           fecha_inicio: fechaInicio,
           fecha_vencimiento: tipo === 'ANUAL' ? sumarUnAnio(fechaInicio) : null,
@@ -1121,10 +1169,23 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           // guarda el precio pleno, que es la base de la cláusula 5×/3×.
           valor: valorNeto, valor_lista: valorNum,
           descuento_pct: dcto.pct, descuento_motivo: dcto.motivo,
-          metodo_pago: metodoPago, fecha_pago: fechaPago || null,
-          comprobantes, creado_por: personalData?.id || null,
-        })
+          // Diferido: el pago de hoy es el primer abono y vive en
+          // afiliacion_pagos; el contrato no dice "pagado" (no lo está).
+          cuotas: diferido ? cuotas : 1,
+          metodo_pago: diferido ? null : metodoPago,
+          fecha_pago: diferido ? null : (fechaPago || null),
+          comprobantes: diferido ? [] : comprobantes,
+          creado_por: personalData?.id || null,
+        }).select('id').single()
         if (e2) throw e2
+        if (diferido) {
+          const { error: e3 } = await db.from('afiliacion_pagos').insert({
+            contrato_id: contrato.id, monto: abonoNum, fecha: fechaPago || today(),
+            metodo_pago: metodoPago, comprobantes, notas: 'Abono inicial (cuota 1)',
+            creado_por: personalData?.id || null,
+          })
+          if (e3) throw e3
+        }
       } catch (e) {
         await db.from('afiliaciones').delete().eq('id', afil.id)
         throw e
@@ -1294,10 +1355,10 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           <h4 className="text-[12px] font-bold text-ink uppercase tracking-wide mb-2">3 · Plan</h4>
           <div className="flex gap-2 mb-3">
             {['ANUAL', 'VITALICIO'].map(t => (
-              <button key={t} onClick={() => setTipo(t)}
+              <button key={t} onClick={() => { setTipo(t); if (t !== 'VITALICIO') setCuotas(1) }}
                 className={`flex-1 px-3 py-2 rounded-xl border-2 text-left transition-all ${tipo === t ? 'border-primary-dark bg-green-light' : 'border-transparent bg-surface2 hover:bg-surface3'}`}>
                 <div className="font-bold text-ink text-[13px]">{t === 'ANUAL' ? 'Anual' : 'Vitalicio'}</div>
-                <div className="text-[10px] text-ink3">{t === 'ANUAL' ? 'Un pago cada año · renovable · cláusula el primer año' : 'Un solo pago · cubierta de por vida'}</div>
+                <div className="text-[10px] text-ink3">{t === 'ANUAL' ? 'Un pago cada año · renovable · cláusula el primer año' : 'De contado o en cuotas · cubierta de por vida'}</div>
               </button>
             ))}
           </div>
@@ -1340,6 +1401,33 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         {/* Pago */}
         <section>
           <h4 className="text-[12px] font-bold text-ink uppercase tracking-wide mb-2">4 · Pago</h4>
+          {tipo === 'VITALICIO' && (
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div><label className={LABEL}>Forma de pago</label>
+                <Select value={cuotas} onChange={e => { setCuotas(parseInt(e.target.value)); setAbonoInicial('') }}>
+                  <option value={1}>De contado</option>
+                  {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>Diferido en {n} cuotas</option>)}
+                </Select></div>
+              {diferido && <>
+                <div><label className={LABEL}>Abono de hoy (cuota 1)</label>
+                  <Input type="number" min="0" value={abonoInicial === '' ? String(cuotaSugerida || '') : abonoInicial}
+                    onChange={e => setAbonoInicial(e.target.value)} /></div>
+                <div className="text-[11px] text-ink2 pt-5">
+                  {cuotas} cuotas de <b>{fmt(cuotaSugerida)}</b><br />
+                  <span className="text-ink3">Saldo tras el abono: {fmt(Math.max(0, totalPlan - abonoNum))}</span>
+                </div>
+              </>}
+            </div>
+          )}
+          {diferido && abonoInvalido && nMascotas > 0 && (
+            <p className="text-[11px] text-danger -mt-1.5 mb-2">El abono debe ser mayor que $0 y no superar el total del plan ({fmt(totalPlan)}).</p>
+          )}
+          {diferido && (
+            <p className="text-[11px] text-ink3 -mt-1 mb-2">
+              Las siguientes cuotas se cobran el mismo día de cada mes desde la fecha de afiliación; aparecen
+              en «Cuotas por cobrar» con su botón para recordárselas por WhatsApp.
+            </p>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div><label className={LABEL}>Método</label>
               <Select value={metodoPago} onChange={e => setMetodoPago(e.target.value)}>
@@ -1361,7 +1449,8 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
 function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged }) {
-  const { alert: showAlert } = useConfirm()
+  const { alert: showAlert, confirm } = useConfirm()
+  const { personalData } = useAuth()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
   const [pdfGen, setPdfGen] = useState(null)
   const [enviandoWa, setEnviandoWa] = useState(null)
@@ -1371,6 +1460,9 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
   const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
   const [formMasc, setFormMasc] = useState({ nombre: '', especie_id: '', raza: '', peso_kg: '', edad: '' })
   const [guardandoMasc, setGuardandoMasc] = useState(false)
+  // Cuotas (migr. 183): un formulario abierto a la vez, por contrato
+  const [formPago, setFormPago] = useState(null)  // { contratoId, modo: 'ABONO'|'DIFERIR', cuotas, monto, fecha, metodo, file }
+  const [guardandoPago, setGuardandoPago] = useState(false)
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
   const mascotas = mascotasDe(a)
@@ -1390,6 +1482,61 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
     } finally {
       setSubiendo(null)
     }
+  }
+
+  function abrirFormPago(c, modo) {
+    if (formPago?.contratoId === c.id && formPago.modo === modo) { setFormPago(null); return }
+    const est = estadoCuotas(c, mascotas.length)
+    setFormPago(modo === 'ABONO'
+      ? { contratoId: c.id, modo, monto: String(Math.round(est?.proxima?.monto || 0)), fecha: today(), metodo: 'EFECTIVO', file: null }
+      // Diferir un contrato ya cargado como de contado: lo que se registró
+      // como pago pasa a ser el primer abono, con su método y su fecha.
+      : { contratoId: c.id, modo, cuotas: 4, monto: '', fecha: c.fecha_pago || c.fecha_inicio, metodo: c.metodo_pago || 'EFECTIVO', file: null })
+  }
+
+  async function guardarPago(c) {
+    const f = formPago
+    const total = totalContrato(c, mascotas.length)
+    const monto = f.modo === 'DIFERIR' && f.monto === '' ? Math.round(total / f.cuotas) : parseFloat(f.monto)
+    const tope = f.modo === 'ABONO' ? estadoCuotas(c, mascotas.length)?.saldo || 0 : total
+    if (!(monto > 0)) { await showAlert('Digita el valor abonado.', { title: 'Falta el valor' }); return }
+    if (monto > tope + 0.5) {
+      await showAlert(`El abono (${fmt(monto)}) supera ${f.modo === 'ABONO' ? 'el saldo' : 'el total del plan'} (${fmt(tope)}).`, { title: 'Valor fuera de rango' })
+      return
+    }
+    setGuardandoPago(true)
+    try {
+      if (f.modo === 'DIFERIR') {
+        const { error } = await db.from('afiliacion_contratos').update({ cuotas: f.cuotas }).eq('id', c.id)
+        if (error) throw error
+      }
+      const comprobantes = f.file ? [await subirComprobanteAfiliacion(a.id, f.file)] : []
+      const { error } = await db.from('afiliacion_pagos').insert({
+        contrato_id: c.id, monto, fecha: f.fecha || today(), metodo_pago: f.metodo, comprobantes,
+        notas: f.modo === 'DIFERIR' ? 'Abono inicial (cuota 1) — contrato pasado a cuotas' : null,
+        creado_por: personalData?.id || null,
+      })
+      if (error) {
+        // Sin el abono, un contrato recién diferido quedaría con $0 pagado
+        if (f.modo === 'DIFERIR') await db.from('afiliacion_contratos').update({ cuotas: 1 }).eq('id', c.id)
+        throw error
+      }
+      setFormPago(null)
+      await onChanged()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo registrar el abono' })
+    } finally {
+      setGuardandoPago(false)
+    }
+  }
+
+  async function borrarAbono(p) {
+    const ok = await confirm(`Se borra el abono de ${fmt(p.monto)} del ${p.fecha} y el saldo vuelve a subir. ¿Continuar?`,
+      { title: 'Borrar abono', confirmLabel: 'Sí, borrar', variant: 'danger' })
+    if (!ok) return
+    const { error } = await db.from('afiliacion_pagos').delete().eq('id', p.id)
+    if (error) { await showAlert(error.message, { title: 'No se pudo borrar el abono' }); return }
+    await onChanged()
   }
 
   // Los cinco datos que la tabla del contrato imprime (nombre, especie, raza,
@@ -1563,6 +1710,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
         return (
           <div className="rounded-xl px-3.5 py-2.5 mb-4 text-[12px] bg-surface2 flex flex-wrap gap-x-5 gap-y-1">
             <span><span className="text-ink3">Pagado a la fecha:</span> <b className="text-ink">{fmt(p.total)}</b></span>
+            {p.saldo > 0 && <span><span className="text-ink3">Saldo en cuotas:</span> <b className="text-danger">{fmt(p.saldo)}</b></span>}
             <span className="text-ink3">
               {p.nContratos} contrato{p.nContratos === 1 ? '' : 's'}
               {p.nRenovaciones > 0 ? ` (${p.nRenovaciones} renovación${p.nRenovaciones === 1 ? '' : 'es'})` : ''}
@@ -1677,7 +1825,10 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
 
       <h4 className="text-[12px] font-bold text-ink uppercase tracking-wide mb-2">Contratos</h4>
       <div className="space-y-2">
-        {contratos.map(c => (
+        {contratos.map(c => {
+          const est = estadoCuotas(c, mascotas.length)
+          const fp = formPago?.contratoId === c.id ? formPago : null
+          return (
           <div key={c.id} className="border rounded-xl px-3 py-2.5" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
@@ -1689,7 +1840,9 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                 <div className="text-[11px] text-ink2 font-semibold">
                   {fmt(totalContrato(c, mascotas.length))}
                   {mascotas.length > 1 && <span className="text-ink3 font-normal"> ({mascotas.length} × {fmt(c.valor)})</span>}
-                  {c.metodo_pago ? ` · ${c.metodo_pago}` : ''}{c.fecha_pago ? ` · pagado ${c.fecha_pago}` : ''}
+                  {est
+                    ? <span className="text-ink3 font-normal"> · diferido en {est.cuotas} cuotas de {fmt(est.valorCuota)}</span>
+                    : <>{c.metodo_pago ? ` · ${c.metodo_pago}` : ''}{c.fecha_pago ? ` · pagado ${c.fecha_pago}` : ''}</>}
                 </div>
                 {parseFloat(c.descuento_pct) > 0 && (
                   <div className="text-[10px] font-semibold text-primary-dark mt-0.5">
@@ -1745,8 +1898,112 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                 {c.enviado_email_at && <>Enviado a {c.enviado_email_a} el {new Date(c.enviado_email_at).toLocaleDateString('es-CO')}</>}
               </div>
             )}
+
+            {/* Cuotas (migr. 183): abonos, saldo y la cuota que sigue */}
+            {est && (
+              <div className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-[12px]">
+                    <span className="text-ink3">Abonado</span> <b className="text-ink">{fmt(est.pagado)}</b>
+                    <span className="text-ink3"> de {fmt(est.total)} · </span>
+                    {est.proxima
+                      ? <>
+                          <span className="text-ink3">saldo</span> <b className="text-danger">{fmt(est.saldo)}</b>
+                          <div className={`text-[11px] font-semibold ${est.proxima.dias < 0 ? 'text-danger' : est.proxima.dias <= DIAS_AVISO_CUOTA ? 'text-[#9A5500]' : 'text-ink2'}`}>
+                            Próximo cobro: cuota {est.proxima.numero} de {est.cuotas} · {fmt(est.proxima.monto)} · {est.proxima.fecha}
+                            {est.proxima.dias < 0 ? ` (vencida hace ${-est.proxima.dias} d)` : est.proxima.dias === 0 ? ' (hoy)' : ` (en ${est.proxima.dias} d)`}
+                          </div>
+                        </>
+                      : <b className="text-primary-dark">pagado completo ✓</b>}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {est.proxima && a.clientes?.whatsapp && (
+                      <a href={waLink(a.clientes.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: c, estado: est }))} target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
+                        <MessageCircle size={11} /> Recordar cuota
+                      </a>
+                    )}
+                    {est.proxima && (
+                      <Button size="sm" onClick={() => abrirFormPago(c, 'ABONO')}><Wallet size={11} /> Registrar abono</Button>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {[...est.abonos].sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))).map((p, i) => (
+                    <div key={p.id} className="flex items-center gap-2 text-[11px] text-ink2 bg-surface2 rounded-lg px-2 py-1">
+                      <span className="font-bold text-ink3 w-14">Abono {i + 1}</span>
+                      <span className="w-20">{p.fecha}</span>
+                      <b className="text-ink w-24">{fmt(p.monto)}</b>
+                      <span className="text-ink3">{p.metodo_pago}</span>
+                      {(p.comprobantes || []).map((comp, j) => (
+                        <button key={j} onClick={() => abrirArchivoStorage(comp.storage_path, comp.bucket)}
+                          className="inline-flex items-center gap-0.5 text-primary-dark hover:underline">
+                          <Paperclip size={10} /> comp.
+                        </button>
+                      ))}
+                      <button className="ml-auto text-ink3 hover:text-danger" title="Borrar este abono (si se registró por error)"
+                        onClick={() => borrarAbono(p)}><Trash2 size={11} /></button>
+                    </div>
+                  ))}
+                  {est.abonos.length === 0 && <p className="text-[11px] text-ink3">Aún no hay abonos registrados.</p>}
+                </div>
+              </div>
+            )}
+
+            {/* Un vitalicio cargado de contado que en realidad se difirió */}
+            {!est && a.tipo === 'VITALICIO' && a.estado !== 'CANCELADA' && !fp && (
+              <button className="mt-1.5 text-[11px] font-semibold text-primary-dark hover:underline"
+                onClick={() => abrirFormPago(c, 'DIFERIR')}>
+                ¿Lo está pagando en cuotas? Diferir en cuotas →
+              </button>
+            )}
+
+            {fp && (
+              <form className="mt-2 pt-2 border-t" style={{ borderColor: 'rgba(30,80,40,0.10)' }}
+                onSubmit={e => { e.preventDefault(); guardarPago(c) }}>
+                {fp.modo === 'DIFERIR' && (
+                  <p className="text-[11px] text-ink2 mb-2">
+                    El total del plan ({fmt(totalContrato(c, mascotas.length))}) queda dividido en cuotas mensuales desde
+                    el {c.fecha_inicio}. Registra aquí lo que el cliente ya pagó como primer abono.
+                  </p>
+                )}
+                <div className="flex flex-wrap items-end gap-2">
+                  {fp.modo === 'DIFERIR' && (
+                    <div><label className={LABEL}>Cuotas</label>
+                      <Select className="w-24" value={fp.cuotas}
+                        onChange={e => setFormPago(p => ({ ...p, cuotas: parseInt(e.target.value), monto: '' }))}>
+                        {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
+                      </Select></div>
+                  )}
+                  <div><label className={LABEL}>{fp.modo === 'DIFERIR' ? 'Ya abonó' : 'Valor del abono'}</label>
+                    <Input type="number" min="0" className="w-28" autoFocus
+                      value={fp.modo === 'DIFERIR' && fp.monto === '' ? String(Math.round(totalContrato(c, mascotas.length) / fp.cuotas)) : fp.monto}
+                      onChange={e => setFormPago(p => ({ ...p, monto: e.target.value }))} /></div>
+                  <div><label className={LABEL}>Fecha</label>
+                    <Input type="date" className="w-36" value={fp.fecha}
+                      onChange={e => setFormPago(p => ({ ...p, fecha: e.target.value }))} /></div>
+                  <div><label className={LABEL}>Método</label>
+                    <Select className="w-32" value={fp.metodo} onChange={e => setFormPago(p => ({ ...p, metodo: e.target.value }))}>
+                      {METODOS_PAGO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </Select></div>
+                  {fp.modo === 'ABONO' && (
+                    <div><label className={LABEL}>Comprobante</label>
+                      <input type="file" accept="image/*,application/pdf" className="text-[11px] w-44 pt-1.5"
+                        onChange={e => { const file = e.target.files?.[0] || null; setFormPago(p => ({ ...p, file })) }} /></div>
+                  )}
+                  <Button size="sm" type="submit" disabled={guardandoPago}>
+                    {guardandoPago ? 'Guardando...' : fp.modo === 'DIFERIR' ? 'Diferir' : 'Registrar'}
+                  </Button>
+                  <Button size="sm" variant="ghost" type="button" onClick={() => setFormPago(null)}>Cancelar</Button>
+                </div>
+                {fp.modo === 'DIFERIR' && (c.comprobantes || []).length > 0 && (
+                  <p className="text-[10px] text-ink3 mt-1.5">El comprobante que ya tiene el contrato se queda donde está.</p>
+                )}
+              </form>
+            )}
           </div>
-        ))}
+          )
+        })}
         {contratos.length === 0 && <p className="text-[12px] text-ink3">Sin contratos — esto no debería pasar.</p>}
       </div>
 
@@ -1790,7 +2047,8 @@ function ModalCancelar({ afiliacion: a, amRetirar = null, personalData, onClose,
       const sello = `[${today()}] ` +
         (amRetirar ? `${nombreRetiro} retirada (era la última cubierta) y contrato CANCELADO` : 'Contrato CANCELADO') +
         ` por ${quien}: ${MOTIVOS_CANCELACION[motivo]}${detalle.trim() ? ` — ${detalle.trim()}` : ''}.` +
-        ` Pagado a la fecha: ${fmt(pagos.total)} en ${pagos.nContratos} contrato${pagos.nContratos === 1 ? '' : 's'}.`
+        ` Pagado a la fecha: ${fmt(pagos.total)} en ${pagos.nContratos} contrato${pagos.nContratos === 1 ? '' : 's'}.` +
+        (pagos.saldo > 0 ? ` Quedó un saldo en cuotas sin pagar de ${fmt(pagos.saldo)}.` : '')
       const { error } = await db.from('afiliaciones').update({
         estado:              'CANCELADA',
         motivo_cancelacion:  motivo,
@@ -2163,6 +2421,7 @@ function ModalActivar({ afiliacion: a, am, config, planes, onClose, onConfirm })
   const ct = contratoVigente(a)
   const { cobro, motivo } = calcularCobroActivacion({ afiliacion: a, contratoVigente: ct, config })
   const hermanas = mascotasDe(a).filter(x => x.id !== am.id && x.estado === 'VIGENTE')
+  const saldoCuotas = estadoCuotas(ct, mascotasDe(a).length)?.saldo || 0
 
   const planPorCodigo = codigo => planes.find(p => p.codigo === codigo)
   const planFijo = a.nivel !== 'ORO' ? planPorCodigo(config?.plan_equivalente?.[a.nivel]) : null
@@ -2189,6 +2448,13 @@ function ModalActivar({ afiliacion: a, am, config, planes, onClose, onConfirm })
           <div className="text-[11px] text-ink2 mt-0.5">{motivo}</div>
           <div className="text-[10px] text-ink3 mt-1">El transporte fuera de Bogotá se suma en el registro según la tarifa del municipio.</div>
         </div>
+
+        {saldoCuotas > 0 && (
+          <div className="rounded-xl bg-danger-light border border-danger/30 px-3 py-2 text-[11px] text-ink2">
+            <strong className="text-danger">El plan tiene saldo en cuotas: {fmt(saldoCuotas)}.</strong> No se suma
+            solo al cobro del servicio: cóbralo aparte y regístralo como abono en la ficha del contrato.
+          </div>
+        )}
 
         {hermanas.length > 0 && (
           <div className="rounded-xl bg-surface2 px-3 py-2 text-[11px] text-ink2">

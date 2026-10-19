@@ -168,6 +168,75 @@ export function sumarUnAnio(fechaISO) {
   return hoyLocalISO(f)
 }
 
+// Mismo día del mes, n meses después. Si ese mes es más corto (31-ene + 1),
+// cae en su último día (28/29-feb) en vez de saltar a marzo.
+export function sumarMeses(fechaISO, n) {
+  const f = parseDate(fechaISO)
+  const dia = f.getDate()
+  f.setDate(1)
+  f.setMonth(f.getMonth() + n)
+  const ultimo = new Date(f.getFullYear(), f.getMonth() + 1, 0).getDate()
+  f.setDate(Math.min(dia, ultimo))
+  return hoyLocalISO(f)
+}
+
+// ─── Pago en cuotas (migración 183) ──────────────────────────────────────────
+// `contrato.cuotas` = en cuántas cuotas mensuales se pactó el total. Con 1 (de
+// contado, todo lo anterior a la 183) el contrato se da por pagado completo y
+// no lleva abonos. Con más de 1, lo pagado es la SUMA de `afiliacion_pagos`;
+// saldo, cuota que sigue y su fecha se derivan aquí y no se guardan.
+export const esDiferido = contrato => (parseInt(contrato?.cuotas) || 1) > 1
+
+const abonosDe = contrato => contrato?.afiliacion_pagos || []
+
+export function pagadoContrato(contrato, nMascotas) {
+  if (!esDiferido(contrato)) return totalContrato(contrato, nMascotas)
+  return abonosDe(contrato).reduce((s, p) => s + (parseFloat(p.monto) || 0), 0)
+}
+
+/**
+ * Estado de un contrato diferido, o null si es de contado.
+ * La cuota k vence en fecha_inicio + (k-1) meses: la 1ª se paga al firmar.
+ * Los abonos no tienen que ser exactos: se cuentan como cubiertas las cuotas
+ * que alcanza a pagar lo abonado (en orden), y la cuota que sigue pide solo lo
+ * que le falta. La última absorbe el redondeo, para que la suma dé el total.
+ */
+export function estadoCuotas(contrato, nMascotas, hoyISO = hoyLocalISO()) {
+  if (!esDiferido(contrato)) return null
+  const n = parseInt(contrato.cuotas)
+  const total = totalContrato(contrato, nMascotas)
+  const pagado = pagadoContrato(contrato, nMascotas)
+  const saldo = Math.max(0, total - pagado)
+  const valorCuota = Math.round(total / n)
+  const acumulado = k => (k >= n ? total : valorCuota * k)
+  let cubiertas = 0
+  while (cubiertas < n && acumulado(cubiertas + 1) <= pagado + 0.5) cubiertas++
+  let proxima = null
+  if (saldo > 0.5) {
+    const numero = Math.min(cubiertas + 1, n)
+    const fecha = sumarMeses(contrato.fecha_inicio, numero - 1)
+    proxima = {
+      numero, fecha,
+      monto: Math.min(saldo, acumulado(numero) - pagado),
+      dias: Math.round((parseDate(fecha) - parseDate(hoyISO)) / 86400000),
+    }
+  }
+  return { cuotas: n, total, pagado, saldo, valorCuota, cubiertas, proxima, abonos: abonosDe(contrato) }
+}
+
+export function mensajeCuotaWa({ afiliacion, contrato, estado }) {
+  const nombre = afiliacion?.clientes?.nombre
+  const p = estado?.proxima
+  if (!p) return ''
+  const vencida = p.dias < 0
+  return `Hola${nombre ? ` ${nombre}` : ''} 👋 Te escribimos de Camino al Cielo 🌈\n\n` +
+    `Te recordamos la cuota ${p.numero} de ${estado.cuotas} de tu plan pre-exequial ${afiliacion?.nivel || ''}` +
+    `${afiliacion?.tipo === 'VITALICIO' ? ' vitalicio' : ''} (contrato Nº ${contrato.numero_contrato}): ` +
+    `*${fmt(p.monto)}*, ${vencida ? 'que venció el' : 'con fecha'} ${p.fecha}.\n\n` +
+    `Saldo pendiente del plan: ${fmt(estado.saldo)}.\n` +
+    `Cuando realices el pago, por favor envíanos el comprobante por aquí. ¡Gracias! 🐾`
+}
+
 // Comprobante de pago de un contrato → bucket compartido `evidencias`.
 // Una sola fuente: el resultado se agrega al jsonb `comprobantes` del contrato.
 export async function subirComprobanteAfiliacion(afiliacionId, file) {
@@ -311,10 +380,15 @@ export const MOTIVOS_CANCELACION_MANUALES = Object.keys(MOTIVOS_CANCELACION).fil
 export function resumenPagosAfiliacion(afiliacion) {
   const n = (afiliacion?.afiliacion_mascotas || []).length
   const contratos = [...(afiliacion?.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)
-  const total = contratos.reduce((s, c) => s + totalContrato(c, n), 0)
-  const fechas = contratos.map(c => c.fecha_pago || c.fecha_inicio).filter(Boolean).sort()
+  // Un contrato en cuotas cuenta lo ABONADO, no el total pactado (migr. 183)
+  const total = contratos.reduce((s, c) => s + pagadoContrato(c, n), 0)
+  const saldo = contratos.reduce((s, c) => s + (estadoCuotas(c, n)?.saldo || 0), 0)
+  const fechas = contratos.flatMap(c => esDiferido(c)
+    ? abonosDe(c).map(p => p.fecha)
+    : [c.fecha_pago || c.fecha_inicio]).filter(Boolean).sort()
   return {
     total,
+    saldo,
     nContratos: contratos.length,
     nRenovaciones: contratos.filter(c => c.numero > 0).length,
     ultimoPago: fechas[fechas.length - 1] || null,
@@ -475,12 +549,26 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
       (vitalicio ? '.' : ' y no modifica los valores de activación señalados en el Parágrafo 2.'))
   }
 
+  // Pactado en cuotas (migr. 183): como en el papel de Cristian Atuesta,
+  // "diferido en cuatro cuotas mensuales de $133.000".
+  const parrafoCuotas = numParagrafo => {
+    if (!esDiferido(contrato)) return
+    const nCuotas = parseInt(contrato.cuotas)
+    const total = valorPagado * mascotas.length
+    const cuota = Math.round(total / nCuotas)
+    parrafo(
+      'Parágrafo ' + numParagrafo + ': El valor total de la afiliación, ' + pesos(total) + ', se paga diferido en ' +
+      numeroALetras(nCuotas) + ' (' + nCuotas + ') cuotas mensuales de ' + pesos(cuota) +
+      ', la primera a la formalización del contrato y las siguientes el mismo día de cada mes.')
+  }
+
   if (vitalicio) {
     parrafo(
       'Parágrafo 2: La afiliación al Plan Pre Exequial ' + nivelTxt + ' tiene un valor de ' + pesos(valor) +
       ' por mascota, no tiene tiempos de carencia, por lo cual se puede solicitar y utilizar a partir de la ' +
       'formalización del contrato.')
     parrafoDescuento()
+    parrafoCuotas(pctDcto > 0 ? 4 : 3)
     parrafo(
       'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene vigencia desde el: ' +
       fechaLarga(contrato.fecha_inicio) + ' hasta requerir la utilización del mismo.')
@@ -499,6 +587,7 @@ export async function generarContratoPdf({ contrato, afiliacion, cliente, mascot
       nivel + ' antes de transcurridos 365 días desde la formalización del mismo, y este no tendrá activación si hay ' +
       'continuidad en la renovación.')
     parrafoDescuento()
+    parrafoCuotas(pctDcto > 0 ? 5 : 4)
     parrafo(
       'Segunda. – VIGENCIA DEL CONTRATO – El presente contrato tiene una vigencia de 365 días luego de su ' +
       'formalización, para efectos de este contrato en particular su vigencia es desde el ' +
