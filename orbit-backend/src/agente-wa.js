@@ -917,6 +917,34 @@ async function registrarSolicitud({ entrada, agente, contacto, phoneNumberId = n
     }
   }
 
+  // 🩸 NO DUPLICAR (19-oct). El agente volvía a llamar esta herramienta cada vez
+  // que la clínica escribía "perfecto" o "gracias" después de registrar: Diverpool
+  // quedó con CINCO solicitudes de la misma gatita en una hora (coordinación
+  // descartó tres a mano; una cuarta quedó PENDIENTE a punto de convertirse en un
+  // servicio duplicado). Misma familia (o misma clínica sin familia) + misma
+  // mascota en las últimas 24 h y no descartada = es la misma solicitud.
+  // Se compara la PRIMERA palabra del nombre: "Gatica (sin nombre aún)" y
+  // "Gatica" son la misma gata.
+  const { rows: [yaEsta] } = await pool.query(
+    `SELECT id, estado FROM public.solicitudes_servicio
+      WHERE created_at > now() - interval '24 hours' AND estado <> 'DESCARTADO'
+        AND lower(split_part(trim(mascota_nombre), ' ', 1)) = lower(split_part(trim($1), ' ', 1))
+        AND (public.wa_tel10(cliente_whatsapp) = public.wa_tel10($2)
+             OR ($3::uuid IS NOT NULL AND aliado_id = $3 AND public.wa_tel10($2) = public.wa_tel10($4)))
+      ORDER BY created_at DESC LIMIT 1`,
+    [String(entrada.mascota_nombre || ''), tel, conv?.aliado_id || null, contactoDigitos]
+  )
+  if (yaEsta) {
+    log(MOD, `solicitud de ${entrada.mascota_nombre} desde ${contacto} YA existía (${yaEsta.id}, ${yaEsta.estado}) — no se duplica`)
+    return {
+      ok: true,
+      ya_registrada: true,
+      mensaje: 'Esta solicitud YA estaba registrada: no se creó otra y NO debes volver a registrarla. '
+        + 'Si la clínica solo agradece o confirma, respóndele en una línea que ya quedó y que coordinación confirma la hora. '
+        + 'Si cambió un dato (dirección, peso, plan), dile que se lo pasas a coordinación y etiqueta la conversación.',
+    }
+  }
+
   // `origen` se queda en ALIADO — la solicitud viene de una veterinaria. Meter
   // un valor nuevo rompería el aviso a coordinación y, al convertir, la
   // comisión del aliado. El canal va en `agente_id`. Ver migración 088.
