@@ -40,6 +40,11 @@
 # Idempotente: el indice unico (solicitud_id, numero) impide duplicar un contacto.
 30 10 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/seguimiento-imagenes >> /var/log/orbit-backend-cron.log 2>&1
 
+# Cadena de contacto de imagenes (migr. 186) — cada 10 minutos de dia: si el 1er
+# contacto rebota por el numero, prueba otro celular del cliente y luego la vet.
+# Idempotente: UNIQUE (solicitud, canal, destino) impide repetir un paso.
+5-55/10 7-20 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/cadena-contacto-imagenes >> /var/log/orbit-backend-cron.log 2>&1
+
 # Digitales — revisa cada 10 minutos, solo en horario diurno. El job aplica un
 # corte de activacion y nunca toma los servicios historicos anteriores a este.
 # Maximo 5 por corrida y bloqueo global para impedir dos ejecuciones simultaneas.
