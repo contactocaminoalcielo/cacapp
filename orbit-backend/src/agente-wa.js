@@ -36,6 +36,7 @@ import { construirEnlace } from './reglas-imagenes.js'
 import {
   prospectoAbiertoPorNumero, contextoProspectoParaAgente, registrarInteresDesdeAgente, crearProspecto,
   traspasoVivo, extenderTraspaso, pasarAComercial, devolverAOperacion, contextoAliadaParaVentas, reportarReclamo,
+  derivarFamilia,
 } from './crm.js'
 
 const MOD = '[agente-wa]'
@@ -340,6 +341,23 @@ const HERRAMIENTAS = [{
     },
     required: ['categoria', 'asunto'],
   },
+}, {
+  name: 'derivar_familia',
+  description:
+    'Quien escribe es la FAMILIA dueña de la mascota (un particular), no una clínica: esta línea es solo '
+    + 'para clínicas. Devuelve el enlace de WhatsApp de nuestra línea de atención al cliente con su mensaje '
+    + 'ya escrito, para que la atiendan allí de inmediato.\n\n'
+    + 'Pistas de FAMILIA: "mi perrito/mi gata", "soy la dueña/propietaria", "mi mascota está en la veterinaria '
+    + 'X", pregunta el precio para SU mascota. Pistas de CLÍNICA: "te escribimos desde la veterinaria", "tenemos '
+    + 'un paciente", firma con el nombre de la clínica. Si no está claro, PREGUNTA antes de usarla.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      resumen:     { type: 'string', description: 'Una línea con lo que necesita, en primera persona de la familia. Ej: "Necesito cremación para mi perrita Luna de 13 años, unos 12 kg."' },
+      veterinaria: { type: 'string', description: 'La veterinaria donde está la mascota o que la refirió, si la mencionó. Vacío si no.' },
+    },
+    required: ['resumen'],
+  },
 }]
 
 // Catálogo que usa la pantalla para decidir qué capacidades puede concederle
@@ -422,6 +440,13 @@ export const HERRAMIENTAS_DISPONIBLES = [
     resumen: 'Abre un ticket prioritario y alerta al equipo cuando la clínica reclama algo concreto.',
     propia_del_negocio: true,
     orden: 11,
+  },
+  {
+    clave: 'derivar_familia',
+    nombre: 'Derivar familia a atención al cliente',
+    resumen: 'Si escribe un particular, le da el enlace de la línea de atención al cliente y anota la veterinaria que lo refirió.',
+    propia_del_negocio: true,
+    orden: 12,
   },
 ]
 
@@ -640,6 +665,12 @@ async function enviarEnlaceRegistro({ contacto, phoneNumberId = null }) {
 async function prospectoDesdeWhatsapp(contacto, phoneNumberId) {
   const num = String(contacto || '').replace(/\D/g, '')
   if (!num) return
+  // Una conversación ya marcada como familia (migración 184) no es un prospecto.
+  const { rows: [part] } = await pool.query(
+    `SELECT 1 FROM public.whatsapp_conversacion_etiquetas ce JOIN public.whatsapp_etiquetas e ON e.id = ce.etiqueta_id
+      WHERE ce.contacto = $1 AND ($2::text IS NULL OR ce.phone_number_id = $2) AND e.clave = 'PARTICULAR' LIMIT 1`,
+    [num, phoneNumberId])
+  if (part) return
   const { rows: [c] } = await pool.query(
     `SELECT nombre_perfil FROM public.whatsapp_contactos WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2) LIMIT 1`,
     [num, phoneNumberId])
@@ -1352,7 +1383,11 @@ async function contextoDeLaConversacion(contacto, phoneNumberId = null) {
   if (!num) return null
 
   const { rows: [c] } = await pool.query(
-    `SELECT v.aliado_id, a.nombre, a.activo, a.estado
+    `SELECT v.aliado_id, a.nombre, a.activo, a.estado, v.tipo_contacto, v.cliente_nombre,
+            EXISTS (SELECT 1 FROM public.whatsapp_conversacion_etiquetas ce
+                      JOIN public.whatsapp_etiquetas e ON e.id = ce.etiqueta_id
+                     WHERE ce.contacto = v.contacto AND ce.phone_number_id = v.phone_number_id
+                       AND e.clave = 'PARTICULAR') AS particular
        FROM public.v_whatsapp_conversaciones v
        LEFT JOIN public.aliados a ON a.id_aliado = v.aliado_id
       WHERE v.contacto = $1 AND ($2::text IS NULL OR v.phone_number_id = $2)`,
@@ -1360,11 +1395,31 @@ async function contextoDeLaConversacion(contacto, phoneNumberId = null) {
   )
   if (!c) return null
 
+  // 🩸 19-oct: aquí se le decía al modelo que todo número no registrado era una
+  // clínica ("usa enviar_enlace_registro"). Pero ~1 de cada 4 conversaciones de
+  // la línea son FAMILIAS que vieron el número en un folleto: decían "mi mascota
+  // está en la veterinaria X" y recibían el enlace de afiliación. Ahora primero
+  // se averigua con quién se habla (migración 184).
+  if (!c.aliado_id && c.particular) {
+    return 'Este número YA se identificó como una FAMILIA (particular) y se le pasó la línea de '
+      + 'atención al cliente. Si vuelve a escribir, recuérdaselo con calidez usando `derivar_familia`. '
+      + 'No le mandes enlaces de afiliación ni le tomes datos de recogida aquí.'
+  }
   if (!c.aliado_id) {
-    return 'Este número NO está registrado como veterinaria aliada. En cuanto se hable de '
-      + 'una recogida, lo PRIMERO que haces es usar `enviar_enlace_registro`: le llegará el '
-      + 'enlace de afiliación. Mándaselo y, en el mismo mensaje, ofrécele tomarle los datos '
-      + 'por aquí para que no espere a que coordinación la apruebe.'
+    return 'Este número NO es de una veterinaria aliada registrada. ANTES de mandar enlaces o tomar '
+      + 'datos, averigua con quién hablas: ¿una CLÍNICA veterinaria (su personal pide el servicio) o la '
+      + 'FAMILIA dueña de la mascota? Pistas de familia: "mi perrito", "soy la dueña", "mi mascota está '
+      + 'en la veterinaria X", pregunta el precio para SU mascota. Pistas de clínica: "te escribimos desde '
+      + 'la veterinaria", "tenemos un paciente", firma con el nombre de la clínica. Si no está claro, '
+      + 'pregunta una sola vez y con calidez: "¿Nos escribes desde una clínica veterinaria o eres familiar '
+      + 'de la mascota?".'
+      + (c.tipo_contacto === 'CLIENTE'
+        ? ` Ojo: este número figura en nuestra base como CLIENTE (familia)${c.cliente_nombre ? ` «${c.cliente_nombre}»` : ''}; `
+          + 'lo más probable es que sea una familia, pero algunas clínicas dan su número como contacto: confírmalo si dudas.'
+        : '')
+      + ' Si es una FAMILIA → `derivar_familia`. Si es una CLÍNICA → en cuanto se hable de una recogida, '
+      + '`enviar_enlace_registro` (le llega el enlace de afiliación) y, en el mismo mensaje, ofrécele '
+      + 'tomarle los datos por aquí para que no espere a que coordinación la apruebe.'
   }
   if (!c.activo || c.estado === 'pendiente_validacion') {
     return `Este número figura como "${c.nombre}" pero esa clínica NO está habilitada en el `
@@ -2798,6 +2853,10 @@ export async function ejecutar({ agente, contacto, phoneNumberId = null, origen 
               out = await devolverAOperacion({ phoneNumberId, contacto, motivo: bloque.entrada?.motivo })
             }
             if (out.ok && !mensajePrueba) traspaso = bloque.nombre
+          } else if (bloque.nombre === 'derivar_familia') {
+            out = mensajePrueba
+              ? { ok: true, enlace: 'https://wa.me/573193585508?text=Hola', nota: 'Ensayo: en la línea real se marcaría la conversación como PARTICULAR.' }
+              : await derivarFamilia({ phoneNumberId, contacto, entrada: bloque.entrada || {} })
           } else if (bloque.nombre === 'reportar_reclamo') {
             out = mensajePrueba
               ? { ok: true, nota: 'Ensayo: en la línea real se abriría un ticket y una alerta.' }

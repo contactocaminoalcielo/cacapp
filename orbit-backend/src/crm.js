@@ -13,7 +13,7 @@ import { pool, log } from './db.js'
 import { llamarClaude } from './ia.js'
 import { enviarPlantilla, valoresDeFuente } from './whatsapp-plantillas.js'
 import { enviarMaterial } from './whatsapp-materiales.js'
-import { enviarSobre } from './whatsapp-cloud.js'
+import { enviarSobre, etiquetar } from './whatsapp-cloud.js'
 
 const MOD = '[crm]'
 const APP_URL = (process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')
@@ -1808,6 +1808,104 @@ export async function reportarReclamo({ contacto, entrada = {} }) {
   log(MOD, `reclamo de ${f.aliado.nombre} → ticket #${r.body.ticket.numero} (${categoria})`)
   return { ok: true, ticket: r.body.ticket.numero,
     nota: `Quedó registrado como caso #${r.body.ticket.numero}. Dile que el equipo lo revisa y le responde; no prometas fechas ni montos.` }
+}
+
+// ─── Familias en la línea de veterinarias (migración 184) ───────────────────
+/**
+ * La veterinaria que nombró una familia ("mi mascota está en Patitas"), contra
+ * las aliadas. Por parecido (pg_trgm), quitando las palabras que todas comparten
+ * ("clínica", "veterinaria"…). Solo se acepta si el mejor candidato es claro:
+ * ante la duda no se le atribuye nada a nadie — una comisión mal puesta es peor
+ * que una por asignar.
+ */
+async function aliadaPorNombre(nombre) {
+  const limpio = s => `lower(translate(regexp_replace(${s}, '\\m(cl[ií]nica|veterinari[ao]s?|vet|centro|hospital|consultorio|m[eé]dico|sas|s\\.a\\.s)\\M', ' ', 'gi'), 'áéíóúÁÉÍÓÚ', 'aeiouAEIOU'))`
+  const { rows } = await pool.query(
+    `SELECT id_aliado, nombre, similarity(${limpio('nombre')}, ${limpio('$1')}) AS sim
+       FROM public.aliados WHERE activo
+      ORDER BY sim DESC LIMIT 2`, [String(nombre || '')])
+  const [a, b] = rows
+  // Claramente ninguna aliada se le parece: es otra veterinaria (prospecto).
+  if (!a || Number(a.sim) < 0.3) return { ninguna: true }
+  // Parecida a una, o a dos a la vez ("Patitas" vs "Patotas" y "Paticas"): no se adivina.
+  if (Number(a.sim) < 0.45 || (b && Number(a.sim) - Number(b.sim) < 0.1)) {
+    return { dudosa: [a, b].filter(Boolean).map(x => x.nombre) }
+  }
+  return { aliado: a }
+}
+
+/**
+ * Una FAMILIA escribió a la línea de veterinarias. Se le da el enlace de
+ * atención al cliente con su mensaje ya escrito, se marca la conversación y se
+ * anota quién la refirió.
+ */
+export async function derivarFamilia({ phoneNumberId, contacto, entrada = {} }) {
+  const num = digitos(contacto)
+  const { rows: [cfg] } = await pool.query(
+    `SELECT valor FROM public.config_operativa WHERE modulo = 'CRM' AND clave = 'linea_atencion_cliente'`)
+  const linea = aWhatsapp(typeof cfg?.valor === 'string' ? cfg.valor : '573193585508')
+  const resumen = txt(entrada.resumen, 400)
+  const vet = txt(entrada.veterinaria, 120)
+  const mensaje = ['Hola, escribí a la línea de veterinarias y me indicaron este número.', resumen,
+    vet ? `Mi mascota está en / me refirió la veterinaria ${vet}.` : null].filter(Boolean).join(' ')
+  const enlace = `https://wa.me/${linea}?text=${encodeURIComponent(mensaje)}`
+
+  // Que no vuelva a pasar por el filtro: la conversación queda marcada.
+  await etiquetar({ contacto: num, linea: phoneNumberId, clave: 'PARTICULAR', origen: 'AGENTE',
+    motivo: (resumen || 'Familia derivada a atención al cliente').slice(0, 200) }).catch(e => log(MOD, 'no se pudo marcar PARTICULAR —', e.message))
+
+  // Si se había colado como prospecto (pidió "el enlace" y parecía una clínica), se retira.
+  const t = tel10(num)
+  if (t && t.length === 10) {
+    await pool.query(
+      `UPDATE public.crm_prospectos
+          SET etapa = 'PERDIDO', etapa_desde = now(), motivo_perdida = 'Era una familia (particular), no una clínica'
+        WHERE (public.wa_tel10(whatsapp) = $1 OR public.wa_tel10(telefono) = $1)
+          AND fuente IN ('WHATSAPP','AGENTE') AND etapa NOT IN ('GANADO','PERDIDO')`, [t])
+    await pool.query(
+      `UPDATE public.agente_wa_traspasos SET cerrado_en = now(), cerrado_motivo = 'Era una familia'
+        WHERE phone_number_id = $1 AND contacto = $2 AND cerrado_en IS NULL`, [phoneNumberId, num])
+  }
+
+  // La veterinaria que la refirió: comisión (si es aliada) u oportunidad (si no lo es).
+  let referida = null
+  if (vet) {
+    const m = await aliadaPorNombre(vet)
+    const a = m.aliado
+    const nota = `📣 Una familia (WhatsApp ${num}) dijo que su mascota está en esta veterinaria / que la refirió`
+      + `${resumen ? `: ${resumen}` : ''}. Se derivó a atención al cliente (${linea}) — asignar la veterinaria al servicio para su comisión.`
+    if (a) {
+      await pool.query(
+        `INSERT INTO public.crm_actividades (aliado_id, tipo, resumen, origen) VALUES ($1, 'WHATSAPP', $2, 'AGENTE')`,
+        [a.id_aliado, nota.slice(0, 1000)])
+      referida = { aliada: a.nombre }
+    } else if (m.dudosa) {
+      // Ni se atribuye ni se crea un prospecto: lo resuelve una persona al
+      // tomar el servicio (el mensaje a atención al cliente lleva el nombre).
+      log(MOD, `${num}: la familia nombró "${vet}" — parecida a ${m.dudosa.join(' / ')}, no se atribuye sola`)
+      referida = { dudosa: m.dudosa }
+    } else {
+      const r = await crearProspecto({
+        nombre: vet, fuente_detalle: `Una familia dijo que su mascota estaba allí (WhatsApp ${num})`, notas: resumen,
+      }, null, { fuente: 'REFERIDO' })
+      const pid = r.body?.prospecto?.id || (r.body?.duplicado?.tipo === 'PROSPECTO' ? r.body.duplicado.id : null)
+      const aid = r.body?.duplicado?.tipo === 'ALIADO' ? r.body.duplicado.id : null
+      if (pid || aid) {
+        await pool.query(
+          `INSERT INTO public.crm_actividades (prospecto_id, aliado_id, tipo, resumen, origen) VALUES ($1, $2, 'WHATSAPP', $3, 'AGENTE')`,
+          [pid, aid, nota.slice(0, 1000)])
+      }
+      referida = { prospecto: vet }
+    }
+  }
+  log(MOD, `${num}: familia derivada a atención al cliente${vet ? ` (refirió: ${vet} → ${referida?.aliada ? 'aliada ' + referida.aliada : 'prospecto'})` : ''}`)
+  return {
+    ok: true,
+    enlace,
+    nota: 'Respóndele con calidez (puede estar en duelo), en 2-3 líneas: esta línea es exclusiva para clínicas '
+      + 'veterinarias y para atenderle de inmediato escriba a nuestra línea de atención al cliente en este enlace, '
+      + 'que ya lleva su mensaje. Pega el enlace EXACTO. NO le des precios ni le pidas datos aquí.',
+  }
 }
 
 // ─── Rutas ──────────────────────────────────────────────────────────────────
