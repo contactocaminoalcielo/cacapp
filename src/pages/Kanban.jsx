@@ -28,7 +28,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, History, PawPrint, Zap, Star,
+  ImageUp, History, PawPrint, Zap, Star, CheckCircle2,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import BitacoraTecnico from '@/components/servicio/BitacoraTecnico'
@@ -327,10 +327,22 @@ const fmtDiaMes = d => parseDate(d)?.toLocaleDateString('es-CO', { day: '2-digit
 const esCompostajeAnticipado = s =>
   s?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL' && s?.recordatorios_anticipados === true
 
+// Servicio ya entregado: su plazo dejó de correr el día de la entrega
+// (migración 185). `dias_para_vencer` queda congelado en los días hábiles entre
+// la entrega y el límite: positivo = entregó antes, 0 = el día límite,
+// negativo = tarde. No es urgencia: no se pinta como «vencido» ni «vence hoy».
+const entregaCerrada = s => s?.estado === 'ENTREGADO' && !!s.fecha_entrega_real
+const textoCumplimiento = s =>
+  s.dias_para_vencer < 0 ? `Entregado ${Math.abs(s.dias_para_vencer)}d tarde`
+    : s.dias_para_vencer === 0 ? 'Entregado el día límite'
+    : `Entregado a tiempo · ${s.dias_para_vencer}d antes`
+
 function explicaLimite(s, diasPlan) {
   if (!s?.fecha_limite_entrega) return undefined
   const largo = d => parseDate(d)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })
   const l = []
+  if (entregaCerrada(s))
+    l.push(`Entregado el ${largo(s.fecha_entrega_real)}: el conteo se detuvo ese día.`)
   // Compostaje individual que espera al final: el reloj lo abre la salida del
   // cubículo, no las imágenes (migración 155). Decirlo, o el tooltip miente.
   if (s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL' && s.recordatorios_anticipados !== true) {
@@ -2506,7 +2518,7 @@ export default function Kanban() {
   }
 
   function alertLevel(s) {
-    if (s.dias_para_vencer == null) return null
+    if (s.dias_para_vencer == null || entregaCerrada(s)) return null
     if (s.dias_para_vencer < 0)  return 'vencido'
     if (s.dias_para_vencer === 0) return 'hoy'
     if (s.dias_para_vencer <= 3) return 'pronto'
@@ -3451,7 +3463,14 @@ export default function Kanban() {
                           { key: 'antiguos',label: 'Más antiguos', color: '#6B7280', bg: '#F3F4F6', urgent: false, test: s => { const d = diasDesdeIngreso(s.fecha_ingreso); return d != null && d >= 7 } },
                           { key: 'sin_fecha', label: 'Sin fecha',  color: '#9CA3AF', bg: '#F3F4F6', urgent: false, test: s => diasDesdeIngreso(s.fecha_ingreso) == null },
                         ]
-                        const TIERS = esVistaProd ? TIERS_URGENCIA : TIERS_FECHA
+                        // Lo entregado ya no tiene urgencia: se agrupa por
+                        // cumplimiento real del plazo (migración 185).
+                        const TIERS_CUMPLIMIENTO = [
+                          { key: 'tarde',    label: 'Entregados tarde',    color: '#C03030', bg: '#FEE2E2', urgent: false, test: s => entregaCerrada(s) && s.dias_para_vencer != null && s.dias_para_vencer < 0 },
+                          { key: 'a_tiempo', label: 'Entregados a tiempo', color: '#1D8A55', bg: '#E8F3EB', urgent: false, test: s => entregaCerrada(s) && s.dias_para_vencer != null && s.dias_para_vencer >= 0 },
+                          { key: 'sin_fecha', label: 'Sin fecha límite',   color: '#9CA3AF', bg: '#F3F4F6', urgent: false, test: s => !entregaCerrada(s) || s.dias_para_vencer == null },
+                        ]
+                        const TIERS = esVistaProd ? (col === 'ENTREGADO' ? TIERS_CUMPLIMIENTO : TIERS_URGENCIA) : TIERS_FECHA
 
                         const renderCard = s => {
                           const al  = alertLevel(s)
@@ -3636,6 +3655,13 @@ export default function Kanban() {
                                   <AlertTriangle size={9} />
                                   {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Vence hoy' : `${s.dias_para_vencer}d`}
                                   {s.fecha_limite_entrega && ` · límite ${fmtDiaMes(s.fecha_limite_entrega)}`}
+                                </div>
+                              )}
+                              {entregaCerrada(s) && s.dias_para_vencer != null && (
+                                <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1 ${s.dias_para_vencer < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                                  title={explicaLimite(s, diasDelPlan(s))}>
+                                  {s.dias_para_vencer < 0 ? <AlertTriangle size={9} /> : <CheckCircle2 size={9} />}
+                                  {textoCumplimiento(s)}
                                 </div>
                               )}
                               {tieneImagenes && (
@@ -3829,7 +3855,12 @@ export default function Kanban() {
                           {s.fecha_ingreso ? parseDate(s.fecha_ingreso)?.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '—'}
                         </td>
                         <td className="px-4 py-3">
-                          {s.dias_para_vencer != null ? (
+                          {s.dias_para_vencer != null && entregaCerrada(s) ? (
+                            <span className={`text-[12px] font-semibold ${s.dias_para_vencer < 0 ? 'text-red-600' : 'text-green-700'}`}
+                              title={explicaLimite(s, diasDelPlan(s))}>
+                              {s.dias_para_vencer < 0 ? `Tarde ${Math.abs(s.dias_para_vencer)}d` : '✓ A tiempo'}
+                            </span>
+                          ) : s.dias_para_vencer != null ? (
                             <span className={`text-[12px] font-semibold ${al === 'vencido' ? 'text-red-600' : al === 'hoy' ? 'text-amber-600' : al === 'pronto' ? 'text-amber-500' : 'text-gray-500'}`}
                               title={explicaLimite(s, diasDelPlan(s))}>
                               {s.dias_para_vencer < 0 ? `−${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Hoy' : `${s.dias_para_vencer}d`}
@@ -3894,9 +3925,15 @@ export default function Kanban() {
                 <span className="text-[11px] text-gray-400" title={explicaLimite(selected, diasDelPlan(selected))}>Límite: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
               )}
               {selected.dias_para_vencer != null && (
+                entregaCerrada(selected) ? (
+                  <span title={explicaLimite(selected, diasDelPlan(selected))} className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${selected.dias_para_vencer < 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                    {textoCumplimiento(selected)}
+                  </span>
+                ) : (
                 <span title={explicaLimite(selected, diasDelPlan(selected))} className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${selected.dias_para_vencer < 0 ? 'bg-red-50 text-red-600' : selected.dias_para_vencer <= 2 ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'}`}>
                   {selected.dias_para_vencer < 0 ? `${Math.abs(selected.dias_para_vencer)}d vencido` : `${selected.dias_para_vencer}d restantes`}
                 </span>
+                )
               )}
               {selected.nevera_codigo && (
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#CFFAFE', color: '#0E7490' }}>

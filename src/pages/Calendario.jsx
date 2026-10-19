@@ -318,7 +318,10 @@ export default function Calendario() {
                             <span className="text-[11px] text-gray-500">{s.plan}</span>
                             {s.dias_para_vencer != null && (
                               <span className="text-[11px] font-bold" style={{ color: getUrgColor(s) }}>
-                                {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d`
+                                {/* Entregado: el plazo se congeló en la entrega (migr. 185) */}
+                                {s.estado === 'ENTREGADO'
+                                  ? (s.dias_para_vencer < 0 ? `Entregado ${Math.abs(s.dias_para_vencer)}d tarde` : 'Entregado a tiempo')
+                                  : s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d`
                                   : s.dias_para_vencer === 0 ? 'Vence hoy'
                                   : `${s.dias_para_vencer}d restantes`}
                               </span>
