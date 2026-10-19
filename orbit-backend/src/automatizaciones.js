@@ -45,6 +45,24 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'cadena_imagenes',
+    nombre: 'Imágenes: si no le llega al cliente',
+    descripcion: 'Si la solicitud de imágenes no le llega por un problema del número, Orbit prueba el otro celular del cliente y luego le pide apoyo a la veterinaria que lo remitió. Cada paso queda como novedad del servicio.',
+    quien: 'A la familia y a la clínica',
+    cron: 'Cada 10 min, 7:00 a 20:00',
+    interruptor: { modulo: 'SOLICITUDES_IMAGENES', clave: 'cadena_contacto_activa' },
+    // La plantilla que falta es la de la clínica; la del cliente es la del 1er contacto.
+    plantillaCfg: { modulo: 'SOLICITUDES_IMAGENES', clave: 'plantilla_apoyo_vet' },
+    sql: {
+      tabla: 'public.solicitud_imagenes_cadena',
+      fecha: 'created_at',
+      filtro: "canal IN ('CLIENTE_ALTERNO', 'VETERINARIA')",
+      ok: "estado IN ('ENVIADO', 'LLEGO')",
+      error: "estado = 'ERROR'",
+      pendiente: "estado = 'SIN_PLANTILLA'",
+    },
+  },
+  {
     clave: 'aviso_vet',
     nombre: 'Aviso de recogida a la veterinaria',
     descripcion: 'Cuando el técnico inicia ruta y pone su hora, la clínica recibe sola el aviso por la línea de veterinarias.',

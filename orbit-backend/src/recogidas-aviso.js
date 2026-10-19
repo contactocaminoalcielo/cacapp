@@ -82,7 +82,7 @@ function horaCorta(v) {
 }
 
 /** La línea por la que se habla con las veterinarias, leída del agente. */
-async function lineaVeterinarias() {
+export async function lineaVeterinarias() {
   const { rows: [a] } = await pool.query(
     `SELECT id, nombre, phone_number_ids
        FROM public.agente_wa WHERE clave = $1 LIMIT 1`,

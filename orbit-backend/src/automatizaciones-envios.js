@@ -63,6 +63,34 @@ const FUENTES = {
       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
      WHERE ct.numero >= 2`,
 
+  // Cadena de contacto (migr. 186): cada paso es una fila. El PRINCIPAL es el
+  // fallo que la arrancó; COORDINACION y SIN_PLANTILLA quedan en manos de una
+  // persona (PENDIENTE).
+  cadena_imagenes: `
+    SELECT k.id, k.servicio_id,
+           COALESCE(k.enviado_en, k.created_at) AS fecha,
+           CASE WHEN k.canal = 'PRINCIPAL' THEN 'ERROR'
+                WHEN k.estado IN ('ENVIADO', 'LLEGO') THEN 'ENVIADO'
+                WHEN k.estado = 'ERROR' THEN 'ERROR'
+                WHEN k.estado = 'ENVIANDO' THEN 'ENVIANDO'
+                ELSE 'PENDIENTE' END AS estado,
+           COALESCE(k.ultimo_error, k.disparo_error) AS error, NULL::int AS intentos,
+           m.nombre AS mascota,
+           CASE k.canal WHEN 'VETERINARIA' THEN a.nombre ELSE ${PROPIETARIO} END AS destinatario,
+           NULLIF(k.destino, '') AS destino,
+           COALESCE(k.message_id, k.disparo_message_id) AS wamid, NULL::text AS acuse_propio,
+           CASE k.canal WHEN 'PRINCIPAL' THEN 'No llegó al número principal'
+                        WHEN 'CLIENTE_ALTERNO' THEN 'Otro número del cliente'
+                        WHEN 'VETERINARIA' THEN CASE WHEN k.estado = 'SIN_PLANTILLA'
+                             THEN 'Veterinaria · falta plantilla: escribirle a mano' ELSE 'Apoyo de la veterinaria' END
+                        ELSE 'Coordinación: llamar a la familia' END AS detalle,
+           jsonb_build_object('solicitud_id', k.solicitud_id, 'canal', k.canal) AS extra
+      FROM public.solicitud_imagenes_cadena k
+      JOIN public.servicios s     ON s.id = k.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+      LEFT JOIN public.aliados a  ON a.id_aliado = s.aliado_origen_id`,
+
   // No hay tabla propia: el estado se deduce de dos columnas de `recogidas`.
   // PENDIENTE = el técnico ya está en ruta hacia una clínica y no hay aviso ni error.
   aviso_vet: `
@@ -277,6 +305,8 @@ function relanzable(clave, r) {
   if (clave === 'aviso_cliente') return no('Lo manda una persona por wa.me')
   // Necesita que una persona mire el marco: se reenvía desde Tenjo → Evidencias.
   if (clave === 'evidencia_inicio') return no('Se revisa y envía desde Tenjo → Evidencias')
+  // La cadena avanza sola con cada fallo; lo que queda es corregir el número del cliente.
+  if (clave === 'cadena_imagenes') return no('La cadena sigue sola · corrige el WhatsApp del cliente')
   if (r.estado === 'CANCELADO')  return no('Cancelado')
   if (r.acuse === 'failed')      return { relanzable: true }
   if (r.estado === 'ENVIADO') {

@@ -66,6 +66,7 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
 
     const { rows } = await client.query(
       `SELECT sol.id, sol.servicio_id, sol.estado, sol.seguimiento_pausado, sol.whatsapp_destino,
+              sol.wa_fallido, sol.wa_alterno,
               s.estado AS servicio_estado, s.fecha_imagenes_recibidas, s.codigo_fotos,
               p.codigo AS plan_codigo,
               m.nombre AS mascota,
@@ -94,7 +95,13 @@ export async function enviarContacto({ solicitudId, numero, automatico = true, p
     // 3º tienen que ir al nuevo. Al revés se quedaba pegado el primero y los
     // mensajes seguían saliendo al número equivocado. El snapshot solo sirve de
     // respaldo si el cliente se quedó sin número en la ficha.
-    const destino = waOrNull(sol.whatsapp) || waOrNull(sol.whatsapp_destino)
+    // Cadena de contacto (migr. 186): si el número de la ficha es el que Meta
+    // rechazó y otro número del cliente SÍ recibió la solicitud, se sigue por
+    // ese. Si coordinación ya corrigió la ficha, el número nuevo manda.
+    const ult10 = v => String(v || '').replace(/\D/g, '').slice(-10)
+    const fichaFallida = sol.wa_fallido && ult10(sol.whatsapp) === ult10(sol.wa_fallido)
+    const destino = (fichaFallida && waOrNull(sol.wa_alterno))
+      || waOrNull(sol.whatsapp) || waOrNull(sol.whatsapp_destino)
     if (!destino) { await client.query('ROLLBACK'); return { enviado: false, motivo: 'sin_whatsapp' } }
 
     const config = await cargarConfigImagenes(client)

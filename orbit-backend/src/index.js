@@ -12,6 +12,7 @@ import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupal
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
+import { jobCadenaContactoImagenes } from './cadena-contacto-imagenes.js'
 import { jobEleccionPlanta } from './jobs/plantas.js'
 import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
 import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
@@ -1209,6 +1210,18 @@ app.post('/jobs/seguimiento-imagenes', requireJob, async (req, res) => {
     res.json(await jobSeguimientoImagenes({ dryRun: req.query.dry === '1' }))
   } catch (e) {
     log('[seguimiento-imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Job: cadena de contacto de imágenes (migración 186), cada 10 min ──
+// Si el 1er contacto no le llegó al cliente por su número: otro celular → vet.
+// ?dry=1 → dice qué cadenas arrancaría, sin enviar ni escribir.
+app.post('/jobs/cadena-contacto-imagenes', requireJob, async (req, res) => {
+  try {
+    res.json(await jobCadenaContactoImagenes({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[cadena-imagenes/job] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
