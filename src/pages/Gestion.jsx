@@ -23,6 +23,7 @@ import TabAutorizaciones from '@/components/gestion/TabAutorizaciones'
 import { Plus, Search, Trash2, ArrowUpCircle, ArrowDownCircle, History, Upload, Download, CheckCircle2, XCircle, AlertTriangle, FileDown } from 'lucide-react'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import FichaServicio from '@/components/servicio/FichaServicio'
+import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 
 // Edad de la mascota para mostrar: no se guarda cruda sino declarada en una
 // fecha (migración 056), así envejece sola. El fallback a `edad_anios` cubre
@@ -823,7 +824,7 @@ function TabAliados({ isAdmin, canEdit }) {
   }, [])
   async function cargar() {
     if (primeraCarga.current) setLoading(true)
-    const { data: d } = await db.from('aliados').select('*').order('nombre')
+    const { data: d } = await db.from('aliados').select(ALIADOS_COLUMNAS).order('nombre')
     setData(d || [])
     primeraCarga.current = false
     setLoading(false)

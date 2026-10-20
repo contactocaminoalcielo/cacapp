@@ -17,6 +17,7 @@ import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Buildin
 import TabPlantas from '@/components/configuracion/TabPlantas'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
+import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 
 const nullify = (obj, keys) => {
   const out = { ...obj }
@@ -399,7 +400,7 @@ function TabVeterinarias() {
   // Genera (o recupera) el enlace de acceso de una veterinaria YA activa.
   // Reusa el mismo endpoint idempotente: si ya tiene token lo devuelve.
   async function generarEnlaceAliado(a) {
-    const tiene = !!a.token_acceso
+    const tiene = !!a.tiene_acceso
     if (!await confirm(
       tiene
         ? `Se mostrará el enlace de acceso de "${a.nombre}" para reenviárselo.`
@@ -426,7 +427,7 @@ function TabVeterinarias() {
 
   async function cargar() {
     setLoading(true)
-    const { data: d } = await db.from('aliados').select('*').order('nombre')
+    const { data: d } = await db.from('aliados').select(ALIADOS_COLUMNAS).order('nombre')
     setData(d || [])
     setLoading(false)
   }
@@ -488,7 +489,7 @@ function TabVeterinarias() {
   const activos = data.filter(a => a.activo !== false).length
   // Onboarding al portal: cuántas vets activas ya tienen enlace de acceso (token)
   const activasReales = data.filter(a => a.activo !== false && a.estado !== 'pendiente_validacion')
-  const conAcceso = activasReales.filter(a => a.token_acceso).length
+  const conAcceso = activasReales.filter(a => a.tiene_acceso).length
 
   // Las que la regla pondría distinto de como están: primero las que ganan el VIP.
   const sugerenciasVip = revisionVip?.conteo
@@ -618,7 +619,7 @@ function TabVeterinarias() {
                   <Td>
                     {a.estado === 'pendiente_validacion' ? (
                       <span className="text-gray-300">—</span>
-                    ) : a.token_acceso ? (
+                    ) : a.tiene_acceso ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#EAF3E2', color: '#3D5A27' }}>
                         <KeyRound size={9} /> Con acceso
                       </span>
@@ -630,8 +631,8 @@ function TabVeterinarias() {
                     <div className="flex items-center gap-1">
                       {a.estado !== 'pendiente_validacion' && a.activo !== false && (
                         <Button size="sm" variant="ghost" onClick={() => generarEnlaceAliado(a)} disabled={aprobando === a.id_aliado}
-                          title={a.token_acceso ? 'Ver / reenviar enlace de acceso' : 'Generar enlace de acceso al portal'}>
-                          <KeyRound size={13} /> {aprobando === a.id_aliado ? '…' : a.token_acceso ? 'Enlace' : 'Generar'}
+                          title={a.tiene_acceso ? 'Ver / reenviar enlace de acceso' : 'Generar enlace de acceso al portal'}>
+                          <KeyRound size={13} /> {aprobando === a.id_aliado ? '…' : a.tiene_acceso ? 'Enlace' : 'Generar'}
                         </Button>
                       )}
                       <Button size="sm" variant="ghost" onClick={() => abrir(a)}>Editar</Button>

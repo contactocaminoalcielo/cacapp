@@ -16,6 +16,7 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
 import { planComisiona, volumenMesAliado } from '@/lib/precios'
+import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
   User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse
@@ -414,7 +415,7 @@ export default function Registro() {
         db.from('planes').select('*')
           .not('codigo', 'in', '(BRONCE,PLATA,ORO_EXCLUSIVO,DIAMANTE,VITALICIO)')
           .order('nombre'),
-        db.from('aliados').select('*').eq('activo', true).order('nombre'),
+        db.from('aliados').select(ALIADOS_COLUMNAS).eq('activo', true).order('nombre'),
         db.from('personal').select('*').eq('activo', true).order('nombre'),
         db.from('recordatorios').select('id,nombre,precio_base,categoria').eq('activo', true).order('nombre'),
         db.from('tarifas_transporte').select('ciudad,tarifa_moto,tarifa_camioneta').eq('activo', true).order('ciudad'),
