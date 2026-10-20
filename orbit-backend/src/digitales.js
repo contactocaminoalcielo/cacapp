@@ -19,7 +19,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RENDER_ENTRY = path.join(__dirname, '..', 'memorial', 'render.mjs')
 const APP_ROOT = path.join(__dirname, '..')
 const DATA_DIR = process.env.MEMORIAL_DATA_DIR || '/data/memoriales'
-const SIGN_SECRET = process.env.MEMORIAL_SIGN_SECRET || process.env.JWT_SECRET || 'dev-secret'
+// Sin respaldo fijo: un secreto conocido dejaría firmar enlaces a cualquiera (SEC-110).
+const SIGN_SECRET = process.env.MEMORIAL_SIGN_SECRET || process.env.JWT_SECRET
+if (!SIGN_SECRET) throw new Error('Falta MEMORIAL_SIGN_SECRET o JWT_SECRET')
 // Base pública del API (nginx /api → backend) — para URLs que Meta debe poder descargar.
 const PUBLIC_API_BASE = process.env.PUBLIC_API_BASE || 'https://orbit.orbitacac.com/api'
 

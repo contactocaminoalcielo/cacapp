@@ -2388,8 +2388,10 @@ export default function Kanban() {
   }
 
   function generateCodigo() {
+    // 32 símbolos → cada byte % 32 es uniforme. Aleatorio criptográfico: este
+    // código abre el portal de fotos de la familia (auditoría 2026-10, SEC-109).
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+    return Array.from(crypto.getRandomValues(new Uint8Array(8)), b => chars[b % chars.length]).join('')
   }
 
   async function contactar(e, s) {

@@ -2,7 +2,7 @@
 // Jobs programados (cron del VPS → /jobs/*) + API con permisos en backend.
 import express from 'express'
 import { pool, log } from './db.js'
-import { requireJob, requireAuth, requireRol } from './auth.js'
+import { requireJob, requireAuth, requireRol, tokenIgual } from './auth.js'
 import { generarPropuesta } from './jobs/propuesta.js'
 import { motorAlertas } from './jobs/alertas.js'
 import { confirmarLote, cerrarLote } from './lotes.js'
@@ -138,7 +138,12 @@ app.use('/whatsapp/materiales', cargaBandeja, express.json({ limit: '90mb' }))
 app.use('/whatsapp/plantillas-cabecera', cargaBandeja, express.json({ limit: '90mb' }))
 // Los PDFs de marca reciben los datos del documento y, a veces, la firma
 // dibujada en base64 (≈ 100-300 kB): no cabe en el límite por defecto.
-app.use('/pdf', express.json({ limit: '8mb' }))
+// Con sesión ANTES de leer 8 MB: sin esto cualquiera, sin cuenta, hacía que
+// el backend leyera cuerpos grandes (auditoría 2026-10, SEC-107).
+app.use('/pdf', requireAuth, express.json({ limit: '8mb' }))
+// El banco de voz valida su token ANTES de leer hasta 25 MB de audio (SEC-105).
+app.use('/voz/turno', (req, res, next) => (tokenVoz(req) ? next() : res.status(403).json({ error: 'Sin token' })),
+  express.json({ limit: '25mb' }))
 // CRM: las fotos del establecimiento y la importación de bases de datos.
 const cargaCrm = protegerCarga(requireRol(...ROLES_CRM))
 app.use('/crm/fotos', cargaCrm, express.json({ limit: '12mb' }))
@@ -147,7 +152,9 @@ app.use('/crm/prospectos/importar', cargaCrm, express.json({ limit: '25mb' }))
 app.use(express.json())
 
 // CORS para el frontend (mismo criterio que las funciones existentes)
-const ALLOWED = ['https://orbit.orbitacac.com', 'https://localhost:5173']
+// localhost solo fuera de producción (auditoría 2026-10, SEC-111).
+const ALLOWED = ['https://orbit.orbitacac.com',
+  ...(process.env.NODE_ENV === 'production' ? [] : ['https://localhost:5173'])]
 app.use((req, res, next) => {
   const origin = req.headers.origin || ''
   res.set('Access-Control-Allow-Origin', ALLOWED.includes(origin) ? origin : ALLOWED[0])
@@ -344,12 +351,28 @@ app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, bandejaCom, a
 
 // Recibos y certificados individuales. Reemplaza la Edge Function histórica
 // de GHL y usa el mismo interruptor seguro que el resto de automatizaciones.
-// `requireAuth` sin limitar a coordinación: el técnico también envía recibos.
-app.post('/whatsapp/operativo/documento', requireAuth, async (req, res) => {
+// El técnico y el mensajero también envían recibos (TecnicoApp).
+//
+// 🔒 Auditoría 2026-10 (RBAC-008): con solo tener sesión, cualquier rol —el
+// comercial, el operario— mandaba desde la línea oficial un PDF de CUALQUIER
+// dirección con texto libre a CUALQUIER número: suplantación con la marca.
+// Ahora: solo los roles que envían documentos; fuera de coordinación, solo
+// RECIBO (sale en plantilla, sin texto libre); y el PDF tiene que vivir en
+// nuestro Storage.
+const STORAGE_DOCS = (process.env.STORAGE_PUBLIC_BASE || 'https://db.orbitacac.com/storage/v1/') + 'object/'
+app.post('/whatsapp/operativo/documento', requireAuth, requireRol('TECNICO', 'MENSAJERO', 'COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const tipoDocumento = String(req.body?.tipoDocumento || 'DOCUMENTO').toUpperCase()
     if (!['RECIBO', 'CERTIFICADO', 'DOCUMENTO'].includes(tipoDocumento)) {
       return res.status(400).json({ ok: false, error: 'Tipo de documento inválido' })
+    }
+    const esCoordinacion = ['COORDINADOR', 'ADMIN'].includes(req.personal.rol)
+    if (!esCoordinacion && tipoDocumento !== 'RECIBO') {
+      return res.status(403).json({ ok: false, error: 'Tu rol solo puede enviar recibos' })
+    }
+    const pdfUrl = req.body?.pdfUrl
+    if (pdfUrl && (typeof pdfUrl !== 'string' || !pdfUrl.startsWith(STORAGE_DOCS) || pdfUrl.includes('..'))) {
+      return res.status(400).json({ ok: false, error: 'El PDF debe estar en el almacenamiento de Orbit' })
     }
 
     // A QUIÉN se le manda decide POR DÓNDE sale. Un recibo de veterinaria va a
@@ -478,7 +501,7 @@ app.post('/whatsapp/conversaciones/:contacto/bloqueo', requireAuth, rolBandeja, 
 // micrófono y una llave de pago.
 const tokenVoz = (req) => {
   const t = req.query?.t || req.headers['x-job-token']
-  return t && process.env.JOB_TOKEN && t === process.env.JOB_TOKEN
+  return tokenIgual(t, process.env.JOB_TOKEN)
 }
 
 app.get('/voz/prueba', (req, res) => {
@@ -498,7 +521,7 @@ app.get('/voz/relleno', async (req, res) => {
   } catch (e) { errorInterno(res, 'voz/relleno', e) }
 })
 
-app.post('/voz/turno', express.json({ limit: '25mb' }), async (req, res) => {
+app.post('/voz/turno', async (req, res) => {
   if (!tokenVoz(req)) return res.status(403).json({ error: 'Sin token' })
   try {
     const { rows: [agente] } = await pool.query(
@@ -1477,7 +1500,7 @@ app.post('/automatizaciones/:clave/envios/:id/relanzar', requireAuth, requireRol
 // El frontend manda los mismos datos que antes armaba para jsPDF y recibe los
 // bytes. Cualquier persona activa del equipo puede pedirlos: el certificado lo
 // genera el mensajero en la puerta, el coordinador desde el tablero y la ficha.
-app.post('/pdf/certificado-entrega', requireAuth, async (req, res) => {
+app.post('/pdf/certificado-entrega', requireAuth, requireRol('TECNICO', 'MENSAJERO', 'PRODUCTOR', 'COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     const { svc, entrega, mensajero, items, firma } = req.body || {}
     if (!svc?.id) return res.status(400).json({ ok: false, error: 'Falta el servicio' })
@@ -1548,7 +1571,7 @@ app.get('/evidencias', requireAuth, rolEvidencias, async (req, res) => {
 
 // La Jornada lo llama al iniciar el proceso (cualquier rol de planta): solo
 // PREPARA la fila para revisión, no le escribe a la familia.
-app.post('/evidencias/preparar', requireAuth, async (req, res) => {
+app.post('/evidencias/preparar', requireAuth, requireRol('OPERARIO', 'PRODUCTOR', 'COORDINADOR', 'ADMIN'), async (req, res) => {
   try { res.json(await prepararEvidencias({ servicioId: req.body?.servicio_id || null })) }
   catch (e) { errorInterno(res, 'evidencias/preparar', e) }
 })
@@ -1715,7 +1738,7 @@ app.post('/grupales/desvincular', requireAuth, requireRol('COORDINADOR', 'ADMIN'
 })
 
 // ── Asistente IA (solo sugiere; el humano confirma) ──
-app.post('/grupales/ia/resumen', requireAuth, async (_req, res) => {
+app.post('/grupales/ia/resumen', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
     res.json(await resumenPendientes())
   } catch (e) {
@@ -1724,7 +1747,7 @@ app.post('/grupales/ia/resumen', requireAuth, async (_req, res) => {
   }
 })
 
-app.post('/grupales/ia/redactar', requireAuth, async (req, res) => {
+app.post('/grupales/ia/redactar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
     res.json(await redactarMensaje({ itemId: req.body.item_id }))
   } catch (e) {
@@ -1733,7 +1756,7 @@ app.post('/grupales/ia/redactar', requireAuth, async (req, res) => {
   }
 })
 
-app.post('/grupales/ia/control', requireAuth, async (_req, res) => {
+app.post('/grupales/ia/control', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
     res.json(await alertaVencimientos())
   } catch (e) {
@@ -1754,7 +1777,7 @@ app.post('/cuadres/ia/analizar', requireAuth, requireRol('COORDINADOR', 'ADMIN')
 })
 
 // ── API Tenjo (primeros endpoints; la migración desde PostgREST será gradual) ──
-app.get('/tenjo/candidatos', requireAuth, async (_req, res) => {
+app.get('/tenjo/candidatos', requireAuth, requireRol('OPERARIO', 'PRODUCTOR', 'COORDINADOR', 'ADMIN'), async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT * FROM public.v_candidatos_tenjo ORDER BY fecha_ingreso ASC`
