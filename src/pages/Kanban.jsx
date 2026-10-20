@@ -1740,7 +1740,7 @@ export default function Kanban() {
     setGuardando(true)
     const updates = {}
     if (editTecnicoId !== (selected.tecnico_id || ''))   updates.tecnico_id  = editTecnicoId  || null
-    if (editEstadoPago !== (selected.estado_pago || '')) updates.estado_pago = editEstadoPago
+    if (esAdmin && editEstadoPago !== (selected.estado_pago || '')) updates.estado_pago = editEstadoPago
     if (editNotas !== (selected.notas || ''))            updates.notas       = editNotas       || null
     // comision_aliado se guarda con su propio botón dedicado en la sección Financiero
 
@@ -4328,8 +4328,9 @@ export default function Kanban() {
                     {detalle?.metodo_pago && <div><span className="text-gray-400">Método:</span> <span className="font-semibold">{detalle.metodo_pago}</span></div>}
                   </div>
 
-                  {/* Comisión aliado — visible cuando viene de aliado y no fue descontada del precio */}
-                  {detalle?.aliado_origen_id && !detalle?.comision_descontada && (
+                  {/* Comisión aliado — visible cuando viene de aliado y no fue descontada del precio.
+                      Solo coordinación: la base rechaza que otro rol mueva dinero (migr. 192). */}
+                  {esAdmin && detalle?.aliado_origen_id && !detalle?.comision_descontada && (
                     <div className="rounded-lg px-3 py-2.5 space-y-2" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
                       <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Comisión aliado</div>
                       <div className="text-[11px] text-amber-700">
@@ -4427,6 +4428,9 @@ export default function Kanban() {
                     </div>
                   )}
 
+                  {/* Solo coordinación (migr. 192): para el PRODUCTOR la base rechaza el
+                      cambio y con él TODO el guardado, notas incluidas. */}
+                  {esAdmin && (
                   <div>
                     <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Estado de pago</div>
                     <Select value={editEstadoPago} onChange={e => setEditEstadoPago(e.target.value)} className="w-full text-[12px]">
@@ -4435,6 +4439,7 @@ export default function Kanban() {
                       <option value="COMPLETO">Completo</option>
                     </Select>
                   </div>
+                  )}
 
                   {/* De cuánto partió el servicio, qué movió el precio y en cuánto
                       quedó. Va aquí, en la parte de pago, que es donde alguien
