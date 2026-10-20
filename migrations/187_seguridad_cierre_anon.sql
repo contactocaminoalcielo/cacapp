@@ -46,6 +46,33 @@ END $$;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO authenticated, service_role, orbit_backend;
 
+-- ─── SEC-001b: la subida de fotos del portal NO puede depender de leer servicios ──
+-- 🩸 Detectado por el perito de datos antes de aplicar: la política de Storage
+-- `anon_insert_fotos_clientes` validaba con una subconsulta a `servicios`
+-- COMO anon. Con el REVOKE de arriba, esa subconsulta daría "permiso denegado"
+-- y las familias dejarían de poder subir fotos (2.231 de 2.340 subidas de los
+-- últimos 30 días son del portal, sin sesión). Se valida con una función que
+-- corre con permisos de su dueño y SOLO responde sí/no para un id concreto
+-- (los ids son UUID aleatorios: no sirve para listar nada).
+-- Va DESPUÉS del bucle de SEC-002, que le quita EXECUTE a anon a todo SECURITY DEFINER.
+CREATE OR REPLACE FUNCTION public.portal_puede_subir_foto(p_servicio text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.servicios s
+     WHERE s.id::text = p_servicio
+       AND s.estado::text IN ('EN_CUARTO_FRIO', 'EN_PROCESO', 'EN_PRODUCCION'))
+$$;
+REVOKE ALL ON FUNCTION public.portal_puede_subir_foto(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.portal_puede_subir_foto(text) TO anon, authenticated, service_role;
+
+DROP POLICY IF EXISTS "anon_insert_fotos_clientes" ON storage.objects;
+CREATE POLICY "anon_insert_fotos_clientes" ON storage.objects
+  FOR INSERT TO anon
+  WITH CHECK (
+    bucket_id = 'fotos-clientes'
+    AND public.portal_puede_subir_foto((string_to_array(name, '/'))[1])
+  );
+
 -- ─── SEC-003 ────────────────────────────────────────────────────────────────
 ALTER TABLE public._backup_fase0_cuarto_frio ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public._backup_fase0_cuarto_frio FROM anon, authenticated;
