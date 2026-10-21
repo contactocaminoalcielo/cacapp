@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/select'
 import { db, dbTodo } from '@/lib/supabase'
 import { cargarItemsKanban } from '@/lib/lecturasOperativas'
 import { serviciosListosDesdeItems, ESTADOS_AUTOCORREGIBLES } from '@/lib/kanbanEstado'
-import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet } from '@/lib/utils'
+import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet, acompFijo } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
@@ -1125,7 +1125,7 @@ export default function Kanban() {
         plan_id:               convForm.plan_id || null,
         estado:                'INGRESADO',
         fecha_ingreso:         today(),
-        tipo_acompanamiento:   esIndividual ? convForm.tipo_acompanamiento : 'EVIDENCIA',
+        tipo_acompanamiento:   esIndividual ? (acompFijo(planSeleccionado) || convForm.tipo_acompanamiento) : 'EVIDENCIA',
         // ALIADO siempre que haya vet asociada (portal O solicitud pública con
         // vet): la pestaña Comisiones y el KPI de Finanzas filtran por
         // canal_entrada='ALIADO' — si esto fuera DIRECTO, la comisión asignada
@@ -5436,7 +5436,10 @@ export default function Kanban() {
                 {esIndividual && (
                   <div>
                     <label className={SOL_LABL}>Tipo de acompañamiento</label>
-                    <select className={SOL_INP} value={cf.tipo_acompanamiento} onChange={e => set('tipo_acompanamiento', e.target.value)}>
+                    {/* En los COMPETS lo define el plan (migr. 198): no se ofrece escoger. */}
+                    <select className={SOL_INP} value={acompFijo(planActual) || cf.tipo_acompanamiento}
+                            disabled={!!acompFijo(planActual)}
+                            onChange={e => set('tipo_acompanamiento', e.target.value)}>
                       <option value="PRESENCIAL">Presencial</option>
                       <option value="VIDEOLLAMADA">Videollamada</option>
                       <option value="EVIDENCIA">Solo evidencias</option>

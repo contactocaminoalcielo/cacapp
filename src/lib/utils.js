@@ -36,6 +36,11 @@ export const today = () => hoyLocalISO()
 export const petEmoji = e => ({ Perro: '🐕', Gato: '🐈', Conejo: '🐇', Ave: '🐦', Hámster: '🐹', Cobayo: '🐹', Pez: '🐠', Reptil: '🦎' })[e] || '🐾'
 export const initials = (n, a) => ((n || '?')[0] + (a || '?')[0]).toUpperCase()
 export const needsAcomp = p => p && ['CREMACION_INDIVIDUAL', 'COMPOSTAJE_INDIVIDUAL'].includes(p.tipo_proceso)
+// En los COMPETS el acompañamiento lo trae el plan y no se escoge (David, 21-oct);
+// solo varía en los EXCLUSIVOS y demás individuales. La DB lo impone igual
+// (trigger de la migración 198): mantener los dos mapas iguales.
+export const ACOMP_FIJO_POR_PLAN = { COMPETS_EVIDENCIA: 'EVIDENCIA', COMPETS_PRESENCIAL: 'PRESENCIAL' }
+export const acompFijo = p => ACOMP_FIJO_POR_PLAN[p?.codigo] || null
 
 // ── Horario veterinaria ───────────────────────────────────────────────────────
 // Mapea getDay() → clave del objeto horario de aliados

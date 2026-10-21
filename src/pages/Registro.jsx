@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Alert } from '@/components/ui/alert'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
-import { fmt, today, needsAcomp, petEmoji, initials } from '@/lib/utils'
+import { fmt, today, needsAcomp, acompFijo, petEmoji, initials } from '@/lib/utils'
 import { planComisiona, volumenMesAliado } from '@/lib/precios'
 import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 import {
@@ -879,7 +879,7 @@ export default function Registro() {
         plan_id:              planSeleccionado.id,
         estado:               'INGRESADO',
         fecha_ingreso:        today(),
-        tipo_acompanamiento:  tipoAcomp,
+        tipo_acompanamiento:  acompFijo(planSeleccionado) || tipoAcomp,
         canal_entrada:        canalEntrada,
         registrado_por:       personalData?.id || null,
         aliado_origen_id:     aliadoSeleccionado?.id_aliado || null,
@@ -1457,7 +1457,15 @@ export default function Registro() {
             )}
 
             {/* Acompañamiento */}
-            {planSeleccionado && needsAcomp(planSeleccionado) && (
+            {planSeleccionado && needsAcomp(planSeleccionado) && acompFijo(planSeleccionado) && (
+              <div className="mb-6">
+                <div className={SUB}>Tipo de acompañamiento</div>
+                <div className="text-[12px] text-gray-600">
+                  <strong>{TIPOS_ACOMP.find(t => t.value === acompFijo(planSeleccionado))?.label}</strong> — lo define el plan.
+                </div>
+              </div>
+            )}
+            {planSeleccionado && needsAcomp(planSeleccionado) && !acompFijo(planSeleccionado) && (
               <div className="mb-6">
                 <div className={SUB}>Tipo de acompañamiento</div>
                 <div className="flex flex-wrap gap-2">
