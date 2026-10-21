@@ -1942,6 +1942,208 @@ export async function derivarFamilia({ phoneNumberId, contacto, entrada = {} }) 
     nota: 'No se pudo mandar el botón. Escríbele tu mensaje y pega este enlace COMPLETO, carácter por carácter: ' + enlace }
 }
 
+// ─── Campañas ────────────────────────────────────────────────────────────────
+const TIPOS_AUDIENCIA = ['TODAS', 'ACTIVAS', 'ENFRIANDOSE', 'EN_RIESGO', 'DORMIDAS', 'PROSPECTOS', 'MANUAL']
+const ESTADOS_CAMPANA = ['BORRADOR', 'LISTA', 'ENVIANDO', 'COMPLETADA', 'CANCELADA']
+
+export async function listarCampanas() {
+  const { rows } = await pool.query(
+    `SELECT c.*, TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS creado_por_nombre,
+            a.nombre AS agente_nombre
+       FROM public.crm_campanas c
+       LEFT JOIN public.personal p ON p.id = c.creado_por
+       LEFT JOIN public.agente_wa a ON a.id = c.agente_id
+      ORDER BY c.created_at DESC LIMIT 200`)
+  return rows
+}
+
+export async function crearCampana(d = {}, personalId) {
+  const nombre = txt(d.nombre, 160)
+  if (!nombre) return { status: 422, body: { ok: false, error: 'Falta el nombre de la campaña' } }
+  const tipoAudiencia = TIPOS_AUDIENCIA.includes(d.tipo_audiencia) ? d.tipo_audiencia : 'ACTIVAS'
+  const { rows: [c] } = await pool.query(
+    `INSERT INTO public.crm_campanas
+       (nombre, descripcion, tipo_audiencia, plantilla_nombre, idioma, variables_plantilla, agente_id, programada_para, creado_por)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [nombre, txt(d.descripcion, 1000), tipoAudiencia, txt(d.plantilla_nombre, 200) || null,
+     txt(d.idioma, 10) || 'es_MX',
+     d.variables_plantilla && typeof d.variables_plantilla === 'object' ? JSON.stringify(d.variables_plantilla) : null,
+     entero(d.agente_id) || null, fecha(d.programada_para), personalId])
+  return { status: 201, body: { ok: true, campana: c } }
+}
+
+export async function actualizarCampana(id, d = {}) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'Campaña inválida' } }
+  const { rows: [actual] } = await pool.query(`SELECT estado FROM public.crm_campanas WHERE id = $1`, [cid])
+  if (!actual) return { status: 404, body: { ok: false, error: 'No existe esa campaña' } }
+  if (['ENVIANDO', 'COMPLETADA'].includes(actual.estado)) {
+    return { status: 409, body: { ok: false, error: 'No se puede editar una campaña ya enviada' } }
+  }
+  const sets = []; const vals = []
+  const add = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`) }
+  if (d.nombre !== undefined) { const n = txt(d.nombre, 160); if (!n) return { status: 422, body: { ok: false, error: 'Nombre vacío' } }; add('nombre', n) }
+  if (d.descripcion !== undefined) add('descripcion', txt(d.descripcion, 1000))
+  if (d.tipo_audiencia !== undefined && TIPOS_AUDIENCIA.includes(d.tipo_audiencia)) add('tipo_audiencia', d.tipo_audiencia)
+  if (d.estado !== undefined && ESTADOS_CAMPANA.includes(d.estado)) add('estado', d.estado)
+  if (d.plantilla_nombre !== undefined) add('plantilla_nombre', txt(d.plantilla_nombre, 200) || null)
+  if (d.idioma !== undefined) add('idioma', txt(d.idioma, 10) || 'es_MX')
+  if (d.variables_plantilla !== undefined) add('variables_plantilla', d.variables_plantilla && typeof d.variables_plantilla === 'object' ? JSON.stringify(d.variables_plantilla) : null)
+  if (d.agente_id !== undefined) add('agente_id', entero(d.agente_id) || null)
+  if (d.programada_para !== undefined) add('programada_para', fecha(d.programada_para))
+  if (!sets.length) return { status: 400, body: { ok: false, error: 'Nada que guardar' } }
+  add('updated_at', new Date().toISOString())
+  vals.push(cid)
+  const { rows: [c] } = await pool.query(`UPDATE public.crm_campanas SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)
+  return { status: 200, body: { ok: true, campana: c } }
+}
+
+export async function borrarCampana(id) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'Campaña inválida' } }
+  const { rows: [c] } = await pool.query(`SELECT estado FROM public.crm_campanas WHERE id = $1`, [cid])
+  if (!c) return { status: 404, body: { ok: false, error: 'No existe esa campaña' } }
+  if (c.estado === 'ENVIANDO') return { status: 409, body: { ok: false, error: 'No se puede borrar mientras se está enviando' } }
+  await pool.query(`DELETE FROM public.crm_campanas WHERE id = $1`, [cid])
+  return { status: 200, body: { ok: true } }
+}
+
+export async function detalleCampana(id) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'Campaña inválida' } }
+  const { rows: [c] } = await pool.query(
+    `SELECT c.*, TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS creado_por_nombre, a.nombre AS agente_nombre
+       FROM public.crm_campanas c
+       LEFT JOIN public.personal p ON p.id = c.creado_por
+       LEFT JOIN public.agente_wa a ON a.id = c.agente_id
+      WHERE c.id = $1`, [cid])
+  if (!c) return { status: 404, body: { ok: false, error: 'No existe esa campaña' } }
+  const { rows: envios } = await pool.query(
+    `SELECT e.*, al.nombre AS nombre_aliado
+       FROM public.crm_campana_envios e
+       LEFT JOIN public.aliados al ON al.id_aliado = e.aliado_id
+      WHERE e.campana_id = $1 ORDER BY e.created_at DESC LIMIT 500`, [cid])
+  return { status: 200, body: { ok: true, campana: c, envios } }
+}
+
+/** Vista previa: cuántos destinatarios quedarían según la audiencia. */
+export async function previaCampana(id) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'Campaña inválida' } }
+  const { rows: [c] } = await pool.query(`SELECT tipo_audiencia FROM public.crm_campanas WHERE id = $1`, [cid])
+  if (!c) return { status: 404, body: { ok: false, error: 'No existe esa campaña' } }
+  const destinatarios = await obtenerDestinatarios(c.tipo_audiencia, cid)
+  return { status: 200, body: { ok: true, total: destinatarios.length, destinatarios: destinatarios.slice(0, 50) } }
+}
+
+/** Construye la lista de destinatarios según el tipo de audiencia. */
+async function obtenerDestinatarios(tipoAudiencia, campanaId) {
+  const hoy = `(now() AT TIME ZONE 'America/Bogota')::date`
+  if (tipoAudiencia === 'MANUAL') {
+    const { rows } = await pool.query(
+      `SELECT e.numero_wa, e.nombre_destino, e.aliado_id, e.prospecto_id
+         FROM public.crm_campana_envios e WHERE e.campana_id = $1 AND e.estado = 'PENDIENTE'`, [campanaId])
+    return rows
+  }
+  if (tipoAudiencia === 'PROSPECTOS') {
+    const { rows } = await pool.query(
+      `SELECT whatsapp AS numero_wa, nombre AS nombre_destino, NULL::uuid AS aliado_id, id AS prospecto_id
+         FROM public.crm_prospectos
+        WHERE whatsapp IS NOT NULL AND etapa NOT IN ('GANADO','PERDIDO') AND NOT COALESCE(no_contactar, false)
+        ORDER BY created_at DESC LIMIT 500`)
+    return rows
+  }
+  // Aliados: filtrar por segmento usando días sin actividad
+  const condicion = {
+    TODAS:       `true`,
+    ACTIVAS:     `(${hoy} - agg.ultimo) < 60`,
+    ENFRIANDOSE: `(${hoy} - agg.ultimo) BETWEEN 30 AND 59`,
+    EN_RIESGO:   `(${hoy} - agg.ultimo) BETWEEN 60 AND 89`,
+    DORMIDAS:    `(${hoy} - agg.ultimo) >= 90`,
+  }[tipoAudiencia] || `true`
+  const { rows } = await pool.query(
+    `WITH agg AS (
+       SELECT s.aliado_origen_id AS aliado_id, max(s.fecha_ingreso::date) AS ultimo
+         FROM public.servicios s
+        WHERE s.estado <> 'CANCELADO' GROUP BY 1
+     )
+     SELECT a.whatsapp AS numero_wa, a.nombre AS nombre_destino, a.id_aliado AS aliado_id, NULL::uuid AS prospecto_id
+       FROM public.aliados a
+       LEFT JOIN agg ON agg.aliado_id = a.id_aliado
+      WHERE a.whatsapp IS NOT NULL
+        AND NOT COALESCE(a.no_contactar, false)
+        AND ${condicion}
+      ORDER BY a.nombre LIMIT 1000`)
+  return rows
+}
+
+export async function enviarCampana(id, personalId) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'Campaña inválida' } }
+  const { rows: [c] } = await pool.query(`SELECT * FROM public.crm_campanas WHERE id = $1`, [cid])
+  if (!c) return { status: 404, body: { ok: false, error: 'No existe esa campaña' } }
+  if (!['BORRADOR', 'LISTA'].includes(c.estado)) {
+    return { status: 409, body: { ok: false, error: `La campaña está ${c.estado}: solo se pueden enviar las en BORRADOR o LISTA` } }
+  }
+  if (!c.plantilla_nombre) {
+    return { status: 422, body: { ok: false, error: 'La campaña no tiene plantilla asignada' } }
+  }
+
+  await pool.query(`UPDATE public.crm_campanas SET estado = 'ENVIANDO', updated_at = now() WHERE id = $1`, [cid])
+
+  const destinatarios = await obtenerDestinatarios(c.tipo_audiencia, cid)
+  if (!destinatarios.length) {
+    await pool.query(`UPDATE public.crm_campanas SET estado = 'COMPLETADA', total = 0, updated_at = now() WHERE id = $1`, [cid])
+    return { status: 200, body: { ok: true, total: 0, enviados: 0, fallidos: 0 } }
+  }
+
+  // Vaciar envíos anteriores (re-envío desde LISTA)
+  await pool.query(`DELETE FROM public.crm_campana_envios WHERE campana_id = $1`, [cid])
+
+  let enviados = 0, fallidos = 0
+  const vars = c.variables_plantilla || {}
+
+  for (const dest of destinatarios) {
+    const nombre = dest.nombre_destino || ''
+    // Reemplaza el token {{nombre}} con el nombre real del destinatario
+    const valores = Object.fromEntries(
+      Object.entries(vars).map(([k, v]) => [k, String(v || '').replace(/\{\{nombre\}\}/gi, nombre)])
+    )
+    try {
+      const r = await enviarPlantilla({
+        contacto: dest.numero_wa,
+        nombre: c.plantilla_nombre,
+        idioma: c.idioma || 'es_MX',
+        valores,
+        agenteId: c.agente_id || null,
+        personalId,
+      })
+      const exito = r.status === 200 && r.body?.ok
+      await pool.query(
+        `INSERT INTO public.crm_campana_envios
+           (campana_id, aliado_id, prospecto_id, nombre_destino, numero_wa, estado, wam_id, enviado_en, error)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [cid, dest.aliado_id || null, dest.prospecto_id || null, nombre, dest.numero_wa,
+         exito ? 'ENVIADO' : 'FALLIDO', r.body?.wa_message_id || null,
+         exito ? new Date().toISOString() : null, exito ? null : (r.body?.error || 'Error desconocido')])
+      if (exito) enviados++; else fallidos++
+    } catch (e) {
+      await pool.query(
+        `INSERT INTO public.crm_campana_envios (campana_id, aliado_id, prospecto_id, nombre_destino, numero_wa, estado, error)
+         VALUES ($1,$2,$3,$4,$5,'FALLIDO',$6)`,
+        [cid, dest.aliado_id || null, dest.prospecto_id || null, nombre, dest.numero_wa, e.message.slice(0, 300)])
+      fallidos++
+    }
+  }
+
+  await pool.query(
+    `UPDATE public.crm_campanas SET estado = 'COMPLETADA', total = $2, enviados = $3, fallidos = $4, updated_at = now() WHERE id = $1`,
+    [cid, destinatarios.length, enviados, fallidos])
+
+  log(MOD, `campaña ${c.nombre}: ${destinatarios.length} dest, ${enviados} ok, ${fallidos} fallidos`)
+  return { status: 200, body: { ok: true, total: destinatarios.length, enviados, fallidos } }
+}
+
 // ─── Rutas ──────────────────────────────────────────────────────────────────
 export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   const r = express.Router()
@@ -2056,5 +2258,15 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
         WHERE a.clave IN ('VETERINARIAS','VENTAS') ORDER BY a.id`)
     return { ok: true, agentes: rows }
   }))
+
+  // ── Campañas ──────────────────────────────────────────────────────────────
+  r.get('/campanas', responder('campanas', async () => ({ ok: true, campanas: await listarCampanas() })))
+  r.post('/campanas', responder('campana-crear', req => crearCampana(req.body || {}, P(req).id)))
+  r.get('/campanas/:id', responder('campana', req => detalleCampana(req.params.id)))
+  r.put('/campanas/:id', responder('campana-guardar', req => actualizarCampana(req.params.id, req.body || {})))
+  r.delete('/campanas/:id', responder('campana-borrar', req => borrarCampana(req.params.id)))
+  r.post('/campanas/:id/enviar', responder('campana-enviar', req => enviarCampana(req.params.id, P(req).id)))
+  r.post('/campanas/:id/previa', responder('campana-previa', req => previaCampana(req.params.id)))
+
   return r
 }
