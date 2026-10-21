@@ -70,10 +70,11 @@ renombrados de otra sesión colados dentro de un commit que no era suyo. Todo es
    `git commit -m "..." -- ruta/uno ruta/dos`.
    ⚠️ Aun nombrando rutas, un renombrado que otra sesión dejó en el índice se cuela en tu
    commit. **Revisa con `git show --stat HEAD` después de commitear** y sácalo si aparece.
-3. **NO hagas `git push`. NO hagas `git pull`, `rebase`, `reset --hard` ni `stash`**: el
-   árbol tiene trabajo sin guardar de otras sesiones y lo destruyes.
-4. Termina diciéndole a David **qué commiteaste y qué falta por subir**. Él lo sube desde
-   la sesión de despliegue.
+3. **SÍ puedes hacer `git push origin main`** cuando David te lo pida explícitamente.
+   Antes de empujar: corre `git log origin/main..HEAD --oneline` para ver qué sube y
+   confirma que no haya basura (bundles compilados, CSVs con datos de clientes).
+   **NO hagas `git pull`, `rebase`, `reset --hard` ni `stash`**: el árbol puede tener
+   trabajo sin guardar de otras sesiones y lo destruirías.
 
 **Si te toca ser la sesión de despliegue**, antes de empujar revisa que no se vaya basura:
 hoy conviven en la raíz bundles compilados (`Gestion.js`, `precios.js`, `precios_new.js`)
