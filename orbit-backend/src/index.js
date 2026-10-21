@@ -250,46 +250,60 @@ const rolBandeja = requireRol('COORDINADOR', 'ADMIN')
  * es un 403, y si no pide ninguna se le FIJA la de veterinarias — sin eso,
  * "listar conversaciones" sin filtro le devolvería las de todas las líneas.
  * Coordinación y admin pasan como siempre.
+ *
+ * PRODUCTOR (pedido de David, 21-oct): atiende la línea de FAMILIAS, y solo
+ * lo de atender — leer, responder, etiquetar, mandar plantillas y adjuntos.
+ * Crear o editar plantillas en Meta, materiales, bloquear y campañas siguen
+ * siendo de coordinación: esas rutas no llevan `atender` y le dan 403.
  */
-let cacheLineaVets = { hasta: 0, linea: null, agentes: [], vet: null }
-async function lineaParaComercial() {
-  if (Date.now() < cacheLineaVets.hasta) return cacheLineaVets
+const BANDEJA_ACOTADA = {
+  COMERCIAL: { principal: 'VETERINARIAS', claves: ['VETERINARIAS', 'VENTAS'], nombre: 'veterinarias' },
+  PRODUCTOR: { principal: 'FAMILIAS', claves: ['FAMILIAS'], nombre: 'familias', soloAtender: true },
+}
+const cacheLineaAcotada = {}
+async function lineaParaRol(rol) {
+  const c = cacheLineaAcotada[rol]
+  if (c && Date.now() < c.hasta) return c
+  const { claves, principal } = BANDEJA_ACOTADA[rol]
   const { rows } = await pool.query(
-    `SELECT id, clave, phone_number_ids FROM public.agente_wa WHERE clave IN ('VETERINARIAS','VENTAS')`)
-  const vet = rows.find(r => r.clave === 'VETERINARIAS')
-  cacheLineaVets = {
-    hasta: Date.now() + 60000, linea: vet?.phone_number_ids?.[0] || null,
-    agentes: rows.map(r => String(r.id)), vet: vet ? String(vet.id) : null,
+    `SELECT id, clave, phone_number_ids FROM public.agente_wa WHERE clave = ANY($1)`, [claves])
+  const p = rows.find(r => r.clave === principal)
+  cacheLineaAcotada[rol] = {
+    hasta: Date.now() + 60000, linea: p?.phone_number_ids?.[0] || null,
+    agentes: rows.map(r => String(r.id)), principal: p ? String(p.id) : null,
   }
-  return cacheLineaVets
+  return cacheLineaAcotada[rol]
 }
 const rolBandejaCom = (opciones = {}) => async (req, res, next) => {
   const rol = req.personal?.rol
   if (rol === 'COORDINADOR' || rol === 'ADMIN') return next()
-  if (rol !== 'COMERCIAL') return res.status(403).json({ error: 'Requiere rol: COORDINADOR o ADMIN' })
+  const acotada = BANDEJA_ACOTADA[rol]
+  if (!acotada || (acotada.soloAtender && !opciones.atender)) {
+    return res.status(403).json({ error: 'Requiere rol: COORDINADOR o ADMIN' })
+  }
   try {
-    const { linea, agentes, vet } = await lineaParaComercial()
-    if (!linea) return res.status(503).json({ ok: false, error: 'La línea de veterinarias no está configurada' })
+    const { linea, agentes, principal } = await lineaParaRol(rol)
+    if (!linea) return res.status(503).json({ ok: false, error: `La línea de ${acotada.nombre} no está configurada` })
     const cuerpo = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : null
     for (const f of [req.query, cuerpo]) {
       if (!f) continue
-      if (f.linea && String(f.linea) !== linea) return res.status(403).json({ ok: false, error: 'Solo la línea de veterinarias' })
+      if (f.linea && String(f.linea) !== linea) return res.status(403).json({ ok: false, error: `Solo la línea de ${acotada.nombre}` })
       for (const k of ['agenteId', 'agente_id']) {
         if (f[k] != null && f[k] !== '' && !agentes.includes(String(f[k]))) {
-          return res.status(403).json({ ok: false, error: 'Solo los agentes de veterinarias y ventas' })
+          return res.status(403).json({ ok: false, error: `Solo los agentes de ${acotada.nombre}` })
         }
       }
     }
     req.query.linea = linea
     if (cuerpo) cuerpo.linea = linea
-    // Listas por agente (materiales, interactivos): sin agente, las de vets.
-    if (opciones.agente && !req.query.agenteId) req.query.agenteId = vet
+    // Listas por agente (materiales, interactivos): sin agente, las del agente principal.
+    if (opciones.agente && !req.query.agenteId) req.query.agenteId = principal
     if (opciones.material) {
       if (req.params.id) {
         const { rows: [m] } = await pool.query(`SELECT agente_id FROM public.whatsapp_materiales WHERE id = $1`, [Number(req.params.id) || 0])
         if (m && !agentes.includes(String(m.agente_id))) return res.status(403).json({ ok: false, error: 'Ese material es de otro agente' })
       }
-      if (cuerpo && req.method === 'POST' && (cuerpo.agente_id == null || cuerpo.agente_id === '')) cuerpo.agente_id = vet
+      if (cuerpo && req.method === 'POST' && (cuerpo.agente_id == null || cuerpo.agente_id === '')) cuerpo.agente_id = principal
     }
     if (opciones.media) {
       const { rows: [m] } = await pool.query(`SELECT phone_number_id FROM public.whatsapp_mensajes WHERE id = $1`, [Number(req.params.mensajeId) || 0])
@@ -297,13 +311,15 @@ const rolBandejaCom = (opciones = {}) => async (req, res, next) => {
     }
     next()
   } catch (e) {
-    log('[wa-bandeja/comercial] ERROR', e.message)
+    log('[wa-bandeja/acotada] ERROR', e.message)
     res.status(500).json({ ok: false, error: 'No se pudo validar la línea' })
   }
 }
 const bandejaCom = rolBandejaCom()
+// Lo de atender una conversación: también entra el PRODUCTOR (a familias).
+const bandejaAtender = rolBandejaCom({ atender: true })
 
-app.get('/whatsapp/conversaciones', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/conversaciones', requireAuth, bandejaAtender, async (req, res) => {
   try {
     // `linea` filtra la bandeja: con varias líneas, verlas mezcladas es
     // exactamente lo que no se quiere. Sin ella se ven todas.
@@ -314,7 +330,7 @@ app.get('/whatsapp/conversaciones', requireAuth, bandejaCom, async (req, res) =>
   }
 })
 
-app.get('/whatsapp/conversaciones/:contacto', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/conversaciones/:contacto', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await hilo({
       contacto: req.params.contacto, linea: req.query.linea || null, limite: req.query.limite,
@@ -326,7 +342,7 @@ app.get('/whatsapp/conversaciones/:contacto', requireAuth, bandejaCom, async (re
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, bandejaCom, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await marcarLeido({ contacto: req.params.contacto, linea: req.body?.linea || null })
     res.status(r.status).json(r.body)
@@ -336,7 +352,7 @@ app.post('/whatsapp/conversaciones/:contacto/leido', requireAuth, bandejaCom, as
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, bandejaCom, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/enviar', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await enviarTexto({
       contacto: req.params.contacto, linea: req.body?.linea || null,
@@ -434,7 +450,7 @@ app.post('/whatsapp/esperas/:id/cerrar', requireAuth, rolBandeja, async (req, re
   }
 })
 
-app.get('/whatsapp/etiquetas', requireAuth, bandejaCom, async (_req, res) => {
+app.get('/whatsapp/etiquetas', requireAuth, bandejaAtender, async (_req, res) => {
   try {
     res.json(await listarEtiquetas())
   } catch (e) {
@@ -443,7 +459,7 @@ app.get('/whatsapp/etiquetas', requireAuth, bandejaCom, async (_req, res) => {
   }
 })
 
-app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, bandejaCom, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await etiquetar({
       contacto: req.params.contacto, linea: req.body?.linea || null, clave: req.body?.clave,
@@ -456,7 +472,7 @@ app.post('/whatsapp/conversaciones/:contacto/etiquetas', requireAuth, bandejaCom
   }
 })
 
-app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, bandejaCom, async (req, res) => {
+app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await desetiquetar({
       contacto: req.params.contacto, linea: req.query.linea || null, clave: req.params.clave,
@@ -470,7 +486,7 @@ app.delete('/whatsapp/conversaciones/:contacto/etiquetas/:clave', requireAuth, b
 
 // Encender o apagar el agente en UNA conversación (migración 105). Manda sobre
 // las reglas automáticas: "de esta clínica me encargo yo" no dura doce horas.
-app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, bandejaCom, async (req, res) => {
+app.post('/whatsapp/conversaciones/:contacto/agente', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await cambiarAgente({
       contacto: req.params.contacto, linea: req.body?.linea || null,
@@ -546,7 +562,7 @@ app.post('/voz/turno', async (req, res) => {
 // Son el único modo de escribirle a alguien fuera de la ventana de 24h. Viven
 // en la WABA (`WHATSAPP_WABA_ID`), no en Orbit: la lista siempre viene de Meta,
 // que es quien manda sobre el estado de aprobación.
-app.get('/whatsapp/plantillas', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/plantillas', requireAuth, bandejaAtender, async (req, res) => {
   try {
     // La bandeja pregunta por LÍNEA (que es lo que tiene a mano) y no por
     // agente: con la línea se sabe la WABA, y con la WABA sus plantillas.
@@ -593,7 +609,7 @@ app.delete('/whatsapp/plantillas/:nombre', requireAuth, bandejaCom, async (req, 
 
 // Qué dato de Orbit va en cada {{n}} (migración 097). El catálogo es cerrado:
 // se guarda una clave, nunca una expresión escrita desde la pantalla.
-app.get('/whatsapp/plantillas-campos', requireAuth, bandejaCom, (_req, res) => {
+app.get('/whatsapp/plantillas-campos', requireAuth, bandejaAtender, (_req, res) => {
   const r = camposDisponibles()
   res.status(r.status).json(r.body)
 })
@@ -618,14 +634,14 @@ app.post('/whatsapp/plantillas-cabecera', requireAuth, bandejaCom, async (req, r
 
 // Buscar el servicio del que salen los datos, por mascota/familia/código. Sin
 // esto, enviar empieza por pegar un UUID y acaba escribiéndose todo a mano.
-app.get('/whatsapp/plantillas-servicios', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/plantillas-servicios', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await buscarServicios({ q: req.query.q })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-plantillas/servicios', e) }
 })
 
-app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/plantillas/:nombre/variables', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await variablesDe({
       plantilla: req.params.nombre, idioma: req.query.idioma,
@@ -689,7 +705,7 @@ app.put('/whatsapp/plantillas/:nombre/agente', requireAuth, bandejaCom, async (r
   } catch (e) { errorInterno(res, 'wa-plantillas/agente', e) }
 })
 
-app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, bandejaCom, async (req, res) => {
+app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await valoresPara({
       plantilla: req.params.nombre, idioma: req.query.idioma, servicioId: req.params.servicioId,
@@ -699,7 +715,7 @@ app.get('/whatsapp/plantillas/:nombre/valores/:servicioId', requireAuth, bandeja
   } catch (e) { errorInterno(res, 'wa-plantillas/valores', e) }
 })
 
-app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, bandejaCom, async (req, res) => {
+app.post('/whatsapp/plantillas/:nombre/enviar', requireAuth, bandejaAtender, async (req, res) => {
   try {
     const r = await enviarPlantilla({
       nombre: req.params.nombre,
@@ -800,7 +816,7 @@ app.delete('/whatsapp/campanas/:id', requireAuth, rolBandeja, async (req, res) =
 // conversaciones con clínicas y familias. Se sirven aquí, con sesión y rol, y
 // por eso la bandeja los pide con fetch + Bearer y los pinta desde un blob (un
 // <img src> no puede mandar cabeceras).
-app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandejaCom({ media: true }), async (req, res) => {
+app.get('/whatsapp/media/:mensajeId', requireAuth, rolBandejaCom({ media: true, atender: true }), async (req, res) => {
   try {
     const m = await leerMedia(req.params.mensajeId)
     if (!m) return res.status(404).json({ ok: false, error: 'No hay archivo para ese mensaje' })
@@ -844,8 +860,8 @@ async function rutaArchivo(req, res) {
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa/archivo', e) }
 }
-app.post('/whatsapp/archivo', requireAuth, bandejaCom, rutaArchivo)
-app.post('/whatsapp/imagen',  requireAuth, bandejaCom, rutaArchivo)
+app.post('/whatsapp/archivo', requireAuth, bandejaAtender, rutaArchivo)
+app.post('/whatsapp/imagen',  requireAuth, bandejaAtender, rutaArchivo)
 
 app.post('/whatsapp/interactivos', requireAuth, rolBandeja, async (req, res) => {
   try {

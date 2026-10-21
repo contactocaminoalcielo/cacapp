@@ -25,6 +25,7 @@ import { useLocation } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { MessageCircle, ChevronDown, Phone } from 'lucide-react'
 import { useChatWa, pitar } from '@/contexts/ChatWaContext'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   listarEsperas, cerrarEspera, identidadLinea, formatearNumero,
 } from '@/lib/whatsappInbox'
@@ -52,7 +53,10 @@ function nombreDe(e) {
 
 export default function EsperasCoordinacion() {
   const chat = useChatWa()
-  const vigila = chat?.vigila
+  // `chat.vigila` ya incluye al PRODUCTOR (atiende la bandeja de familias, 21-oct),
+  // pero estas esperas son de coordinación: el backend le daría 403 en cada sondeo.
+  const { personalData } = useAuth()
+  const vigila = chat?.vigila && ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
   const quieto = useReducedMotion()
   // Fuera del tablero ni se pinta NI se sondea: si sonara el pitido desde
   // Producción o Finanzas, sería la misma interrupción que se vino a quitar.

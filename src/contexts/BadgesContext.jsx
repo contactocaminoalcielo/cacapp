@@ -12,7 +12,8 @@ export function BadgesProvider({ children }) {
   const { todasConversaciones = [] } = useChatWa() || {}
   // La bandeja de WhatsApp es de coordinación: PRODUCTOR y OPERARIO también
   // pasan por aquí y el backend les respondería 403 cada minuto.
-  const veWhatsapp = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
+  // PRODUCTOR sí (21-oct): atiende la línea de familias y el backend se la fija.
+  const veWhatsapp = ['COORDINADOR', 'ADMIN', 'PRODUCTOR'].includes(personalData?.rol)
 
   useEffect(() => {
     let vivo = true

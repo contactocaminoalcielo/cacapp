@@ -44,7 +44,10 @@ export const ROLE_CONFIG = {
     // es quien tiene el material en la mano. El backend le cierra el resto.
     // Y ve las compras de recordatorios sin servicio para producir la cédula:
     // mueve el estado de cada línea; vender, cobrar y anular es de coordinación.
-    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales', '/inventario', '/compras-recordatorios']),
+    // Bandeja de WhatsApp (pedido de David, 21-oct): SOLO la línea de familias,
+    // para atender. El backend le fija la línea y le cierra plantillas en Meta,
+    // materiales, bloqueo y campañas (BANDEJA_ACOTADA en orbit-backend/src/index.js).
+    routes:     new Set(['/', '/kanban', '/calendario', '/tenjo', '/produccion', '/imagenes', '/nps', '/digitales', '/inventario', '/compras-recordatorios', '/whatsapp']),
   },
   OPERARIO: {
     isTecnico:  false,

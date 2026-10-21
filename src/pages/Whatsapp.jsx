@@ -13,6 +13,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useChatWa } from '@/contexts/ChatWaContext'
+import { useAuth } from '@/contexts/AuthContext'
 import ValorarRespuesta from '@/components/ValorarRespuesta'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
@@ -41,6 +42,10 @@ const POLL_MS = 10000
 // (desde la ficha de una veterinaria).
 export default function Whatsapp({ embebido = false, lineaFija = null, abrirContacto = null }) {
   const { todasConversaciones, bandejaCargada, errorBandeja, refrescarConversaciones } = useChatWa()
+  // COMERCIAL y PRODUCTOR atienden una sola línea; bloquear es de coordinación
+  // (el backend les da 403).
+  const { personalData } = useAuth()
+  const esCoordinacion = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
   // `todas` es lo que devuelve el backend; `convs` es lo que se pinta, ya
   // filtrado por la línea elegida. Ver más abajo.
   const [todas, setConvs]         = useState([])
@@ -430,7 +435,7 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
                                 setHilo(h => h ? { ...h, contacto: { ...h.contacto, agente_activo: encender } } : h)
                                 cargarLista({ silencioso: true })
                               }}
-                              onBloquear={async (bloquear) => {
+                              onBloquear={esCoordinacion && (async (bloquear) => {
                                 await bloquearConversacion(activo, bloquear, null, lineaActiva)
                                 // Bloquear implica pausar, así que se repintan
                                 // los dos estados: verlos discrepar da la
@@ -440,7 +445,7 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
                                   agente_activo: bloquear ? false : h.contacto?.agente_activo,
                                 } } : h)
                                 cargarLista({ silencioso: true })
-                              }} />
+                              })} />
 
                 <div ref={scrollRef} onScroll={onScroll}
                      className="flex-1 overflow-y-auto px-4 py-4 space-y-1"
@@ -855,8 +860,9 @@ function CabeceraHilo({ conv, contacto, onVolver, etiquetas = [], catalogo = [],
 
         {/* Bloquear es más fuerte que pausar y por eso va aparte, en rojo: el
             agente no vuelve por su cuenta y ni siquiera acusa recibo. Es para
-            cuando al otro lado hay otro bot y se ponen a hablar entre ellos. */}
-        <button onClick={alternarBloqueo} disabled={bloqueando}
+            cuando al otro lado hay otro bot y se ponen a hablar entre ellos.
+            Es de coordinación: sin `onBloquear` no se pinta. */}
+        {onBloquear && <button onClick={alternarBloqueo} disabled={bloqueando}
                 title={bloqueado
                   ? `Bloqueada${conv?.bloqueado_motivo ? `: ${conv.bloqueado_motivo}` : ''}. Tócalo para desbloquear.`
                   : 'Bloquear: el agente no responderá nunca aquí, ni acusará recibo. Tú sí puedes escribir.'}
@@ -867,7 +873,7 @@ function CabeceraHilo({ conv, contacto, onVolver, etiquetas = [], catalogo = [],
                               : 'border-gray-200 bg-white text-gray-400 hover:text-red-600 hover:border-red-300'}`}>
           {bloqueando ? <Loader2 size={11} className="animate-spin" /> : <Ban size={11} />}
           <span className="hidden sm:inline">{bloqueado ? 'Bloqueada' : 'Bloquear'}</span>
-        </button>
+        </button>}
       </div>
 
       {/* Quitar la etiqueta es cómo se cierra una novedad: la conversación sale

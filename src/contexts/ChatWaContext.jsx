@@ -54,7 +54,8 @@ export function ChatWaProvider({ children }) {
   // La bandeja es de coordinación. Sin esto, PRODUCTOR y OPERARIO recibirían un
   // 403 cada diez segundos — el mismo criterio que ya usa BadgesContext.
   // COMERCIAL también (CRM, migr. 180): el backend le fija la línea de vets.
-  const vigila = ['COORDINADOR', 'ADMIN', 'COMERCIAL'].includes(personalData?.rol)
+  // PRODUCTOR también (21-oct): el backend le fija la línea de familias.
+  const vigila = ['COORDINADOR', 'ADMIN', 'COMERCIAL', 'PRODUCTOR'].includes(personalData?.rol)
 
   const [conversaciones, setConversaciones] = useState([])
   const [bandejaCargada, setBandejaCargada] = useState(false)
