@@ -35,7 +35,7 @@ export const crm = {
 
   registrarGestion: datos => orbitApi('/crm/actividades', { method: 'POST', body: datos }),
 
-  seguimientos: (rango = 'pendientes', mios = false) => orbitApi(`/crm/seguimientos${q({ rango, mios: mios ? 1 : null })}`),
+  seguimientos: (rango = 'pendientes', mios = false, extras = {}) => orbitApi(`/crm/seguimientos${q({ rango, mios: mios ? 1 : null, ...extras })}`),
   crearSeguimiento: datos => orbitApi('/crm/seguimientos', { method: 'POST', body: datos }),
   cambiarSeguimiento: (id, datos) => orbitApi(`/crm/seguimientos/${id}`, { method: 'PUT', body: datos }),
 

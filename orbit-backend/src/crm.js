@@ -889,14 +889,34 @@ export async function crearSeguimiento(d = {}, personalId, { client = pool, orig
   return { status: 201, body: { ok: true, seguimiento: s } }
 }
 
-export async function listarSeguimientos({ rango = 'pendientes', responsableId = null } = {}) {
-  const filtros = {
-    vencidos: `s.estado = 'PENDIENTE' AND s.programado_para < now()`,
-    hoy: `s.estado = 'PENDIENTE' AND (s.programado_para AT TIME ZONE 'America/Bogota')::date <= ${HOY_SQL}`,
-    semana: `s.estado = 'PENDIENTE' AND (s.programado_para AT TIME ZONE 'America/Bogota')::date <= ${HOY_SQL} + 7`,
+export async function listarSeguimientos({ rango = 'pendientes', responsableId = null, desde = null, hasta = null, tipos = null } = {}) {
+  const filtroBase = {
+    vencidos:   `s.estado = 'PENDIENTE' AND s.programado_para < now()`,
+    hoy:        `s.estado = 'PENDIENTE' AND (s.programado_para AT TIME ZONE 'America/Bogota')::date <= ${HOY_SQL}`,
+    semana:     `s.estado = 'PENDIENTE' AND (s.programado_para AT TIME ZONE 'America/Bogota')::date <= ${HOY_SQL} + 7`,
     pendientes: `s.estado = 'PENDIENTE'`,
-    hechos: `s.estado <> 'PENDIENTE' AND s.programado_para > now() - interval '30 days'`,
+    hechos:     `s.estado <> 'PENDIENTE' AND s.programado_para > now() - interval '30 days'`,
   }
+  const tiposArr = (tipos || '').split(',').map(t => t.trim().toUpperCase()).filter(t => TIPOS_SEG.includes(t))
+  const params = [uuid(responsableId)]
+  const clausulas = []
+
+  if (desde && hasta) {
+    params.push(desde, hasta)
+    clausulas.push(`(s.programado_para AT TIME ZONE 'America/Bogota')::date BETWEEN $${params.length - 1} AND $${params.length}`)
+  } else {
+    clausulas.push(filtroBase[rango] || filtroBase.pendientes)
+  }
+
+  clausulas.push(`($1::uuid IS NULL OR s.responsable_id = $1 OR s.responsable_id IS NULL)`)
+
+  if (tiposArr.length > 0) {
+    const slots = tiposArr.map((_, i) => `$${params.length + i + 1}`).join(', ')
+    clausulas.push(`s.tipo IN (${slots})`)
+    params.push(...tiposArr)
+  }
+
+  const descending = rango === 'hechos' || (desde && hasta)
   const { rows } = await pool.query(
     `SELECT s.*, TRIM(CONCAT_WS(' ', p.nombre, p.apellido)) AS responsable,
             a.nombre AS aliado_nombre, a.whatsapp AS aliado_whatsapp, a.telefono AS aliado_telefono,
@@ -907,9 +927,8 @@ export async function listarSeguimientos({ rango = 'pendientes', responsableId =
        LEFT JOIN public.aliados a ON a.id_aliado = s.aliado_id
        LEFT JOIN public.crm_prospectos pr ON pr.id = s.prospecto_id
        LEFT JOIN public.crm_tickets t ON t.id = s.ticket_id
-      WHERE ${filtros[rango] || filtros.pendientes}
-        AND ($1::uuid IS NULL OR s.responsable_id = $1 OR s.responsable_id IS NULL)
-      ORDER BY s.programado_para ${rango === 'hechos' ? 'DESC' : 'ASC'} LIMIT 500`, [uuid(responsableId)])
+      WHERE ${clausulas.join(' AND ')}
+      ORDER BY s.programado_para ${descending ? 'DESC' : 'ASC'} LIMIT 500`, params)
   return rows
 }
 
@@ -1992,7 +2011,9 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   r.post('/actividades', responder('actividad', req => registrarActividad(req.body || {}, P(req).id)))
 
   r.get('/seguimientos', responder('seguimientos', async req => ({ ok: true, seguimientos: await listarSeguimientos({
-    rango: req.query.rango, responsableId: req.query.mios === '1' ? P(req).id : null }) })))
+    rango: req.query.rango, responsableId: req.query.mios === '1' ? P(req).id : null,
+    desde: req.query.desde || null, hasta: req.query.hasta || null,
+    tipos: req.query.tipos || null }) })))
   r.post('/seguimientos', responder('seguimiento', req => crearSeguimiento(req.body || {}, P(req).id)))
   r.put('/seguimientos/:id', responder('seguimiento-cambiar', req => actualizarSeguimiento(req.params.id, req.body || {}, P(req).id)))
 
