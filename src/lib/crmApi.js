@@ -69,6 +69,9 @@ export const crm = {
   borrarCampana:    id => orbitApi(`/crm/campanas/${id}`, { method: 'DELETE' }),
   enviarCampana:    id => orbitApi(`/crm/campanas/${id}/enviar`, { method: 'POST' }),
   previaCampana:    id => orbitApi(`/crm/campanas/${id}/previa`, { method: 'POST' }),
+  crearContacto:    (aliadoId, datos) => orbitApi(`/crm/aliados/${aliadoId}/contactos`, { method: 'POST', body: datos }),
+  editarContacto:   (aliadoId, cid, datos) => orbitApi(`/crm/aliados/${aliadoId}/contactos/${cid}`, { method: 'PUT', body: datos }),
+  borrarContacto:   (aliadoId, cid) => orbitApi(`/crm/aliados/${aliadoId}/contactos/${cid}`, { method: 'DELETE' }),
   bloqueoAliado:    (id, datos) => orbitApi(`/crm/aliados/${id}/bloqueo`, { method: 'POST', body: datos }),
   bloqueoProspecto: (id, datos) => orbitApi(`/crm/prospectos/${id}/bloqueo`, { method: 'POST', body: datos }),
 }

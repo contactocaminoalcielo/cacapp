@@ -305,7 +305,7 @@ export async function fichaAliado(id) {
   const todas = await cartera()
   const m = todas.find(r => r.id_aliado === aliadoId) || {}
 
-  const [serie, planes, servicios, actividades, seguimientos, tickets, fotos, pqrs, conv, prospecto] = await Promise.all([
+  const [serie, planes, servicios, actividades, seguimientos, tickets, fotos, pqrs, conv, prospecto, contactos] = await Promise.all([
     pool.query(
       `WITH meses AS (
          SELECT generate_series(date_trunc('month', ${HOY_SQL}) - interval '11 months',
@@ -362,6 +362,9 @@ export async function fichaAliado(id) {
         WHERE aliado_id = $1 AND phone_number_id = (SELECT (phone_number_ids)[1] FROM public.agente_wa WHERE clave = 'VETERINARIAS')
         ORDER BY ultimo_mensaje_en DESC NULLS LAST LIMIT 3`, [aliadoId]).catch(() => ({ rows: [] })),
     pool.query(`SELECT id, numero, etapa, fuente, created_at FROM public.crm_prospectos WHERE aliado_id = $1 LIMIT 1`, [aliadoId]),
+    pool.query(`SELECT id, nombre, rol, telefono, whatsapp, email, notas, principal, created_at
+                  FROM public.crm_aliado_contactos WHERE aliado_id = $1 ORDER BY principal DESC, created_at`, [aliadoId])
+      .catch(() => ({ rows: [] })),
   ])
 
   const pqrs90 = pqrs.rows.filter(q => Date.now() - new Date(q.created_at).getTime() < 90 * 86400000).length
@@ -385,9 +388,57 @@ export async function fichaAliado(id) {
       pqrs: pqrs.rows,
       conversaciones: conv.rows,
       prospecto: prospecto.rows[0] || null,
+      contactos: contactos.rows,
       enlace_portal: enlacePortal,
     },
   }
+}
+
+// ─── Contactos por veterinaria ────────────────────────────────────────────────
+const ROLES_CONTACTO = ['DUENO', 'ADMINISTRADOR', 'AUXILIAR', 'ENCARGADO', 'OTRO']
+
+export async function crearContacto(aliadoId, d) {
+  const aid = uuid(aliadoId)
+  if (!aid) return { status: 400, body: { ok: false, error: 'Veterinaria inválida' } }
+  if (!d.nombre?.trim()) return { status: 400, body: { ok: false, error: 'Falta el nombre' } }
+  const rol = ROLES_CONTACTO.includes(d.rol) ? d.rol : 'OTRO'
+
+  if (d.principal) {
+    await pool.query(`UPDATE public.crm_aliado_contactos SET principal = false WHERE aliado_id = $1`, [aid])
+  }
+  const { rows: [c] } = await pool.query(
+    `INSERT INTO public.crm_aliado_contactos (aliado_id, nombre, rol, telefono, whatsapp, email, notas, principal)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [aid, d.nombre.trim(), rol, d.telefono || null, d.whatsapp || null, d.email || null, d.notas || null, !!d.principal])
+  return { ok: true, contacto: c }
+}
+
+export async function actualizarContacto(id, d) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'ID inválido' } }
+  const { rows: [exist] } = await pool.query(`SELECT aliado_id FROM public.crm_aliado_contactos WHERE id = $1`, [cid])
+  if (!exist) return { status: 404, body: { ok: false, error: 'No existe' } }
+
+  if (d.principal) {
+    await pool.query(`UPDATE public.crm_aliado_contactos SET principal = false WHERE aliado_id = $1 AND id <> $2`, [exist.aliado_id, cid])
+  }
+  const campos = [], vals = []
+  let i = 1
+  for (const [k, v] of Object.entries({ nombre: d.nombre, rol: d.rol, telefono: d.telefono, whatsapp: d.whatsapp, email: d.email, notas: d.notas, principal: d.principal })) {
+    if (v !== undefined) { campos.push(`${k} = $${i++}`); vals.push(k === 'rol' && !ROLES_CONTACTO.includes(v) ? 'OTRO' : v) }
+  }
+  if (!campos.length) return { ok: true }
+  campos.push(`updated_at = now()`)
+  vals.push(cid)
+  const { rows: [c] } = await pool.query(`UPDATE public.crm_aliado_contactos SET ${campos.join(', ')} WHERE id = $${i} RETURNING *`, vals)
+  return { ok: true, contacto: c }
+}
+
+export async function borrarContacto(id) {
+  const cid = uuid(id)
+  if (!cid) return { status: 400, body: { ok: false, error: 'ID inválido' } }
+  await pool.query(`DELETE FROM public.crm_aliado_contactos WHERE id = $1`, [cid])
+  return { ok: true }
 }
 
 // Lo que se puede editar de la ficha desde el CRM. `token_acceso`, comisión y
@@ -2204,6 +2255,9 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   r.post('/prospectos/:id/mover', responder('prospecto-mover', req => moverProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/convertir', responder('prospecto-convertir', req => convertirProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/plantilla', responder('prospecto-plantilla', req => enviarPlantillaCrm({ ...req.body, prospecto_id: req.params.id, aliado_id: null }, P(req).id)))
+  r.post('/aliados/:id/contactos', responder('contacto-crear', req => crearContacto(req.params.id, req.body || {})))
+  r.put('/aliados/:id/contactos/:cid', responder('contacto-editar', req => actualizarContacto(req.params.cid, req.body || {})))
+  r.delete('/aliados/:id/contactos/:cid', responder('contacto-borrar', req => borrarContacto(req.params.cid)))
   r.post('/aliados/:id/bloqueo', responder('bloqueo', req => cambiarBloqueo({ aliadoId: req.params.id, bloquear: !!req.body?.bloquear, motivo: req.body?.motivo }, P(req).id)))
   r.post('/prospectos/:id/bloqueo', responder('prospecto-bloqueo', req => cambiarBloqueo({ prospectoId: req.params.id, bloquear: !!req.body?.bloquear, motivo: req.body?.motivo }, P(req).id)))
   r.post('/prospectos/:id/material', responder('prospecto-material', req => enviarMaterialCrm({ ...req.body, prospecto_id: req.params.id, aliado_id: null }, P(req).id)))

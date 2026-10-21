@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Phone, MessageCircle, PhoneCall, CalendarPlus, LifeBuoy, Send, Paperclip, Pencil,
   MapPin, Clock, Instagram, Globe, Mail, Link2, Check, CheckCircle2, RotateCcw, XCircle, Ban,
+  UserPlus, Trash2, Star,
 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import {
@@ -20,8 +21,163 @@ import Fotos, { FotoCrm } from '@/components/crm/Fotos'
 import { EnviarPlantillaCrm, EnviarMaterialCrm } from '@/components/crm/EnviarWhatsapp'
 import EditarFicha from '@/components/crm/EditarFicha'
 import { useCrm } from '@/components/crm/CrmContext'
+import { Modal } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { Campo } from '@/components/crm/ui'
 
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+
+const ROLES_CONTACTO = {
+  DUENO:          { label: 'Dueño/a',        color: '#7C3AED', bg: '#F5F3FF' },
+  ADMINISTRADOR:  { label: 'Administrador/a', color: '#2563EB', bg: '#EFF6FF' },
+  AUXILIAR:       { label: 'Auxiliar',        color: '#059669', bg: '#ECFDF5' },
+  ENCARGADO:      { label: 'Encargado/a',     color: '#D97706', bg: '#FFFBEB' },
+  OTRO:           { label: 'Otro',            color: '#6B7280', bg: '#F3F4F6' },
+}
+
+function RolChip({ rol }) {
+  const r = ROLES_CONTACTO[rol] || ROLES_CONTACTO.OTRO
+  return (
+    <span className="text-[10.5px] font-bold px-2 py-0.5 rounded-full"
+      style={{ color: r.color, background: r.bg }}>{r.label}</span>
+  )
+}
+
+function ModalContacto({ abierto, contacto, aliadoId, onCerrar, onGuardado }) {
+  const nuevo = !contacto?.id
+  const [f, setF] = useState({})
+  const [guardando, setGuardando] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!abierto) return
+    setF(contacto ? { ...contacto } : { nombre: '', rol: 'OTRO', telefono: '', whatsapp: '', email: '', notas: '', principal: false })
+    setError(null)
+  }, [abierto, contacto])
+
+  async function guardar() {
+    if (!f.nombre?.trim()) { setError('Falta el nombre'); return }
+    setGuardando(true); setError(null)
+    try {
+      if (nuevo) await crm.crearContacto(aliadoId, f)
+      else await crm.editarContacto(aliadoId, f.id, f)
+      onGuardado()
+    } catch (e) { setError(e.message) } finally { setGuardando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title={nuevo ? 'Nuevo contacto' : 'Editar contacto'} maxWidth="max-w-md"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={guardar} disabled={guardando} style={{ background: ACENTO }}>
+            {guardando ? 'Guardando…' : 'Guardar'}
+          </Button>
+        </div>
+      </>}>
+      <div className="space-y-3">
+        <Campo label="Nombre *">
+          <Input value={f.nombre || ''} onChange={e => setF(x => ({ ...x, nombre: e.target.value }))}
+            placeholder="Ej: María Torres" autoFocus />
+        </Campo>
+        <Campo label="Rol">
+          <Select value={f.rol || 'OTRO'} onChange={e => setF(x => ({ ...x, rol: e.target.value }))}>
+            {Object.entries(ROLES_CONTACTO).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </Select>
+        </Campo>
+        <div className="grid grid-cols-2 gap-2">
+          <Campo label="WhatsApp">
+            <Input value={f.whatsapp || ''} onChange={e => setF(x => ({ ...x, whatsapp: e.target.value }))}
+              placeholder="3001234567" inputMode="tel" />
+          </Campo>
+          <Campo label="Teléfono">
+            <Input value={f.telefono || ''} onChange={e => setF(x => ({ ...x, telefono: e.target.value }))}
+              placeholder="Opcional" inputMode="tel" />
+          </Campo>
+        </div>
+        <Campo label="Correo">
+          <Input value={f.email || ''} onChange={e => setF(x => ({ ...x, email: e.target.value }))}
+            placeholder="correo@veterinaria.com" type="email" />
+        </Campo>
+        <Campo label="Notas">
+          <Textarea rows={2} value={f.notas || ''} onChange={e => setF(x => ({ ...x, notas: e.target.value }))}
+            placeholder="Horario, observaciones, mejor hora para llamar…" />
+        </Campo>
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" checked={!!f.principal} onChange={e => setF(x => ({ ...x, principal: e.target.checked }))}
+            className="w-4 h-4 rounded" />
+          <span className="text-[12.5px] text-gray-700">Marcar como contacto principal</span>
+          <Star size={12} className="text-amber-400" />
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+function ContactosSection({ aliadoId, contactos = [], onCambio, useConfirm: confirmar }) {
+  const [modal, setModal] = useState(null)  // null | 'nuevo' | contacto-obj
+
+  async function eliminar(c) {
+    if (!window.confirm(`¿Eliminar a ${c.nombre}?`)) return
+    try { await crm.borrarContacto(aliadoId, c.id); onCambio() } catch (e) { alert(e.message) }
+  }
+
+  return (
+    <Seccion titulo="Personas de contacto"
+      accion={<button onClick={() => setModal('nuevo')} className="flex items-center gap-1 text-[12px] font-semibold" style={{ color: ACENTO }}>
+        <UserPlus size={13} /> Agregar
+      </button>}>
+      {!contactos.length
+        ? <div className="text-[12.5px] text-gray-400 italic">Sin contactos registrados. Agrega el dueño, administrador o encargado.</div>
+        : <div className="space-y-2">
+            {contactos.map(c => (
+              <div key={c.id} className="flex items-start gap-2.5 rounded-xl border border-gray-100 p-2.5 hover:bg-gray-50 group">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-[14px] font-bold"
+                  style={{ background: ROLES_CONTACTO[c.rol]?.bg || '#F3F4F6', color: ROLES_CONTACTO[c.rol]?.color || '#6B7280' }}>
+                  {c.nombre.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[13px] font-semibold text-gray-900">{c.nombre}</span>
+                    {c.principal && <Star size={11} className="text-amber-400" fill="currentColor" />}
+                    <RolChip rol={c.rol} />
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-gray-500 mt-0.5">
+                    {c.whatsapp && <a href={`https://wa.me/${String(c.whatsapp).replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
+                      className="text-teal-700 hover:underline">WA {c.whatsapp}</a>}
+                    {c.telefono && <a href={`tel:${c.telefono}`} className="hover:underline">{c.telefono}</a>}
+                    {c.email && <span>{c.email}</span>}
+                  </div>
+                  {c.notas && <p className="text-[11.5px] text-gray-400 mt-0.5 line-clamp-2">{c.notas}</p>}
+                </div>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
+                  <button onClick={() => setModal(c)}
+                    className="w-7 h-7 rounded-lg hover:bg-gray-200 flex items-center justify-center text-gray-400 hover:text-gray-700">
+                    <Pencil size={13} />
+                  </button>
+                  <button onClick={() => eliminar(c)}
+                    className="w-7 h-7 rounded-lg hover:bg-red-50 flex items-center justify-center text-gray-400 hover:text-red-500">
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>}
+
+      <ModalContacto
+        abierto={modal !== null}
+        contacto={modal === 'nuevo' ? null : modal}
+        aliadoId={aliadoId}
+        onCerrar={() => setModal(null)}
+        onGuardado={() => { setModal(null); onCambio() }}
+      />
+    </Seccion>
+  )
+}
 
 export default function FichaVeterinaria() {
   const { id } = useParams()
@@ -237,6 +393,8 @@ export default function FichaVeterinaria() {
               </div>
             </Seccion>
           )}
+
+          <ContactosSection aliadoId={a.id_aliado} contactos={d.contactos || []} onCambio={cargar} />
 
           <Seccion titulo="Datos de contacto" accion={<button onClick={() => setModal('editar')} className="text-[12px] font-semibold" style={{ color: ACENTO }}>Editar</button>}>
             <dl className="space-y-1.5 text-[12.5px]">

@@ -7,10 +7,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { crm, TIPOS_GESTION, aInputFechaHora, desdeInputFechaHora, atajoFecha } from '@/lib/crmApi'
+import { crm, TIPOS_GESTION, TICKET_TIPOS, TICKET_CATEGORIAS, aInputFechaHora, desdeInputFechaHora, atajoFecha } from '@/lib/crmApi'
+import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { useCrm } from './CrmContext'
 import { Campo, ACENTO } from './ui'
-import { Camera, Building2, Users } from 'lucide-react'
+import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp } from 'lucide-react'
 
 const TIPOS = ['VISITA', 'REUNION']
 const ATAJOS = [['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
@@ -129,9 +130,8 @@ function FormNuevoProspecto({ f, setF, fotoPreview, onFoto }) {
           <Input value={f.ciudad || ''} onChange={e => setF(x => ({ ...x, ciudad: e.target.value }))}
             placeholder="Bogotá" />
         </Campo>
-        <Campo label="Localidad / barrio">
-          <Input value={f.localidad || ''} onChange={e => setF(x => ({ ...x, localidad: e.target.value }))}
-            placeholder="Chapinero" />
+        <Campo label="Localidad">
+          <LocalidadSelect value={f.localidad || ''} onChange={v => setF(x => ({ ...x, localidad: v }))} />
         </Campo>
       </div>
 
@@ -159,6 +159,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   const [fotoPreview, setFotoPreview] = useState(null)
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState(null)
+  const [pqrs, setPqrs] = useState(null)  // null=oculto | {}=habilitado
 
   function fechaDesde(dia) {
     if (dia) {
@@ -170,7 +171,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
 
   useEffect(() => {
     if (!abierto) return
-    setError(null); setBuscar(''); setFoto(null); setFotoPreview(null)
+    setError(null); setBuscar(''); setFoto(null); setFotoPreview(null); setPqrs(null)
     setF({ tipo: 'VISITA', aliado_id: '', titulo: '', notas: '', fecha: fechaDesde(fechaInicial),
            responsable_id: '', nombre: '', contacto_nombre: '', whatsapp: '', telefono: '',
            ciudad: 'Bogotá', localidad: '', direccion: '', notasProspecto: '' })
@@ -224,6 +225,19 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
         programado_para: desdeInputFechaHora(f.fecha),
         responsable_id: f.responsable_id || null,
       })
+
+      if (pqrs && pqrs.asunto?.trim() && aliadoId) {
+        await crm.crearTicket({
+          aliado_id: aliadoId,
+          tipo: pqrs.tipo || 'PETICION',
+          categoria: pqrs.categoria || 'OTRO',
+          prioridad: pqrs.prioridad || 'MEDIA',
+          canal: 'VISITA',
+          asunto: pqrs.asunto.trim(),
+          descripcion: pqrs.descripcion || null,
+        }).catch(() => {})
+      }
+
       refrescarAlertas()
       onGuardado?.()
       onCerrar()
@@ -301,6 +315,46 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
               {equipo.map(p => <option key={p.id} value={p.id}>{p.nombre} · {p.rol.toLowerCase()}</option>)}
             </Select>
           </Campo>
+        )}
+
+        {/* PQRS opcional — solo para vet existente seleccionada */}
+        {modo === 'existente' && f.aliado_id && (
+          <div className="rounded-xl border border-dashed border-gray-300 overflow-hidden">
+            <button type="button"
+              onClick={() => setPqrs(p => p ? null : { tipo: 'PETICION', categoria: 'OTRO', prioridad: 'MEDIA', asunto: '', descripcion: '' })}
+              className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12.5px] font-semibold text-gray-600 hover:bg-gray-50 transition">
+              <LifeBuoy size={14} style={{ color: pqrs ? ACENTO : undefined }} />
+              <span className="flex-1 text-left">
+                {pqrs ? 'Registrar PQRS también' : 'También registrar una PQRS'}
+              </span>
+              {pqrs ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            {pqrs && (
+              <div className="px-3.5 pb-3.5 space-y-3 border-t border-gray-100 pt-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Campo label="Tipo">
+                    <Select value={pqrs.tipo || 'PETICION'} onChange={e => setPqrs(p => ({ ...p, tipo: e.target.value }))}>
+                      {Object.entries(TICKET_TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </Select>
+                  </Campo>
+                  <Campo label="Categoría">
+                    <Select value={pqrs.categoria || 'OTRO'} onChange={e => setPqrs(p => ({ ...p, categoria: e.target.value }))}>
+                      {Object.entries(TICKET_CATEGORIAS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </Select>
+                  </Campo>
+                </div>
+                <Campo label="Asunto *">
+                  <Input value={pqrs.asunto || ''} onChange={e => setPqrs(p => ({ ...p, asunto: e.target.value }))}
+                    placeholder="Ej: Cobro incorrecto en comisión de octubre" />
+                </Campo>
+                <Campo label="Descripción">
+                  <Textarea rows={2} value={pqrs.descripcion || ''} onChange={e => setPqrs(p => ({ ...p, descripcion: e.target.value }))}
+                    placeholder="Detalles del caso…" />
+                </Campo>
+                <p className="text-[11px] text-gray-400">El ticket quedará con canal <b>Visita</b> y prioridad <b>Media</b>.</p>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </Modal>
