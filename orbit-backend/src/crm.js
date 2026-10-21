@@ -13,7 +13,7 @@ import { pool, log } from './db.js'
 import { llamarClaude } from './ia.js'
 import { enviarPlantilla, valoresDeFuente } from './whatsapp-plantillas.js'
 import { enviarMaterial } from './whatsapp-materiales.js'
-import { enviarSobre, etiquetar } from './whatsapp-cloud.js'
+import { enviarSobre, enviarTexto, etiquetar } from './whatsapp-cloud.js'
 
 const MOD = '[crm]'
 const APP_URL = (process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')
@@ -481,6 +481,16 @@ export async function actualizarFicha(id, datos = {}, personalId) {
             ficha_actualizada_por = $${vals.length - 1}, updated_at = now()
       WHERE id_aliado = $${vals.length}`, vals)
   if (!rowCount) return { status: 404, body: { ok: false, error: 'No existe esa veterinaria' } }
+  return { status: 200, body: { ok: true } }
+}
+
+export async function borrarAliado(id) {
+  const aliadoId = uuid(id)
+  if (!aliadoId) return { status: 400, body: { ok: false, error: 'Veterinaria inválida' } }
+  const { rowCount } = await pool.query(
+    `UPDATE public.aliados SET estado = 'inactivo', updated_at = now()
+      WHERE id_aliado = $1 AND estado != 'inactivo'`, [aliadoId])
+  if (!rowCount) return { status: 404, body: { ok: false, error: 'Veterinaria no encontrada o ya está inactiva' } }
   return { status: 200, body: { ok: true } }
 }
 
@@ -2220,6 +2230,7 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
 
   r.get('/aliados/:id', responder('ficha', req => fichaAliado(req.params.id)))
   r.put('/aliados/:id', responder('ficha-guardar', req => actualizarFicha(req.params.id, req.body || {}, P(req).id)))
+  r.delete('/aliados/:id', responder('aliada-eliminar', req => borrarAliado(req.params.id)))
   r.post('/aliados/:id/plantilla', responder('plantilla', req => enviarPlantillaCrm({ ...req.body, aliado_id: req.params.id }, P(req).id)))
   r.post('/aliados/:id/material', responder('material', req => enviarMaterialCrm({ ...req.body, aliado_id: req.params.id }, P(req).id)))
 
@@ -2321,6 +2332,19 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   r.delete('/campanas/:id', responder('campana-borrar', req => borrarCampana(req.params.id)))
   r.post('/campanas/:id/enviar', responder('campana-enviar', req => enviarCampana(req.params.id, P(req).id)))
   r.post('/campanas/:id/previa', responder('campana-previa', req => previaCampana(req.params.id)))
+
+  // ── Invitar aliada ─────────────────────────────────────────────────────────
+  // Envía el enlace de afiliación por la API de WhatsApp de vets. Si la vet
+  // nunca ha conversado con nosotros, linea se pasa explícitamente (lineaDe
+  // falla para números sin historial).
+  r.post('/invitar-aliada', responder('invitar-aliada', async req => {
+    const { whatsapp } = req.body || {}
+    if (!whatsapp) return { status: 400, body: { ok: false, error: 'Falta número de WhatsApp' } }
+    const { linea } = await lineaVeterinarias()
+    if (!linea) return { status: 500, body: { ok: false, error: 'Línea de veterinarias no configurada' } }
+    const texto = `Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo y pedir recogidas con facilidad:\nhttps://orbit.orbitacac.com/#/aliado`
+    return enviarTexto({ contacto: whatsapp, linea, texto, personalId: P(req).id })
+  }))
 
   return r
 }
