@@ -2234,7 +2234,15 @@ export default function Kanban() {
     setServicios(prev => prev.map(s => s.servicio_id === servicioId ? { ...s, estado: nuevoEstado } : s))
     if (selected?.servicio_id === servicioId) setSelected(prev => ({ ...prev, estado: nuevoEstado }))
     const { error: err } = await db.from('servicios').update({ estado: nuevoEstado }).eq('id', servicioId)
-    if (err) { await showAlert(parsearErrorDB(err), { title: 'Error' }); cargar() }
+    if (err) { await showAlert(parsearErrorDB(err), { title: 'Error' }); cargar(); return }
+    // Al entregar, la DB pasa los ítems LISTOS a ENTREGADO (migr. 195): se
+    // releen para que el modal abierto no los siga mostrando en LISTO.
+    if (nuevoEstado === 'ENTREGADO' && selected?.servicio_id === servicioId) {
+      const { data: recs } = await db.from('servicio_recordatorios')
+        .select('*, recordatorios(nombre, precio_base)')
+        .eq('servicio_id', servicioId).neq('origen', 'REMOVIDO')
+      if (recs) setRecordatorios(recs)
+    }
   }
 
   // Cancelación formal: transición de estado trazable — nunca borra datos,
