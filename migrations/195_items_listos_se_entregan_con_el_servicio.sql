@@ -27,7 +27,10 @@
 -- dispara con este UPDATE, pero `fn_cerrar_servicio_sin_ruta` sale de una vez
 -- porque el servicio ya está ENTREGADO. No mueve dinero ni inventario.
 --
--- Incluye el relleno de los servicios ya ENTREGADO con ítems físicos en LISTO.
+-- Relleno de los servicios ya ENTREGADO: ahí sí pasan TODOS los LISTO, también
+-- los digitales (David 21-oct: lo entregado se da por entregado; no se audita
+-- ítem por ítem). Medido antes de aplicar: 418 físicos + 91 digitales + 6
+-- ceremonia = 515.
 --   cat migrations/195_items_listos_se_entregan_con_el_servicio.sql | ssh -i ~/.ssh/orbit_deploy -o BatchMode=yes root@13.140.139.61 \
 --     "docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f -"
 -- ============================================================================
@@ -62,22 +65,19 @@ CREATE TRIGGER trg_items_siguen_servicio_entregado
   WHEN (NEW.estado = 'ENTREGADO' AND OLD.estado IS DISTINCT FROM 'ENTREGADO')
   EXECUTE FUNCTION public.fn_items_siguen_servicio_entregado();
 
--- Relleno: los que ya estaban entregados con ítems físicos en LISTO.
+-- Relleno: todo lo LISTO de los servicios ya entregados (también digitales).
 UPDATE public.servicio_recordatorios sr
    SET estado = 'ENTREGADO'
-  FROM public.recordatorios r, public.servicios s
- WHERE r.id = sr.recordatorio_id
-   AND s.id = sr.servicio_id
+  FROM public.servicios s
+ WHERE s.id = sr.servicio_id
    AND s.estado = 'ENTREGADO'
    AND sr.estado = 'LISTO'
-   AND COALESCE(sr.origen, '') <> 'REMOVIDO'
-   AND r.categoria IS DISTINCT FROM 'digital';
+   AND COALESCE(sr.origen, '') <> 'REMOVIDO';
 
 COMMIT;
 
 -- Verificación (debe dar 0):
 --   SELECT count(*) FROM servicio_recordatorios sr
 --     JOIN servicios s ON s.id = sr.servicio_id
---     JOIN recordatorios r ON r.id = sr.recordatorio_id
 --    WHERE s.estado = 'ENTREGADO' AND sr.estado = 'LISTO'
---      AND COALESCE(sr.origen,'') <> 'REMOVIDO' AND r.categoria IS DISTINCT FROM 'digital';
+--      AND COALESCE(sr.origen,'') <> 'REMOVIDO';
