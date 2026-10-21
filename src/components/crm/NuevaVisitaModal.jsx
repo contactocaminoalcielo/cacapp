@@ -149,7 +149,7 @@ function FormNuevoProspecto({ f, setF, fotoPreview, onFoto }) {
 }
 
 // ── Modal principal ──────────────────────────────────────────────────────────
-export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = null, onGuardado }) {
+export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = null, registrarHoy = false, onGuardado }) {
   const { equipo, refrescarAlertas } = useCrm()
   const [modo, setModo] = useState('existente')   // 'existente' | 'nuevo'
   const [aliados, setAliados] = useState(null)
@@ -162,6 +162,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   const [pqrs, setPqrs] = useState(null)  // null=oculto | {}=habilitado
 
   function fechaDesde(dia) {
+    if (registrarHoy) return aInputFechaHora(new Date())
     if (dia) {
       const d = new Date(dia + 'T09:00:00')
       if (!isNaN(d.getTime())) return aInputFechaHora(d)
@@ -245,13 +246,13 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   }
 
   return (
-    <Modal open={abierto} onClose={onCerrar} title="Programar visita presencial" maxWidth="max-w-lg"
+    <Modal open={abierto} onClose={onCerrar} title={registrarHoy ? 'Registrar visita de hoy' : 'Programar visita presencial'} maxWidth="max-w-lg"
       footer={<>
         <span className="text-[12px] text-red-600">{error}</span>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
           <Button onClick={guardar} disabled={guardando} style={{ background: ACENTO }}>
-            {guardando ? 'Guardando…' : modo === 'nuevo' ? 'Crear y programar' : 'Programar'}
+            {guardando ? 'Guardando…' : modo === 'nuevo' ? (registrarHoy ? 'Crear y registrar' : 'Crear y programar') : (registrarHoy ? 'Registrar' : 'Programar')}
           </Button>
         </div>
       </>}>
@@ -296,10 +297,12 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
             placeholder="Ej: presentar plan grupal y tarifas 2027" />
         </Campo>
 
-        {/* Cuándo */}
-        <Campo label="Cuándo">
-          <SelectorFecha valor={f.fecha || ''} onCambio={v => setF(x => ({ ...x, fecha: v }))} />
-        </Campo>
+        {/* Cuándo — solo cuando se programa, no cuando se registra en el acto */}
+        {!registrarHoy && (
+          <Campo label="Cuándo">
+            <SelectorFecha valor={f.fecha || ''} onCambio={v => setF(x => ({ ...x, fecha: v }))} />
+          </Campo>
+        )}
 
         {/* Notas de la visita */}
         <Campo label="Notas de la visita (opcional)">
