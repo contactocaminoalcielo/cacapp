@@ -11,7 +11,7 @@ import { crm, TIPOS_GESTION, TICKET_TIPOS, TICKET_CATEGORIAS, aInputFechaHora, d
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { useCrm } from './CrmContext'
 import { Campo, ACENTO } from './ui'
-import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp, Send } from 'lucide-react'
+import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp, Send, Check, Loader2 } from 'lucide-react'
 
 const LINK_ALIADO = 'https://orbit.orbitacac.com/#/aliado'
 
@@ -162,6 +162,8 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState(null)
   const [pqrs, setPqrs] = useState(null)  // null=oculto | {}=habilitado
+  const [enviandoInv, setEnviandoInv] = useState(false)
+  const [exitoInv, setExitoInv] = useState(false)
 
   function fechaDesde(dia) {
     if (registrarHoy) return aInputFechaHora(new Date())
@@ -175,6 +177,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   useEffect(() => {
     if (!abierto) return
     setError(null); setBuscar(''); setFoto(null); setFotoPreview(null); setPqrs(null)
+    setEnviandoInv(false); setExitoInv(false)
     setF({ tipo: 'VISITA', aliado_id: '', titulo: '', notas: '', fecha: fechaDesde(fechaInicial),
            responsable_id: '', nombre: '', contacto_nombre: '', whatsapp: '', telefono: '',
            ciudad: 'Bogotá', localidad: '', direccion: '', notasProspecto: '' })
@@ -294,24 +297,28 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
           : <FormNuevoProspecto f={f} setF={setF} fotoPreview={fotoPreview} onFoto={manejarFoto} />
         }
 
-        {/* Botón enviar enlace de invitación por WhatsApp */}
-        {(modo === 'existente' && f.aliado_id) || modo === 'nuevo' ? (
-          <div className="flex items-center gap-2">
-            {(() => {
-              const wa = modo === 'existente' ? f._vet?.whatsapp : f.whatsapp
-              const tel = wa ? wa.replace(/\D/g, '') : null
-              const msg = encodeURIComponent(`Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo: ${LINK_ALIADO}`)
-              const href = tel ? `https://wa.me/${tel}?text=${msg}` : `https://wa.me/?text=${msg}`
-              return (
-                <a href={href} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-green-700 hover:text-green-800 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-lg transition">
-                  <Send size={12} /> Enviar enlace de invitación
-                  {tel ? ' (wa.me directo)' : ' (abrir WhatsApp)'}
-                </a>
-              )
-            })()}
-          </div>
-        ) : null}
+        {/* Botón enviar enlace de invitación por WhatsApp de Orbit */}
+        {(modo === 'existente' && f.aliado_id) || (modo === 'nuevo' && f.whatsapp?.replace(/\D/g, '')) ? (() => {
+          const wa = (modo === 'existente' ? f._vet?.whatsapp : f.whatsapp)?.replace(/\D/g, '')
+          if (!wa) return null
+          async function enviarInvitacion() {
+            setEnviandoInv(true); setExitoInv(false)
+            try {
+              const r = await crm.invitarAliada(wa)
+              if (r?.ok === false) throw new Error(r.error)
+              setExitoInv(true); setTimeout(() => setExitoInv(false), 4000)
+            } catch (e) { setError(`Invitación: ${e.message}`) } finally { setEnviandoInv(false) }
+          }
+          return (
+            <button type="button" onClick={enviarInvitacion} disabled={enviandoInv}
+              className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-60"
+              style={{ color: exitoInv ? '#22C55E' : '#0F766E', background: exitoInv ? '#F0FDF4' : '#E6F4F1' }}>
+              {enviandoInv ? <><Loader2 size={12} className="animate-spin" /> Enviando…</>
+                : exitoInv ? <><Check size={12} /> Enviado por Orbit</>
+                : <><Send size={12} /> Enviar enlace de invitación por Orbit</>}
+            </button>
+          )
+        })() : null}
 
         {/* Qué hacer */}
         <Campo label="¿Qué se va a hacer?">

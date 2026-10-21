@@ -1,12 +1,18 @@
 import { useState } from 'react'
-import { Check, Copy, Send, UserPlus } from 'lucide-react'
-import { ACENTO, Cabecera } from '@/components/crm/ui'
+import { Check, Copy, Send, UserPlus, Loader2 } from 'lucide-react'
+import { crm as crmApi } from '@/lib/crmApi'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { ACENTO, Cabecera, Campo } from '@/components/crm/ui'
 
 const LINK = 'https://orbit.orbitacac.com/#/aliado'
-const MSG  = `Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria como aliada de Camino al Cielo:\n${LINK}`
 
 export default function Invitar() {
   const [copiado, setCopiado] = useState(false)
+  const [telefono, setTelefono] = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [exito, setExito] = useState(false)
+  const [errorEnvio, setErrorEnvio] = useState(null)
 
   function copiar() {
     navigator.clipboard.writeText(LINK).then(() => {
@@ -15,9 +21,26 @@ export default function Invitar() {
     })
   }
 
+  async function enviarPorOrbit() {
+    const num = telefono.replace(/\D/g, '')
+    if (!num) return
+    setEnviando(true); setExito(false); setErrorEnvio(null)
+    try {
+      const r = await crmApi.invitarAliada(num)
+      if (r?.ok === false) throw new Error(r.error || 'No se pudo enviar')
+      setExito(true)
+      setTelefono('')
+      setTimeout(() => setExito(false), 4000)
+    } catch (e) {
+      setErrorEnvio(e.message)
+    } finally {
+      setEnviando(false)
+    }
+  }
+
   return (
     <div className="max-w-2xl mx-auto">
-      <Cabecera titulo="Invitar aliada" sub="Comparte el enlace de registro con cualquier clínica o veterinaria que quiera sumarse." />
+      <Cabecera titulo="Invitar aliada" sub="Envía el enlace de registro a cualquier clínica o veterinaria que quiera sumarse." />
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mt-4 space-y-5">
         <div className="flex items-start gap-3">
@@ -33,6 +56,7 @@ export default function Invitar() {
           </div>
         </div>
 
+        {/* Copiar enlace */}
         <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-4 py-3 border border-gray-200">
           <span className="flex-1 text-[12.5px] font-mono text-gray-700 truncate">{LINK}</span>
           <button onClick={copiar}
@@ -42,11 +66,34 @@ export default function Invitar() {
           </button>
         </div>
 
-        <a href={`https://wa.me/?text=${encodeURIComponent(MSG)}`} target="_blank" rel="noreferrer"
-          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-[13px] font-bold text-white transition hover:opacity-90"
-          style={{ background: '#25D366' }}>
-          <Send size={15} /> Enviar por WhatsApp
-        </a>
+        {/* Enviar por WhatsApp de Orbit */}
+        <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+          <div className="text-[13px] font-semibold text-gray-800">Enviar por WhatsApp de Orbit</div>
+          <div className="text-[12px] text-gray-500">
+            El mensaje saldrá por la línea de veterinarias de Orbit, no desde tu celular personal.
+          </div>
+          <Campo label="Número de WhatsApp de la veterinaria">
+            <Input
+              value={telefono}
+              onChange={e => { setTelefono(e.target.value); setExito(false); setErrorEnvio(null) }}
+              placeholder="3001234567"
+              inputMode="tel"
+              onKeyDown={e => e.key === 'Enter' && enviarPorOrbit()}
+            />
+          </Campo>
+          {errorEnvio && <p className="text-[12px] text-red-600">{errorEnvio}</p>}
+          <Button
+            onClick={enviarPorOrbit}
+            disabled={enviando || !telefono.replace(/\D/g, '')}
+            className="w-full flex items-center justify-center gap-2"
+            style={{ background: exito ? '#22C55E' : ACENTO }}>
+            {enviando
+              ? <><Loader2 size={14} className="animate-spin" /> Enviando…</>
+              : exito
+                ? <><Check size={14} /> Enviado</>
+                : <><Send size={14} /> Enviar enlace de invitación</>}
+          </Button>
+        </div>
 
         <div className="text-[11.5px] text-gray-400 leading-relaxed">
           El enlace no caduca. Para enviarle a una veterinaria ya aprobada su enlace personal,

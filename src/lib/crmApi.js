@@ -74,6 +74,8 @@ export const crm = {
   borrarContacto:   (aliadoId, cid) => orbitApi(`/crm/aliados/${aliadoId}/contactos/${cid}`, { method: 'DELETE' }),
   bloqueoAliado:    (id, datos) => orbitApi(`/crm/aliados/${id}/bloqueo`, { method: 'POST', body: datos }),
   bloqueoProspecto: (id, datos) => orbitApi(`/crm/prospectos/${id}/bloqueo`, { method: 'POST', body: datos }),
+  eliminarAliado:   id => orbitApi(`/crm/aliados/${id}`, { method: 'DELETE' }),
+  invitarAliada:    whatsapp => orbitApi('/crm/invitar-aliada', { method: 'POST', body: { whatsapp } }),
 }
 
 // ─── Catálogos y etiquetas ──────────────────────────────────────────────────

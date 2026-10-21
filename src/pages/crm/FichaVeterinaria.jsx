@@ -266,6 +266,7 @@ export default function FichaVeterinaria() {
               <AccionBoton icono={LifeBuoy} onClick={() => setModal('ticket')}>Ticket</AccionBoton>
               <AccionBoton icono={Pencil} onClick={() => setModal('editar')}>Editar ficha</AccionBoton>
               {!a.no_contactar && <AccionBoton icono={Ban} onClick={() => setModal('bloqueo')}>No contactar</AccionBoton>}
+              {a.estado === 'activo' && <AccionBoton icono={Trash2} onClick={() => setModal('eliminar')}>Eliminar</AccionBoton>}
             </div>
           </div>
         </div>
@@ -450,7 +451,44 @@ export default function FichaVeterinaria() {
       <EditarFicha abierto={modal === 'editar'} onCerrar={() => setModal(null)} aliado={a} onGuardado={cargar} />
       <BloqueoModal abierto={modal === 'bloqueo'} onCerrar={() => setModal(null)} destino={destino} nombre={a.nombre}
         bloqueada={a.no_contactar} onListo={() => { refrescarAlertas(); cargar() }} />
+      <EliminarModal abierto={modal === 'eliminar'} onCerrar={() => setModal(null)} aliado={a}
+        onEliminado={() => navegar('/crm/veterinarias')} />
     </div>
+  )
+}
+
+function EliminarModal({ abierto, onCerrar, aliado, onEliminado }) {
+  const [eliminando, setEliminando] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function confirmar() {
+    setEliminando(true); setError(null)
+    try {
+      const r = await crm.eliminarAliado(aliado.id_aliado)
+      if (r?.ok === false) throw new Error(r.error || 'Error al eliminar')
+      onEliminado()
+    } catch (e) { setError(e.message); setEliminando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title="Eliminar veterinaria" maxWidth="max-w-sm"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={confirmar} disabled={eliminando} style={{ background: '#DC2626' }}>
+            {eliminando ? 'Eliminando…' : 'Sí, eliminar'}
+          </Button>
+        </div>
+      </>}>
+      <p className="text-[13.5px] text-gray-700">
+        ¿Eliminar a <strong>{aliado?.nombre}</strong> del CRM?
+      </p>
+      <p className="text-[12px] text-gray-500 mt-2">
+        La veterinaria quedará inactiva. Sus servicios históricos y registros no se borran.
+        Si se equivocó, puede reactivarla desde la base de datos.
+      </p>
+    </Modal>
   )
 }
 
