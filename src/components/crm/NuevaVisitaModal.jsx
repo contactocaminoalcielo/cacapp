@@ -230,6 +230,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
         tipo: f.tipo, titulo: f.titulo, notas: f.notas || null,
         programado_para: desdeInputFechaHora(f.fecha),
         responsable_id: f.responsable_id || null,
+        estado: registrarHoy ? 'HECHO' : 'PENDIENTE',
       })
 
       if (pqrs && pqrs.asunto?.trim() && aliadoId) {
@@ -305,7 +306,11 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
             setEnviandoInv(true); setExitoInv(false)
             try {
               const r = await crm.invitarAliada(wa)
-              if (r?.ok === false) throw new Error(r.error)
+              if (r?.sin_conversacion) {
+                window.open(r.wa_href, '_blank', 'noopener')
+                return
+              }
+              if (r?.ok === false) throw new Error(r.error || 'No se pudo enviar')
               setExitoInv(true); setTimeout(() => setExitoInv(false), 4000)
             } catch (e) { setError(`Invitación: ${e.message}`) } finally { setEnviandoInv(false) }
           }

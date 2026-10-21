@@ -941,12 +941,13 @@ export async function crearSeguimiento(d = {}, personalId, { client = pool, orig
     const b = await bloqueoDe({ aliadoId, prospectoId }, client)
     if (b) return { status: 423, body: { ok: false, error: `${b.nombre} pidió no ser contactada (${b.motivo}). Desbloquéala primero si cambió de opinión.` } }
   }
+  const estadoSeg = d.estado === 'HECHO' ? 'HECHO' : 'PENDIENTE'
   const { rows: [s] } = await client.query(
     `INSERT INTO public.crm_seguimientos
-       (aliado_id, prospecto_id, ticket_id, tipo, titulo, notas, programado_para, responsable_id, origen, creado_por)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+       (aliado_id, prospecto_id, ticket_id, tipo, titulo, notas, programado_para, responsable_id, origen, creado_por, estado)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [aliadoId, prospectoId, ticketId, TIPOS_SEG.includes(d.tipo) ? d.tipo : 'LLAMADA', titulo,
-     txt(d.notas, 2000), cuando, uuid(d.responsable_id) || personalId || null, origen, personalId || null])
+     txt(d.notas, 2000), cuando, uuid(d.responsable_id) || personalId || null, origen, personalId || null, estadoSeg])
   return { status: 201, body: { ok: true, seguimiento: s } }
 }
 
@@ -2343,7 +2344,16 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
     const { linea } = await lineaVeterinarias()
     if (!linea) return { status: 500, body: { ok: false, error: 'Línea de veterinarias no configurada' } }
     const texto = `Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo y pedir recogidas con facilidad:\nhttps://orbit.orbitacac.com/#/aliado`
-    return enviarTexto({ contacto: whatsapp, linea, texto, personalId: P(req).id })
+    const r = await enviarTexto({ contacto: whatsapp, linea, texto, personalId: P(req).id })
+    // Si no hay conversación previa, WA solo acepta plantillas; devolvemos la señal
+    // para que el frontend abra wa.me en su lugar.
+    if (r.status === 404 || r.body?.error?.includes('Conversación no encontrada')) {
+      const num = String(whatsapp).replace(/\D/g, '')
+      const n57 = num.length === 10 ? `57${num}` : num
+      const msg = encodeURIComponent(`Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo: https://orbit.orbitacac.com/#/aliado`)
+      return { status: 200, body: { ok: false, sin_conversacion: true, wa_href: `https://wa.me/${n57}?text=${msg}` } }
+    }
+    return r
   }))
 
   return r

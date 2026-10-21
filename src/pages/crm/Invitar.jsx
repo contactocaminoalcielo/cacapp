@@ -13,6 +13,7 @@ export default function Invitar() {
   const [enviando, setEnviando] = useState(false)
   const [exito, setExito] = useState(false)
   const [errorEnvio, setErrorEnvio] = useState(null)
+  const [waHref, setWaHref] = useState(null)
 
   function copiar() {
     navigator.clipboard.writeText(LINK).then(() => {
@@ -24,9 +25,15 @@ export default function Invitar() {
   async function enviarPorOrbit() {
     const num = telefono.replace(/\D/g, '')
     if (!num) return
-    setEnviando(true); setExito(false); setErrorEnvio(null)
+    setEnviando(true); setExito(false); setErrorEnvio(null); setWaHref(null)
     try {
       const r = await crmApi.invitarAliada(num)
+      if (r?.sin_conversacion) {
+        // Número sin conversación previa: WA solo acepta plantillas para iniciar.
+        // Mostramos el enlace wa.me para que el coordinador lo envíe desde su celular.
+        setWaHref(r.wa_href)
+        return
+      }
       if (r?.ok === false) throw new Error(r.error || 'No se pudo enviar')
       setExito(true)
       setTelefono('')
@@ -93,6 +100,18 @@ export default function Invitar() {
                 ? <><Check size={14} /> Enviado</>
                 : <><Send size={14} /> Enviar enlace de invitación</>}
           </Button>
+          {waHref && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+              <p className="text-[12px] text-amber-800 font-medium">
+                Esta veterinaria no tiene conversación previa con Orbit. WhatsApp solo permite plantillas aprobadas para iniciar contacto.
+              </p>
+              <a href={waHref} target="_blank" rel="noreferrer"
+                className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-[13px] font-bold text-white"
+                style={{ background: '#25D366' }}>
+                <Send size={14} /> Enviar desde mi WhatsApp personal
+              </a>
+            </div>
+          )}
         </div>
 
         <div className="text-[11.5px] text-gray-400 leading-relaxed">
