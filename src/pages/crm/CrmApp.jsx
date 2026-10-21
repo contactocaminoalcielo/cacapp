@@ -5,7 +5,7 @@ import { Suspense, lazy, useEffect, useState } from 'react'
 import { NavLink, Route, Routes, Navigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, CalendarClock, Building2, Target, LifeBuoy, MessageCircle, Award,
-  FolderOpen, ClipboardList, Settings, ArrowLeft, LogOut, Menu, X, Bell, MapPin, Megaphone,
+  FolderOpen, ClipboardList, Settings, ArrowLeft, LogOut, Menu, X, Bell, MapPin, Megaphone, UserPlus,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { CrmProvider, useCrm } from '@/components/crm/CrmContext'
@@ -26,11 +26,13 @@ const Servicios     = lazy(() => import('./Servicios'))
 const Ajustes       = lazy(() => import('./Ajustes'))
 const Visitas       = lazy(() => import('./Visitas'))
 const Campanas      = lazy(() => import('./Campanas'))
+const Invitar       = lazy(() => import('./Invitar'))
 
 const MENU = [
   { to: '/crm',              label: 'Inicio',          icon: LayoutDashboard, end: true },
   { to: '/crm/agenda',       label: 'Agenda',          icon: CalendarClock, badge: 'agenda' },
   { to: '/crm/visitas',      label: 'Visitas',         icon: MapPin },
+  { to: '/crm/invitar',      label: 'Invitar aliada',  icon: UserPlus },
   { to: '/crm/campanas',     label: 'Campañas',        icon: Megaphone },
   { to: '/crm/veterinarias', label: 'Veterinarias',    icon: Building2 },
   { to: '/crm/prospectos',   label: 'Prospectos',      icon: Target },
@@ -168,6 +170,7 @@ function Contenido() {
               <Route path="recursos" element={<Recursos />} />
               <Route path="servicios" element={<Servicios />} />
               <Route path="visitas" element={<Visitas />} />
+              <Route path="invitar" element={<Invitar />} />
               <Route path="campanas" element={<Campanas />} />
               <Route path="ajustes" element={<Ajustes />} />
               <Route path="*" element={<Navigate to="/crm" replace />} />

@@ -11,7 +11,9 @@ import { crm, TIPOS_GESTION, TICKET_TIPOS, TICKET_CATEGORIAS, aInputFechaHora, d
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { useCrm } from './CrmContext'
 import { Campo, ACENTO } from './ui'
-import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp } from 'lucide-react'
+import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp, Send } from 'lucide-react'
+
+const LINK_ALIADO = 'https://orbit.orbitacac.com/#/aliado'
 
 const TIPOS = ['VISITA', 'REUNION']
 const ATAJOS = [['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
@@ -73,7 +75,7 @@ function SelectorVetExistente({ aliados, buscar, setBuscar, aliadoId, onSeleccio
               ? <div className="px-3 py-2 text-[12px] text-gray-400">Sin resultados</div>
               : aliados.filter(a => a.nombre.toLowerCase().includes(buscar.toLowerCase())).slice(0, 30).map(a => (
                 <button key={a.id_aliado} type="button"
-                  onClick={() => { onSeleccionar(a.id_aliado); setBuscar(a.nombre) }}
+                  onClick={() => { onSeleccionar(a.id_aliado, a); setBuscar(a.nombre) }}
                   className="w-full text-left px-3 py-2 text-[12.5px] text-gray-800 hover:bg-teal-50 border-b border-gray-50 last:border-0">
                   {a.nombre}
                   {a.estado !== 'activo' && <span className="ml-1.5 text-[11px] text-gray-400">· {a.estado}</span>}
@@ -84,7 +86,7 @@ function SelectorVetExistente({ aliados, buscar, setBuscar, aliadoId, onSeleccio
       {aliadoId && (
         <div className="mt-1 flex items-center justify-between text-[12px] text-teal-700 font-semibold">
           <span>✓ {buscar}</span>
-          <button type="button" onClick={() => { onSeleccionar(''); setBuscar('') }}
+          <button type="button" onClick={() => { onSeleccionar('', null); setBuscar('') }}
             className="text-gray-400 hover:text-gray-600 text-[11px]">Cambiar</button>
         </div>
       )}
@@ -287,9 +289,29 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
         {/* Contenido según modo */}
         {modo === 'existente'
           ? <SelectorVetExistente aliados={aliados} buscar={buscar} setBuscar={setBuscar}
-              aliadoId={f.aliado_id} onSeleccionar={v => setF(x => ({ ...x, aliado_id: v }))} />
+              aliadoId={f.aliado_id}
+              onSeleccionar={(id, vet) => setF(x => ({ ...x, aliado_id: id, _vet: vet || null }))} />
           : <FormNuevoProspecto f={f} setF={setF} fotoPreview={fotoPreview} onFoto={manejarFoto} />
         }
+
+        {/* Botón enviar enlace de invitación por WhatsApp */}
+        {(modo === 'existente' && f.aliado_id) || modo === 'nuevo' ? (
+          <div className="flex items-center gap-2">
+            {(() => {
+              const wa = modo === 'existente' ? f._vet?.whatsapp : f.whatsapp
+              const tel = wa ? wa.replace(/\D/g, '') : null
+              const msg = encodeURIComponent(`Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo: ${LINK_ALIADO}`)
+              const href = tel ? `https://wa.me/${tel}?text=${msg}` : `https://wa.me/?text=${msg}`
+              return (
+                <a href={href} target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-green-700 hover:text-green-800 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-lg transition">
+                  <Send size={12} /> Enviar enlace de invitación
+                  {tel ? ' (wa.me directo)' : ' (abrir WhatsApp)'}
+                </a>
+              )
+            })()}
+          </div>
+        ) : null}
 
         {/* Qué hacer */}
         <Campo label="¿Qué se va a hacer?">
