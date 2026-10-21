@@ -27,6 +27,11 @@ nuestro recuerdo») sobre papel crema con el dorado del logo.
 - Plantilla elegida por David (UTILITY, es_MX, cabecera IMAGEN): «Hola {{1}} 🌿 Con mucho cariño te
   compartimos que hoy iniciamos el proceso de compostaje de {{2}}. Lo acompañamos con todo el respeto
   y el amor que merece. Gracias por confiar en nosotros. — Camino al Cielo».
+- **21-oct-2026:** David agregó al final del texto dos enlaces fijos de Drive (iguales para todas
+  las familias, por eso van en el texto y no como variables): el audio de despedida y las
+  herramientas para el duelo. Texto exacto en `orbit-backend/scripts/crear-plantilla-evidencia.mjs`
+  (`CUERPO`). Se sube a Meta con `... crear-plantilla-evidencia.mjs editar`: conserva nombre e id
+  (la config de Orbit no se toca), pero **vuelve a revisión y mientras tanto no se puede enviar**.
 - El pie del marco dice «Inicio de su proceso de compostaje · fecha» (editable; vacío = solo fecha).
   David no quiere «regreso a la tierra».
 
