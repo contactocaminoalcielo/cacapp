@@ -95,6 +95,67 @@ export function validarPago(pago, saldo) {
   }
 }
 
+// ── Catálogo público (migr. 200) ────────────────────────────────────────────
+
+/** Precio que ve y paga el cliente del catálogo: el público si existe, si no el de siempre. */
+export function precioPublico(rec) {
+  const p = rec?.precio_publico
+  return p === null || p === undefined || p === '' ? Math.round(Number(rec?.precio_base) || 0) : Math.round(Number(p) || 0)
+}
+
+/** Cuántas fotos sube el CLIENTE para este producto (misma regla que el portal de fotos). */
+export function fotosQuePide(rec) {
+  return rec && rec.requiere_imagen === true && rec.solo_nombre !== true ? Math.max(0, Number(rec.max_fotos) || 0) : 0
+}
+
+/**
+ * Líneas del catálogo público contra el catálogo de la base. A diferencia de
+ * `normalizarItems`, aquí el navegador NO fija precio: sale de la base. Y solo
+ * entra lo que está activo Y marcado para venta pública.
+ *
+ * `prefijoFotos` es la URL pública de la carpeta del borrador: una foto que no
+ * esté ahí no se acepta (no se puede colgar a la compra un archivo ajeno).
+ * Devuelve { items, subtotal, hayFisico }.
+ */
+export function normalizarItemsPublicos(items, catalogo, prefijoFotos) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new HttpError(400, 'Escoge al menos un recordatorio.')
+  }
+  if (items.length > 30) throw new HttpError(400, 'Demasiados productos en un solo pedido.')
+  const out = []
+  let hayFisico = false
+  for (const it of items) {
+    const rec = catalogo[it?.recordatorio_id]
+    if (!rec || rec.activo === false || rec.venta_publica !== true) {
+      throw new HttpError(400, 'Uno de los productos ya no está disponible en el catálogo. Recarga la página.')
+    }
+    const cantidad = Number(it.cantidad ?? 1)
+    if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > 20) {
+      throw new HttpError(400, `Cantidad inválida para «${rec.nombre}» (1 a 20).`)
+    }
+    const maxF  = fotosQuePide(rec)
+    const fotos = (Array.isArray(it.imagenes_urls) ? it.imagenes_urls : [])
+      .map(u => t(u, 500)).filter(Boolean)
+    if (fotos.some(u => !prefijoFotos || !u.startsWith(prefijoFotos))) {
+      throw new HttpError(400, `Una foto de «${rec.nombre}» no es válida. Vuelve a subirla.`)
+    }
+    if (fotos.length > maxF) throw new HttpError(400, `«${rec.nombre}» lleva máximo ${maxF} foto${maxF === 1 ? '' : 's'}.`)
+    if (maxF > 0 && fotos.length === 0) throw new HttpError(400, `Falta la foto de «${rec.nombre}».`)
+    if (rec.categoria === 'fisico') hayFisico = true
+    out.push({
+      recordatorio_id: it.recordatorio_id,
+      nombre:          rec.nombre,
+      cantidad,
+      precio_unitario: precioPublico(rec),
+      datos_cliente:   limpiarDatosCliente(it.datos_cliente),
+      imagenes_urls:   fotos,
+      notas:           t(it.notas, 1000),
+    })
+  }
+  const subtotal = out.reduce((a, i) => a + i.cantidad * i.precio_unitario, 0)
+  return { items: out, subtotal, hayFisico }
+}
+
 /**
  * Estado general de una compra a partir de sus líneas. Es la misma regla que
  * el CASE del SQL de la lista; vive aquí para poder probarla y para que quien

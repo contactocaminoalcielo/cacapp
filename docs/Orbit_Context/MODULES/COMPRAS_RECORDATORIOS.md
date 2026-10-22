@@ -118,3 +118,30 @@ con datos de mentira (no necesita base).
   Integrarla exige migración (columna `compra_id` + XOR), reescribir la RPC del cuadre
   (~600 líneas, copiar de la 166) y bifurcar ocho puntos de `TecnicoApp`. Decisión de David
   pendiente. Hoy la entrega se marca desde la compra (línea → ENTREGADO).
+
+## Catálogo público — `/#/catalogo` (2026-10-22, migración 200)
+
+Enlace único para clientes **sin servicio funerario**: ven el catálogo, escogen, suben las
+fotos y textos que pide **cada** producto, dejan sus datos y la entrega, y la compra cae aquí
+con `origen = 'CATALOGO_WEB'` y en el Tablero de Producción como «Compra de recordatorio –
+Cliente sin servicio funerario».
+
+- **Qué se vende**: `recordatorios.venta_publica` + `precio_publico` (vacío = `precio_base`).
+  Se marcan en Configuración › Recordatorios, donde está también el panel del catálogo
+  (enlace, «Recibe pedidos», valor del envío, datos de pago → `config_operativa` `CATALOGO_PUBLICO`).
+- **Precio**: lo calcula el backend (`orbit-backend/src/catalogo-publico.js`); el navegador no lo fija.
+- **Envío**: un valor fijo, solo si el pedido trae algo `fisico`. Va en `valor_envio` y dentro de `total`.
+- **Fotos sin sesión**: `POST /portal/catalogo/borrador` abre `fotos-clientes/compra-web/<id>/`
+  por 3 horas (función `portal_compra_web_abierta`, tope 120 archivos). La compra se crea con
+  `id = borrador`: un reintento no duplica. Las fotos se guardan como **URL pública completa**
+  (las de una compra interna son rutas de `evidencias`); `urlFirmada` devuelve tal cual las URL.
+- **Pago**: el cliente sube comprobante o escoge «pagar después». Eso va a `pago_cliente`
+  (jsonb), **no** a `compra_recordatorio_pagos`, porque el trigger suma todo lo que haya ahí.
+  En el detalle, «Verificado: registrar este pago» crea el pago con su comprobante y marca
+  `pago_cliente.revisado_en`.
+- **Cliente**: se reutiliza solo si es claramente la misma persona (misma cédula Y WhatsApp,
+  o sin cédula un único cliente con ese WhatsApp); si la cédula ya existe con otro WhatsApp,
+  se crea ficha nueva sin cédula y la cédula declarada queda en notas.
+- Autorización de datos con `origen = 'CATALOGO_RECORDATORIOS'`, `medio = 'PORTAL_WEB'`.
+- Pruebas: `normalizarItemsPublicos`, `precioPublico`, `fotosQuePide` en
+  `tests/compras-recordatorios.test.mjs`.

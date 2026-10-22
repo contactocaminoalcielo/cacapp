@@ -140,6 +140,9 @@ export async function subirArchivoCompra(compraId, file, carpeta = 'comprobantes
 
 export async function urlFirmada(path, segundos = 600) {
   if (!path) return null
+  // Las compras del catálogo web (migr. 200) guardan la URL pública completa de
+  // fotos-clientes: esa ya se abre sola, no es una ruta de `evidencias`.
+  if (/^https?:\/\//i.test(path)) return path
   const { data } = await db.storage.from('evidencias').createSignedUrl(path, segundos)
   return data?.signedUrl || null
 }

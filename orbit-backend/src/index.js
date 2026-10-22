@@ -86,6 +86,7 @@ import {
 import {
   listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
 } from './compras-recordatorios.js'
+import { verCatalogo, abrirBorrador, crearCompraPublica } from './catalogo-publico.js'
 
 const app = express()
 
@@ -217,6 +218,35 @@ app.post('/compras-recordatorios/:id/pagos',         requireAuth, rolCompras,  r
 // (localhost → prod) el preflight de un PATCH se cae mudo.
 app.post('/compras-recordatorios/:id/items/:itemId', requireAuth, rolComprasL, actualizarItem)
 app.post('/compras-recordatorios/:id/anular',        requireAuth, rolCompras,  anularCompra)
+
+// ── Catálogo público de recordatorios (migración 200) ──
+// Público a propósito: el enlace /#/catalogo se le comparte a cualquier cliente
+// sin servicio funerario. La compra cae en el módulo de arriba con
+// origen CATALOGO_WEB; el precio sale de la base, nunca del navegador.
+app.get('/portal/catalogo', async (_req, res) => {
+  try {
+    const r = await verCatalogo()
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/catalogo GET', e)
+  }
+})
+app.post('/portal/catalogo/borrador', async (req, res) => {
+  try {
+    const r = await abrirBorrador({ contexto: contextoPeticion(req) })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/catalogo borrador', e)
+  }
+})
+app.post('/portal/catalogo/compra', async (req, res) => {
+  try {
+    const r = await crearCompraPublica({ payload: req.body || {}, contexto: contextoPeticion(req) })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/catalogo compra', e)
+  }
+})
 
 // ── WhatsApp Cloud API — receptor de webhooks (línea de veterinarias) ──
 // Público a propósito: lo llama Meta, no un usuario. La autenticación es la

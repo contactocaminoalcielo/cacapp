@@ -28,9 +28,9 @@ const initials = p => p ? `${(p.nombre || '')[0] || ''}${(p.apellido || '')[0] |
 export async function cargarItemsCompras() {
   return dbTodo(() => db.from('compra_recordatorio_items')
     .select(`id, compra_id, recordatorio_id, nombre, cantidad, estado, asignado_a, notas,
-             imagenes_urls, fecha_inicio_prod, fecha_fin_prod, created_at,
+             imagenes_urls, datos_cliente, fecha_inicio_prod, fecha_fin_prod, created_at,
              recordatorios ( id, nombre, requiere_imagen, solo_nombre, tiempo_produccion_dias ),
-             compras_recordatorios!inner ( id, numero, created_at, anulada_en,
+             compras_recordatorios!inner ( id, numero, created_at, anulada_en, origen,
                mascotas ( nombre, especies ( nombre ) ),
                clientes ( nombre, apellido, whatsapp ) )`)
     .in('estado', ['PENDIENTE', 'EN_PROCESO', 'LISTO'])
@@ -82,7 +82,7 @@ export default function ComprasEnProduccion({ filtroEstado = 'todos', filtroPers
   return (
     <div className="mb-5">
       <div className="flex items-center gap-2 mb-2 text-[11px] font-bold uppercase tracking-wider text-gray-500">
-        <ShoppingBag size={12} /> Compras de recordatorios · sin servicio
+        <ShoppingBag size={12} /> Compra de recordatorio – Cliente sin servicio funerario
         <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]">{compras.length}</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -100,6 +100,9 @@ export default function ComprasEnProduccion({ filtroEstado = 'todos', filtroPers
                   <div className="text-[11px] text-gray-500 truncate">
                     {compra.clientes?.nombre} {compra.clientes?.apellido} · CR-{compra.numero}
                   </div>
+                  {compra.origen === 'CATALOGO_WEB' && (
+                    <div className="text-[10px] font-bold text-green-700 mt-0.5">🛒 Pedido del catálogo web</div>
+                  )}
                 </div>
                 <button onClick={() => navigate(`/compras-recordatorios?ver=${compra.id}`)}
                   className="text-[10px] font-bold text-[#7C3AED] hover:underline flex items-center gap-1 flex-shrink-0" title="Abrir la compra">
@@ -167,6 +170,30 @@ function ModalItemCompra({ item, personal, onClose, onSaved, showAlert }) {
         <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</Button>
       </>}>
       <div className="space-y-4">
+        {/* Lo que mandó el cliente del catálogo web: las fotos ya son URLs públicas
+            (las de una compra interna son rutas privadas y se ven en la compra). */}
+        {(item.imagenes_urls || []).some(u => /^https?:\/\//i.test(u)) && (
+          <div>
+            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fotos del cliente</label>
+            <div className="flex flex-wrap gap-2">
+              {item.imagenes_urls.filter(u => /^https?:\/\//i.test(u)).map(u => (
+                <a key={u} href={u} target="_blank" rel="noopener noreferrer">
+                  <img src={u} alt="" className="w-20 h-20 rounded-lg object-cover border" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+        {item.datos_cliente && Object.keys(item.datos_cliente).length > 0 && (
+          <div>
+            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Textos del cliente</label>
+            <div className="space-y-1 text-[12px] text-gray-700">
+              {Object.entries(item.datos_cliente).map(([k, v]) => (
+                <div key={k}><span className="text-gray-400">{k}:</span> {(Array.isArray(v) ? v : [v]).join(' · ')}</div>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Estado</label>
           <div className="flex gap-1.5 flex-wrap">

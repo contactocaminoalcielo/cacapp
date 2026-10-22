@@ -163,7 +163,15 @@ export default function ComprasRecordatorios() {
               )}
               {compras.map(c => (
                 <Tr key={c.id} onClick={() => setVerId(c.id)} className={c.anulada_en ? 'opacity-60' : ''}>
-                  <Td className="font-mono text-[12px] text-gray-500">CR-{c.numero}</Td>
+                  <Td className="font-mono text-[12px] text-gray-500">
+                    CR-{c.numero}
+                    {c.origen === 'CATALOGO_WEB' && (
+                      <div className="font-sans text-[10px] font-bold text-green-700 mt-0.5" title="La hizo el cliente desde el catálogo público">
+                        🛒 Catálogo web{c.pago_cliente && !c.pago_cliente.revisado_en
+                          ? (c.pago_cliente.modo === 'COMPROBANTE' ? ' · comprobante por revisar' : ' · paga después') : ''}
+                      </div>
+                    )}
+                  </Td>
                   <Td className="text-[12px] text-gray-500 whitespace-nowrap">{fecha(c.created_at)}</Td>
                   <Td>
                     <div className="font-semibold text-gray-900 text-[13px]">{c.cliente_nombre} {c.cliente_apellido}</div>
@@ -688,6 +696,7 @@ function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
   const [abMetodo, setAbMetodo] = useState('EFECTIVO')
   const [abRef, setAbRef]       = useState('')
   const [abFile, setAbFile]     = useState(null)
+  const [abComprobanteUrl, setAbComprobanteUrl] = useState(null)   // el que subió el cliente del catálogo
 
   // Anular
   const [anulando, setAnulando] = useState(false)
@@ -736,10 +745,18 @@ function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
     if (!(m > 0)) return showAlert('Escribe el monto del abono.', { title: 'Falta el monto' })
     if (m > saldo) return showAlert(`El abono supera lo pendiente (${fmt(saldo)}).`, { title: 'Monto muy alto' })
     await ejecutar(async () => {
-      const comprobante_path = abFile ? await subirArchivoCompra(id, abFile, 'comprobantes') : null
+      const comprobante_path = abFile ? await subirArchivoCompra(id, abFile, 'comprobantes') : (abComprobanteUrl || null)
       return registrarPago(id, { monto: m, metodo: abMetodo, referencia: abRef || null, comprobante_path })
     })
-    setAbono(false); setAbMonto(''); setAbRef(''); setAbFile(null)
+    setAbono(false); setAbMonto(''); setAbRef(''); setAbFile(null); setAbComprobanteUrl(null)
+  }
+
+  // El cliente del catálogo dijo que ya pagó: se registra con su comprobante.
+  function registrarPagoDelCliente() {
+    const pc = d?.pago_cliente || {}
+    setAbono(true); setAbMonto(String(saldo))
+    if (pc.metodo) setAbMetodo(pc.metodo)
+    setAbComprobanteUrl(pc.comprobante_url || null)
   }
 
   async function confirmarAnular() {
@@ -781,9 +798,50 @@ function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
               <div className="text-[13px]"><span className="text-gray-500">Total</span> <strong>{fmt(d.total)}</strong>
                 <span className="text-gray-400"> · pagado {fmt(d.valor_pagado)}</span></div>
               {saldo > 0 && activa && <div className="text-[12px] font-semibold text-amber-700">Pendiente {fmt(saldo)}</div>}
-              <div className="text-[11px] text-gray-400">Registró {d.registrado_por_nombre || '—'}</div>
+              {Number(d.valor_envio) > 0 && <div className="text-[11px] text-gray-500">Incluye envío {fmt(d.valor_envio)}</div>}
+              <div className="text-[11px] text-gray-400">
+                {d.origen === 'CATALOGO_WEB' ? 'La hizo el cliente desde el catálogo web' : `Registró ${d.registrado_por_nombre || '—'}`}
+              </div>
             </div>
           </div>
+
+          {/* Compra del catálogo público (migr. 200): entrega y lo que declaró el cliente del pago */}
+          {d.origen === 'CATALOGO_WEB' && (
+            <div className="rounded-xl p-3 space-y-2 text-[12px]" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+              <div className="font-bold text-green-800">🛒 Compra de recordatorio – Cliente sin servicio funerario · catálogo web</div>
+              {d.entrega && (
+                <div className="text-gray-700">
+                  <span className="text-gray-500">Entregar en:</span> {d.entrega.direccion}{d.entrega.barrio ? `, ${d.entrega.barrio}` : ''}, {d.entrega.ciudad}
+                  {' · '}recibe {d.entrega.recibe} ({d.entrega.telefono})
+                  {d.entrega.indicaciones && <span className="text-gray-500"> · {d.entrega.indicaciones}</span>}
+                </div>
+              )}
+              {d.pago_cliente && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-gray-500">Pago que declaró el cliente:</span>
+                  {d.pago_cliente.modo === 'COMPROBANTE'
+                    ? <>
+                        <strong>Ya pagó por {d.pago_cliente.metodo}</strong>
+                        {d.pago_cliente.comprobante_url && (
+                          <a href={d.pago_cliente.comprobante_url} target="_blank" rel="noopener noreferrer"
+                            className="text-[#1A5CD8] font-semibold flex items-center gap-1"><Paperclip size={12} /> ver comprobante</a>
+                        )}
+                      </>
+                    : <strong>Paga después — hay que contactarlo</strong>}
+                  {d.pago_cliente.revisado_en
+                    ? <Badge variant="green">revisado</Badge>
+                    : <>
+                        <Badge variant="amber">por revisar</Badge>
+                        {esCoordinador && activa && saldo > 0 && d.pago_cliente.modo === 'COMPROBANTE' && !abono && (
+                          <Button size="sm" variant="secondary" onClick={registrarPagoDelCliente}>
+                            <Wallet size={12} /> Verificado: registrar este pago
+                          </Button>
+                        )}
+                      </>}
+                </div>
+              )}
+            </div>
+          )}
 
           {d.anulada_en && (
             <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
@@ -839,7 +897,7 @@ function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
                 <div><label className={LABEL}>Referencia</label>
                   <Input value={abRef} onChange={e => setAbRef(e.target.value)} /></div>
                 <label className="flex items-center justify-center gap-1.5 h-10 px-2 rounded-lg border border-dashed cursor-pointer text-[11px] font-semibold text-amber-700 hover:bg-amber-50 truncate" style={{ borderColor: '#FBBF24' }}>
-                  <Paperclip size={12} /> {abFile ? abFile.name : 'Comprobante'}
+                  <Paperclip size={12} /> {abFile ? abFile.name : abComprobanteUrl ? 'El del cliente' : 'Comprobante'}
                   <input type="file" accept="image/*,application/pdf" className="hidden"
                     onChange={e => { setAbFile(e.target.files?.[0] || null); e.target.value = '' }} />
                 </label>
@@ -891,7 +949,11 @@ function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
 function textoEvento(ev) {
   const x = ev.detalle || {}
   switch (ev.tipo) {
-    case 'CREADA':      return `Compra registrada · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.cliente_nuevo ? ' · cliente nuevo' : ''}${x.mascota_nueva ? ' · mascota nueva' : ''}`
+    case 'CREADA':
+      if (x.origen === 'CATALOGO_WEB') {
+        return `Pedido del catálogo web · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.envio ? ` (envío ${fmt(x.envio)})` : ''} · ${x.pago === 'COMPROBANTE' ? 'adjuntó comprobante' : 'paga después'}`
+      }
+      return `Compra registrada · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.cliente_nuevo ? ' · cliente nuevo' : ''}${x.mascota_nueva ? ' · mascota nueva' : ''}`
     case 'PAGO':        return `Pago ${fmt(x.monto)} por ${x.metodo}${x.inicial ? ' (al registrar)' : ''}`
     case 'ESTADO_ITEM': return `${x.item}: ${ESTADO_ITEM_META[x.de]?.label || x.de} → ${ESTADO_ITEM_META[x.a]?.label || x.a}`
     case 'DATOS_ITEM':  return `${x.item}: se actualizó ${(x.campos || []).join(', ')}`

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   normalizarItems, validarPago, estadoCompra, limpiarDatosCliente,
+  normalizarItemsPublicos, precioPublico, fotosQuePide,
 } from '../orbit-backend/src/compras-recordatorios-reglas.js'
 
 // Catálogo de mentira con la forma que devuelve la consulta del backend
@@ -94,4 +95,44 @@ test('el estado de la compra sigue a sus líneas y la anulación manda sobre tod
   assert.equal(estadoCompra({ anulada: false, n: 2, entregados: 1, listos: 1, enProceso: 0 }), 'LISTA')
   assert.equal(estadoCompra({ anulada: false, n: 2, entregados: 2, listos: 0, enProceso: 0 }), 'ENTREGADA')
   assert.equal(estadoCompra({ anulada: true,  n: 2, entregados: 2, listos: 0, enProceso: 0 }), 'ANULADA')
+})
+
+// ── Catálogo público (migr. 200) ────────────────────────────────────────────
+const LLAVERO = '44444444-4444-4444-8444-444444444444'
+const OCULTO  = '55555555-5555-4555-8555-555555555555'
+const AUDIO   = '66666666-6666-4666-8666-666666666666'
+const PREFIJO = 'https://db.x/storage/v1/object/public/fotos-clientes/compra-web/b1/'
+const PUB = {
+  [LLAVERO]: { nombre: 'Llavero', categoria: 'fisico', precio_base: 7000, precio_publico: 15000, activo: true,
+               venta_publica: true, requiere_imagen: true, solo_nombre: false, max_fotos: 2 },
+  [OCULTO]:  { nombre: 'Interno', categoria: 'fisico', precio_base: 2000, precio_publico: null, activo: true,
+               venta_publica: false, requiere_imagen: false, solo_nombre: false, max_fotos: 0 },
+  [AUDIO]:   { nombre: 'Audio', categoria: 'digital', precio_base: 30000, precio_publico: null, activo: true,
+               venta_publica: true, requiere_imagen: false, solo_nombre: true, max_fotos: 0 },
+}
+
+test('catálogo público: precio de la base (público si existe), nunca el del navegador', () => {
+  const { items, subtotal, hayFisico } = normalizarItemsPublicos(
+    [{ recordatorio_id: LLAVERO, cantidad: 2, precio_unitario: 1, imagenes_urls: [PREFIJO + 'a.jpg'] },
+     { recordatorio_id: AUDIO, cantidad: 1 }], PUB, PREFIJO)
+  assert.equal(items[0].precio_unitario, 15000)
+  assert.equal(items[1].precio_unitario, 30000)
+  assert.equal(subtotal, 60000)
+  assert.equal(hayFisico, true)
+  assert.equal(precioPublico({ precio_base: 7000, precio_publico: null }), 7000)
+})
+
+test('catálogo público: solo lo marcado para venta pública', () => {
+  assert.throws(() => normalizarItemsPublicos([{ recordatorio_id: OCULTO }], PUB, PREFIJO), /no está disponible/)
+})
+
+test('catálogo público: fotos de la carpeta del borrador, y las que pide el producto', () => {
+  assert.throws(() => normalizarItemsPublicos([{ recordatorio_id: LLAVERO }], PUB, PREFIJO), /Falta la foto/)
+  assert.throws(() => normalizarItemsPublicos(
+    [{ recordatorio_id: LLAVERO, imagenes_urls: ['https://otro.sitio/x.jpg'] }], PUB, PREFIJO), /no es válida/)
+  assert.throws(() => normalizarItemsPublicos(
+    [{ recordatorio_id: LLAVERO, imagenes_urls: [1, 2, 3].map(n => `${PREFIJO}${n}.jpg`) }], PUB, PREFIJO), /máximo 2/)
+  assert.equal(fotosQuePide(PUB[AUDIO]), 0)   // solo_nombre: el cliente no sube foto
+  const { hayFisico } = normalizarItemsPublicos([{ recordatorio_id: AUDIO }], PUB, PREFIJO)
+  assert.equal(hayFisico, false)              // solo digital: no hay envío
 })

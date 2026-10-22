@@ -65,7 +65,7 @@ export async function listarCompras(req, res) {
     const { rows } = await pool.query(
       `WITH base AS (
          SELECT c.id, c.numero, c.total, c.valor_pagado, c.estado_pago, c.notas,
-                c.created_at, c.anulada_en,
+                c.created_at, c.anulada_en, c.origen, c.pago_cliente,
                 cl.id_cliente, cl.nombre AS cliente_nombre, cl.apellido AS cliente_apellido,
                 cl.whatsapp AS cliente_whatsapp,
                 m.id_mascota, m.nombre AS mascota_nombre, e.nombre AS especie_nombre,
@@ -410,6 +410,13 @@ export async function registrarPago(req, res) {
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [id, pago.monto, pago.metodo, pago.referencia, pago.comprobante_path, req.personal.id]
     )
+    // Compra del catálogo web (migr. 200): lo que declaró el cliente queda
+    // revisado con el primer pago que registra coordinación.
+    await client.query(
+      `UPDATE public.compras_recordatorios
+          SET pago_cliente = pago_cliente || jsonb_build_object('revisado_en', now(), 'revisado_por', $2::text)
+        WHERE id = $1 AND pago_cliente IS NOT NULL AND NOT (pago_cliente ? 'revisado_en')`,
+      [id, req.personal.id])
     await evento(client, { compraId: id, tipo: 'PAGO', por: req.personal.id,
       detalle: { monto: pago.monto, metodo: pago.metodo, referencia: pago.referencia } })
     await client.query('COMMIT')

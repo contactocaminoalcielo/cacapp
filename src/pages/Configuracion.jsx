@@ -15,6 +15,8 @@ import { invalidarTarifasEspecie } from '@/lib/precios'
 import { contarServiciosVip, cumpleVip, VIP_MIN_POR_MES } from '@/lib/vipAliados'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame, Leaf } from 'lucide-react'
 import TabPlantas from '@/components/configuracion/TabPlantas'
+import CatalogoPublicoPanel from '@/components/configuracion/CatalogoPublicoPanel'
+import { subirImagenOferta } from '@/lib/ofertas'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { HorarioEditor, resumenHorario } from '@/components/ui/horario-editor'
 import { ALIADOS_COLUMNAS } from '@/lib/aliados'
@@ -1211,9 +1213,19 @@ function TabRecordatorios() {
   const [form, setForm]           = useState({})
   const [saving, setSaving]       = useState(false)
   const [formError, setFormError] = useState('')
+  const [subiendoFoto, setSubiendoFoto] = useState(false)
   const { q, setQ, filtered }     = useSearch(data, ['nombre', 'categoria'])
 
   useEffect(() => { cargar() }, [])
+
+  // Foto del producto para el catálogo público (bucket público `ofertas`).
+  async function subirFotoProducto(file) {
+    if (!file) return
+    setSubiendoFoto(true); setFormError('')
+    try { const url = await subirImagenOferta(file); setForm(p => ({ ...p, foto_url: url })) }
+    catch (e) { setFormError(e.message) }
+    finally { setSubiendoFoto(false) }
+  }
 
   async function cargar() {
     setLoading(true)
@@ -1235,11 +1247,13 @@ function TabRecordatorios() {
       maquina_id: item.maquina_id || '', tiempo_produccion_dias: item.tiempo_produccion_dias ?? 1,
       recolecta_tecnico: !!item.recolecta_tecnico,
       activo: item.activo !== false,
+      venta_publica: !!item.venta_publica, precio_publico: item.precio_publico ?? '', foto_url: item.foto_url || '',
     } : {
       nombre: '', descripcion: '', categoria: '', requiere_imagen: true,
       solo_nombre: false, precio_base: 0, max_fotos: 1,
       campos_texto: [],
       maquina_id: '', tiempo_produccion_dias: 1, recolecta_tecnico: false, activo: true,
+      venta_publica: false, precio_publico: '', foto_url: '',
     })
   }
 
@@ -1253,7 +1267,10 @@ function TabRecordatorios() {
       campos_texto: (form.campos_texto || []).filter(c => c.label?.trim()),
       tiempo_produccion_dias: parseInt(form.tiempo_produccion_dias) || 1,
       maquina_id: form.maquina_id ? parseInt(form.maquina_id) : null,
-    }, ['categoria', 'maquina_id'])
+      // Vacío = el catálogo público cobra el precio base (migr. 200)
+      precio_publico: String(form.precio_publico ?? '').trim() === '' ? null : Math.max(0, parseFloat(form.precio_publico) || 0),
+      venta_publica: !!form.venta_publica,
+    }, ['categoria', 'maquina_id', 'foto_url'])
     const { error } = selected?.id
       ? await db.from('recordatorios').update(body).eq('id', selected.id)
       : await db.from('recordatorios').insert(body)
@@ -1280,9 +1297,10 @@ function TabRecordatorios() {
         <SearchBar q={q} setQ={setQ} placeholder="Buscar por nombre o categoría..." />
         <Button size="sm" onClick={() => abrir(null)}><Plus size={14} /> Nuevo ítem</Button>
       </div>
+      {!loading && <CatalogoPublicoPanel productosEnCatalogo={data.filter(r => r.venta_publica && r.activo !== false).length} />}
       {loading ? <div className="text-center py-10 text-gray-400">Cargando...</div> : (
         <TableWrap><Table>
-          <thead><tr><Th>Nombre</Th><Th>Categoría</Th><Th>Máquina</Th><Th>Precio</Th><Th>Fotos</Th><Th>Req. img</Th><Th>Solo nombre</Th><Th>Técnico</Th><Th>Estado</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Nombre</Th><Th>Categoría</Th><Th>Máquina</Th><Th>Precio</Th><Th>Catálogo</Th><Th>Fotos</Th><Th>Req. img</Th><Th>Solo nombre</Th><Th>Técnico</Th><Th>Estado</Th><Th></Th></tr></thead>
           <tbody>
             {filtered.map(r => (
               <Tr key={r.id}>
@@ -1290,6 +1308,13 @@ function TabRecordatorios() {
                 <Td><span className="text-[11px] capitalize bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{r.categoria || '—'}</span></Td>
                 <Td className="text-gray-500 text-[12px]">{r.maquinas_produccion?.nombre || '—'}</Td>
                 <Td className="text-gray-600 text-[12px]">{r.precio_base ? `$${Number(r.precio_base).toLocaleString('es-CO')}` : '—'}</Td>
+                <Td>
+                  {r.venta_publica
+                    ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-50 text-green-700 whitespace-nowrap">
+                        Sí · {fmt(r.precio_publico ?? r.precio_base)}
+                      </span>
+                    : <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">No</span>}
+                </Td>
                 <Td>
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">
                     {r.max_fotos ?? 1} foto{(r.max_fotos ?? 1) > 1 ? 's' : ''}
@@ -1307,7 +1332,7 @@ function TabRecordatorios() {
                 </Td>
               </Tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={10} className="text-center py-10 text-gray-400 text-sm">Sin ítems</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={11} className="text-center py-10 text-gray-400 text-sm">Sin ítems</td></tr>}
           </tbody>
         </Table></TableWrap>
       )}
@@ -1356,6 +1381,40 @@ function TabRecordatorios() {
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!form.solo_nombre} onChange={e => setForm(p => ({ ...p, solo_nombre: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Solo nombre</span></label>
               <label className="flex items-center gap-2 cursor-pointer" title="El técnico lo entrega/recoge en la recogida. Al confirmar la recogida pasa solo a EN_PROCESO."><input type="checkbox" checked={!!form.recolecta_tecnico} onChange={e => setForm(p => ({ ...p, recolecta_tecnico: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Lo recolecta el técnico</span></label>
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={form.activo !== false} onChange={e => setForm(p => ({ ...p, activo: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" /><span className="text-[13px] font-semibold text-gray-700">Activo</span></label>
+            </div>
+
+            {/* ── Catálogo público (migr. 200) ── */}
+            <div className="border-t pt-4 space-y-3" style={{ borderColor: '#F3F4F6' }}>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={!!form.venta_publica} onChange={e => setForm(p => ({ ...p, venta_publica: e.target.checked }))} className="w-4 h-4 accent-[#1A5CD8]" />
+                <span className="text-[13px] font-semibold text-gray-700">Mostrar en catálogo público</span>
+              </label>
+              {form.venta_publica && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={LABEL}>Precio público ($)</label>
+                    <Input type="number" min="0" value={form.precio_publico ?? ''} placeholder={`= precio base (${fmt(form.precio_base)})`}
+                      onChange={e => setForm(p => ({ ...p, precio_publico: e.target.value }))} />
+                    <p className="text-[11px] text-gray-400 mt-1">Vacío = cobra el precio base. No cambia lo que cobra el Registro.</p>
+                  </div>
+                  <div>
+                    <label className={LABEL}>Foto del producto</label>
+                    {form.foto_url
+                      ? <div className="flex items-center gap-2">
+                          <img src={form.foto_url} alt="" className="w-14 h-14 rounded-lg object-cover border" />
+                          <button type="button" onClick={() => setForm(p => ({ ...p, foto_url: '' }))} className="text-[12px] text-red-600 hover:underline">Quitar</button>
+                        </div>
+                      : <label className="flex items-center justify-center h-14 rounded-lg border border-dashed text-[12px] text-gray-500 cursor-pointer hover:bg-gray-50">
+                          {subiendoFoto ? 'Subiendo…' : 'Subir foto'}
+                          <input type="file" accept="image/*" className="sr-only" disabled={subiendoFoto}
+                            onChange={e => { subirFotoProducto(e.target.files?.[0]); e.target.value = '' }} />
+                        </label>}
+                  </div>
+                  <p className="col-span-2 text-[11px] text-gray-400">
+                    El cliente ve el nombre, la descripción, el precio, los días de producción y las fotos y textos que pide este producto.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* ── Campos de texto del cliente ── */}
