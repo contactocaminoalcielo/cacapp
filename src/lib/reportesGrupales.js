@@ -5,6 +5,7 @@ import { db } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 import {
   generarHTMLCremacionGrupal, generarHTMLCompostajeGrupal, generarYSubirPDF,
+  fechaProcesoColectiva,
 } from '@/lib/certificados'
 
 // ─── Estados (espejo del backend) ────────────────────────────────────────────
@@ -77,7 +78,11 @@ function itemsAServicios(items) {
 }
 
 // ─── Generar reporte (PDF + marcar GENERADO en backend) ──────────────────────
-export async function generarReporte(reporte, coordinador) {
+// Las mascotas del proyecto de la Alcaldía (migr. 199) NO van en el PDF del
+// lote: cada una lleva el suyo, con solo su fila. `itemIds` acota cuáles de
+// esos PDFs propios se arman (enviar a una sola mascota no rehace los demás).
+// Devuelve { pdfUrl (el del lote), html, pdfUrls: {itemId: url}, htmls: {itemId: html} }.
+export async function generarReporte(reporte, coordinador, { itemIds = null } = {}) {
   // Los nombres (mascota/propietario) de reportes_grupales_items son un SNAPSHOT;
   // solo se refrescan al sincronizar. Sin esto, un cambio de nombre no se reflejaba
   // en el PDF aun dándole "regenerar" (se construía del snapshot viejo). Por eso
@@ -94,25 +99,42 @@ export async function generarReporte(reporte, coordinador) {
     entidad_externa:  actual.lotes_grupales?.entidad_externa,
     duracion_proceso: actual.lotes_grupales?.duracion_proceso,
   }
-  const servicios = itemsAServicios(actual.reportes_grupales_items)
-  const html = actual.tipo_proceso === 'CREMACION_GRUPAL'
+  // La cremación colectiva fue una sola: su fecha sale de TODO el lote, aunque
+  // el certificado del lote ya no lleve a las mascotas de la Alcaldía.
+  lote.fecha_proceso = fechaProcesoColectiva(itemsAServicios(actual.reportes_grupales_items), lote)
+
+  const generar = servicios => actual.tipo_proceso === 'CREMACION_GRUPAL'
     ? generarHTMLCremacionGrupal({ lote, servicios, coordinador })
     : generarHTMLCompostajeGrupal({ lote, servicios, coordinador })
 
+  const activos   = (actual.reportes_grupales_items || []).filter(i => i.estado !== 'EXCLUIDO')
+  const normales  = activos.filter(i => !i.es_alcaldia)
+  const alcaldia  = activos.filter(i => i.es_alcaldia && (!itemIds || itemIds.includes(i.id)))
+
   // Sube el PDF y obtiene la URL que enviará el backend a Zolutium
-  const pdfUrl = await generarYSubirPDF(html, lote.numero_lote || 'reporte')
+  let html = null, pdfUrl = null
+  if (normales.length) {
+    html   = generar(itemsAServicios(normales))
+    pdfUrl = await generarYSubirPDF(html, lote.numero_lote || 'reporte')
+  }
+  const htmls = {}, pdfUrls = {}
+  for (const it of alcaldia) {
+    htmls[it.id]   = generar(itemsAServicios([it]))
+    pdfUrls[it.id] = await generarYSubirPDF(htmls[it.id], `${lote.numero_lote || 'reporte'}_alcaldia_${String(it.id).slice(0, 8)}`)
+  }
+  if (!html && alcaldia.length) html = htmls[alcaldia[0].id]
 
   await orbitApi(`/grupales/reportes/${reporte.id}/generar`, {
-    method: 'POST', body: { storage_path: pdfUrl },
+    method: 'POST', body: { storage_path: pdfUrl, items_pdf: pdfUrls },
   })
-  return { pdfUrl, html }
+  return { pdfUrl, html, pdfUrls, htmls }
 }
 
 // ─── Enviar / reenviar (transaccional en backend; persiste evidencia) ────────
-export function enviarReporte(reporteId, { pdfUrl, items, fromNumber, reenvio = false, motivo, mensajes } = {}) {
+export function enviarReporte(reporteId, { pdfUrl, pdfUrls, items, fromNumber, reenvio = false, motivo, mensajes } = {}) {
   return orbitApi(`/grupales/reportes/${reporteId}/enviar`, {
     method: 'POST',
-    body: { pdf_url: pdfUrl, items, fromNumber, reenvio, motivo, mensajes },
+    body: { pdf_url: pdfUrl, pdf_urls: pdfUrls, items, fromNumber, reenvio, motivo, mensajes },
   })
 }
 

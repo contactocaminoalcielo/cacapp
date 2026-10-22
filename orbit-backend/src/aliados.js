@@ -46,7 +46,8 @@ export async function validarTokenPortal({ token }) {
   const t = txt(token, 60)
   if (!t) return { status: 400, body: { ok: false, error: 'token_requerido' } }
   const { rows } = await pool.query(
-    `SELECT id_aliado, nombre, ciudad, localidad, barrio, direccion, contacto_nombre
+    `SELECT id_aliado, nombre, ciudad, localidad, barrio, direccion, contacto_nombre,
+            convenio_alcaldia
        FROM public.aliados
       WHERE token_acceso = $1 AND estado = 'activo' AND activo = true`,
     [t]
@@ -63,12 +64,16 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
   if (!t) return { status: 400, body: { ok: false, error: 'token_requerido' } }
 
   const { rows: ali } = await pool.query(
-    `SELECT id_aliado FROM public.aliados
+    `SELECT id_aliado, convenio_alcaldia FROM public.aliados
       WHERE token_acceso = $1 AND estado = 'activo' AND activo = true`,
     [t]
   )
   if (!ali[0]) return { status: 404, body: { ok: false, error: 'token_invalido' } }
   const aliadoId = ali[0].id_aliado
+  // Proyecto de la Alcaldía (migr. 199): solo se pregunta a la vet con convenio
+  // (hoy Animal City) y ahí la respuesta es obligatoria. A las demás se ignora.
+  const conConvenio = ali[0].convenio_alcaldia === true
+  const esAlcaldia  = conConvenio && typeof payload.es_alcaldia === 'boolean' ? payload.es_alcaldia : null
 
   const prop = payload.propietario || {}
   const masc = payload.mascota || {}
@@ -92,6 +97,7 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
   if (pesoKg <= 0)         faltan.push('peso')
   if (!planId)             faltan.push('plan')
   if (tipoRecogida === 'domicilio' && !direccionDom) faltan.push('dirección de recogida')
+  if (conConvenio && esAlcaldia === null) faltan.push('si la mascota es del proyecto de la Alcaldía')
   if (faltan.length) return { status: 422, body: { ok: false, error: 'incompleto', faltan } }
 
   // Los datos son de un TERCERO: quien los entrega es la clínica, que declara
@@ -118,11 +124,11 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
         mascota_nombre, especie_id, mascota_peso_kg, mascota_sexo, mascota_raza,
         plan_id, tipo_recogida, aliado_id,
         ciudad, localidad, barrio, direccion,
-        hora_aproximada, notas_cliente, origen
+        hora_aproximada, notas_cliente, origen, es_alcaldia
      ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
         $12,$13,$14,$15,$16,
-        $17,$18,$19,$20,$21,$22,$23,$24,$25,'ALIADO'
+        $17,$18,$19,$20,$21,$22,$23,$24,$25,'ALIADO',$26
      ) RETURNING id`,
     [
       clienteNombre, txt(prop.apellido, 120), txt(prop.cedula, 30), whatsapp.slice(0, 25),
@@ -133,6 +139,7 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
       txt(rec.ciudad, 80), txt(rec.localidad, 80), txt(rec.barrio, 120),
       tipoRecogida === 'domicilio' ? direccionDom : null,
       txt(rec.hora_aproximada, 20), txt(rec.notas, 2000),
+      esAlcaldia,
     ]
   )
   log('[aliados/solicitud]', 'creada', rows[0].id, 'aliado', aliadoId)

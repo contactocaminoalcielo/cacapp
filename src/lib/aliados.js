@@ -6,7 +6,8 @@ const API_BASE = import.meta.env.VITE_ORBIT_API_URL || 'https://orbit.orbitacac.
 // Columnas de `aliados` que el navegador puede leer: TODAS menos `token_acceso`,
 // la llave del portal de cada veterinaria (migr. 194: solo la ve el backend).
 // `select('*')` sobre aliados FALLA (permiso de columna): usar esta lista.
-// ⚠️ Al agregar una columna a aliados, agrégala aquí Y en el GRANT de la 194.
+// ⚠️ Al agregar una columna a aliados, agrégala aquí Y en el GRANT de la 194
+// (como hizo la 199 con convenio_alcaldia).
 export const ALIADOS_COLUMNAS = [
   'id_aliado', 'nombre', 'identificacion_nit', 'email', 'telefono', 'whatsapp', 'contacto_nombre',
   'tipo_establecimiento_id', 'ciudad', 'localidad', 'barrio', 'direccion', 'vip', 'numero_sedes',
@@ -16,7 +17,7 @@ export const ALIADOS_COLUMNAS = [
   'instagram', 'sitio_web', 'atiende_24h', 'num_veterinarios', 'servicios_clinica',
   'referencia_ubicacion', 'lat', 'lng', 'comercial_id', 'notas_comerciales', 'ficha_actualizada_en',
   'ficha_actualizada_por', 'no_contactar', 'no_contactar_motivo', 'no_contactar_desde',
-  'no_contactar_por', 'tiene_acceso',
+  'no_contactar_por', 'tiene_acceso', 'convenio_alcaldia',
 ].join(',')
 
 async function post(path, body) {

@@ -147,6 +147,9 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
 
   const [prop, setProp] = useState({ nombre: '', apellido: '', cedula: '', whatsapp: '', telefono: '', email: '', ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '' })
   const [masc, setMasc] = useState({ nombre: '', especie_id: '', sexo: '', peso_kg: '', raza: '' })
+  // Proyecto de la Alcaldía (migr. 199): solo a la vet con convenio (Animal City)
+  const preguntaAlcaldia = aliado?.convenio_alcaldia === true
+  const [esAlcaldia, setEsAlcaldia] = useState(null)   // null = sin responder
   const [planId, setPlanId] = useState('')
   const [rec, setRec]   = useState({ tipo: 'veterinaria', ciudad: aliado?.ciudad || 'Bogotá', localidad: aliado?.localidad || '', barrio: aliado?.barrio || '', direccion: '', hora_aproximada: '', notas: '' })
   const [autorizo, setAutorizo] = useState(false)
@@ -195,6 +198,7 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
       set('especie_id', !masc.especie_id ? 'Selecciona la especie' : null)
       const n = parseFloat(String(masc.peso_kg).replace(',', '.'))
       set('peso_kg', !masc.peso_kg ? 'El peso es requerido' : isNaN(n) || n <= 0 ? 'Peso inválido' : n > 100 ? '¿Está en kg?' : null)
+      if (preguntaAlcaldia) set('es_alcaldia', esAlcaldia === null ? 'Indica si la mascota es del proyecto de la Alcaldía' : null)
     }
     if (paso === 2 && !planId) { setError('Selecciona un plan para continuar.'); return }
     if (paso === 3 && rec.tipo === 'domicilio') {
@@ -223,6 +227,7 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
           ciudad: prop.ciudad, localidad: prop.localidad, barrio: prop.barrio, direccion: prop.direccion,
         },
         mascota: { nombre: masc.nombre, especie_id: masc.especie_id, peso_kg: masc.peso_kg, sexo: masc.sexo, raza: masc.raza },
+        ...(preguntaAlcaldia ? { es_alcaldia: esAlcaldia } : {}),
         plan_id: planId,
         recogida: {
           tipo: rec.tipo,
@@ -359,6 +364,21 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
               <input className={INPUT} placeholder="Labrador, Persa…" value={masc.raza}
                 onChange={e => setMasc(p => ({ ...p, raza: e.target.value }))} />
             </div>
+            {preguntaAlcaldia && (
+              <div className={`rounded-xl p-3 border ${tocados.es_alcaldia && errores.es_alcaldia ? 'border-red-400 bg-red-50/40' : 'border-gray-200'}`}>
+                <label className={LABEL}>¿Esta mascota pertenece al proyecto de la Alcaldía? *</label>
+                <div className="flex gap-2">
+                  {[{ v: true, label: 'Sí' }, { v: false, label: 'No' }].map(o => (
+                    <button key={o.label} type="button"
+                      onClick={() => { setEsAlcaldia(o.v); setErrores(e => ({ ...e, es_alcaldia: null })) }}
+                      className={`flex-1 py-2.5 rounded-xl text-[13px] font-semibold border transition-all ${
+                        esAlcaldia === o.v ? 'border-[#3D5A27] bg-[#F0F7EB] text-[#3D5A27]' : 'border-gray-200 text-gray-500'
+                      }`}>{o.label}</button>
+                  ))}
+                </div>
+                <ErrMsg msg={tocados.es_alcaldia && errores.es_alcaldia} />
+              </div>
+            )}
           </div>
         )}
 

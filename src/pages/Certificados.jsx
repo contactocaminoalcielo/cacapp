@@ -54,7 +54,7 @@ function Pill({ cfg, children }) {
 }
 
 // ─── Fila de destinatario (modelo formal) ────────────────────────────────────
-function FilaItem({ item, onEnviar, onReenviar, saving, puedeEnviar }) {
+function FilaItem({ item, onEnviar, onReenviar, onImprimir, saving, puedeEnviar }) {
   const cfg = ESTADO_ITEM[item.estado] || ESTADO_ITEM.PENDIENTE
   const fallos = Object.entries(item.validacion || {}).filter(([, ok]) => !ok).map(([k]) => VALID_LABEL[k] || k)
   const yaEnviado = ['ENVIADO', 'REENVIADO'].includes(item.estado)
@@ -66,6 +66,12 @@ function FilaItem({ item, onEnviar, onReenviar, saving, puedeEnviar }) {
           <span className="text-[12px] font-semibold text-gray-900">{item.mascota_nombre}</span>
           <span className="text-[11px] text-gray-500">{item.propietario_nombre}</span>
           <Pill cfg={cfg} />
+          {item.es_alcaldia && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800"
+              title="Proyecto de la Alcaldía: recibe su propio certificado, solo con su mascota">
+              🏛 Alcaldía
+            </span>
+          )}
           {item.fecha_vencimiento && !yaEnviado && (
             <span className="text-[10px] flex items-center gap-1 text-gray-400">
               <Clock size={9} /> vence {fmtFecha(item.fecha_vencimiento)}
@@ -82,6 +88,12 @@ function FilaItem({ item, onEnviar, onReenviar, saving, puedeEnviar }) {
           <p className="text-[10px] text-green-600 mt-0.5">Enviado {fmtDateTime(item.enviado_en)}</p>
         )}
       </div>
+      {item.es_alcaldia && item.estado !== 'EXCLUIDO' && (
+        <Button size="sm" variant="secondary" disabled={saving} onClick={() => onImprimir(item)}
+          title="Ver e imprimir el certificado propio de esta mascota">
+          <Printer size={11} />
+        </Button>
+      )}
       {item.estado === 'EXCLUIDO' ? (
         <span className="text-[10px] text-gray-300 px-2">No incluido</span>
       ) : yaEnviado ? (
@@ -99,7 +111,7 @@ function FilaItem({ item, onEnviar, onReenviar, saving, puedeEnviar }) {
 }
 
 // ─── Tarjeta de reporte grupal ───────────────────────────────────────────────
-function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReenviar, saving }) {
+function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReenviar, onImprimirItem, saving }) {
   const [open, setOpen] = useState(true)
   const cfg   = TIPO_CFG[reporte.tipo_proceso] || TIPO_CFG.CREMACION_GRUPAL
   const eCfg  = ESTADO_REPORTE[reporte.estado] || ESTADO_REPORTE.PENDIENTE
@@ -158,7 +170,8 @@ function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReen
             {items.map(it => (
               <FilaItem key={it.id} item={it} saving={saving} puedeEnviar={generado}
                 onEnviar={(item) => onEnviarUno(reporte, item)}
-                onReenviar={(item) => onReenviar(reporte, item)} />
+                onReenviar={(item) => onReenviar(reporte, item)}
+                onImprimir={(item) => onImprimirItem(reporte, item)} />
             ))}
             {!generado && <p className="text-[11px] text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">Genera el reporte antes de enviar.</p>}
             {excluidos.length > 0 && (
@@ -298,11 +311,23 @@ export default function Certificados() {
     } finally { setSaving(false) }
   }
 
+  // Certificado propio de una mascota de la Alcaldía (migr. 199): solo su fila
+  async function handleImprimirItem(reporte, item) {
+    setSaving(true)
+    try {
+      const { htmls } = await generarReporte(reporte, coordDe(reporte), { itemIds: [item.id] })
+      if (htmls[item.id]) imprimirCertificado(htmls[item.id])
+      await cargar()
+    } catch (e) {
+      await showAlert(e.message, { title: 'Error al generar el certificado' })
+    } finally { setSaving(false) }
+  }
+
   async function handleEnviarTodos(reporte) {
     setSaving(true)
     try {
-      const { pdfUrl } = await generarReporte(reporte, coordDe(reporte))
-      const r = await enviarReporte(reporte.id, { pdfUrl, fromNumber: lineaOrigen })
+      const { pdfUrl, pdfUrls } = await generarReporte(reporte, coordDe(reporte))
+      const r = await enviarReporte(reporte.id, { pdfUrl, pdfUrls, fromNumber: lineaOrigen })
       await cargar()
       if (r.errores?.length) {
         await showAlert(`${r.enviados} enviados.\n\nErrores:\n${r.errores.map(e => `${e.mascota}: ${e.error}`).join('\n')}`, { title: 'Envío parcial', variant: 'warning' })
@@ -315,8 +340,8 @@ export default function Certificados() {
   async function handleEnviarUno(reporte, item) {
     setSaving(true)
     try {
-      const { pdfUrl } = await generarReporte(reporte, coordDe(reporte))
-      const r = await enviarReporte(reporte.id, { pdfUrl, items: [item.id], fromNumber: lineaOrigen })
+      const { pdfUrl, pdfUrls } = await generarReporte(reporte, coordDe(reporte), { itemIds: [item.id] })
+      const r = await enviarReporte(reporte.id, { pdfUrl, pdfUrls, items: [item.id], fromNumber: lineaOrigen })
       await cargar()
       if (r.errores?.length) await showAlert(r.errores.map(e => `${e.mascota}: ${e.error}`).join('\n'), { title: 'Error al enviar' })
     } catch (e) {
@@ -329,8 +354,8 @@ export default function Certificados() {
     const { reporte, item } = reenvio
     setSaving(true); setReenvio(null)
     try {
-      const { pdfUrl } = await generarReporte(reporte, coordDe(reporte))
-      await enviarReporte(reporte.id, { pdfUrl, items: [item.id], reenvio: true, motivo: motivoReenvio.trim(), fromNumber: lineaOrigen })
+      const { pdfUrl, pdfUrls } = await generarReporte(reporte, coordDe(reporte), { itemIds: [item.id] })
+      await enviarReporte(reporte.id, { pdfUrl, pdfUrls, items: [item.id], reenvio: true, motivo: motivoReenvio.trim(), fromNumber: lineaOrigen })
       setMotivoReenvio('')
       await cargar()
     } catch (e) {
@@ -464,7 +489,8 @@ export default function Certificados() {
                 {reportes.map(r => (
                   <TarjetaReporte key={r.id} reporte={r} saving={saving}
                     onGenerar={handleGenerar} onEnviarTodos={handleEnviarTodos}
-                    onEnviarUno={handleEnviarUno} onReenviar={(reporte, item) => setReenvio({ reporte, item })} />
+                    onEnviarUno={handleEnviarUno} onReenviar={(reporte, item) => setReenvio({ reporte, item })}
+                    onImprimirItem={handleImprimirItem} />
                 ))}
               </div>
             )}

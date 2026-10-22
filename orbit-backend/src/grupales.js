@@ -26,7 +26,8 @@ async function serviciosDelLote(client, loteId) {
             TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario_nombre,
             c.whatsapp        AS canal_destino,
             p.codigo          AS plan_codigo,
-            p.tipo_proceso
+            p.tipo_proceso,
+            s.es_alcaldia
      FROM public.servicios s
      JOIN public.mascotas m       ON m.id_mascota = s.mascota_id
      LEFT JOIN public.clientes c  ON c.id_cliente = m.cliente_id
@@ -126,12 +127,13 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
       const { rows: ins } = await client.query(
         `INSERT INTO public.reportes_grupales_items
            (reporte_id, servicio_id, mascota_nombre, propietario_nombre, canal_destino,
-            plan_codigo, peso_kg, fecha_base, fecha_vencimiento, estado, validacion, datos_completos, motivo_exclusion)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
+            plan_codigo, peso_kg, fecha_base, fecha_vencimiento, estado, validacion, datos_completos, motivo_exclusion,
+            es_alcaldia)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14)
          RETURNING id`,
         [reporteId, svc.servicio_id, svc.mascota_nombre, svc.propietario_nombre, svc.canal_destino,
          svc.plan_codigo, svc.peso_kg, svc.fecha_base, fechaVenc, estadoItem,
-         JSON.stringify(validacion), datos_completos, motivo_exclusion]
+         JSON.stringify(validacion), datos_completos, motivo_exclusion, svc.es_alcaldia === true]
       )
       creados++
       await evento(client, { reporteId, itemId: ins[0].id, servicioId: svc.servicio_id,
@@ -148,10 +150,11 @@ export async function construirReporteDeLote(client, lote, { generadoPor = null,
         `UPDATE public.reportes_grupales_items
          SET mascota_nombre=$2, propietario_nombre=$3, canal_destino=$4, plan_codigo=$5, peso_kg=$6,
              fecha_base=$7, fecha_vencimiento=$8, estado=$9, validacion=$10::jsonb,
-             datos_completos=$11, motivo_exclusion=$12
+             datos_completos=$11, motivo_exclusion=$12, es_alcaldia=$13
          WHERE id=$1`,
         [exist[0].id, svc.mascota_nombre, svc.propietario_nombre, svc.canal_destino, svc.plan_codigo, svc.peso_kg,
-         svc.fecha_base, fechaVenc, nuevoEstado, JSON.stringify(validacion), datos_completos, motivo_exclusion]
+         svc.fecha_base, fechaVenc, nuevoEstado, JSON.stringify(validacion), datos_completos, motivo_exclusion,
+         svc.es_alcaldia === true]
       )
       if (motivo_exclusion && exist[0].estado !== 'EXCLUIDO') {
         excluidos++
@@ -390,7 +393,16 @@ export async function marcarGenerado({ reporteId, personalId, body = {} }) {
        WHERE id = $1`,
       [reporteId, body.storage_path || null, actorId]
     )
-    await evento(client, { reporteId, tipo: 'GENERADO', detalle: { storage_path: body.storage_path, actor_raw: personalId || null }, actor: actorId })
+    // Certificado propio de cada mascota de la Alcaldía (migr. 199): { itemId: url }
+    for (const [itemId, url] of Object.entries(body.items_pdf || {})) {
+      if (!uuidOrNull(itemId) || typeof url !== 'string' || !url) continue
+      await client.query(
+        `UPDATE public.reportes_grupales_items SET storage_path = $3
+          WHERE id = $1 AND reporte_id = $2 AND es_alcaldia`,
+        [itemId, reporteId, url]
+      )
+    }
+    await evento(client, { reporteId, tipo: 'GENERADO', detalle: { storage_path: body.storage_path, items_pdf: body.items_pdf || null, actor_raw: personalId || null }, actor: actorId })
     await client.query('COMMIT')
     return { status: 200, body: { ok: true } }
   } catch (e) {
@@ -401,10 +413,12 @@ export async function marcarGenerado({ reporteId, personalId, body = {} }) {
 
 /**
  * Endpoint: enviar el reporte a los destinatarios (o reenviar).
- * body: { pdf_url, items?: [itemId], fromNumber?, reenvio?: bool, motivo?, mensajes?: {itemId: texto} }
+ * body: { pdf_url, pdf_urls?: {itemId: url}, items?: [itemId], fromNumber?, reenvio?: bool, motivo?, mensajes?: {itemId: texto} }
  * - No envía ítems con datos incompletos (criterio #10).
  * - Idempotente: salta los ya ENVIADO salvo reenvío explícito con motivo (criterio #7).
  * - Cada intento (éxito o error) queda persistido (criterios #5, #6).
+ * - Una mascota de la Alcaldía (migr. 199) recibe SOLO su certificado propio
+ *   (`pdf_urls[itemId]` o el guardado en su ítem); el del lote nunca le sale.
  */
 export async function enviarReporte({ reporteId, personalId, body = {} }) {
   const actorId = uuidOrNull(personalId)
@@ -414,7 +428,6 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
   if (!rep) return { status: 404, body: { error: 'Reporte no encontrado' } }
 
   const pdfUrl = body.pdf_url || null
-  if (!pdfUrl && !rep.storage_path) return { status: 422, body: { error: 'No hay PDF generado para enviar.' } }
   if (body.reenvio && !body.motivo?.trim())
     return { status: 422, body: { error: 'El reenvío requiere un motivo.' } }
 
@@ -441,6 +454,15 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
     if (item.estado === 'EXCLUIDO') { resumen.omitidos.push({ mascota: item.mascota_nombre, motivo: item.motivo_exclusion || 'Excluido' }); continue }
     if (!item.datos_completos)      { resumen.omitidos.push({ mascota: item.mascota_nombre, motivo: 'Datos incompletos' }); continue }
 
+    const pdfItem = item.es_alcaldia
+      ? (body.pdf_urls?.[item.id] || item.storage_path || null)
+      : (pdfUrl || rep.storage_path || null)
+    if (!pdfItem) {
+      resumen.omitidos.push({ mascota: item.mascota_nombre,
+        motivo: item.es_alcaldia ? 'Falta su certificado propio (Alcaldía): regenera el reporte' : 'No hay PDF generado para enviar' })
+      continue
+    }
+
     const mensaje = body.mensajes?.[item.id] || mensajeReporte(item, lote)
 
     // Envío (red, fuera de transacción) → luego se persiste atómicamente
@@ -454,7 +476,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
           petName: item.mascota_nombre,                 // {{contact.name_pets}} = solo mascota
           plantillaNombre: config.plantilla_nombre,
           idioma: config.plantilla_idioma || 'es_MX',
-          pdfUrl,
+          pdfUrl: pdfItem,
           pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
           personalId: actorId,
         })
@@ -463,7 +485,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
         // para que la pantalla no pueda sacar un certificado por otra empresa.
         envioOk = await enviarWhatsAppOperativo({
           telefono: item.canal_destino, nombre: item.propietario_nombre,
-          mensaje, pdfUrl,
+          mensaje, pdfUrl: pdfItem,
           pdfFilename: `Certificado ${etiquetaProceso(lote.tipo_proceso)} ${item.mascota_nombre}.pdf`,
           personalId: actorId,
         })
@@ -479,7 +501,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
              (item_id, reporte_id, servicio_id, canal, destino, pdf_url, message_id, contact_id,
               estado, es_reenvio, motivo_reenvio, enviado_por)
            VALUES ($1,$2,$3,$11,$4,$5,$6,$7,'ENVIADO',$8,$9,$10)`,
-          [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl,
+          [item.id, reporteId, item.servicio_id, item.canal_destino, pdfItem,
            envioOk.messageId, envioOk.contactId, !!body.reenvio, body.reenvio ? body.motivo.trim() : null, actorId,
            canalOperativo]
         )
@@ -509,7 +531,7 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
           `INSERT INTO public.reportes_grupales_envios
              (item_id, reporte_id, servicio_id, canal, destino, pdf_url, estado, error, es_reenvio, motivo_reenvio, enviado_por)
            VALUES ($1,$2,$3,$10,$4,$5,'ERROR',$6,$7,$8,$9)`,
-          [item.id, reporteId, item.servicio_id, item.canal_destino, pdfUrl, envioErr,
+          [item.id, reporteId, item.servicio_id, item.canal_destino, pdfItem, envioErr,
            !!body.reenvio, body.reenvio ? body.motivo?.trim() : null, actorId,
            canalOperativo]
         )

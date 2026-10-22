@@ -90,7 +90,11 @@ function sumarPesos(servicios) {
 // (= ingreso de la última mascota en entrar + 3 días hábiles, ya calculado por el
 // backend como fecha_vencimiento de cada ítem). Así todas las mascotas cumplen los
 // 3 días hábiles desde su ingreso. Cae a la fecha del lote solo si faltara el dato.
-function fechaProcesoColectiva(servicios, lote) {
+// `lote.fecha_proceso` la fija quien llama cuando el certificado NO trae a todo
+// el lote (las mascotas de la Alcaldía van aparte, migr. 199): la cremación
+// colectiva fue una sola y su fecha es la de todas.
+export function fechaProcesoColectiva(servicios, lote) {
+  if (lote.fecha_proceso) return lote.fecha_proceso
   const fechas = (servicios || []).map(s => s.fecha_proceso).filter(Boolean).sort()
   return fechas.length ? fechas[fechas.length - 1] : (lote.fecha_completado || lote.fecha_envio || today())
 }
@@ -177,6 +181,8 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
     : 'INDUSTRIA AMBIENTAL S.A.S/ECOLOGIA Y ENTORNO S.A.S ESP'
   const duracion   = lote.duracion_proceso || '6 horas y 18 minutos'
   const pesoTotal  = sumarPesos(servicios)
+  // Certificado de una sola mascota (proyecto de la Alcaldía, migr. 199)
+  const unaSola    = servicios.length === 1
 
   const filas = servicios.map(s => `
     <tr>
@@ -233,7 +239,7 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
 
   <p>
     El día <strong>${fechaLarga}</strong> se realiza cremación colectiva de los restos biológicos
-    de las mascotas mencionadas en el cuadro anterior, en totalidad de: <strong>${pesoTotal} Kg</strong>;
+    ${unaSola ? 'de la mascota mencionada' : 'de las mascotas mencionadas'} en el cuadro anterior, en totalidad de: <strong>${pesoTotal} Kg</strong>;
     con duración de <strong>${duracion}</strong>, con la empresa:
   </p>
 
@@ -312,7 +318,7 @@ export function generarHTMLCompostajeGrupal({ lote, servicios, coordinador }) {
     <strong>compostaje grupal</strong>. Este procedimiento se llevó a cabo bajo condiciones
     controladas de biotransformación, permitiendo la descomposición natural de los restos
     biológicos en materia orgánica, contribuyendo así a un proceso ambientalmente sostenible.
-    De las siguientes mascotas:
+    ${servicios.length === 1 ? 'De la siguiente mascota:' : 'De las siguientes mascotas:'}
   </p>
 
   <p>

@@ -563,6 +563,8 @@ export default function Kanban() {
     ciudad: 'Bogotá', localidad: '', barrio: '', direccion: '', hora_aproximada: '', notas_cliente: '',
     // Servicio
     tipo_acompanamiento: 'PRESENCIAL', tecnico_id: '', valor_total: '', estado_pago: 'PENDIENTE', metodo_pago: '',
+    // Proyecto de la Alcaldía (migr. 199): null = sin responder
+    es_alcaldia: null,
   })
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -916,7 +918,7 @@ export default function Kanban() {
     convTarifaTocada.current = false; setConvTarifaCiudad(''); setConvVehiculo('')
     if (s.aliado_id) {
       const { data } = await db.from('aliados')
-        .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision')
+        .select('id_aliado,nombre,direccion,ciudad,barrio,localidad,telefono,whatsapp,contacto_nombre,vip,modalidad_comision,convenio_alcaldia')
         .eq('id_aliado', s.aliado_id)
         .maybeSingle()
       aliado = data
@@ -951,6 +953,9 @@ export default function Kanban() {
       // Servicio
       tipo_acompanamiento: 'PRESENCIAL', tecnico_id: '', valor_total: '',
       estado_pago: 'PENDIENTE', metodo_pago: '',
+      // Lo que respondió la vet en su enlace; si la solicitud no lo trae (vino
+      // del enlace público), el coordinador lo responde antes de aceptar.
+      es_alcaldia: typeof s.es_alcaldia === 'boolean' ? s.es_alcaldia : null,
     })
 
     calcularPrecioPara(planId, s.mascota_peso_kg, s.especie_id).then(precio => {
@@ -995,6 +1000,10 @@ export default function Kanban() {
       }
       if (convForm.tipo_recogida === 'domicilio' && !direccionDomicilio.trim()) {
         await showAlert('La solicitud de domicilio necesita direccion de recogida.', { title: 'Datos incompletos' })
+        return
+      }
+      if (aliadoSolData?.convenio_alcaldia && convForm.es_alcaldia === null) {
+        await showAlert('Indica si la mascota pertenece al proyecto de la Alcaldía.', { title: 'Datos incompletos' })
         return
       }
 
@@ -1155,6 +1164,7 @@ export default function Kanban() {
         valor_adicionales:     0,
         valor_transporte:      transporteNum,
         recargo_nocturno:      0,
+        es_alcaldia:           !!aliadoSolData?.convenio_alcaldia && convForm.es_alcaldia === true,
       }).select('id')
       if (se) throw se
       const servicioId = sv[0].id
@@ -1676,7 +1686,7 @@ export default function Kanban() {
 
     const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }, { data: tenjoItems }] = await Promise.all([
       db.from('servicios')
-        .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, ${COLS_CONSISTENCIA_COMISION}`)
+        .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, es_alcaldia, ${COLS_CONSISTENCIA_COMISION}`)
         .eq('id', s.servicio_id).maybeSingle(),
       db.from('recogidas')
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
@@ -1729,7 +1739,7 @@ export default function Kanban() {
     }
     // Cargar horario del aliado si viene de veterinaria
     if (svcFull?.aliado_origen_id) {
-      db.from('aliados').select('nombre, horario, telefono, whatsapp, vip')
+      db.from('aliados').select('nombre, horario, telefono, whatsapp, vip, convenio_alcaldia')
         .eq('id_aliado', svcFull.aliado_origen_id).maybeSingle()
         .then(({ data }) => { if (data) setAliadoHorario(data) })
     }
@@ -4044,6 +4054,34 @@ export default function Kanban() {
               )
             })()}
 
+            {/* ── Proyecto de la Alcaldía (migr. 199): etiqueta, y coordinación la corrige ── */}
+            {detalle && (detalle.es_alcaldia || aliadoHorario?.convenio_alcaldia) && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-sky-50 border-sky-200">
+                <span className="text-lg shrink-0">🏛</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] font-bold text-sky-900">
+                    {detalle.es_alcaldia ? 'Proyecto de la Alcaldía' : 'No es del proyecto de la Alcaldía'}
+                  </p>
+                  {detalle.es_alcaldia && (
+                    <p className="text-[11px] text-sky-800 mt-0.5">Su certificado grupal sale aparte, solo con esta mascota.</p>
+                  )}
+                </div>
+                {esAdmin && (
+                  <button
+                    disabled={guardando}
+                    onClick={async () => {
+                      const nuevo = !detalle.es_alcaldia
+                      const { error } = await db.from('servicios').update({ es_alcaldia: nuevo }).eq('id', selected.servicio_id)
+                      if (error) { await showAlert(parsearErrorDB(error), { title: 'Error' }); return }
+                      setDetalle(prev => prev ? { ...prev, es_alcaldia: nuevo } : prev)
+                    }}
+                    className="shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-bold border border-sky-300 bg-white text-sky-800 disabled:opacity-40">
+                    {detalle.es_alcaldia ? 'Quitar' : 'Marcar'}
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* ── Galería de imágenes del cliente (productor y admin) ── */}
             {puedeVerImagenes && imagenesDelCliente.length > 0 && (
               <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#E9D5FF', background: '#FAF5FF' }}>
@@ -5180,6 +5218,22 @@ export default function Kanban() {
                       .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                   </select>
                 </div>
+                {aliadoSolData?.convenio_alcaldia && (
+                  <div className={`col-span-2 rounded-xl p-3 border ${cf.es_alcaldia === null ? 'border-amber-300 bg-amber-50' : 'border-sky-200 bg-sky-50'}`}>
+                    <label className={SOL_LABL}>¿Pertenece al proyecto de la Alcaldía? *</label>
+                    <div className="flex gap-2">
+                      {[{ v: true, label: 'Sí' }, { v: false, label: 'No' }].map(o => (
+                        <button key={o.label} type="button" onClick={() => set('es_alcaldia', o.v)}
+                          className={`flex-1 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+                            cf.es_alcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-200 bg-white text-gray-600'
+                          }`}>{o.label}</button>
+                      ))}
+                    </div>
+                    {selSolicitud?.origen === 'ALIADO' && typeof selSolicitud?.es_alcaldia === 'boolean' && (
+                      <p className="text-[10px] text-gray-500 mt-1.5">La veterinaria respondió «{selSolicitud.es_alcaldia ? 'Sí' : 'No'}» en su enlace.</p>
+                    )}
+                  </div>
+                )}
                 <div>
                   {/* Es el valor del PLAN: el transporte se suma aparte (abajo) y la
                       comisión se descuenta al guardar si el pago pasa por la vet. */}

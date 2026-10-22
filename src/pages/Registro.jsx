@@ -287,6 +287,8 @@ export default function Registro() {
   const [aliadoBusqueda, setAliadoBusqueda]         = useState('')
   const [aliadoSeleccionado, setAliadoSeleccionado] = useState(borrador?.aliadoSeleccionado ?? null)
   const [aliadoOpen, setAliadoOpen]                 = useState(false)
+  // Proyecto de la Alcaldía (migr. 199): null = sin responder
+  const [esAlcaldia, setEsAlcaldia]                 = useState(borrador?.esAlcaldia ?? null)
   const [adicionales, setAdicionales]               = useState(borrador?.adicionales ?? [])
   const [adicionalBusqueda, setAdicionalBusqueda]   = useState('')
   const [comisionPorcentaje, setComisionPorcentaje] = useState(borrador?.comisionPorcentaje ?? 0)
@@ -340,7 +342,7 @@ export default function Registro() {
       planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
       aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
       formRecogida, vehiculoTipo, tecnicoSeleccionado,
-      descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno,
+      descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno, esAlcaldia,
     })
   }, [
     paso, formCliente, clienteSeleccionado, clienteNuevo,
@@ -348,7 +350,7 @@ export default function Registro() {
     planSeleccionado, precioSeleccionado, tipoAcomp, canalEntrada,
     aliadoSeleccionado, adicionales, comisionPorcentaje, desamparadoPrioridad,
     formRecogida, vehiculoTipo, tecnicoSeleccionado, success,
-    descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno,
+    descuentoAdicional, descuentoAdicionalMotivo, recargoNocturno, esAlcaldia,
   ])
 
   // ── computed ──
@@ -358,6 +360,12 @@ export default function Registro() {
     ? mascotaSeleccionada.especie_id
     : (parseInt(formMascota.especie_id) || null)
   const valorBase        = precioSeleccionado || 0
+  // La vet con convenio de la Alcaldía (hoy Animal City) obliga a responder si la
+  // mascota es del proyecto. Se mira en el catálogo y no solo en la copia del
+  // borrador, que puede venir de antes de la migración 199 sin la bandera.
+  const preguntaAlcaldia = !!aliadoSeleccionado &&
+    (aliados.find(a => a.id_aliado === aliadoSeleccionado.id_aliado)?.convenio_alcaldia
+      ?? aliadoSeleccionado.convenio_alcaldia) === true
   // adicionales: cantidad × precio_base (precio fijo de DB, no editable)
   const valorAdicionales = adicionales.reduce((s, a) => s + ((a.precio_base || 0) * (a.cantidad || 1)), 0)
   const valorBruto       = valorBase + valorAdicionales
@@ -741,6 +749,7 @@ export default function Registro() {
   // ── selectores aliado / técnico ──
   function selectAliado(a) {
     setAliadoSeleccionado(a)
+    setEsAlcaldia(null)
     setCanalEntrada('ALIADO')
     setAliadoBusqueda('')
     setAliadoOpen(false)
@@ -749,6 +758,7 @@ export default function Registro() {
   }
   function clearAliado() {
     setAliadoSeleccionado(null)
+    setEsAlcaldia(null)
     setAliadoBusqueda('')
     if (canalEntrada === 'ALIADO') setCanalEntrada('DIRECTO')
   }
@@ -776,6 +786,11 @@ export default function Registro() {
 
   // ── guardar ──
   async function guardar() {
+    if (preguntaAlcaldia && esAlcaldia === null) {
+      setPaso(2)
+      setError('Falta indicar si la mascota pertenece al proyecto de la Alcaldía.')
+      return
+    }
     if (!autorizo) {
       setErrAutorizo('Falta dejar constancia de la autorización de datos del titular.')
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
@@ -908,6 +923,7 @@ export default function Registro() {
         // podía saber si el valor estaba dentro del total, y el técnico terminaba
         // cobrando otra vez lo que el doctor ya había cobrado.
         valor_eutanasia:             valorEutanasia || 0,
+        es_alcaldia:                 preguntaAlcaldia && esAlcaldia === true,
       }).select('id')
       if (svcErr) throw svcErr
 
@@ -1022,7 +1038,7 @@ export default function Registro() {
   const canNext = [
     () => clienteSeleccionado !== null || (clienteNuevo && !!formCliente.nombre && !!formCliente.whatsapp),
     () => mascotaSeleccionada !== null || (mascotaNueva && !!formMascota.nombre && !!formMascota.peso_kg),
-    () => planSeleccionado !== null,
+    () => planSeleccionado !== null && (!preguntaAlcaldia || esAlcaldia !== null),
     () => true,
   ]
 
@@ -1528,6 +1544,24 @@ export default function Registro() {
               </div>
               {!aliadoSeleccionado && (
                 <p className="text-[10px] text-gray-400 mt-1">Si el servicio viene de una veterinaria aliada, selecciónala aquí para aplicar comisión y recordatorios VIP.</p>
+              )}
+              {preguntaAlcaldia && (
+                <div className={`mt-3 rounded-lg border px-3 py-2.5 ${esAlcaldia === null ? 'border-amber-300 bg-amber-50' : 'border-sky-200 bg-sky-50'}`}>
+                  <div className="text-[12px] font-semibold text-gray-800 mb-2">
+                    ¿Esta mascota pertenece al proyecto de la Alcaldía? <span className="text-red-500">*</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {[{ v: true, label: 'Sí' }, { v: false, label: 'No' }].map(o => (
+                      <button key={o.label} type="button" onClick={() => { setEsAlcaldia(o.v); setError(null) }}
+                        className={`flex-1 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+                          esAlcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-200 bg-white text-gray-600'
+                        }`}>{o.label}</button>
+                    ))}
+                  </div>
+                  {esAlcaldia === null && (
+                    <p className="text-[10px] text-amber-700 mt-1.5">Obligatorio para {aliadoSeleccionado.nombre}: si es Sí, su certificado de cremación grupal sale solo con esta mascota.</p>
+                  )}
+                </div>
               )}
             </div>
 
