@@ -16,10 +16,11 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, acompFijo, petEmoji, initials } from '@/lib/utils'
 import { planComisiona, volumenMesAliado } from '@/lib/precios'
+import { FECHA_CORTE } from '@/lib/constants'
 import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 import {
   CheckCircle, ChevronRight, ChevronLeft, Search, X,
-  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse
+  User, Star, Loader2, MapPin, Clock, CreditCard, Truck, Sparkles, MessageSquare, AlertCircle, HeartPulse, AlertTriangle
 } from 'lucide-react'
 
 // Precio de eutanasia por peso (tabla eutanasia_tarifas; peso_max_kg null = "o más")
@@ -292,6 +293,10 @@ export default function Registro() {
   const [adicionales, setAdicionales]               = useState(borrador?.adicionales ?? [])
   const [adicionalBusqueda, setAdicionalBusqueda]   = useState('')
   const [comisionPorcentaje, setComisionPorcentaje] = useState(borrador?.comisionPorcentaje ?? 0)
+  // Cruce de comisiones (migr. 201): comisiones pendientes del aliado y mapa de importes a cruzar
+  const [comisionesPend, setComisionesPend]   = useState([])
+  const [cruceMap, setCruceMap]               = useState({})
+  const [crucePanelOpen, setCrucePanelOpen]   = useState(false)
   const [desamparadoPrioridad, setDesamparadoPrioridad] = useState(borrador?.desamparadoPrioridad ?? false)
   // Eutanasia compasiva combinada con el plan (Caso 2/3) — entidad propia vinculada
   const [eutanasiaIncluida,   setEutanasiaIncluida]   = useState(borrador?.eutanasiaIncluida ?? false)
@@ -412,7 +417,8 @@ export default function Registro() {
   const valorEutanasia        = eutanasiaIncluida
     ? (eutanasiaValorManual !== '' ? (parseFloat(eutanasiaValorManual) || 0) : (precioEutanasiaAuto || 0))
     : 0
-  const valorCobrado          = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad + recargoNocturnoNum - descuentoAdicionalNum + valorEutanasia
+  const totalCruce            = Object.values(cruceMap).reduce((s, v) => s + (Number(v) || 0), 0)
+  const valorCobrado          = valorBruto - comisionMonto + recargoCiudad + recargoPrioridad + recargoNocturnoNum - descuentoAdicionalNum + valorEutanasia - totalCruce
 
   // ── cargar catálogos ──
   useEffect(() => { cargarCatalogos() }, [])
@@ -669,6 +675,25 @@ export default function Registro() {
     calcularComision()
   }, [aliadoSeleccionado, planSeleccionado])
 
+  // ── comisiones pendientes del aliado (cruce) ──
+  useEffect(() => {
+    setCruceMap({})
+    setComisionesPend([])
+    if (!aliadoSeleccionado?.id_aliado) return
+    async function cargarComisionesPend() {
+      const { data } = await db
+        .from('servicios')
+        .select('id, fecha_ingreso, comision_aliado, mascotas(nombre)')
+        .eq('aliado_origen_id', aliadoSeleccionado.id_aliado)
+        .eq('comision_descontada', false)
+        .gt('comision_aliado', 0)
+        .gte('fecha_ingreso', FECHA_CORTE)
+        .order('fecha_ingreso', { ascending: false })
+      setComisionesPend(data || [])
+    }
+    cargarComisionesPend()
+  }, [aliadoSeleccionado])
+
   // ── auto-fill recogida ──
   useEffect(() => {
     // Solo ejecutar en el paso de recogida — evita que al avanzar al paso 4
@@ -762,6 +787,9 @@ export default function Registro() {
     setEsAlcaldia(null)
     setAliadoBusqueda('')
     if (canalEntrada === 'ALIADO') setCanalEntrada('DIRECTO')
+    setCruceMap({})
+    setComisionesPend([])
+    setCrucePanelOpen(false)
   }
 
   // ── filtros ──
@@ -999,6 +1027,32 @@ export default function Registro() {
         if (eutErr) throw eutErr
         if (eutData?.id) {
           await db.from('servicios').update({ eutanasia_id: eutData.id }).eq('id', svcData[0].id)
+        }
+      }
+
+      // Cruce de comisiones (migr. 201): insertar filas y marcar comisión pagada.
+      // Si falla, NO tumba el servicio ya creado: el cruce quedará pendiente.
+      const cruceEntries = Object.entries(cruceMap).filter(([, v]) => Number(v) > 0)
+      if (cruceEntries.length > 0 && svcData?.[0]?.id) {
+        try {
+          await db.from('cruce_comisiones').insert(
+            cruceEntries.map(([svcSaldadoId, monto]) => ({
+              servicio_nuevo_id:   svcData[0].id,
+              servicio_saldado_id: svcSaldadoId,
+              monto:               Number(monto),
+              autorizado_por:      personalData?.id,
+            }))
+          )
+          // Marcar los servicios saldados como comisión pagada
+          await Promise.all(
+            cruceEntries.map(([svcSaldadoId]) =>
+              db.from('servicios')
+                .update({ comision_descontada: true })
+                .eq('id', svcSaldadoId)
+            )
+          )
+        } catch (e) {
+          setError('El servicio quedó registrado, pero no se pudo guardar el cruce de comisiones: ' + (e.message || ''))
         }
       }
 
@@ -1545,6 +1599,85 @@ export default function Registro() {
               </div>
               {!aliadoSeleccionado && (
                 <p className="text-[10px] text-gray-400 mt-1">Si el servicio viene de una veterinaria aliada, selecciónala aquí para aplicar comisión y recordatorios VIP.</p>
+              )}
+
+              {/* Panel de cruce de comisiones — solo cuando hay comisiones pendientes */}
+              {aliadoSeleccionado && comisionesPend.length > 0 && (
+                <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 overflow-hidden">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-left"
+                    onClick={() => setCrucePanelOpen(v => !v)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle size={14} className="text-amber-600 flex-shrink-0" />
+                      <span className="text-[12px] font-semibold text-amber-800">
+                        {comisionesPend.length} comisión{comisionesPend.length > 1 ? 'es' : ''} pendiente{comisionesPend.length > 1 ? 's' : ''} con {aliadoSeleccionado.nombre}
+                      </span>
+                      {totalCruce > 0 && (
+                        <span className="text-[11px] bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-full">
+                          −{fmt(totalCruce)}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-amber-600">{crucePanelOpen ? '▲ cerrar' : '▼ ver'}</span>
+                  </button>
+
+                  {crucePanelOpen && (
+                    <div className="border-t border-amber-200 px-3 pb-3 pt-2 space-y-2">
+                      <p className="text-[10px] text-amber-700 mb-2">
+                        Marca las comisiones que se cruzan con este servicio. El técnico cobrará ese importe menos al cliente.
+                      </p>
+                      {comisionesPend.map(s => {
+                        const checked  = s.id in cruceMap
+                        const montoMax = Number(s.comision_aliado)
+                        return (
+                          <div key={s.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id={`cruce-${s.id}`}
+                              checked={checked}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setCruceMap(prev => ({ ...prev, [s.id]: montoMax }))
+                                } else {
+                                  setCruceMap(prev => { const n = { ...prev }; delete n[s.id]; return n })
+                                }
+                              }}
+                              className="accent-amber-600 w-4 h-4 flex-shrink-0"
+                            />
+                            <label htmlFor={`cruce-${s.id}`} className="flex-1 text-[11px] text-gray-800 cursor-pointer">
+                              <span className="font-medium">{s.mascotas?.nombre ?? '—'}</span>
+                              <span className="text-gray-500 ml-1">
+                                {s.fecha_ingreso ? new Date(s.fecha_ingreso + 'T00:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : ''}
+                              </span>
+                              <span className="ml-1 text-amber-700 font-semibold">{fmt(montoMax)}</span>
+                            </label>
+                            {checked && (
+                              <input
+                                type="number"
+                                min={1}
+                                max={montoMax}
+                                value={cruceMap[s.id] ?? montoMax}
+                                onChange={e => {
+                                  const v = Math.min(Math.max(1, Number(e.target.value) || 0), montoMax)
+                                  setCruceMap(prev => ({ ...prev, [s.id]: v }))
+                                }}
+                                className="w-24 text-right text-[11px] border border-amber-300 rounded px-1.5 py-0.5 bg-white"
+                              />
+                            )}
+                          </div>
+                        )
+                      })}
+                      {totalCruce > 0 && (
+                        <div className="pt-2 border-t border-amber-200 text-[11px] text-amber-800 font-semibold flex justify-between">
+                          <span>Total cruce:</span>
+                          <span>−{fmt(totalCruce)}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
               {preguntaAlcaldia && (
                 <div className={`mt-3 rounded-xl border-2 p-3.5 transition-all ${esAlcaldia === null

@@ -53,6 +53,9 @@ export function buildReciboData(svc, pesoConfirmado) {
     tecnico:        svc.tecnico ? `${svc.tecnico.nombre} ${svc.tecnico.apellido}` : '',
     descuento_adicional:        svc.descuento_adicional || 0,
     descuento_adicional_motivo: svc.descuento_adicional_motivo || '',
+    // Cruces de comisiones saldados en este servicio (migr. 201).
+    // Se pobla cuando el caller incluye cruce_comisiones_nuevo en el select.
+    cruces: svc.cruce_comisiones_nuevo || [],
   }
 }
 
@@ -231,6 +234,25 @@ export async function renderReciboPDF(r, { abrir = false } = {}) {
     drawBox('Total recibido',     r.valor_pagado, M + bw + 4, y, [29,138,85])
   }
   y += 18
+  // Comisiones saldadas en este servicio (migr. 201) — solo recibo de vet
+  if (esVet && r.cruces && r.cruces.length > 0) {
+    y = hr(y)
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(6.5); pdf.setTextColor(29, 100, 55)
+    t('COMISIONES SALDADAS EN ESTE SERVICIO', M, y); y += 4.5
+    r.cruces.forEach(c => {
+      const nombreMascota = c.servicio_saldado?.mascotas?.nombre || c.servicio_saldado_id?.slice(0, 6).toUpperCase() || '—'
+      const fecha = c.servicio_saldado?.fecha_ingreso
+        ? new Date(c.servicio_saldado.fecha_ingreso + 'T00:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' })
+        : ''
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(60, 60, 60)
+      t(`${nombreMascota}${fecha ? '  ' + fecha : ''}`, M, y)
+      pdf.setFont('helvetica', 'bold'); pdf.setTextColor(29, 100, 55)
+      t(`- ${fmt(Number(c.monto) || 0)}`, W - M, y, { align: 'right' })
+      y += 5
+    })
+    y += 2
+  }
+
   // Desglose real de medios de pago (efectivo/Nequi/…) si viene del recibo real;
   // si no, la cadena metodo_pago del servicio.
   if (r.medios && r.medios.length) {
