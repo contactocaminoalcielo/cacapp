@@ -553,6 +553,40 @@ export async function enviarReporte({ reporteId, personalId, body = {} }) {
 }
 
 /**
+ * Historial de envíos de certificados grupales con el acuse de Meta cruzado
+ * (Certificados › Historial). «Enviado» NO es «le llegó»: el acuse llega por el
+ * webhook a whatsapp_mensajes (sent → delivered → read, o failed), igual que en
+ * Automatizaciones. `soloAlcaldia` deja solo las mascotas del proyecto de la
+ * Alcaldía (migr. 199); `pdf_url` es el archivo exacto que se mandó.
+ */
+export async function historialEnvios({ soloAlcaldia = false, limite = 200 } = {}) {
+  const tope = Math.min(Math.max(parseInt(limite) || 200, 1), 500)
+  const { rows } = await pool.query(
+    `SELECT e.id, e.created_at, e.estado, e.error, e.es_reenvio, e.motivo_reenvio,
+            e.pdf_url, e.message_id, e.destino,
+            i.mascota_nombre, i.propietario_nombre, i.es_alcaldia,
+            rg.tipo_proceso, lg.numero_lote,
+            wm.estado AS acuse, wm.estado_en AS acuse_en, wm.error AS acuse_error
+       FROM public.reportes_grupales_envios e
+       JOIN public.reportes_grupales_items i ON i.id = e.item_id
+       JOIN public.reportes_grupales rg      ON rg.id = e.reporte_id
+       LEFT JOIN public.lotes_grupales lg    ON lg.id = rg.lote_id
+       LEFT JOIN LATERAL (
+         SELECT m.estado, m.estado_en, m.error
+           FROM public.whatsapp_mensajes m
+          WHERE e.message_id IS NOT NULL AND m.wa_message_id = e.message_id
+          ORDER BY m.estado_en DESC NULLS LAST
+          LIMIT 1
+       ) wm ON true
+      WHERE ($1::boolean = false OR i.es_alcaldia)
+      ORDER BY e.created_at DESC
+      LIMIT $2`,
+    [soloAlcaldia === true, tope]
+  )
+  return rows
+}
+
+/**
  * Cambio de plan (criterio #11): permitir + sacar del lote grupal + alerta.
  * - Si el servicio está en un lote grupal, limpia servicios.lote_id.
  * - Si tenía un ítem activo en un reporte, lo marca EXCLUIDO con evento.

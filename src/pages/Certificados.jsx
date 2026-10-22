@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import Topbar from '@/components/layout/Topbar'
@@ -14,14 +14,14 @@ import {
 } from '@/lib/certificados'
 import {
   obtenerReportes, generarReporte, enviarReporte, sincronizar, resumenIA,
-  ESTADO_ITEM, ESTADO_REPORTE,
+  obtenerHistorial, ESTADO_ITEM, ESTADO_REPORTE,
 } from '@/lib/reportesGrupales'
 import { enviarWhatsApp, obtenerLineasWA, LINEAS_WHATSAPP } from '@/lib/whatsapp'
 import ControlGrupal from '@/components/ControlGrupal'
 import LotesTab from '@/components/LotesTab'
 import {
   FileText, RefreshCw, CheckCircle2, Printer, MessageCircle,
-  ChevronDown, ChevronUp, Award, Flame, Send, AlertTriangle, Clock, XCircle, Sparkles,
+  ChevronDown, ChevronUp, Award, Flame, Send, AlertTriangle, Clock, XCircle, Sparkles, ExternalLink,
 } from 'lucide-react'
 import { esAliadoVip, VipStar, VIP_ORO } from '@/components/servicio/VipAliado'
 
@@ -53,6 +53,33 @@ function Pill({ cfg, children }) {
   )
 }
 
+// «Enviado» no es «le llegó»: el acuse de Meta llega por el webhook.
+function AcuseMeta({ envio, conAcuse }) {
+  if (envio.estado !== 'ENVIADO') return <span className="text-[11px] text-gray-400">—</span>
+  if (!conAcuse) return <span className="text-[11px] text-gray-400">No disponible</span>
+  const a = envio.acuse
+  const cfg = a === 'read'      ? { t: 'Leído',              c: '#065F46', bg: '#D1FAE5' }
+            : a === 'delivered' ? { t: 'Le llegó',           c: '#065F46', bg: '#ECFDF5' }
+            : a === 'failed'    ? { t: 'No llegó',           c: '#B91C1C', bg: '#FEE2E2' }
+            : a === 'sent'      ? { t: 'En camino',          c: '#92400E', bg: '#FEF3C7' }
+            :                     { t: 'Sin acuse de Meta',  c: '#6B7280', bg: '#F3F4F6' }
+  return (
+    <span className="inline-flex flex-col">
+      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full w-fit" style={{ background: cfg.bg, color: cfg.c }}
+        title={a === 'failed' && envio.acuse_error ? envio.acuse_error : undefined}>{cfg.t}</span>
+      {envio.acuse_en && a !== 'failed' && <span className="text-[10px] text-gray-400 mt-0.5">{fmtDateTime(envio.acuse_en)}</span>}
+      {a === 'failed' && envio.acuse_error && <span className="text-[10px] text-red-600 mt-0.5 max-w-[220px] truncate" title={envio.acuse_error}>{envio.acuse_error}</span>}
+    </span>
+  )
+}
+
+const ChipAlcaldia = () => (
+  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 whitespace-nowrap"
+    title="Proyecto de la Alcaldía: recibe su propio certificado, solo con su mascota">
+    🏛 Alcaldía
+  </span>
+)
+
 // ─── Fila de destinatario (modelo formal) ────────────────────────────────────
 function FilaItem({ item, onEnviar, onReenviar, onImprimir, saving, puedeEnviar }) {
   const cfg = ESTADO_ITEM[item.estado] || ESTADO_ITEM.PENDIENTE
@@ -66,12 +93,7 @@ function FilaItem({ item, onEnviar, onReenviar, onImprimir, saving, puedeEnviar 
           <span className="text-[12px] font-semibold text-gray-900">{item.mascota_nombre}</span>
           <span className="text-[11px] text-gray-500">{item.propietario_nombre}</span>
           <Pill cfg={cfg} />
-          {item.es_alcaldia && (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800"
-              title="Proyecto de la Alcaldía: recibe su propio certificado, solo con su mascota">
-              🏛 Alcaldía
-            </span>
-          )}
+          {item.es_alcaldia && <ChipAlcaldia />}
           {item.fecha_vencimiento && !yaEnviado && (
             <span className="text-[10px] flex items-center gap-1 text-gray-400">
               <Clock size={9} /> vence {fmtFecha(item.fecha_vencimiento)}
@@ -111,12 +133,16 @@ function FilaItem({ item, onEnviar, onReenviar, onImprimir, saving, puedeEnviar 
 }
 
 // ─── Tarjeta de reporte grupal ───────────────────────────────────────────────
-function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReenviar, onImprimirItem, saving }) {
+// `soloAlcaldia`: el filtro de Certificados. La gestión es la misma, pero la
+// tarjeta muestra, cuenta y envía SOLO a las mascotas de la Alcaldía.
+function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReenviar, onImprimirItem, saving, soloAlcaldia = false }) {
   const [open, setOpen] = useState(true)
   const cfg   = TIPO_CFG[reporte.tipo_proceso] || TIPO_CFG.CREMACION_GRUPAL
   const eCfg  = ESTADO_REPORTE[reporte.estado] || ESTADO_REPORTE.PENDIENTE
-  const items = (reporte.reportes_grupales_items || []).filter(i => i.estado !== 'EXCLUIDO')
-  const excluidos = (reporte.reportes_grupales_items || []).filter(i => i.estado === 'EXCLUIDO')
+  const visibles = (reporte.reportes_grupales_items || []).filter(i => !soloAlcaldia || i.es_alcaldia)
+  const items = visibles.filter(i => i.estado !== 'EXCLUIDO')
+  const excluidos = visibles.filter(i => i.estado === 'EXCLUIDO')
+  const enviadosVisibles = items.filter(i => ['ENVIADO', 'REENVIADO'].includes(i.estado)).length
   const enviables = items.filter(i => i.datos_completos && !['ENVIADO', 'REENVIADO'].includes(i.estado))
   const incompletos = items.filter(i => !i.datos_completos).length
   const vencidos = items.filter(i => i.estado === 'VENCIDO').length
@@ -138,7 +164,8 @@ function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReen
           </div>
           <p className="text-[11px] text-gray-500 mt-0.5">
             {items.length} destinatario{items.length !== 1 ? 's' : ''}
-            {' · '}<span className="text-green-600 font-medium">{reporte.enviados}/{items.length} enviados</span>
+            {soloAlcaldia && ' de la Alcaldía'}
+            {' · '}<span className="text-green-600 font-medium">{enviadosVisibles}/{items.length} enviados</span>
             {incompletos > 0 && <span className="text-red-600"> · {incompletos} con datos incompletos</span>}
             {conErrores > 0 && <span className="text-red-600"> · {conErrores} con error</span>}
             {reporte.fecha_vencimiento && reporte.estado !== 'ENVIADO' && <span> · vence {fmtFecha(reporte.fecha_vencimiento)}</span>}
@@ -154,8 +181,8 @@ function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReen
               <Printer size={13} /> {generado ? 'Reimprimir / regenerar' : 'Generar reporte'}
             </Button>
             {enviables.length > 0 && (
-              <Button onClick={() => onEnviarTodos(reporte)} disabled={saving} style={{ background: '#25D366', color: 'white' }}>
-                <Send size={13} /> Enviar a todos ({enviables.length})
+              <Button onClick={() => onEnviarTodos(reporte, soloAlcaldia ? enviables.map(i => i.id) : null)} disabled={saving} style={{ background: '#25D366', color: 'white' }}>
+                <Send size={13} /> {soloAlcaldia ? 'Enviar a los de la Alcaldía' : 'Enviar a todos'} ({enviables.length})
               </Button>
             )}
             {incompletos > 0 && (
@@ -204,10 +231,26 @@ export default function Certificados() {
   const [coordMap, setCoordMap]       = useState({})
   const [individuales, setIndividuales] = useState([])
   const [historial, setHistorial]     = useState([])
+  const [historialConAcuse, setHistorialConAcuse] = useState(true)
+  // Filtro de la Alcaldía (migr. 199): la gestión es la misma, solo cambia qué se ve
+  const [soloAlcaldia, setSoloAlcaldia] = useState(false)
+  const soloAlcaldiaRef = useRef(false)
   const [reenvio, setReenvio]         = useState(null)  // { reporte, item }
   const [motivoReenvio, setMotivoReenvio] = useState('')
   const [iaResumen, setIaResumen]     = useState('')
   const [iaLoading, setIaLoading]     = useState(false)
+
+  const cargarHistorial = useCallback(async (solo) => {
+    const r = await obtenerHistorial({ soloAlcaldia: solo })
+    setHistorial(r.envios)
+    setHistorialConAcuse(r.conAcuse)
+  }, [])
+
+  function alternarAlcaldia() {
+    const v = !soloAlcaldia
+    setSoloAlcaldia(v); soloAlcaldiaRef.current = v
+    cargarHistorial(v).catch(e => console.error('Error cargando historial:', e))
+  }
 
   // ── Carga ─────────────────────────────────────────────────────────────────
   const cargar = useCallback(async () => {
@@ -261,13 +304,8 @@ export default function Certificados() {
       }
       setIndividuales(indItems.map(i => ({ ...i, cert: certMap[i.servicio_id] || null })))
 
-      // 3. Historial: evidencia de envíos grupales
-      const { data: envios } = await db
-        .from('reportes_grupales_envios')
-        .select('*, reportes_grupales(tipo_proceso, lotes_grupales(numero_lote)), reportes_grupales_items(mascota_nombre, propietario_nombre)')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      setHistorial(envios || [])
+      // 3. Historial: evidencia de envíos grupales, con el acuse de Meta
+      await cargarHistorial(soloAlcaldiaRef.current)
     } catch (e) {
       console.error('Error cargando certificados:', e)
     } finally {
@@ -323,11 +361,12 @@ export default function Certificados() {
     } finally { setSaving(false) }
   }
 
-  async function handleEnviarTodos(reporte) {
+  // `itemIds`: con el filtro de la Alcaldía, solo esas mascotas (null = todo el lote)
+  async function handleEnviarTodos(reporte, itemIds = null) {
     setSaving(true)
     try {
-      const { pdfUrl, pdfUrls } = await generarReporte(reporte, coordDe(reporte))
-      const r = await enviarReporte(reporte.id, { pdfUrl, pdfUrls, fromNumber: lineaOrigen })
+      const { pdfUrl, pdfUrls } = await generarReporte(reporte, coordDe(reporte), itemIds ? { itemIds } : {})
+      const r = await enviarReporte(reporte.id, { pdfUrl, pdfUrls, items: itemIds || undefined, fromNumber: lineaOrigen })
       await cargar()
       if (r.errores?.length) {
         await showAlert(`${r.enviados} enviados.\n\nErrores:\n${r.errores.map(e => `${e.mascota}: ${e.error}`).join('\n')}`, { title: 'Envío parcial', variant: 'warning' })
@@ -404,6 +443,11 @@ export default function Certificados() {
   const pendGrupales = reportes.reduce((acc, r) =>
     acc + (r.reportes_grupales_items || []).filter(i => i.estado !== 'EXCLUIDO' && !['ENVIADO', 'REENVIADO'].includes(i.estado)).length, 0)
   const pendInd = individuales.filter(i => !i.cert?.enviado_whatsapp).length
+  const pendAlcaldia = reportes.reduce((acc, r) =>
+    acc + (r.reportes_grupales_items || []).filter(i => i.es_alcaldia && i.estado !== 'EXCLUIDO' && !['ENVIADO', 'REENVIADO'].includes(i.estado)).length, 0)
+  const reportesVisibles = soloAlcaldia
+    ? reportes.filter(r => (r.reportes_grupales_items || []).some(i => i.es_alcaldia && i.estado !== 'EXCLUIDO'))
+    : reportes
   const totalPend = pendGrupales + pendInd
 
   const TABS = [
@@ -453,6 +497,15 @@ export default function Certificados() {
               {t.badge > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: tab === t.id ? '#1A5CD8' : '#9CA3AF', color: 'white', minWidth: 18, textAlign: 'center' }}>{t.badge}</span>}
             </button>
           ))}
+          <button onClick={alternarAlcaldia}
+            className="ml-2 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 border"
+            style={soloAlcaldia
+              ? { background: '#0369A1', color: 'white', borderColor: '#0369A1' }
+              : { background: 'white', color: '#075985', borderColor: '#BAE6FD' }}
+            title="Ver solo las mascotas del proyecto de la Alcaldía">
+            🏛 Solo Alcaldía
+            {pendAlcaldia > 0 && <span className="text-[10px] font-bold px-1.5 rounded-full" style={{ background: soloAlcaldia ? 'white' : '#0369A1', color: soloAlcaldia ? '#0369A1' : 'white' }}>{pendAlcaldia}</span>}
+          </button>
           <button onClick={handleSincronizar} disabled={saving || loading}
             className="ml-2 px-3 py-1.5 rounded-lg text-[11px] text-gray-500 hover:text-gray-700 hover:bg-white transition-colors flex items-center gap-1">
             <RefreshCw size={12} className={saving ? 'animate-spin' : ''} /> Sincronizar
@@ -483,11 +536,16 @@ export default function Certificados() {
               </div>
             )}
 
-            {reportes.length > 0 && (
+            {soloAlcaldia && reportesVisibles.length === 0 && (
+              <div className="rounded-2xl border border-dashed p-8 text-center text-[13px] text-gray-500" style={{ borderColor: '#BAE6FD' }}>
+                🏛 No hay mascotas de la Alcaldía en los reportes grupales.
+              </div>
+            )}
+            {reportesVisibles.length > 0 && (
               <div className="space-y-3">
-                <h3 className="text-[11px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5"><Flame size={12} /> Reportes grupales</h3>
-                {reportes.map(r => (
-                  <TarjetaReporte key={r.id} reporte={r} saving={saving}
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5"><Flame size={12} /> Reportes grupales{soloAlcaldia && ' · solo Alcaldía'}</h3>
+                {reportesVisibles.map(r => (
+                  <TarjetaReporte key={r.id} reporte={r} saving={saving} soloAlcaldia={soloAlcaldia}
                     onGenerar={handleGenerar} onEnviarTodos={handleEnviarTodos}
                     onEnviarUno={handleEnviarUno} onReenviar={(reporte, item) => setReenvio({ reporte, item })}
                     onImprimirItem={handleImprimirItem} />
@@ -495,7 +553,7 @@ export default function Certificados() {
               </div>
             )}
 
-            {individuales.length > 0 && (
+            {!soloAlcaldia && individuales.length > 0 && (
               <div className="space-y-3">
                 <h3 className="text-[11px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5"><Award size={12} /> Certificados individuales</h3>
                 <div className="space-y-2">
@@ -560,22 +618,36 @@ export default function Certificados() {
             <div className="rounded-2xl border bg-white shadow-sm overflow-hidden" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
               <table className="w-full text-[12px]">
                 <thead className="bg-gray-50 border-b" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-                  <tr>{['Mascota', 'Propietario', 'Lote', 'Estado', 'Evidencia', 'Fecha'].map(h => (
+                  <tr>{['Mascota', 'Propietario', 'Lote', 'Estado', '¿Le llegó?', 'PDF enviado', 'Fecha'].map(h => (
                     <th key={h} className="text-left px-4 py-3 font-semibold text-gray-500 text-[11px] uppercase tracking-wide">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody>
                   {historial.map(e => (
                     <tr key={e.id} className="border-b hover:bg-gray-50" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>
-                      <td className="px-4 py-3 font-semibold text-gray-900">{e.reportes_grupales_items?.mascota_nombre || '-'}</td>
-                      <td className="px-4 py-3 text-gray-600">{e.reportes_grupales_items?.propietario_nombre || '-'}</td>
-                      <td className="px-4 py-3 text-gray-500">{e.reportes_grupales?.lotes_grupales?.numero_lote || '-'}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">
+                        <span className="flex items-center gap-1.5 flex-wrap">{e.mascota_nombre || '-'}{e.es_alcaldia && <ChipAlcaldia />}</span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{e.propietario_nombre || '-'}</td>
+                      <td className="px-4 py-3 text-gray-500">{e.numero_lote || '-'}</td>
                       <td className="px-4 py-3">
                         {e.estado === 'ENVIADO'
                           ? <span className="flex items-center gap-1 text-green-700 font-medium text-[11px]"><CheckCircle2 size={11} /> {e.es_reenvio ? 'Reenviado' : 'Enviado'}</span>
                           : <span className="flex items-center gap-1 text-red-600 font-medium text-[11px]"><XCircle size={11} /> Error</span>}
                       </td>
-                      <td className="px-4 py-3 text-gray-400 text-[10px]">{e.message_id ? `msg ${e.message_id.slice(0, 8)}…` : (e.error || '-')}</td>
+                      <td className="px-4 py-3">
+                        {e.estado === 'ENVIADO'
+                          ? <AcuseMeta envio={e} conAcuse={historialConAcuse} />
+                          : <span className="text-[10px] text-red-600 max-w-[220px] truncate inline-block" title={e.error || ''}>{e.error || '-'}</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {e.pdf_url
+                          ? <a href={e.pdf_url} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 hover:underline">
+                              <ExternalLink size={11} /> Ver PDF
+                            </a>
+                          : <span className="text-[11px] text-gray-400">—</span>}
+                      </td>
                       <td className="px-4 py-3 text-gray-500">{fmtDateTime(e.created_at)}</td>
                     </tr>
                   ))}

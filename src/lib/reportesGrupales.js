@@ -41,6 +41,32 @@ export async function obtenerReportes() {
   return data || []
 }
 
+// ─── Historial de envíos con el acuse de Meta (lo cruza el backend) ──────────
+// Si el backend no responde, cae a la lectura directa de siempre: sin acuse ni
+// etiqueta, pero el historial no queda en blanco.
+export async function obtenerHistorial({ soloAlcaldia = false } = {}) {
+  try {
+    const r = await orbitApi(`/grupales/historial?limite=200${soloAlcaldia ? '&alcaldia=1' : ''}`)
+    return { envios: r.envios || [], conAcuse: true }
+  } catch (e) {
+    console.warn('[historial grupales] backend no disponible, lectura directa:', e.message)
+    const { data, error } = await db
+      .from('reportes_grupales_envios')
+      .select('*, reportes_grupales(tipo_proceso, lotes_grupales(numero_lote)), reportes_grupales_items(mascota_nombre, propietario_nombre, es_alcaldia)')
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (error) throw error
+    const envios = (data || []).map(e => ({
+      ...e,
+      mascota_nombre:     e.reportes_grupales_items?.mascota_nombre,
+      propietario_nombre: e.reportes_grupales_items?.propietario_nombre,
+      es_alcaldia:        e.reportes_grupales_items?.es_alcaldia === true,
+      numero_lote:        e.reportes_grupales?.lotes_grupales?.numero_lote,
+    }))
+    return { envios: soloAlcaldia ? envios.filter(e => e.es_alcaldia) : envios, conAcuse: false }
+  }
+}
+
 // ─── Sincronizar (re-clasifica, valida, recalcula vencimientos) ──────────────
 export function sincronizar() {
   return orbitApi('/grupales/sincronizar', { method: 'POST' })

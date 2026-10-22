@@ -7,7 +7,7 @@ import { generarPropuesta } from './jobs/propuesta.js'
 import { motorAlertas } from './jobs/alertas.js'
 import { confirmarLote, cerrarLote } from './lotes.js'
 import { jobReportesGrupales } from './jobs/grupales.js'
-import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServicioAReporteGrupal } from './grupales.js'
+import { marcarGenerado, enviarReporte, desvincularServicioDeGrupal, agregarServicioAReporteGrupal, historialEnvios } from './grupales.js'
 import { resumenPendientes, redactarMensaje, alertaVencimientos } from './grupales-ia.js'
 import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
@@ -1736,6 +1736,17 @@ app.post('/grupales/reportes/:id/enviar', requireAuth, requireRol('COORDINADOR',
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[grupales/enviar] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Historial de envíos con el acuse de Meta (Certificados › Historial). ?alcaldia=1 filtra.
+app.get('/grupales/historial', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const envios = await historialEnvios({ soloAlcaldia: req.query.alcaldia === '1', limite: req.query.limite })
+    res.json({ envios })
+  } catch (e) {
+    log('[grupales/historial] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
