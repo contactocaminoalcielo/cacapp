@@ -7,12 +7,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { crm, TIPOS_GESTION, TICKET_TIPOS, TICKET_CATEGORIAS, aInputFechaHora, desdeInputFechaHora, atajoFecha } from '@/lib/crmApi'
+import { crm, TIPOS_GESTION, aInputFechaHora, desdeInputFechaHora, atajoFecha } from '@/lib/crmApi'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { useCrm } from './CrmContext'
-import { EnviarPlantillaCrm } from './EnviarWhatsapp'
+import { BotonEnlaceAfiliacion, SeccionPqrs, guardarPqrs } from './VisitaExtras'
 import { Campo, ACENTO } from './ui'
-import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp, Send, Check, Loader2 } from 'lucide-react'
+import { Camera, Building2, Users } from 'lucide-react'
 
 const TIPOS = ['VISITA', 'REUNION']
 const ATAJOS = [['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
@@ -161,9 +161,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState(null)
   const [pqrs, setPqrs] = useState(null)  // null=oculto | {}=habilitado
-  const [enviandoInv, setEnviandoInv] = useState(false)
-  const [exitoInv, setExitoInv] = useState(false)
-  const [plantillaPara, setPlantillaPara] = useState(null)   // número, si la ventana de 24 h está cerrada
+  const hecho = useRef(null)   // { aliadoId } cuando la visita ya quedó: reintentar solo reintenta la PQRS
 
   function fechaDesde(dia) {
     if (registrarHoy) return aInputFechaHora(new Date())
@@ -177,7 +175,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   useEffect(() => {
     if (!abierto) return
     setError(null); setBuscar(''); setFoto(null); setFotoPreview(null); setPqrs(null)
-    setEnviandoInv(false); setExitoInv(false); setPlantillaPara(null)
+    hecho.current = null
     setF({ tipo: 'VISITA', aliado_id: '', titulo: '', notas: '', fecha: fechaDesde(fechaInicial),
            responsable_id: '', nombre: '', contacto_nombre: '', whatsapp: '', telefono: '',
            ciudad: 'Bogotá', localidad: '', direccion: '', notasProspecto: '' })
@@ -206,46 +204,38 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
     if (pqrs && modo === 'existente' && !pqrs.asunto?.trim()) { setError('Escribe el asunto de la PQRS (o ciérrala)'); return }
     setGuardando(true); setError(null)
     try {
-      let aliadoId = f.aliado_id || null, prospectoId = null
+      if (!hecho.current) {
+        let aliadoId = f.aliado_id || null, prospectoId = null
 
-      if (modo === 'nuevo') {
-        const r = await crm.crearProspecto({
-          nombre: f.nombre, contacto_nombre: f.contacto_nombre || null,
-          whatsapp: f.whatsapp || null, telefono: f.telefono || null,
-          ciudad: f.ciudad || null, localidad: f.localidad || null,
-          direccion: f.direccion || null, notas: f.notasProspecto || null,
-          fuente: 'VISITA',
-        })
-        if (!r.ok) { setError(r.error || 'No se pudo crear el prospecto'); setGuardando(false); return }
-        prospectoId = r.prospecto.id
+        if (modo === 'nuevo') {
+          const r = await crm.crearProspecto({
+            nombre: f.nombre, contacto_nombre: f.contacto_nombre || null,
+            whatsapp: f.whatsapp || null, telefono: f.telefono || null,
+            ciudad: f.ciudad || null, localidad: f.localidad || null,
+            direccion: f.direccion || null, notas: f.notasProspecto || null,
+            fuente: 'VISITA',
+          })
+          if (!r.ok) { setError(r.error || 'No se pudo crear el prospecto'); setGuardando(false); return }
+          prospectoId = r.prospecto.id
 
-        if (foto) {
-          await crm.subirFoto({ prospecto_id: prospectoId, base64: foto.base64,
-            mime: foto.mime, miniatura: foto.miniatura, descripcion: 'Logo / foto del establecimiento' })
-            .catch(() => {})
+          if (foto) {
+            await crm.subirFoto({ prospecto_id: prospectoId, base64: foto.base64,
+              mime: foto.mime, miniatura: foto.miniatura, descripcion: 'Logo / foto del establecimiento' })
+              .catch(() => {})
+          }
         }
-      }
 
-      await crm.crearSeguimiento({
-        aliado_id: aliadoId || undefined, prospecto_id: prospectoId || undefined,
-        tipo: f.tipo, titulo: f.titulo, notas: f.notas || null,
-        programado_para: desdeInputFechaHora(f.fecha),
-        responsable_id: f.responsable_id || null,
-        estado: registrarHoy ? 'HECHO' : 'PENDIENTE',
-      })
+        await crm.crearSeguimiento({
+          aliado_id: aliadoId || undefined, prospecto_id: prospectoId || undefined,
+          tipo: f.tipo, titulo: f.titulo, notas: f.notas || null,
+          programado_para: desdeInputFechaHora(f.fecha),
+          responsable_id: f.responsable_id || null,
+          estado: registrarHoy ? 'HECHO' : 'PENDIENTE',
+        })
 
-      if (pqrs && pqrs.asunto?.trim() && aliadoId) {
-        // Sin .catch mudo: si la PQRS no queda, quien registra tiene que saberlo.
-        await crm.crearTicket({
-          aliado_id: aliadoId,
-          tipo: pqrs.tipo || 'PETICION',
-          categoria: pqrs.categoria || 'OTRO',
-          prioridad: pqrs.prioridad || 'MEDIA',
-          canal: 'VISITA',
-          asunto: pqrs.asunto.trim(),
-          descripcion: pqrs.descripcion || null,
-        }).catch(e => { throw new Error(`La visita quedó registrada, pero la PQRS no: ${e.message}`) })
+        hecho.current = { aliadoId }
       }
+      await guardarPqrs(hecho.current.aliadoId, pqrs)
 
       refrescarAlertas()
       onGuardado?.()
@@ -302,29 +292,13 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
 
         {/* Enlace de afiliación: SIEMPRE por la línea de veterinarias. Fuera de la
             ventana de 24 h WhatsApp exige plantilla y se abre el selector de esa línea. */}
-        {(modo === 'existente' && f.aliado_id) || (modo === 'nuevo' && f.whatsapp?.replace(/\D/g, '')) ? (() => {
+        {(() => {
           const wa = (modo === 'existente' ? (f._vet?.whatsapp || f._vet?.telefono) : f.whatsapp)?.replace(/\D/g, '')
+          if (modo === 'existente' && !f.aliado_id) return null
+          if (modo === 'nuevo' && !wa) return <p className="text-[11.5px] text-gray-400">Escribe el WhatsApp del establecimiento para compartirle el enlace de afiliación.</p>
           if (!wa) return <p className="text-[11.5px] text-gray-400">Esta veterinaria no tiene WhatsApp en la ficha: no se le puede enviar el enlace de afiliación.</p>
-          async function enviarInvitacion() {
-            setEnviandoInv(true); setExitoInv(false); setError(null)
-            try {
-              await crm.invitarAliada({ whatsapp: wa, aliado_id: modo === 'existente' ? f.aliado_id : undefined })
-              setExitoInv(true); setTimeout(() => setExitoInv(false), 4000)
-            } catch (e) {
-              if (e.detalle?.necesita_plantilla) { setError(e.message); setPlantillaPara(e.detalle.numero || wa) }
-              else setError(`Enlace de afiliación: ${e.message}`)
-            } finally { setEnviandoInv(false) }
-          }
-          return (
-            <button type="button" onClick={enviarInvitacion} disabled={enviandoInv}
-              className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-60"
-              style={{ color: exitoInv ? '#22C55E' : '#0F766E', background: exitoInv ? '#F0FDF4' : '#E6F4F1' }}>
-              {enviandoInv ? <><Loader2 size={12} className="animate-spin" /> Enviando…</>
-                : exitoInv ? <><Check size={12} /> Enviado por la línea de veterinarias</>
-                : <><Send size={12} /> Compartir enlace de afiliación (línea de veterinarias)</>}
-            </button>
-          )
-        })() : null}
+          return <BotonEnlaceAfiliacion whatsapp={wa} aliadoId={modo === 'existente' ? f.aliado_id : null} onError={setError} />
+        })()}
 
         {/* Qué hacer */}
         <Campo label="¿Qué se va a hacer?">
@@ -355,58 +329,10 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
           </Campo>
         )}
 
-        {/* PQRS — siempre a la vista. El ticket exige una aliada (crm_tickets.aliado_id
-            NOT NULL): con un establecimiento nuevo o sin vet elegida se explica por qué no. */}
-        <div className="rounded-xl border border-dashed border-gray-300 overflow-hidden">
-          {modo === 'nuevo' ? (
-            <div className="flex items-center gap-2 px-3.5 py-2.5 text-[12px] text-gray-500">
-              <LifeBuoy size={14} /> Las PQRS se registran a veterinarias aliadas. Un establecimiento nuevo primero se afilia.
-            </div>
-          ) : !f.aliado_id ? (
-            <div className="flex items-center gap-2 px-3.5 py-2.5 text-[12px] text-gray-500">
-              <LifeBuoy size={14} /> Elige la veterinaria para registrar también una PQRS.
-            </div>
-          ) : (<>
-            <button type="button"
-              onClick={() => setPqrs(p => p ? null : { tipo: 'PETICION', categoria: 'OTRO', prioridad: 'MEDIA', asunto: '', descripcion: '' })}
-              className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12.5px] font-semibold text-gray-600 hover:bg-gray-50 transition">
-              <LifeBuoy size={14} style={{ color: pqrs ? ACENTO : undefined }} />
-              <span className="flex-1 text-left">
-                {pqrs ? 'Registrar PQRS también' : 'También registrar una PQRS'}
-              </span>
-              {pqrs ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-            {pqrs && (
-              <div className="px-3.5 pb-3.5 space-y-3 border-t border-gray-100 pt-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <Campo label="Tipo">
-                    <Select value={pqrs.tipo || 'PETICION'} onChange={e => setPqrs(p => ({ ...p, tipo: e.target.value }))}>
-                      {Object.entries(TICKET_TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </Select>
-                  </Campo>
-                  <Campo label="Categoría">
-                    <Select value={pqrs.categoria || 'OTRO'} onChange={e => setPqrs(p => ({ ...p, categoria: e.target.value }))}>
-                      {Object.entries(TICKET_CATEGORIAS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </Select>
-                  </Campo>
-                </div>
-                <Campo label="Asunto *">
-                  <Input value={pqrs.asunto || ''} onChange={e => setPqrs(p => ({ ...p, asunto: e.target.value }))}
-                    placeholder="Ej: Cobro incorrecto en comisión de octubre" />
-                </Campo>
-                <Campo label="Descripción">
-                  <Textarea rows={2} value={pqrs.descripcion || ''} onChange={e => setPqrs(p => ({ ...p, descripcion: e.target.value }))}
-                    placeholder="Detalles del caso…" />
-                </Campo>
-                <p className="text-[11px] text-gray-400">El ticket quedará con canal <b>Visita</b> y prioridad <b>Media</b>.</p>
-              </div>
-            )}
-          </>)}
-        </div>
-
-        <EnviarPlantillaCrm abierto={!!plantillaPara} onCerrar={() => setPlantillaPara(null)} whatsapp={plantillaPara}
-          destino={modo === 'existente' && f.aliado_id ? { aliado_id: f.aliado_id } : null}
-          onEnviada={() => { setError(null); setExitoInv(true); setTimeout(() => setExitoInv(false), 4000) }} />
+        {/* PQRS — siempre a la vista. El ticket exige una aliada (crm_tickets.aliado_id NOT NULL). */}
+        <SeccionPqrs pqrs={pqrs} setPqrs={setPqrs}
+          aviso={modo === 'nuevo' ? 'Las PQRS se registran a veterinarias aliadas. Un establecimiento nuevo primero se afilia.'
+            : !f.aliado_id ? 'Elige la veterinaria para registrar también una PQRS.' : null} />
       </div>
     </Modal>
   )

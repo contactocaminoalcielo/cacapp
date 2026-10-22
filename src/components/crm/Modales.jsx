@@ -1,6 +1,6 @@
 // Los tres registros que más se hacen en el CRM: una gestión (lo que pasó),
 // un seguimiento (lo que toca) y un ticket (lo que la vet reclama).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +12,7 @@ import {
 } from '@/lib/crmApi'
 import { useCrm } from './CrmContext'
 import { Campo, ACENTO } from './ui'
+import { BotonEnlaceAfiliacion, SeccionPqrs, guardarPqrs } from './VisitaExtras'
 
 const ATAJOS = [['1h', 'En 1 hora'], ['tarde', 'Esta tarde'], ['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
 
@@ -38,7 +39,11 @@ function SelectorFecha({ valor, onCambio }) {
 // `sinSiguiente`: la cuenta pidió no ser contactada; se registra lo que pasó, pero no se programa nada.
 export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = null, tipoInicial = 'LLAMADA', onGuardado, sinSiguiente = false }) {
   const { equipo, refrescarAlertas } = useCrm()
-  const [tipo, setTipo] = useState(tipoInicial)
+  // Al cerrar una visita programada el formulario arranca en VISITA, no en LLAMADA.
+  const tipoDe = () => (['LLAMADA', 'WHATSAPP', 'VISITA', 'REUNION', 'EMAIL', 'NOTA'].includes(seguimiento?.tipo) ? seguimiento.tipo : tipoInicial)
+  const [tipo, setTipo] = useState(tipoDe)
+  const [pqrs, setPqrs] = useState(null)
+  const gestionHecha = useRef(false)   // si solo falló la PQRS, reintentar no duplica la gestión
   const [resultado, setResultado] = useState('')
   const [resumen, setResumen] = useState('')
   const [compromiso, setCompromiso] = useState('')
@@ -50,10 +55,11 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
 
   useEffect(() => {
     if (!abierto) return
-    setTipo(tipoInicial); setResultado(''); setResumen(''); setCompromiso(''); setDuracion(''); setError(null)
+    setTipo(tipoDe()); setResultado(''); setResumen(''); setCompromiso(''); setDuracion(''); setError(null)
+    setPqrs(null); gestionHecha.current = false
     setConSiguiente(!sinSiguiente)
     setSiguiente({ tipo: 'LLAMADA', fecha: aInputFechaHora(atajoFecha('3d')), titulo: '', responsable_id: '' })
-  }, [abierto, tipoInicial, sinSiguiente])
+  }, [abierto, tipoInicial, sinSiguiente, seguimiento?.id])
 
   // "No contestó" casi siempre es volver a intentar pronto.
   useEffect(() => {
@@ -62,10 +68,13 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
     }
   }, [resultado])
 
+  const enPersona = tipo === 'VISITA' || tipo === 'REUNION'
+
   async function guardar() {
+    if (enPersona && pqrs && !pqrs.asunto?.trim()) { setError('Escribe el asunto de la PQRS (o ciérrala)'); return }
     setGuardando(true); setError(null)
     try {
-      await crm.registrarGestion({
+      if (!gestionHecha.current) await crm.registrarGestion({
         ...destino, tipo, resultado: resultado || null,
         resumen: resumen || (resultado ? RESULTADOS[resultado] : ''),
         compromiso, duracion_min: duracion || null,
@@ -75,6 +84,8 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
           titulo: siguiente.titulo || null, responsable_id: siguiente.responsable_id || null,
         } : null,
       })
+      gestionHecha.current = true
+      if (enPersona) await guardarPqrs(destino?.aliado_id, pqrs)
       refrescarAlertas()
       onGuardado?.()
       onCerrar()
@@ -116,6 +127,13 @@ export function RegistrarGestion({ abierto, onCerrar, destino, seguimiento = nul
           <Textarea rows={4} value={resumen} onChange={e => setResumen(e.target.value)}
             placeholder="Ej: Habló la Dra. Paula. Este mes les han llegado pocos casos; preguntó por la comisión de agosto…" />
         </Campo>
+        {enPersona && (
+          <div className="space-y-3">
+            <BotonEnlaceAfiliacion aliadoId={destino?.aliado_id} prospectoId={destino?.prospecto_id} onError={setError} />
+            <SeccionPqrs pqrs={pqrs} setPqrs={setPqrs}
+              aviso={destino?.aliado_id ? null : 'Las PQRS se registran a veterinarias aliadas. Un prospecto primero se afilia.'} />
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Campo label="Compromiso / acuerdo" className="sm:col-span-2">
             <Input value={compromiso} onChange={e => setCompromiso(e.target.value)} placeholder="Ej: le enviamos el tarifario hoy" />
