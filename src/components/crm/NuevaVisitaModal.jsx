@@ -10,10 +10,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { crm, TIPOS_GESTION, TICKET_TIPOS, TICKET_CATEGORIAS, aInputFechaHora, desdeInputFechaHora, atajoFecha } from '@/lib/crmApi'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { useCrm } from './CrmContext'
+import { EnviarPlantillaCrm } from './EnviarWhatsapp'
 import { Campo, ACENTO } from './ui'
 import { Camera, Building2, Users, LifeBuoy, ChevronDown, ChevronUp, Send, Check, Loader2 } from 'lucide-react'
-
-const LINK_ALIADO = 'https://orbit.orbitacac.com/#/aliado'
 
 const TIPOS = ['VISITA', 'REUNION']
 const ATAJOS = [['manana', 'Mañana 9 a. m.'], ['3d', 'En 3 días'], ['semana', 'En 1 semana'], ['mes', 'En 1 mes']]
@@ -164,6 +163,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   const [pqrs, setPqrs] = useState(null)  // null=oculto | {}=habilitado
   const [enviandoInv, setEnviandoInv] = useState(false)
   const [exitoInv, setExitoInv] = useState(false)
+  const [plantillaPara, setPlantillaPara] = useState(null)   // número, si la ventana de 24 h está cerrada
 
   function fechaDesde(dia) {
     if (registrarHoy) return aInputFechaHora(new Date())
@@ -177,7 +177,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   useEffect(() => {
     if (!abierto) return
     setError(null); setBuscar(''); setFoto(null); setFotoPreview(null); setPqrs(null)
-    setEnviandoInv(false); setExitoInv(false)
+    setEnviandoInv(false); setExitoInv(false); setPlantillaPara(null)
     setF({ tipo: 'VISITA', aliado_id: '', titulo: '', notas: '', fecha: fechaDesde(fechaInicial),
            responsable_id: '', nombre: '', contacto_nombre: '', whatsapp: '', telefono: '',
            ciudad: 'Bogotá', localidad: '', direccion: '', notasProspecto: '' })
@@ -203,6 +203,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
     if (!f.titulo?.trim()) { setError('Escribe qué se va a hacer en la visita'); return }
     if (modo === 'existente' && !f.aliado_id) { setError('Selecciona una veterinaria'); return }
     if (modo === 'nuevo' && !f.nombre?.trim()) { setError('Escribe el nombre del establecimiento'); return }
+    if (pqrs && modo === 'existente' && !pqrs.asunto?.trim()) { setError('Escribe el asunto de la PQRS (o ciérrala)'); return }
     setGuardando(true); setError(null)
     try {
       let aliadoId = f.aliado_id || null, prospectoId = null
@@ -234,6 +235,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
       })
 
       if (pqrs && pqrs.asunto?.trim() && aliadoId) {
+        // Sin .catch mudo: si la PQRS no queda, quien registra tiene que saberlo.
         await crm.crearTicket({
           aliado_id: aliadoId,
           tipo: pqrs.tipo || 'PETICION',
@@ -242,7 +244,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
           canal: 'VISITA',
           asunto: pqrs.asunto.trim(),
           descripcion: pqrs.descripcion || null,
-        }).catch(() => {})
+        }).catch(e => { throw new Error(`La visita quedó registrada, pero la PQRS no: ${e.message}`) })
       }
 
       refrescarAlertas()
@@ -298,29 +300,28 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
           : <FormNuevoProspecto f={f} setF={setF} fotoPreview={fotoPreview} onFoto={manejarFoto} />
         }
 
-        {/* Botón enviar enlace de invitación por WhatsApp de Orbit */}
+        {/* Enlace de afiliación: SIEMPRE por la línea de veterinarias. Fuera de la
+            ventana de 24 h WhatsApp exige plantilla y se abre el selector de esa línea. */}
         {(modo === 'existente' && f.aliado_id) || (modo === 'nuevo' && f.whatsapp?.replace(/\D/g, '')) ? (() => {
-          const wa = (modo === 'existente' ? f._vet?.whatsapp : f.whatsapp)?.replace(/\D/g, '')
-          if (!wa) return null
+          const wa = (modo === 'existente' ? (f._vet?.whatsapp || f._vet?.telefono) : f.whatsapp)?.replace(/\D/g, '')
+          if (!wa) return <p className="text-[11.5px] text-gray-400">Esta veterinaria no tiene WhatsApp en la ficha: no se le puede enviar el enlace de afiliación.</p>
           async function enviarInvitacion() {
-            setEnviandoInv(true); setExitoInv(false)
+            setEnviandoInv(true); setExitoInv(false); setError(null)
             try {
-              const r = await crm.invitarAliada(wa)
-              if (r?.sin_conversacion) {
-                window.open(r.wa_href, '_blank', 'noopener')
-                return
-              }
-              if (r?.ok === false) throw new Error(r.error || 'No se pudo enviar')
+              await crm.invitarAliada({ whatsapp: wa, aliado_id: modo === 'existente' ? f.aliado_id : undefined })
               setExitoInv(true); setTimeout(() => setExitoInv(false), 4000)
-            } catch (e) { setError(`Invitación: ${e.message}`) } finally { setEnviandoInv(false) }
+            } catch (e) {
+              if (e.detalle?.necesita_plantilla) { setError(e.message); setPlantillaPara(e.detalle.numero || wa) }
+              else setError(`Enlace de afiliación: ${e.message}`)
+            } finally { setEnviandoInv(false) }
           }
           return (
             <button type="button" onClick={enviarInvitacion} disabled={enviandoInv}
               className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-60"
               style={{ color: exitoInv ? '#22C55E' : '#0F766E', background: exitoInv ? '#F0FDF4' : '#E6F4F1' }}>
               {enviandoInv ? <><Loader2 size={12} className="animate-spin" /> Enviando…</>
-                : exitoInv ? <><Check size={12} /> Enviado por Orbit</>
-                : <><Send size={12} /> Enviar enlace de invitación por Orbit</>}
+                : exitoInv ? <><Check size={12} /> Enviado por la línea de veterinarias</>
+                : <><Send size={12} /> Compartir enlace de afiliación (línea de veterinarias)</>}
             </button>
           )
         })() : null}
@@ -354,9 +355,18 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
           </Campo>
         )}
 
-        {/* PQRS opcional — solo para vet existente seleccionada */}
-        {modo === 'existente' && f.aliado_id && (
-          <div className="rounded-xl border border-dashed border-gray-300 overflow-hidden">
+        {/* PQRS — siempre a la vista. El ticket exige una aliada (crm_tickets.aliado_id
+            NOT NULL): con un establecimiento nuevo o sin vet elegida se explica por qué no. */}
+        <div className="rounded-xl border border-dashed border-gray-300 overflow-hidden">
+          {modo === 'nuevo' ? (
+            <div className="flex items-center gap-2 px-3.5 py-2.5 text-[12px] text-gray-500">
+              <LifeBuoy size={14} /> Las PQRS se registran a veterinarias aliadas. Un establecimiento nuevo primero se afilia.
+            </div>
+          ) : !f.aliado_id ? (
+            <div className="flex items-center gap-2 px-3.5 py-2.5 text-[12px] text-gray-500">
+              <LifeBuoy size={14} /> Elige la veterinaria para registrar también una PQRS.
+            </div>
+          ) : (<>
             <button type="button"
               onClick={() => setPqrs(p => p ? null : { tipo: 'PETICION', categoria: 'OTRO', prioridad: 'MEDIA', asunto: '', descripcion: '' })}
               className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12.5px] font-semibold text-gray-600 hover:bg-gray-50 transition">
@@ -391,8 +401,12 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
                 <p className="text-[11px] text-gray-400">El ticket quedará con canal <b>Visita</b> y prioridad <b>Media</b>.</p>
               </div>
             )}
-          </div>
-        )}
+          </>)}
+        </div>
+
+        <EnviarPlantillaCrm abierto={!!plantillaPara} onCerrar={() => setPlantillaPara(null)} whatsapp={plantillaPara}
+          destino={modo === 'existente' && f.aliado_id ? { aliado_id: f.aliado_id } : null}
+          onEnviada={() => { setError(null); setExitoInv(true); setTimeout(() => setExitoInv(false), 4000) }} />
       </div>
     </Modal>
   )

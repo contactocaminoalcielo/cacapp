@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Phone, PhoneCall, CalendarPlus, MessageCircle, Send, Paperclip, Trophy, XCircle, Pencil, CheckCircle2, RotateCcw, Ban } from 'lucide-react'
+import { ArrowLeft, Phone, PhoneCall, CalendarPlus, MessageCircle, Send, Paperclip, Trophy, XCircle, Pencil, CheckCircle2, RotateCcw, Ban, Trash2 } from 'lucide-react'
 import { crm, ETAPAS, FUENTES, TIPOS_GESTION, fechaCorta, fechaHora, relativo, telHref } from '@/lib/crmApi'
 import { Modal } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -102,6 +102,7 @@ export default function FichaProspecto() {
           {!cerrado && <Accion icono={Trophy} onClick={() => setModal('ganar')}>Convertir en aliada</Accion>}
           {!cerrado && <Accion icono={XCircle} onClick={() => { setMotivo(''); setModal('perder') }}>Perdido</Accion>}
           {!p.no_contactar && <Accion icono={Ban} onClick={() => setModal('bloqueo')}>No contactar</Accion>}
+          <Accion icono={Trash2} onClick={() => setModal('eliminar')}>Eliminar</Accion>
         </div>
         {p.etapa === 'PERDIDO' && <div className="mt-3 text-[12.5px] text-red-600">Perdido: {p.motivo_perdida}{!p.no_contactar && <> · <button className="underline" onClick={() => mover('CONTACTADO')}>Reabrir</button></>}</div>}
       </div>
@@ -175,7 +176,40 @@ export default function FichaProspecto() {
         }}>Marcar perdido</Button></>}>
         <Campo label="¿Por qué se perdió?"><Textarea rows={3} value={motivo} onChange={e => setMotivo(e.target.value)} /></Campo>
       </Modal>
+      <EliminarProspecto abierto={modal === 'eliminar'} prospecto={p} onCerrar={() => setModal(null)}
+        onEliminado={() => { refrescarAlertas(); navegar('/crm/prospectos') }} />
     </div>
+  )
+}
+
+function EliminarProspecto({ abierto, prospecto, onCerrar, onEliminado }) {
+  const [eliminando, setEliminando] = useState(false)
+  const [error, setError] = useState(null)
+  useEffect(() => { if (abierto) { setError(null); setEliminando(false) } }, [abierto])
+
+  async function confirmar() {
+    setEliminando(true); setError(null)
+    try { await crm.eliminarProspecto(prospecto.id); onEliminado() }
+    catch (e) { setError(e.message); setEliminando(false) }
+  }
+
+  return (
+    <Modal open={abierto} onClose={onCerrar} title="Eliminar prospecto" maxWidth="max-w-sm"
+      footer={<>
+        <span className="text-[12px] text-red-600">{error}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button onClick={confirmar} disabled={eliminando} style={{ background: '#DC2626' }}>
+            {eliminando ? 'Eliminando…' : 'Sí, eliminar'}
+          </Button>
+        </div>
+      </>}>
+      <p className="text-[13.5px] text-gray-700">¿Eliminar a <strong>{prospecto?.nombre}</strong> de los prospectos?</p>
+      <p className="text-[12px] text-gray-500 mt-2">
+        Se borra con sus gestiones, seguimientos y fotos. No se puede deshacer.
+        {prospecto?.aliado_id ? ' La veterinaria aliada en la que se convirtió no se toca.' : ''}
+      </p>
+    </Modal>
   )
 }
 

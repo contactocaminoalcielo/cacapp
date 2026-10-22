@@ -266,7 +266,7 @@ export default function FichaVeterinaria() {
               <AccionBoton icono={LifeBuoy} onClick={() => setModal('ticket')}>Ticket</AccionBoton>
               <AccionBoton icono={Pencil} onClick={() => setModal('editar')}>Editar ficha</AccionBoton>
               {!a.no_contactar && <AccionBoton icono={Ban} onClick={() => setModal('bloqueo')}>No contactar</AccionBoton>}
-              {a.estado === 'activo' && <AccionBoton icono={Trash2} onClick={() => setModal('eliminar')}>Eliminar</AccionBoton>}
+              {a.estado !== 'inactivo' && a.activo !== false && <AccionBoton icono={Trash2} onClick={() => setModal('eliminar')}>Eliminar</AccionBoton>}
             </div>
           </div>
         </div>
@@ -485,8 +485,8 @@ function EliminarModal({ abierto, onCerrar, aliado, onEliminado }) {
         ¿Eliminar a <strong>{aliado?.nombre}</strong> del CRM?
       </p>
       <p className="text-[12px] text-gray-500 mt-2">
-        La veterinaria quedará inactiva. Sus servicios históricos y registros no se borran.
-        Si se equivocó, puede reactivarla desde la base de datos.
+        Queda inactiva: sale del CRM y deja de aparecer al registrar servicios (Registro, Kanban).
+        Sus servicios históricos, comisiones y bitácora no se borran.
       </p>
     </Modal>
   )

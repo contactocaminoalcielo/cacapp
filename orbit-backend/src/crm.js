@@ -14,6 +14,7 @@ import { llamarClaude } from './ia.js'
 import { enviarPlantilla, valoresDeFuente } from './whatsapp-plantillas.js'
 import { enviarMaterial } from './whatsapp-materiales.js'
 import { enviarSobre, enviarTexto, etiquetar } from './whatsapp-cloud.js'
+import { enlaceAfiliacion } from './aliados.js'
 
 const MOD = '[crm]'
 const APP_URL = (process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')
@@ -487,10 +488,21 @@ export async function actualizarFicha(id, datos = {}, personalId) {
 export async function borrarAliado(id) {
   const aliadoId = uuid(id)
   if (!aliadoId) return { status: 400, body: { ok: false, error: 'Veterinaria inválida' } }
+  // Sin servicios borrados: queda inactiva. `activo` también, porque Registro,
+  // Kanban y la solicitud de la familia filtran por esa columna, no por `estado`.
   const { rowCount } = await pool.query(
-    `UPDATE public.aliados SET estado = 'inactivo', updated_at = now()
-      WHERE id_aliado = $1 AND estado != 'inactivo'`, [aliadoId])
+    `UPDATE public.aliados SET estado = 'inactivo', activo = false, updated_at = now()
+      WHERE id_aliado = $1 AND (estado <> 'inactivo' OR activo)`, [aliadoId])
   if (!rowCount) return { status: 404, body: { ok: false, error: 'Veterinaria no encontrada o ya está inactiva' } }
+  return { status: 200, body: { ok: true } }
+}
+
+/** Un prospecto no tiene servicios: se borra de verdad (sus gestiones, seguimientos y fotos caen en cascada). */
+export async function borrarProspecto(id) {
+  const pid = uuid(id)
+  if (!pid) return { status: 400, body: { ok: false, error: 'Prospecto inválido' } }
+  const { rowCount } = await pool.query(`DELETE FROM public.crm_prospectos WHERE id = $1`, [pid])
+  if (!rowCount) return { status: 404, body: { ok: false, error: 'Ese prospecto ya no existe' } }
   return { status: 200, body: { ok: true } }
 }
 
@@ -1348,6 +1360,40 @@ export async function enviarPlantillaCrm(d = {}, personalId) {
       [aliadoId, prospectoId, `Plantilla enviada por WhatsApp: ${d.nombre}`, personalId])
   }
   return r
+}
+
+/**
+ * El enlace de afiliación, SIEMPRE por la línea de veterinarias. Texto libre
+ * solo cabe dentro de la ventana de 24 h; fuera de ella (o si la clínica nunca
+ * nos ha escrito) Meta exige plantilla y se lo decimos al frontend para que
+ * abra el selector de plantillas de esa misma línea. Nada de wa.me: eso sale
+ * del celular de quien está en Orbit, no de la línea de la empresa.
+ */
+export async function invitarAliada(d = {}, personalId) {
+  const aliadoId = uuid(d.aliado_id), prospectoId = uuid(d.prospecto_id)
+  const numero = aWhatsapp(d.whatsapp) || (aliadoId || prospectoId ? (await contactoDe({ aliadoId, prospectoId }))?.numero : null)
+  if (!numero) return { status: 422, body: { ok: false, error: 'Falta el WhatsApp de la veterinaria' } }
+  const b = await bloqueoDe({ aliadoId, prospectoId, numero })
+  if (b) return { status: 423, body: { ok: false, error: `No se envía: ${b.nombre} pidió no ser contactada (${b.motivo}).` } }
+  const { linea } = await lineaVeterinarias()
+  if (!linea) return { status: 500, body: { ok: false, error: 'La línea de veterinarias no está configurada' } }
+  const texto = 'Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo ' +
+    `y pedir recogidas con facilidad:\n${enlaceAfiliacion()}`
+  const r = await enviarTexto({ contacto: numero, linea, texto, personalId })
+  if (!r.body?.ok) {
+    if (r.body?.ventana_cerrada || r.body?.error === 'Conversación no encontrada') {
+      return { status: 409, body: { ok: false, necesita_plantilla: true, numero,
+        error: 'Esta clínica no ha escrito a la línea de veterinarias en las últimas 24 h: WhatsApp solo deja abrir la conversación con una plantilla aprobada.' } }
+    }
+    return r
+  }
+  if (aliadoId || prospectoId) {
+    await pool.query(
+      `INSERT INTO public.crm_actividades (aliado_id, prospecto_id, tipo, resumen, origen, realizado_por)
+       VALUES ($1, $2, 'WHATSAPP', 'Enlace de afiliación enviado por la línea de veterinarias', 'MANUAL', $3)`,
+      [aliadoId, prospectoId, personalId]).catch(() => {})
+  }
+  return { status: 200, body: { ok: true, numero } }
 }
 
 export async function enviarMaterialCrm(d = {}, personalId) {
@@ -2264,6 +2310,7 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
       actividades: acts, seguimientos: segs.rows, fotos: fotos.rows, conversaciones: conv.rows } }
   }))
   r.put('/prospectos/:id', responder('prospecto-guardar', req => actualizarProspecto(req.params.id, req.body || {})))
+  r.delete('/prospectos/:id', responder('prospecto-eliminar', req => borrarProspecto(req.params.id)))
   r.post('/prospectos/:id/mover', responder('prospecto-mover', req => moverProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/convertir', responder('prospecto-convertir', req => convertirProspecto(req.params.id, req.body || {}, P(req).id)))
   r.post('/prospectos/:id/plantilla', responder('prospecto-plantilla', req => enviarPlantillaCrm({ ...req.body, prospecto_id: req.params.id, aliado_id: null }, P(req).id)))
@@ -2338,23 +2385,7 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
   // Envía el enlace de afiliación por la API de WhatsApp de vets. Si la vet
   // nunca ha conversado con nosotros, linea se pasa explícitamente (lineaDe
   // falla para números sin historial).
-  r.post('/invitar-aliada', responder('invitar-aliada', async req => {
-    const { whatsapp } = req.body || {}
-    if (!whatsapp) return { status: 400, body: { ok: false, error: 'Falta número de WhatsApp' } }
-    const { linea } = await lineaVeterinarias()
-    if (!linea) return { status: 500, body: { ok: false, error: 'Línea de veterinarias no configurada' } }
-    const texto = `Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo y pedir recogidas con facilidad:\nhttps://orbit.orbitacac.com/#/aliado`
-    const r = await enviarTexto({ contacto: whatsapp, linea, texto, personalId: P(req).id })
-    // Si no hay conversación previa, WA solo acepta plantillas; devolvemos la señal
-    // para que el frontend abra wa.me en su lugar.
-    if (r.status === 404 || r.body?.error?.includes('Conversación no encontrada')) {
-      const num = String(whatsapp).replace(/\D/g, '')
-      const n57 = num.length === 10 ? `57${num}` : num
-      const msg = encodeURIComponent(`Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo: https://orbit.orbitacac.com/#/aliado`)
-      return { status: 200, body: { ok: false, sin_conversacion: true, wa_href: `https://wa.me/${n57}?text=${msg}` } }
-    }
-    return r
-  }))
+  r.post('/invitar-aliada', responder('invitar-aliada', req => invitarAliada(req.body || {}, P(req).id)))
 
   return r
 }

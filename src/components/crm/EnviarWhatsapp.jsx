@@ -24,7 +24,9 @@ export function EnviarPlantillaCrm({ abierto, onCerrar, destino, whatsapp, onEnv
   return (
     <EnviarPlantilla contacto={numero} linea={lineaVets} nombreLinea="Veterinarias" onCerrar={onCerrar}
       onEnviada={async nombre => {
-        await crm.registrarGestion({ ...destino, tipo: 'PLANTILLA', resumen: `Plantilla enviada por WhatsApp: ${nombre || ''}`.trim() }).catch(() => {})
+        if (destino?.aliado_id || destino?.prospecto_id) {
+          await crm.registrarGestion({ ...destino, tipo: 'PLANTILLA', resumen: `Plantilla enviada por WhatsApp: ${nombre || ''}`.trim() }).catch(() => {})
+        }
         onEnviada?.()
         onCerrar()
       }} />

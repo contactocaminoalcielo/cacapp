@@ -75,7 +75,9 @@ export const crm = {
   bloqueoAliado:    (id, datos) => orbitApi(`/crm/aliados/${id}/bloqueo`, { method: 'POST', body: datos }),
   bloqueoProspecto: (id, datos) => orbitApi(`/crm/prospectos/${id}/bloqueo`, { method: 'POST', body: datos }),
   eliminarAliado:   id => orbitApi(`/crm/aliados/${id}`, { method: 'DELETE' }),
-  invitarAliada:    whatsapp => orbitApi('/crm/invitar-aliada', { method: 'POST', body: { whatsapp } }),
+  eliminarProspecto: id => orbitApi(`/crm/prospectos/${id}`, { method: 'DELETE' }),
+  // datos: { whatsapp?, aliado_id?, prospecto_id? }. 409 + necesita_plantilla si la ventana de 24 h está cerrada.
+  invitarAliada:    datos => orbitApi('/crm/invitar-aliada', { method: 'POST', body: datos }),
 }
 
 // ─── Catálogos y etiquetas ──────────────────────────────────────────────────
