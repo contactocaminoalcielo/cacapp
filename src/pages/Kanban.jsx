@@ -1002,7 +1002,8 @@ export default function Kanban() {
         await showAlert('La solicitud de domicilio necesita direccion de recogida.', { title: 'Datos incompletos' })
         return
       }
-      if (aliadoSolData?.convenio_alcaldia && convForm.es_alcaldia === null) {
+      const convPreguntaAlcaldia = !!aliadoSolData?.convenio_alcaldia && planPorId(convForm.plan_id)?.codigo === 'DESAMPARADO'
+      if (convPreguntaAlcaldia && convForm.es_alcaldia === null) {
         await showAlert('Indica si la mascota pertenece al proyecto de la Alcaldía.', { title: 'Datos incompletos' })
         return
       }
@@ -1164,7 +1165,7 @@ export default function Kanban() {
         valor_adicionales:     0,
         valor_transporte:      transporteNum,
         recargo_nocturno:      0,
-        es_alcaldia:           !!aliadoSolData?.convenio_alcaldia && convForm.es_alcaldia === true,
+        es_alcaldia:           convPreguntaAlcaldia && convForm.es_alcaldia === true,
       }).select('id')
       if (se) throw se
       const servicioId = sv[0].id
@@ -4055,7 +4056,7 @@ export default function Kanban() {
             })()}
 
             {/* ── Proyecto de la Alcaldía (migr. 199): etiqueta, y coordinación la corrige ── */}
-            {detalle && (detalle.es_alcaldia || aliadoHorario?.convenio_alcaldia) && (
+            {detalle && (detalle.es_alcaldia || (aliadoHorario?.convenio_alcaldia && selected.codigo_plan === 'DESAMPARADO')) && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-sky-50 border-sky-200">
                 <span className="text-lg shrink-0">🏛</span>
                 <div className="flex-1 min-w-0">
@@ -5218,17 +5219,29 @@ export default function Kanban() {
                       .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                   </select>
                 </div>
-                {aliadoSolData?.convenio_alcaldia && (
-                  <div className={`col-span-2 rounded-xl p-3 border ${cf.es_alcaldia === null ? 'border-amber-300 bg-amber-50' : 'border-sky-200 bg-sky-50'}`}>
-                    <label className={SOL_LABL}>¿Pertenece al proyecto de la Alcaldía? *</label>
+                {/* Proyecto de la Alcaldía: solo vet con convenio + plan Desamparado (David, 22-oct) */}
+                {aliadoSolData?.convenio_alcaldia && planPorId(cf.plan_id)?.codigo === 'DESAMPARADO' && (
+                  <div className={`col-span-2 rounded-xl border-2 p-3.5 transition-all ${cf.es_alcaldia === null
+                    ? 'border-amber-400 bg-amber-50 shadow-[0_0_0_4px_rgba(251,191,36,0.25)]'
+                    : 'border-sky-300 bg-sky-50'}`}>
+                    <div className="flex items-center gap-2.5 mb-2.5">
+                      <span className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${cf.es_alcaldia === null ? 'bg-amber-500' : 'bg-sky-600'}`}>
+                        {cf.es_alcaldia === null && <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60 animate-ping" />}
+                        <AlertTriangle size={14} className="relative" />
+                      </span>
+                      <p className="text-[13px] font-bold text-gray-900 leading-tight">¿Pertenece al proyecto de la Alcaldía? <span className="text-red-500">*</span></p>
+                    </div>
                     <div className="flex gap-2">
-                      {[{ v: true, label: 'Sí' }, { v: false, label: 'No' }].map(o => (
+                      {[{ v: true, label: 'Sí, es de la Alcaldía' }, { v: false, label: 'No' }].map(o => (
                         <button key={o.label} type="button" onClick={() => set('es_alcaldia', o.v)}
-                          className={`flex-1 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
-                            cf.es_alcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-200 bg-white text-gray-600'
+                          className={`flex-1 py-2 rounded-lg text-[13px] font-bold border-2 transition-all ${
+                            cf.es_alcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-300 bg-white text-gray-700 hover:border-sky-400'
                           }`}>{o.label}</button>
                       ))}
                     </div>
+                    {cf.es_alcaldia === null && (
+                      <p className="text-[11px] font-semibold text-amber-800 mt-2">Obligatorio antes de aceptar: si es Sí, su certificado grupal sale solo con esta mascota.</p>
+                    )}
                     {selSolicitud?.origen === 'ALIADO' && typeof selSolicitud?.es_alcaldia === 'boolean' && (
                       <p className="text-[10px] text-gray-500 mt-1.5">La veterinaria respondió «{selSolicitud.es_alcaldia ? 'Sí' : 'No'}» en su enlace.</p>
                     )}

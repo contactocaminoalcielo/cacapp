@@ -361,9 +361,10 @@ export default function Registro() {
     : (parseInt(formMascota.especie_id) || null)
   const valorBase        = precioSeleccionado || 0
   // La vet con convenio de la Alcaldía (hoy Animal City) obliga a responder si la
-  // mascota es del proyecto. Se mira en el catálogo y no solo en la copia del
-  // borrador, que puede venir de antes de la migración 199 sin la bandera.
-  const preguntaAlcaldia = !!aliadoSeleccionado &&
+  // mascota es del proyecto, SOLO con el plan Desamparado (decisión de David,
+  // 22-oct). Se mira en el catálogo y no solo en la copia del borrador, que
+  // puede venir de antes de la migración 199 sin la bandera.
+  const preguntaAlcaldia = !!aliadoSeleccionado && planSeleccionado?.codigo === 'DESAMPARADO' &&
     (aliados.find(a => a.id_aliado === aliadoSeleccionado.id_aliado)?.convenio_alcaldia
       ?? aliadoSeleccionado.convenio_alcaldia) === true
   // adicionales: cantidad × precio_base (precio fijo de DB, no editable)
@@ -1546,20 +1547,28 @@ export default function Registro() {
                 <p className="text-[10px] text-gray-400 mt-1">Si el servicio viene de una veterinaria aliada, selecciónala aquí para aplicar comisión y recordatorios VIP.</p>
               )}
               {preguntaAlcaldia && (
-                <div className={`mt-3 rounded-lg border px-3 py-2.5 ${esAlcaldia === null ? 'border-amber-300 bg-amber-50' : 'border-sky-200 bg-sky-50'}`}>
-                  <div className="text-[12px] font-semibold text-gray-800 mb-2">
-                    ¿Esta mascota pertenece al proyecto de la Alcaldía? <span className="text-red-500">*</span>
+                <div className={`mt-3 rounded-xl border-2 p-3.5 transition-all ${esAlcaldia === null
+                  ? 'border-amber-400 bg-amber-50 shadow-[0_0_0_4px_rgba(251,191,36,0.25)]'
+                  : 'border-sky-300 bg-sky-50'}`}>
+                  <div className="flex items-center gap-2.5 mb-2.5">
+                    <span className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ${esAlcaldia === null ? 'bg-amber-500' : 'bg-sky-600'}`}>
+                      {esAlcaldia === null && <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60 animate-ping" />}
+                      <AlertCircle size={15} className="relative" />
+                    </span>
+                    <div className="text-[13px] font-bold text-gray-900 leading-tight">
+                      ¿Esta mascota pertenece al proyecto de la Alcaldía? <span className="text-red-500">*</span>
+                    </div>
                   </div>
                   <div className="flex gap-2">
-                    {[{ v: true, label: 'Sí' }, { v: false, label: 'No' }].map(o => (
+                    {[{ v: true, label: 'Sí, es de la Alcaldía' }, { v: false, label: 'No' }].map(o => (
                       <button key={o.label} type="button" onClick={() => { setEsAlcaldia(o.v); setError(null) }}
-                        className={`flex-1 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
-                          esAlcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-200 bg-white text-gray-600'
+                        className={`flex-1 py-2 rounded-lg text-[13px] font-bold border-2 transition-all ${
+                          esAlcaldia === o.v ? 'border-sky-600 bg-sky-600 text-white' : 'border-gray-300 bg-white text-gray-700 hover:border-sky-400'
                         }`}>{o.label}</button>
                     ))}
                   </div>
                   {esAlcaldia === null && (
-                    <p className="text-[10px] text-amber-700 mt-1.5">Obligatorio para {aliadoSeleccionado.nombre}: si es Sí, su certificado de cremación grupal sale solo con esta mascota.</p>
+                    <p className="text-[11px] font-semibold text-amber-800 mt-2">Obligatorio para Desamparado de {aliadoSeleccionado.nombre}: si es Sí, su certificado de cremación grupal sale solo con esta mascota.</p>
                   )}
                 </div>
               )}

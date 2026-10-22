@@ -70,10 +70,7 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
   )
   if (!ali[0]) return { status: 404, body: { ok: false, error: 'token_invalido' } }
   const aliadoId = ali[0].id_aliado
-  // Proyecto de la Alcaldía (migr. 199): solo se pregunta a la vet con convenio
-  // (hoy Animal City) y ahí la respuesta es obligatoria. A las demás se ignora.
   const conConvenio = ali[0].convenio_alcaldia === true
-  const esAlcaldia  = conConvenio && typeof payload.es_alcaldia === 'boolean' ? payload.es_alcaldia : null
 
   const prop = payload.propietario || {}
   const masc = payload.mascota || {}
@@ -97,7 +94,19 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
   if (pesoKg <= 0)         faltan.push('peso')
   if (!planId)             faltan.push('plan')
   if (tipoRecogida === 'domicilio' && !direccionDom) faltan.push('dirección de recogida')
-  if (conConvenio && esAlcaldia === null) faltan.push('si la mascota es del proyecto de la Alcaldía')
+  if (faltan.length) return { status: 422, body: { ok: false, error: 'incompleto', faltan } }
+
+  // Proyecto de la Alcaldía (migr. 199): solo se pregunta a la vet con convenio
+  // (hoy Animal City) y solo con el plan Desamparado (David, 22-oct); ahí la
+  // respuesta es obligatoria. En cualquier otro caso se ignora.
+  let esAlcaldia = null
+  if (conConvenio) {
+    const { rows: pl } = await pool.query(`SELECT codigo FROM public.planes WHERE id = $1`, [planId])
+    if (pl[0]?.codigo === 'DESAMPARADO') {
+      esAlcaldia = typeof payload.es_alcaldia === 'boolean' ? payload.es_alcaldia : null
+      if (esAlcaldia === null) faltan.push('si la mascota es del proyecto de la Alcaldía')
+    }
+  }
   if (faltan.length) return { status: 422, body: { ok: false, error: 'incompleto', faltan } }
 
   // Los datos son de un TERCERO: quien los entrega es la clínica, que declara
