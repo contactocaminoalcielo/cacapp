@@ -72,6 +72,19 @@ CREATE POLICY "coordinador_insert" ON public.cruce_comisiones
     )
   );
 
+-- ── Ampliar el CHECK de via en comisiones_aliados ────────────────────────────
+-- Agrega 'CRUCE_REGISTRO' para los cruces autorizados al registrar un servicio
+-- (el técnico cobra menos en la puerta; la comisión queda saldada allí mismo).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'comisiones_aliados_via_check') THEN
+    ALTER TABLE public.comisiones_aliados DROP CONSTRAINT comisiones_aliados_via_check;
+  END IF;
+  ALTER TABLE public.comisiones_aliados
+    ADD CONSTRAINT comisiones_aliados_via_check
+    CHECK (via IS NULL OR via IN ('CRUCE_RECIBO', 'EFECTIVO', 'LIQUIDACION', 'CRUCE_REGISTRO'));
+END $$;
+
 NOTIFY pgrst, 'reload schema';
 COMMIT;
 

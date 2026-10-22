@@ -2536,21 +2536,28 @@ export default function Finanzas() {
                                               : <><X size={11} /> Pendiente</>
                                           }
                                         </button>
-                                        {/* Qué le pasó a esta comisión fuera del descuento: el técnico
-                                            se la pagó a la vet dentro de un recibo, o se liquidó aquí.
-                                            Es lo que David pidió ver "en el apartado de comisiones". */}
-                                        {!s.comision_descontada && (Number(s.comision_pagada) || 0) > 0 && (
+                                        {/* Qué le pasó a esta comisión: se cruzó al registrar,
+                                            el técnico la pagó en un recibo, o se liquidó aquí.
+                                            También aparece cuando comision_descontada=true y hay
+                                            un registro de cruce en comisiones_aliados. */}
+                                        {((comisionesPagos[s.id] || []).length > 0 ||
+                                          (!s.comision_descontada && (Number(s.comision_pagada) || 0) > 0)) && (
                                           <div className="mt-1 text-[10px] leading-snug text-[#4338CA] max-w-[260px]">
                                             {(comisionesPagos[s.id] || []).map(p => (
                                               <div key={p.id}>
-                                                ✓ {fmt(p.valor_comision)} · {fmtFecha(p.fecha_liquidacion)}
+                                                ✓ {
+                                                  p.via === 'CRUCE_REGISTRO' ? 'Cruce al registrar:' :
+                                                  p.via === 'CRUCE_RECIBO'   ? 'Cruce en recibo:'   :
+                                                  p.via === 'LIQUIDACION'    ? 'Liquidado:'          :
+                                                  ''
+                                                } {fmt(p.valor_comision)} · {fmtFecha(p.fecha_liquidacion)}
                                                 {p.notas ? ` — ${p.notas}` : ''}
                                               </div>
                                             ))}
                                             {(comisionesPagos[s.id] || []).length === 0 && (
                                               <div>✓ Pagada {fmt(s.comision_pagada)}</div>
                                             )}
-                                            {pendienteDe(s) > 0 && (
+                                            {!s.comision_descontada && pendienteDe(s) > 0 && (
                                               <div className="text-[#d97706] font-bold">
                                                 Quedan {fmt(pendienteDe(s))} pendientes
                                               </div>

@@ -1051,6 +1051,22 @@ export default function Registro() {
                 .eq('id', svcSaldadoId)
             )
           )
+          // Registrar en comisiones_aliados para trazabilidad en Finanzas
+          await db.from('comisiones_aliados').insert(
+            cruceEntries.map(([svcSaldadoId, monto]) => ({
+              aliado_id:          aliadoSeleccionado.id_aliado,
+              servicio_id:        svcSaldadoId,
+              valor_comision:     Number(monto),
+              modalidad_pago:     aliadoSeleccionado.modalidad_comision || 'PAGO_POR_SERVICIO',
+              estado:             'PAGADA',
+              fecha_generacion:   today(),
+              fecha_liquidacion:  today(),
+              via:                'CRUCE_REGISTRO',
+              servicio_recibo_id: svcData[0].id,
+              pagado_por:         personalData?.id || null,
+              notas:              `Cruce autorizado al registrar servicio.`,
+            }))
+          )
         } catch (e) {
           setError('El servicio quedó registrado, pero no se pudo guardar el cruce de comisiones: ' + (e.message || ''))
         }
