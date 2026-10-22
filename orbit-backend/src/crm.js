@@ -1369,31 +1369,41 @@ export async function enviarPlantillaCrm(d = {}, personalId) {
  * abra el selector de plantillas de esa misma línea. Nada de wa.me: eso sale
  * del celular de quien está en Orbit, no de la línea de la empresa.
  */
+// Creada en la WABA de la línea de veterinarias (una plantilla vive en UNA WABA).
+export const PLANTILLA_AFILIACION = 'invitacion_afiliacion_vet'
+
 export async function invitarAliada(d = {}, personalId) {
   const aliadoId = uuid(d.aliado_id), prospectoId = uuid(d.prospecto_id)
   const numero = aWhatsapp(d.whatsapp) || (aliadoId || prospectoId ? (await contactoDe({ aliadoId, prospectoId }))?.numero : null)
   if (!numero) return { status: 422, body: { ok: false, error: 'Falta el WhatsApp de la veterinaria' } }
   const b = await bloqueoDe({ aliadoId, prospectoId, numero })
   if (b) return { status: 423, body: { ok: false, error: `No se envía: ${b.nombre} pidió no ser contactada (${b.motivo}).` } }
-  const { linea } = await lineaVeterinarias()
+  const { agenteId, linea } = await lineaVeterinarias()
   if (!linea) return { status: 500, body: { ok: false, error: 'La línea de veterinarias no está configurada' } }
   const texto = 'Hola 👋, te compartimos el enlace para registrar tu clínica o veterinaria en Camino al Cielo ' +
     `y pedir recogidas con facilidad:\n${enlaceAfiliacion()}`
-  const r = await enviarTexto({ contacto: numero, linea, texto, personalId })
+  let r = await enviarTexto({ contacto: numero, linea, texto, personalId })
+  let via = 'TEXTO'
   if (!r.body?.ok) {
-    if (r.body?.ventana_cerrada || r.body?.error === 'Conversación no encontrada') {
+    if (!(r.body?.ventana_cerrada || r.body?.error === 'Conversación no encontrada')) return r
+    // Fuera de la ventana: la plantilla de afiliación (sin variables, botón al
+    // enlace). Si aún no está aprobada, el frontend ofrece escoger otra.
+    r = await enviarPlantilla({ contacto: numero, nombre: PLANTILLA_AFILIACION, idioma: 'es_MX', agenteId, linea, personalId })
+    via = 'PLANTILLA'
+    if (!r.body?.ok) {
       return { status: 409, body: { ok: false, necesita_plantilla: true, numero,
-        error: 'Esta clínica no ha escrito a la línea de veterinarias en las últimas 24 h: WhatsApp solo deja abrir la conversación con una plantilla aprobada.' } }
+        error: `Esta clínica no ha escrito a la línea de veterinarias en las últimas 24 h y la plantilla de afiliación no salió (${r.body?.error || 'sin detalle'}). Escoge una plantilla aprobada.` } }
     }
-    return r
   }
   if (aliadoId || prospectoId) {
     await pool.query(
       `INSERT INTO public.crm_actividades (aliado_id, prospecto_id, tipo, resumen, origen, realizado_por)
-       VALUES ($1, $2, 'WHATSAPP', 'Enlace de afiliación enviado por la línea de veterinarias', 'MANUAL', $3)`,
-      [aliadoId, prospectoId, personalId]).catch(() => {})
+       VALUES ($1, $2, $3, $4, 'MANUAL', $5)`,
+      [aliadoId, prospectoId, via === 'TEXTO' ? 'WHATSAPP' : 'PLANTILLA',
+       `Enlace de afiliación enviado por la línea de veterinarias${via === 'PLANTILLA' ? ` (plantilla ${PLANTILLA_AFILIACION})` : ''}`,
+       personalId]).catch(() => {})
   }
-  return { status: 200, body: { ok: true, numero } }
+  return { status: 200, body: { ok: true, numero, via } }
 }
 
 export async function enviarMaterialCrm(d = {}, personalId) {
