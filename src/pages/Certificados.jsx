@@ -53,6 +53,15 @@ function Pill({ cfg, children }) {
   )
 }
 
+// Varios certificados completos en una sola ventana de impresión, uno por página
+// (abrir una ventana por mascota la bloquea el navegador).
+function unirCertificados(docs) {
+  if (docs.length <= 1) return docs[0] || ''
+  const cuerpo = d => (d.match(/<body[^>]*>([\s\S]*)<\/body>/i) || [, d])[1]
+  const resto = docs.slice(1).map(d => `<div style="page-break-before:always"></div>${cuerpo(d)}`).join('')
+  return docs[0].replace(/<\/body>/i, `${resto}</body>`)
+}
+
 // «Enviado» no es «le llegó»: el acuse de Meta llega por el webhook.
 function AcuseMeta({ envio, conAcuse }) {
   if (envio.estado !== 'ENVIADO') return <span className="text-[11px] text-gray-400">—</span>
@@ -112,8 +121,8 @@ function FilaItem({ item, onEnviar, onReenviar, onImprimir, saving, puedeEnviar 
       </div>
       {item.es_alcaldia && item.estado !== 'EXCLUIDO' && (
         <Button size="sm" variant="secondary" disabled={saving} onClick={() => onImprimir(item)}
-          title="Ver e imprimir el certificado propio de esta mascota">
-          <Printer size={11} />
+          title="Ver e imprimir el certificado propio de esta mascota (solo su fila)">
+          <Printer size={11} /> Certificado propio
         </Button>
       )}
       {item.estado === 'EXCLUIDO' ? (
@@ -143,6 +152,7 @@ function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReen
   const items = visibles.filter(i => i.estado !== 'EXCLUIDO')
   const excluidos = visibles.filter(i => i.estado === 'EXCLUIDO')
   const enviadosVisibles = items.filter(i => ['ENVIADO', 'REENVIADO'].includes(i.estado)).length
+  const deAlcaldia = (reporte.reportes_grupales_items || []).filter(i => i.es_alcaldia && i.estado !== 'EXCLUIDO').length
   const enviables = items.filter(i => i.datos_completos && !['ENVIADO', 'REENVIADO'].includes(i.estado))
   const incompletos = items.filter(i => !i.datos_completos).length
   const vencidos = items.filter(i => i.estado === 'VENCIDO').length
@@ -177,9 +187,23 @@ function TarjetaReporte({ reporte, onGenerar, onEnviarTodos, onEnviarUno, onReen
       {open && (
         <div className="border-t px-5 pb-5 pt-4 space-y-4" style={{ borderColor: 'rgba(30,80,40,0.08)' }}>
           <div className="flex flex-wrap gap-2 items-center">
-            <Button onClick={() => onGenerar(reporte)} disabled={saving} variant={generado ? 'secondary' : 'primary'}>
-              <Printer size={13} /> {generado ? 'Reimprimir / regenerar' : 'Generar reporte'}
-            </Button>
+            {/* Con el filtro de la Alcaldía, el botón grande saca SU certificado (solo su
+                fila), no el del lote: el 23-oct se imprimía el del lote y OREO no salía. */}
+            {soloAlcaldia ? (
+              <Button onClick={() => onGenerar(reporte, items.map(i => i.id))} disabled={saving || !items.length}
+                style={{ background: '#0369A1', color: 'white' }}>
+                <Printer size={13} /> {items.length > 1 ? `Ver certificados de la Alcaldía (${items.length})` : 'Ver certificado de la Alcaldía'}
+              </Button>
+            ) : (
+              <Button onClick={() => onGenerar(reporte)} disabled={saving} variant={generado ? 'secondary' : 'primary'}>
+                <Printer size={13} /> {generado ? 'Reimprimir / regenerar' : 'Generar reporte'}
+              </Button>
+            )}
+            {!soloAlcaldia && deAlcaldia > 0 && (
+              <span className="text-[11px] text-sky-800 bg-sky-50 px-3 py-1.5 rounded-lg border border-sky-200">
+                🏛 {deAlcaldia} de la Alcaldía no {deAlcaldia === 1 ? 'sale' : 'salen'} en este reporte: {deAlcaldia === 1 ? 'tiene' : 'tienen'} su «Certificado propio» en su fila
+              </span>
+            )}
             {enviables.length > 0 && (
               <Button onClick={() => onEnviarTodos(reporte, soloAlcaldia ? enviables.map(i => i.id) : null)} disabled={saving} style={{ background: '#25D366', color: 'white' }}>
                 <Send size={13} /> {soloAlcaldia ? 'Enviar a los de la Alcaldía' : 'Enviar a todos'} ({enviables.length})
@@ -338,11 +362,13 @@ export default function Certificados() {
     finally { setIaLoading(false) }
   }
 
-  async function handleGenerar(reporte) {
+  // `itemIds` (filtro de la Alcaldía): imprime los certificados propios de esas
+  // mascotas, uno por página, en vez del certificado del lote.
+  async function handleGenerar(reporte, itemIds = null) {
     setSaving(true)
     try {
-      const { html } = await generarReporte(reporte, coordDe(reporte))
-      imprimirCertificado(html)
+      const { html, htmls } = await generarReporte(reporte, coordDe(reporte), itemIds ? { itemIds } : {})
+      imprimirCertificado(itemIds ? unirCertificados(itemIds.map(id => htmls[id]).filter(Boolean)) : html)
       await cargar()
     } catch (e) {
       await showAlert(e.message, { title: 'Error al generar reporte' })

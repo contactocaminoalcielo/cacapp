@@ -176,7 +176,11 @@ export function generarHTMLCremacionGrupal({ lote, servicios, coordinador }) {
   const norm = s => (s || '').normalize('NFD')
     .split('').filter(c => { const n = c.charCodeAt(0); return n < 0x300 || n > 0x36f }).join('')
     .toLowerCase().trim()
-  const empresa    = (lote.entidad_externa && norm(lote.entidad_externa) !== 'entidad certificada bogota')
+  // 🩸 El DEFAULT de la columna quedó guardado con la «á» dañada («Bogot�», 139 lotes
+  // desde junio) y la comparación exacta no lo reconocía: el certificado decía
+  // "Entidad certificada Bogot�" en vez del nombre de la planta. Cualquier
+  // variante del placeholder cuenta como placeholder.
+  const empresa    = (lote.entidad_externa && !norm(lote.entidad_externa).startsWith('entidad certificada'))
     ? lote.entidad_externa
     : 'INDUSTRIA AMBIENTAL S.A.S/ECOLOGIA Y ENTORNO S.A.S ESP'
   const duracion   = lote.duracion_proceso || '6 horas y 18 minutos'
