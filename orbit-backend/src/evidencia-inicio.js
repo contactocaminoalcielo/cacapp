@@ -53,6 +53,19 @@ export async function cargarConfigEvidencia(client = pool) {
   return cfg
 }
 
+/**
+ * Revisar y enviar es de coordinación; `personal_autorizado` (lista de ids de
+ * personal en config_operativa) se lo abre a alguien más sin cambiarle el rol.
+ */
+export async function puedeGestionarEvidencias(personal, client = pool) {
+  if (['COORDINADOR', 'ADMIN'].includes(personal?.rol)) return true
+  if (!personal?.id) return false
+  const { rows } = await client.query(
+    `SELECT valor FROM public.config_operativa WHERE modulo = $1 AND clave = 'personal_autorizado'`, [MOD]
+  )
+  return lista(rows[0]?.valor).includes(personal.id)
+}
+
 function plantillaEvidencia(cfg) {
   const raw = cfg.plantilla
   const p = typeof raw === 'string' ? safeJson(raw) : raw

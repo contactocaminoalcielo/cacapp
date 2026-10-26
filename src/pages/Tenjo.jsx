@@ -225,12 +225,21 @@ export default function Tenjo() {
   const [evidPendientes,    setEvidPendientes]    = useState(0)
 
   const canPlan = ['ADMIN', 'COORDINADOR'].includes(personalData?.rol)
+  // Revisar y enviar a la familia es de coordinación, salvo quien esté en
+  // EVIDENCIA_INICIO.personal_autorizado (el backend aplica la misma regla).
+  const [evidAutorizados, setEvidAutorizados] = useState([])
+  const puedeEvidencias = canPlan || (!!personalData?.id && evidAutorizados.includes(personalData.id))
   // Pestañas que puede ver cada rol. El PRODUCTOR queda limitado a Jornada y Operación.
   const tabsVisibles = esProductor
-    ? ['jornada', 'operacion']
+    ? ['jornada', ...(puedeEvidencias ? ['evidencias'] : []), 'operacion']
     : ['planificacion', 'jornada', 'candidatas', 'control', 'salidas', 'cubiculos', 'visitas',
-       // Revisar y enviar a la familia es de coordinación.
-       ...(canPlan ? ['evidencias'] : []), 'operacion']
+       ...(puedeEvidencias ? ['evidencias'] : []), 'operacion']
+
+  useEffect(() => {
+    db.from('config_operativa').select('valor')
+      .eq('modulo', 'EVIDENCIA_INICIO').eq('clave', 'personal_autorizado').maybeSingle()
+      .then(({ data }) => setEvidAutorizados(Array.isArray(data?.valor) ? data.valor : []))
+  }, [])
 
   useEffect(() => {
     cargar()
@@ -577,7 +586,7 @@ export default function Tenjo() {
           </TabsContent>
 
           <TabsContent value="evidencias">
-            {tab === 'evidencias' && <EvidenciasTab onChanged={cargar} />}
+            {tab === 'evidencias' && <EvidenciasTab canConfig={canPlan} onChanged={cargar} />}
           </TabsContent>
 
           <TabsContent value="operacion">

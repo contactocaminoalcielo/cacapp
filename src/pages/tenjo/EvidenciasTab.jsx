@@ -30,7 +30,7 @@ const fmtFecha = v => v
   ? new Date(v).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })
   : '—'
 
-export default function EvidenciasTab({ onChanged }) {
+export default function EvidenciasTab({ canConfig = true, onChanged }) {
   const [filtro, setFiltro]   = useState('PENDIENTES')
   const [datos, setDatos]     = useState(null)
   const [error, setError]     = useState('')
@@ -126,7 +126,8 @@ export default function EvidenciasTab({ onChanged }) {
         </div>
       )}
 
-      <ConfigPlantilla onGuardado={cargar} />
+      {/* config_operativa solo la escribe coordinación (RLS). */}
+      {canConfig && <ConfigPlantilla onGuardado={cargar} />}
 
       {abierta && (
         <EditorEvidencia evidencia={abierta} hayPlantilla={!!datos?.plantilla}

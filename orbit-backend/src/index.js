@@ -23,7 +23,7 @@ import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
 import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, enviarEvidencia,
-         marcarEnviadaManual, descartarEvidencia } from './evidencia-inicio.js'
+         marcarEnviadaManual, descartarEvidencia, puedeGestionarEvidencias } from './evidencia-inicio.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
@@ -1608,7 +1608,13 @@ app.post('/portal/visita/:codigo', async (req, res) => {
 
 // ── Evidencias del inicio del compostaje (migración 178) ──
 // Coordinación revisa, ajusta el marco y envía. Nada sale solo.
-const rolEvidencias = requireRol('COORDINADOR', 'ADMIN')
+// También quien esté en EVIDENCIA_INICIO.personal_autorizado (config_operativa).
+const rolEvidencias = async (req, res, next) => {
+  try {
+    if (await puedeGestionarEvidencias(req.personal)) return next()
+    res.status(403).json({ error: 'Requiere rol: COORDINADOR o ADMIN' })
+  } catch (e) { errorInterno(res, 'evidencias permiso', e) }
+}
 
 app.get('/evidencias', requireAuth, rolEvidencias, async (req, res) => {
   try { res.json(await listarEvidencias({ estado: req.query.estado || 'PENDIENTES' })) }
