@@ -78,10 +78,12 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
   if (candidatas === null) return <SetupNotice />
 
   const evaluadas = (candidatas || []).map(c => ({ c, ev: evaluarCandidato(c, config) }))
+  // Sin tildes: "maria" debe encontrar a "María celeste"
+  const normal = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   const filtradas = evaluadas.filter(({ c }) => {
     if (!busqueda.trim()) return true
-    const q = busqueda.toLowerCase()
-    return [c.mascota, c.cliente, c.plan, c.nevera_codigo].some(v => v?.toLowerCase().includes(q))
+    const q = normal(busqueda.trim())
+    return [c.mascota, c.cliente, c.plan, c.nevera_codigo].some(v => normal(v).includes(q))
   })
 
   const conteo = k => evaluadas.filter(({ ev }) => ev.clasificacion === k).length
