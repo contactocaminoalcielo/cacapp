@@ -21,6 +21,7 @@ import {
   pagadoContrato, estadoCuotas, mensajeCuotaWa,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
+import ImportarContratosPdf from '@/components/preexequiales/ImportarContratosPdf'
 import { Plus, RefreshCw, Rocket, FileText, Paperclip, MessageCircle, Search, RotateCw, RotateCcw, Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2, X, Mail, Pencil, BadgePercent, Wallet, Trash2 } from 'lucide-react'
 
 // Afiliaciones pre-exequiales: ANUAL (renovable, cláusula 5×/3× solo el primer
@@ -243,6 +244,7 @@ export default function Presequiales() {
 
   const [modalNueva, setModalNueva]   = useState(false)
   const [modalImportar, setModalImportar] = useState(false)
+  const [modalPdf, setModalPdf] = useState(false)
   const [ficha, setFicha]             = useState(null)   // contrato abierto
   const [modalRenovar, setModalRenovar] = useState(null)
   const [modalActivar, setModalActivar] = useState(null) // { afiliacion, am }
@@ -347,6 +349,7 @@ export default function Presequiales() {
       <Topbar actions={
         <>
           <Button size="sm" variant="secondary" onClick={() => setModalImportar(true)}><Upload size={14} /> Importar</Button>
+          <Button size="sm" variant="secondary" onClick={() => setModalPdf(true)}><FileText size={14} /> Subir contratos PDF</Button>
           <Button size="sm" onClick={() => setModalNueva(true)}><Plus size={14} /> Nueva afiliación</Button>
           <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
             <RefreshCw size={15} />
@@ -497,6 +500,11 @@ export default function Presequiales() {
       {modalImportar && (
         <ModalImportarAfiliaciones especies={especies} personalData={personalData}
           onClose={() => setModalImportar(false)} onImported={cargar} />
+      )}
+
+      {modalPdf && (
+        <ImportarContratosPdf config={config} especies={especies} personalData={personalData}
+          onClose={() => setModalPdf(false)} onImported={cargar} />
       )}
 
       {modalNueva && (
@@ -1902,7 +1910,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                 {(c.comprobantes || []).map((comp, i) => (
                   <button key={i} onClick={() => abrirArchivoStorage(comp.storage_path, comp.bucket)}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-surface2 text-ink2 hover:bg-surface3">
-                    <Paperclip size={11} /> Comp. {i + 1}
+                    <Paperclip size={11} /> {comp.tipo === 'CONTRATO_ORIGINAL' ? 'Contrato original' : `Comp. ${i + 1}`}
                   </button>
                 ))}
                 <label className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-surface2 text-ink2 hover:bg-surface3 cursor-pointer">

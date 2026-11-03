@@ -14,7 +14,9 @@ const MODELO_DEFAULT = 'claude-haiku-4-5-20251001'
  * `canal` dice de dónde salió, para que en la pantalla se distinga de lo que
  * gasta el agente.
  */
-export async function llamarClaude({ system, prompt, maxTokens = 1024, model, canal = 'SISTEMA' } = {}) {
+// `content` (opcional) reemplaza a `prompt` cuando hace falta mandar algo más
+// que texto, como el PDF de un contrato: [{ type: 'document', ... }, { type: 'text', ... }].
+export async function llamarClaude({ system, prompt, content, maxTokens = 1024, model, canal = 'SISTEMA' } = {}) {
   const CLAUDE_KEY = process.env.CLAUDE_KEY
   if (!CLAUDE_KEY) throw new Error('CLAUDE_KEY no configurada en el backend')
 
@@ -29,7 +31,7 @@ export async function llamarClaude({ system, prompt, maxTokens = 1024, model, ca
       model:      model || process.env.CLAUDE_MODEL || MODELO_DEFAULT,
       max_tokens: maxTokens,
       ...(system ? { system } : {}),
-      messages:   [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+      messages:   [{ role: 'user', content: content || [{ type: 'text', text: prompt }] }],
     }),
   })
   if (!res.ok) {

@@ -28,6 +28,7 @@ import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, 
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
+import { leerContratoPdf } from './afiliaciones-ia.js'
 import { forzarContacto, pausarSeguimiento, resumenSeguimiento } from './seguimiento-imagenes.js'
 import { validarTokenPortal, crearSolicitudAliado, registrarAfiliacion, aprobarAliado } from './aliados.js'
 import { contextoPeticion } from './autorizaciones.js'
@@ -150,6 +151,8 @@ app.use('/voz/turno', (req, res, next) => (tokenVoz(req) ? next() : res.status(4
 const cargaCrm = protegerCarga(requireRol(...ROLES_CRM))
 app.use('/crm/fotos', cargaCrm, express.json({ limit: '12mb' }))
 app.use('/crm/prospectos/importar', cargaCrm, express.json({ limit: '25mb' }))
+// Contratos antiguos en PDF (Pre-Exequiales): hasta 20 MB, en base64 ≈ 27 MB.
+app.use('/afiliaciones/ia/leer-contrato', cargaAgente, express.json({ limit: '30mb' }))
 
 app.use(express.json())
 
@@ -1374,6 +1377,17 @@ app.post('/jobs/afiliaciones', requireJob, async (_req, res) => {
     res.json(await jobAfiliaciones())
   } catch (e) {
     log('[afiliaciones] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Afiliaciones: leer con IA un contrato antiguo en PDF (solo lee; el humano revisa y crea) ──
+app.post('/afiliaciones/ia/leer-contrato', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await leerContratoPdf({ pdfBase64: req.body?.pdf_base64 })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[afiliaciones/ia/leer-contrato] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
