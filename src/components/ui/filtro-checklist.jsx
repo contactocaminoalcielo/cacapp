@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Check, ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { filtrarPorBusqueda } from '@/lib/busqueda'
 
 /**
  * Filtro de varias opciones, como el de una columna de Excel: se abre una lista
@@ -25,7 +26,7 @@ export function FiltroChecklist({
   seleccion,             // Set
   onChange,              // (nuevoSet) => void
   className,
-  buscableDesde = 8,     // a partir de cuántas opciones aparece el buscador
+  buscableDesde = 6,     // a partir de cuántas opciones aparece el buscador
 }) {
   const [abierto, setAbierto] = useState(false)
   const [q, setQ] = useState('')
@@ -45,11 +46,8 @@ export function FiltroChecklist({
     }
   }, [abierto])
 
-  const visibles = useMemo(() => {
-    const t = q.trim().toLowerCase()
-    if (!t) return opciones
-    return opciones.filter(o => String(o.label).toLowerCase().includes(t))
-  }, [opciones, q])
+  // Sin tildes, por palabras y ordenado por relevancia (ver @/lib/busqueda)
+  const visibles = useMemo(() => filtrarPorBusqueda(opciones, q, o => o.label), [opciones, q])
 
   const n = seleccion?.size || 0
   const todas = n === 0 || n === opciones.length

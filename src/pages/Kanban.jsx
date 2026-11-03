@@ -5,6 +5,8 @@ import { EstadoBadge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { SelectBuscable } from '@/components/ui/select-buscable'
+import { filtrarPorBusqueda } from '@/lib/busqueda'
 import { db, dbTodo } from '@/lib/supabase'
 import { cargarItemsKanban } from '@/lib/lecturasOperativas'
 import { serviciosListosDesdeItems, ESTADOS_AUTOCORREGIBLES } from '@/lib/kanbanEstado'
@@ -243,7 +245,10 @@ function pendientesTecnico(s) {
 // ── Dropdown de planes con selección múltiple ────────────────────────────────
 function MultiSelectPlanes({ opciones, seleccion, onChange }) {
   const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
   const ref = useRef(null)
+  useEffect(() => { if (!open) setQ('') }, [open])
+  const visibles = filtrarPorBusqueda(opciones, q)
 
   useEffect(() => {
     if (!open) return
@@ -278,8 +283,23 @@ function MultiSelectPlanes({ opciones, seleccion, onChange }) {
         )}
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 w-60 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-xl p-1.5">
-          {opciones.map(p => {
+        <div className="absolute z-30 mt-1 w-60 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+          {opciones.length >= 6 && (
+            <div className="relative border-b border-gray-100">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Escribe para buscar…"
+                onKeyDown={e => {
+                  if (e.key === 'Escape') setOpen(false)
+                  if (e.key === 'Enter' && visibles[0]) { e.preventDefault(); toggle(visibles[0]); setQ('') }
+                }}
+                className="w-full pl-8 pr-2 py-2 text-[12px] outline-none" />
+            </div>
+          )}
+          <div className="max-h-64 overflow-y-auto p-1.5">
+          {q.trim() && !visibles.length && (
+            <div className="px-3 py-3 text-[12px] text-gray-400 text-center">Nada coincide con “{q.trim()}”</div>
+          )}
+          {visibles.map(p => {
             const activo = seleccion.includes(p)
             return (
               <button
@@ -294,6 +314,7 @@ function MultiSelectPlanes({ opciones, seleccion, onChange }) {
               </button>
             )
           })}
+          </div>
         </div>
       )}
     </div>
@@ -3132,12 +3153,10 @@ export default function Kanban() {
           {/* Filtro por recordatorio + estado de ese recordatorio (solo tablero producción) */}
           {esVistaProd && recOpcionesKanban.length > 0 && (
             <div className="flex items-center gap-1.5">
-              <Select value={filtroRec}
-                onChange={e => { setFiltroRec(e.target.value); if (!e.target.value) setFiltroRecEstado('') }}
-                className="h-9 text-[12px] w-48">
-                <option value="">Todos los recordatorios</option>
-                {recOpcionesKanban.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-              </Select>
+              <SelectBuscable value={filtroRec}
+                onChange={v => { setFiltroRec(v); if (!v) setFiltroRecEstado('') }}
+                placeholder="Todos los recordatorios" className="h-9 w-48"
+                opciones={recOpcionesKanban.map(r => ({ v: String(r.id), label: r.nombre }))} />
               {filtroRec && (
                 <div className="flex flex-wrap gap-0.5 bg-gray-100 rounded-lg p-0.5">
                   {[
@@ -3286,30 +3305,22 @@ export default function Kanban() {
             entero. */}
         {filtrosOpen && (
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={filtroPago} onChange={e => setFiltroPago(e.target.value)} className="h-9 text-[12px] w-36">
-              <option value="">Todo pago</option>
-              <option value="PENDIENTE">Pendiente</option>
-              <option value="PARCIAL">Parcial</option>
-              <option value="COMPLETO">Completo</option>
-            </Select>
-            <Select value={filtroAliado} onChange={e => setFiltroAliado(e.target.value)} className="h-9 text-[12px] w-52">
-              <option value="">Todos los aliados</option>
-              <option value="__none__">— Particulares (sin aliado) —</option>
-              {aliadosUnicos.map(a => <option key={a} value={a}>{a}</option>)}
-            </Select>
-            <Select value={filtroTecnico} onChange={e => setFiltroTecnico(e.target.value)} className="h-9 text-[12px] w-44">
-              <option value="">Todos los técnicos</option>
-              {tecnicosUnicos.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-            </Select>
-            <Select value={filtroUsuario} onChange={e => setFiltroUsuario(e.target.value)} className="h-9 text-[12px] w-48">
-              <option value="">Registrado por (todos)</option>
-              {registranUnicos.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
-              <option value="__none__">— Sin registrar —</option>
-            </Select>
-            <Select value={filtroEspecie} onChange={e => setFiltroEspecie(e.target.value)} className="h-9 text-[12px] w-40">
-              <option value="">Todas las especies</option>
-              {especiesUnicas.map(e => <option key={e} value={e}>{e}</option>)}
-            </Select>
+            <SelectBuscable value={filtroPago} onChange={setFiltroPago} placeholder="Todo pago" className="h-9 w-36"
+              opciones={[
+                { v: 'PENDIENTE', label: 'Pendiente' },
+                { v: 'PARCIAL',   label: 'Parcial' },
+                { v: 'COMPLETO',  label: 'Completo' },
+              ]} />
+            <SelectBuscable value={filtroAliado} onChange={setFiltroAliado} placeholder="Todos los aliados" className="h-9 w-52"
+              fijas={[{ v: '__none__', label: '— Particulares (sin aliado) —' }]}
+              opciones={aliadosUnicos.map(a => ({ v: a, label: a }))} />
+            <SelectBuscable value={filtroTecnico} onChange={setFiltroTecnico} placeholder="Todos los técnicos" className="h-9 w-44"
+              opciones={tecnicosUnicos.map(t => ({ v: t.id, label: t.label }))} />
+            <SelectBuscable value={filtroUsuario} onChange={setFiltroUsuario} placeholder="Registrado por (todos)" className="h-9 w-48"
+              fijas={[{ v: '__none__', label: '— Sin registrar —' }]}
+              opciones={registranUnicos.map(u => ({ v: u.id, label: u.label }))} />
+            <SelectBuscable value={filtroEspecie} onChange={setFiltroEspecie} placeholder="Todas las especies" className="h-9 w-40"
+              opciones={especiesUnicas.map(e => ({ v: e, label: e }))} />
             {filtrosHistActivos > 0 && (
               <button onClick={limpiarFiltrosHist}
                 className="text-[11px] font-semibold text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors">
