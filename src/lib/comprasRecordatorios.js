@@ -66,27 +66,6 @@ export const actualizarItem = (id, itemId, patch) =>
 export const anularCompra = (id, motivo) =>
   orbitApi(`/compras-recordatorios/${id}/anular`, { method: 'POST', body: { motivo } })
 
-/**
- * Entrega con mensajero (migr. 204). `destino`: 'POOL' (la toma el primer
- * mensajero), 'MENSAJERO' (asignada a `mensajero_id`) o 'RETIRAR' (sale de la ruta).
- */
-export const programarEntrega = (id, body) =>
-  orbitApi(`/compras-recordatorios/${id}/entrega`, { method: 'POST', body })
-
-/** El mensajero cierra la entrega: foto, firma/nombre y el cobro, en una transacción. */
-export const completarEntregaCompra = (entregaId, body) =>
-  orbitApi(`/compras-recordatorios/entregas/${entregaId}/completar`, { method: 'POST', body })
-
-export const ESTADO_ENTREGA = {
-  PENDIENTE:    { label: 'Sin programar',          variant: 'gray'   },
-  DISPONIBLE:   { label: 'Publicada a mensajeros', variant: 'amber'  },
-  ASIGNADA:     { label: 'Asignada',               variant: 'purple' },
-  EN_CAMINO:    { label: 'En camino',              variant: 'blue'   },
-  ENTREGADA:    { label: 'Entregada',              variant: 'green'  },
-  FALLIDA:      { label: 'Cancelada',              variant: 'red'    },
-  REPROGRAMADA: { label: 'Reprogramada',           variant: 'amber'  },
-}
-
 /** ¿Esta línea es la cédula de mascota? Se decide por el nombre del catálogo. */
 export const esCedula = nombre => /c[eé]dula/i.test(String(nombre || ''))
 

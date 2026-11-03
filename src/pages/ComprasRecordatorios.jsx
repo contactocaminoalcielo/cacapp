@@ -32,13 +32,11 @@ import {
   listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
   cargarCatalogos, buscarClientes, mascotasDeCliente, subirArchivoCompra, urlFirmada,
   METODOS_PAGO, ESTADOS_ITEM, ESTADO_ITEM_META, ESTADO_COMPRA, ESTADO_PAGO,
-  esCedula, descargarCedula, programarEntrega, ESTADO_ENTREGA,
+  esCedula, descargarCedula,
 } from '@/lib/comprasRecordatorios'
-import { db } from '@/lib/supabase'
-import { crearNotificacion } from '@/lib/notificaciones'
 import {
   Plus, Search, ShoppingBag, Wallet, Layers, PackageCheck, ChevronRight, ChevronLeft,
-  User, Trash2, Paperclip, Loader2, Ban, ImagePlus, Save, AlertTriangle, FileDown, Truck,
+  User, Trash2, Paperclip, Loader2, Ban, ImagePlus, Save, AlertTriangle, FileDown,
 } from 'lucide-react'
 
 const LABEL = 'text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1'
@@ -81,8 +79,6 @@ export default function ComprasRecordatorios() {
   // `?ver=<id>` abre una compra directo (desde el tablero de Producción).
   const [params, setParams]       = useSearchParams()
   const [verId, setVerIdRaw]      = useState(params.get('ver') || null)
-  // `&entrega=1` (botón «Programar entrega» del tablero) abre además el formulario.
-  const [abrirEntrega]            = useState(params.get('entrega') === '1')
   const setVerId = id => { setVerIdRaw(id); if (!id && params.get('ver')) setParams({}, { replace: true }) }
   const debounceRef = useRef(null)
 
@@ -205,7 +201,6 @@ export default function ComprasRecordatorios() {
           id={verId}
           personal={catalogos.personal}
           esCoordinador={esCoordinador}
-          abrirEntrega={abrirEntrega && verId === params.get('ver')}
           onClose={() => setVerId(null)}
           onCambio={cargar}
         />
@@ -688,11 +683,9 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
 // ═════════════════════════════════════════════════════════════════════════════
 // DETALLE — líneas con su estado, pagos, anulación y bitácora
 // ═════════════════════════════════════════════════════════════════════════════
-function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClose, onCambio }) {
+function ModalDetalle({ id, personal, esCoordinador, onClose, onCambio }) {
   const { confirm, alert: showAlert } = useConfirm()
   const [d, setD]             = useState(null)
-  const [entregaOpen, setEntregaOpen] = useState(false)
-  const entregaAutoAbierta = useRef(false)
   const [loading, setLoading] = useState(true)
   const [ocupado, setOcupado] = useState(false)
   const [urls, setUrls]       = useState({})   // path → url firmada
@@ -717,11 +710,6 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
       const det = await detalleCompra(id)
       setD(det)
       firmar(det)
-      if (abrirEntrega && esCoordinador && !entregaAutoAbierta.current && !det.anulada_en
-          && !['EN_CAMINO', 'ENTREGADA'].includes(det.entrega_ruta?.estado)) {
-        entregaAutoAbierta.current = true
-        setEntregaOpen(true)
-      }
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo abrir la compra' })
       onClose()
@@ -734,7 +722,6 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
     const paths = new Set()
     det.items.forEach(i => (i.imagenes_urls || []).forEach(p => paths.add(p)))
     det.pagos.forEach(p => p.comprobante_path && paths.add(p.comprobante_path))
-    if (det.entrega_ruta?.cobro_comprobante_path) paths.add(det.entrega_ruta.cobro_comprobante_path)
     const entries = await Promise.all([...paths].map(async p => [p, await urlFirmada(p)]))
     setUrls(Object.fromEntries(entries))
   }
@@ -782,11 +769,6 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
   }
 
   return (
-    <>
-    {entregaOpen && d && (
-      <ModalEntregaCompra d={d} saldo={saldo} onClose={() => setEntregaOpen(false)}
-        onGuardado={det => { setEntregaOpen(false); setD(det); firmar(det); onCambio?.() }} />
-    )}
     <Modal open onClose={onClose} maxWidth="max-w-4xl"
       title={d ? `Compra CR-${d.numero} · ${fecha(d.created_at)}` : 'Compra'}>
       {loading || !d ? (
@@ -860,15 +842,6 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
               )}
             </div>
           )}
-
-          {/* Entrega con mensajero (migr. 204) */}
-          <SeccionEntrega d={d} urls={urls} saldo={saldo} activa={activa} esCoordinador={esCoordinador}
-            ocupado={ocupado} onProgramar={() => setEntregaOpen(true)}
-            onRetirar={async () => {
-              const ok = await confirm('La entrega sale de la ruta: ningún mensajero la verá hasta que la vuelvas a programar.',
-                { title: '¿Sacar de la ruta?', confirmLabel: 'Sacar de la ruta' })
-              if (ok) await ejecutar(() => programarEntrega(id, { destino: 'RETIRAR' }))
-            }} />
 
           {d.anulada_en && (
             <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
@@ -970,211 +943,6 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
         </div>
       )}
     </Modal>
-    </>
-  )
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// ENTREGA CON MENSAJERO (migr. 204)
-// ═════════════════════════════════════════════════════════════════════════════
-const nombreDe = (n, a) => [n, a].filter(Boolean).join(' ')
-
-function SeccionEntrega({ d, urls, saldo, activa, esCoordinador, ocupado, onProgramar, onRetirar }) {
-  const e = d.entrega_ruta
-  const todoEntregado = d.items.length > 0 && d.items.every(i => i.estado === 'ENTREGADO')
-  const editable = !e || !['EN_CAMINO', 'ENTREGADA'].includes(e.estado)
-  const enRuta = e && ['DISPONIBLE', 'ASIGNADA'].includes(e.estado)
-  const meta = e ? (ESTADO_ENTREGA[e.estado] || { label: e.estado, variant: 'gray' }) : null
-  // Sin entrega y sin nada que hacer (anulada o ya entregada a mano): no se pinta.
-  if (!e && (!activa || todoEntregado)) return null
-
-  return (
-    <div className="rounded-xl p-3 space-y-2 text-[12px]" style={{ background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
-      <div className="flex items-center gap-2 flex-wrap">
-        <Truck size={14} className="text-indigo-700" />
-        <span className="font-bold text-indigo-900">Entrega con mensajero</span>
-        {meta ? <Badge variant={meta.variant}>{meta.label}</Badge> : <Badge variant="gray">Sin programar</Badge>}
-        {esCoordinador && activa && editable && (
-          <div className="ml-auto flex gap-2">
-            {enRuta && <Button size="sm" variant="ghost" onClick={onRetirar} disabled={ocupado}>Sacar de la ruta</Button>}
-            <Button size="sm" onClick={onProgramar} disabled={ocupado}>
-              <Truck size={12} /> {e && e.estado !== 'PENDIENTE' && e.estado !== 'FALLIDA' ? 'Cambiar entrega' : 'Programar entrega'}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {e && e.estado !== 'PENDIENTE' && (
-        <div className="text-gray-700 space-y-0.5">
-          <div>
-            <span className="text-gray-500">Mensajero:</span>{' '}
-            {e.mensajero_id ? <strong>{nombreDe(e.mensajero_nombre, e.mensajero_apellido)}</strong> : <span>el primero que la tome del pool</span>}
-            {e.fecha_programada && <span className="text-gray-500"> · para el {e.fecha_programada}</span>}
-          </div>
-          <div><span className="text-gray-500">Dirección:</span> {[e.direccion_entrega, e.barrio, e.ciudad].filter(Boolean).join(', ')}
-            {e.contacto_nombre && <> · recibe {e.contacto_nombre}</>}{e.contacto_telefono && <> ({e.contacto_telefono})</>}</div>
-          {e.estado === 'ENTREGADA' && (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="text-gray-500">Entregada{e.fecha_realizada ? ` el ${e.fecha_realizada}` : ''}{e.hora_realizada ? ` a las ${e.hora_realizada.slice(0, 5)}` : ''}.</span>
-              {e.cobro_monto != null && <strong className="text-green-800">Cobró {fmt(e.cobro_monto)} ({e.cobro_metodo})</strong>}
-              {e.cobro_no_realizado_motivo && <span className="text-amber-800 font-semibold">Sin cobrar: {e.cobro_no_realizado_motivo}</span>}
-              {e.foto_entrega_url && <a href={e.foto_entrega_url} target="_blank" rel="noopener noreferrer" className="text-[#1A5CD8] font-semibold flex items-center gap-1"><Paperclip size={12} /> foto</a>}
-              {e.foto_firma_url && <a href={e.foto_firma_url} target="_blank" rel="noopener noreferrer" className="text-[#1A5CD8] font-semibold flex items-center gap-1"><Paperclip size={12} /> firma</a>}
-              {e.cobro_comprobante_path && urls[e.cobro_comprobante_path] && (
-                <a href={urls[e.cobro_comprobante_path]} target="_blank" rel="noopener noreferrer" className="text-[#1A5CD8] font-semibold flex items-center gap-1"><Paperclip size={12} /> comprobante</a>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {(!e || e.estado === 'PENDIENTE' || e.estado === 'FALLIDA') && activa && (
-        <p className="text-gray-600">
-          Programa la entrega y le aparece al mensajero en su app.
-          {saldo > 0 && <> Si hay saldo (<strong>{fmt(saldo)}</strong>), el mensajero lo cobra al entregar y entra a su cuadre.</>}
-        </p>
-      )}
-      {editable && enRuta && saldo > 0 && (
-        <p className="text-amber-800 font-semibold">El mensajero cobrará {fmt(saldo)} al entregar.</p>
-      )}
-    </div>
-  )
-}
-
-function ModalEntregaCompra({ d, saldo, onClose, onGuardado }) {
-  const { alert: showAlert } = useConfirm()
-  const e = d.entrega_ruta
-  const dec = d.entrega || {}          // lo que dejó el cliente del catálogo web
-  const cl  = d.cliente || {}
-  const [mensajeros, setMensajeros] = useState([])
-  const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState(null)
-  const [f, setF] = useState(() => ({
-    destino:            e?.mensajero_id ? 'MENSAJERO' : 'POOL',
-    mensajero_id:       e?.mensajero_id || '',
-    direccion_entrega:  e?.direccion_entrega || dec.direccion || cl.direccion || '',
-    barrio:             e?.barrio || dec.barrio || '',
-    localidad:          e?.localidad || '',
-    ciudad:             e?.ciudad || dec.ciudad || cl.ciudad || 'Bogotá',
-    contacto_nombre:    e?.contacto_nombre || dec.recibe || nombreDe(cl.nombre, cl.apellido),
-    contacto_telefono:  e?.contacto_telefono || dec.telefono || cl.whatsapp || '',
-    telefono_adicional: e?.telefono_adicional || cl.telefono || '',
-    indicaciones:       e?.indicaciones || dec.indicaciones || '',
-    horarios_atencion:  e?.horarios_atencion || '',
-    fecha_programada:   e?.fecha_programada || '',
-    notas:              e?.notas || '',
-  }))
-  const set = patch => setF(p => ({ ...p, ...patch }))
-  const pagoSinVerificar = d.pago_cliente?.modo === 'COMPROBANTE' && !d.pago_cliente?.revisado_en
-  const faltanListos = d.items.filter(i => !['LISTO', 'ENTREGADO'].includes(i.estado))
-
-  useEffect(() => {
-    db.from('personal').select('id, nombre, apellido, rol_principal_id')
-      .eq('activo', true).in('rol_principal_id', [2, 3]).order('nombre')
-      .then(({ data }) => setMensajeros(data || []))
-  }, [])
-
-  async function guardar() {
-    setError(null)
-    if (f.destino === 'MENSAJERO' && !f.mensajero_id) { setError('Elige el mensajero.'); return }
-    setSaving(true)
-    try {
-      const det = await programarEntrega(d.id, { ...f, mensajero_id: f.destino === 'MENSAJERO' ? f.mensajero_id : null })
-      if (f.destino === 'MENSAJERO' && f.mensajero_id !== e?.mensajero_id) {
-        await crearNotificacion({
-          para_personal_id: f.mensajero_id,
-          tipo:    'ENTREGA_ASIGNADA',
-          titulo:  'Te asignaron una entrega',
-          mensaje: `Compra CR-${d.numero} · ${d.mascota?.nombre || ''} · ${f.direccion_entrega}${saldo > 0 ? ` · cobrar ${fmt(saldo)}` : ''}`,
-          servicio_id: null,
-          datos: { compra_id: d.id },
-        })
-      }
-      onGuardado(det)
-    } catch (err) {
-      setError(err.message)
-      if (err.status >= 500) await showAlert(err.message, { title: 'No se pudo programar la entrega' })
-    } finally { setSaving(false) }
-  }
-
-  return (
-    <Modal open onClose={onClose} maxWidth="max-w-2xl" title={`Entrega · Compra CR-${d.numero} · ${d.mascota?.nombre || ''}`}
-      footer={<>
-        <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
-        <Button onClick={guardar} disabled={saving || pagoSinVerificar}>
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Truck size={14} />}
-          {f.destino === 'POOL' ? 'Publicar a mensajeros' : 'Asignar entrega'}
-        </Button>
-      </>}>
-      <div className="space-y-4">
-        {error && (
-          <div className="flex items-start gap-2 rounded-xl px-3 py-2 text-[12px] font-semibold"
-            style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B' }}>
-            <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> {error}
-          </div>
-        )}
-        {pagoSinVerificar && (
-          <div className="rounded-xl px-3 py-2 text-[12px] font-semibold" style={{ background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }}>
-            El cliente adjuntó un comprobante que no se ha verificado. Regístralo en «Verificado: registrar este pago» antes de mandar la entrega; si no, el mensajero le cobraría otra vez.
-          </div>
-        )}
-        {faltanListos.length > 0 && (
-          <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', color: '#5B21B6' }}>
-            Ojo: {faltanListos.map(i => i.nombre).join(', ')} {faltanListos.length === 1 ? 'todavía no está listo' : 'todavía no están listos'}. Puedes programarla igual.
-          </div>
-        )}
-
-        <div>
-          <label className={LABEL}>¿Quién la lleva?</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {[{ v: 'POOL', l: 'Publicar a todos los mensajeros', s: 'La toma el primero que pueda' },
-              { v: 'MENSAJERO', l: 'Asignar a un mensajero', s: 'Le llega directo a su app' }].map(o => (
-              <button key={o.v} type="button" onClick={() => set({ destino: o.v })}
-                className="text-left rounded-xl border-2 px-3 py-2"
-                style={f.destino === o.v ? { borderColor: '#4F46E5', background: '#EEF2FF' } : { borderColor: '#E5E7EB' }}>
-                <div className="text-[13px] font-semibold text-gray-900">{o.l}</div>
-                <div className="text-[11px] text-gray-500">{o.s}</div>
-              </button>
-            ))}
-          </div>
-          {f.destino === 'MENSAJERO' && (
-            <Select className="mt-2" value={f.mensajero_id} onChange={ev => set({ mensajero_id: ev.target.value })}>
-              <option value="">Elegir mensajero…</option>
-              {mensajeros.map(m => <option key={m.id} value={m.id}>{nombreDe(m.nombre, m.apellido)}{m.rol_principal_id === 2 ? ' (técnico)' : ''}</option>)}
-            </Select>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="sm:col-span-2"><label className={LABEL}>Dirección *</label>
-            <Input value={f.direccion_entrega} onChange={ev => set({ direccion_entrega: ev.target.value })} /></div>
-          <div><label className={LABEL}>Barrio</label>
-            <Input value={f.barrio} onChange={ev => set({ barrio: ev.target.value })} /></div>
-          <div><label className={LABEL}>Ciudad</label>
-            <Input value={f.ciudad} onChange={ev => set({ ciudad: ev.target.value })} /></div>
-          <div><label className={LABEL}>Quién recibe</label>
-            <Input value={f.contacto_nombre} onChange={ev => set({ contacto_nombre: ev.target.value })} /></div>
-          <div><label className={LABEL}>Teléfono de contacto *</label>
-            <Input inputMode="tel" value={f.contacto_telefono} onChange={ev => set({ contacto_telefono: ev.target.value })} /></div>
-          <div><label className={LABEL}>Fecha programada</label>
-            <Input type="date" value={f.fecha_programada} onChange={ev => set({ fecha_programada: ev.target.value })} /></div>
-          <div><label className={LABEL}>Horario que pide el cliente</label>
-            <Input value={f.horarios_atencion} placeholder="Ej: después de las 2 p. m." onChange={ev => set({ horarios_atencion: ev.target.value })} /></div>
-          <div className="sm:col-span-2"><label className={LABEL}>Indicaciones</label>
-            <Input value={f.indicaciones} placeholder="Portería, punto de referencia…" onChange={ev => set({ indicaciones: ev.target.value })} /></div>
-          <div className="sm:col-span-2"><label className={LABEL}>Notas para el mensajero</label>
-            <Textarea rows={2} value={f.notas} onChange={ev => set({ notas: ev.target.value })} /></div>
-        </div>
-
-        <div className="rounded-xl px-3 py-2 text-[12px]" style={saldo > 0
-          ? { background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }
-          : { background: '#F0FDF4', border: '1px solid #BBF7D0', color: '#166534' }}>
-          {saldo > 0
-            ? <>El mensajero cobrará <strong>{fmt(saldo)}</strong> al entregar. Ese dinero entra al pago de la compra y a su cuadre de caja.</>
-            : <>La compra está pagada: el mensajero no cobra nada.</>}
-        </div>
-      </div>
-    </Modal>
   )
 }
 
@@ -1186,19 +954,10 @@ function textoEvento(ev) {
         return `Pedido del catálogo web · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.envio ? ` (envío ${fmt(x.envio)})` : ''} · ${x.pago === 'COMPROBANTE' ? 'adjuntó comprobante' : 'paga después'}`
       }
       return `Compra registrada · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.cliente_nuevo ? ' · cliente nuevo' : ''}${x.mascota_nueva ? ' · mascota nueva' : ''}`
+    case 'PAGO':        return `Pago ${fmt(x.monto)} por ${x.metodo}${x.inicial ? ' (al registrar)' : ''}`
     case 'ESTADO_ITEM': return `${x.item}: ${ESTADO_ITEM_META[x.de]?.label || x.de} → ${ESTADO_ITEM_META[x.a]?.label || x.a}`
     case 'DATOS_ITEM':  return `${x.item}: se actualizó ${(x.campos || []).join(', ')}`
     case 'ANULADA':     return `Anulada: ${x.motivo}`
-    case 'ENTREGA':
-      if (x.accion === 'COMPLETADA') {
-        return `Entregada${x.recibe ? ` a ${x.recibe}` : ''}${x.cobro ? ` · cobró ${fmt(x.cobro)} (${x.metodo})` : ''}`
-          + `${x.sin_cobrar ? ` · sin cobrar: ${x.sin_cobrar}` : ''}${x.aviso === 'SALDO_YA_EN_CERO' ? ' · ⚠️ ya estaba pagada: revisar doble cobro' : ''}`
-      }
-      if (x.accion === 'RETIRADA') return 'Entrega sacada de la ruta'
-      return `Entrega ${x.accion === 'REPROGRAMADA' ? 'reprogramada' : 'programada'} · ${x.mensajero ? `asignada a ${x.mensajero}` : 'publicada a los mensajeros'}${x.fecha ? ` · para el ${x.fecha}` : ''}`
-    case 'PAGO':
-      if (x.en_entrega) return `Pago ${fmt(x.monto)} por ${x.metodo} · cobrado al entregar`
-      return `Pago ${fmt(x.monto)} por ${x.metodo}${x.inicial ? ' (al registrar)' : ''}`
     default:            return ev.tipo
   }
 }

@@ -337,7 +337,7 @@ function EstadoEntrega({ ent }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega, onAbrirCompra, puedeProgramar = false }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega, onAbrirCompra }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     // Va ANTES del atajo de los LISTO: si no, un servicio listo que no es
@@ -549,14 +549,12 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
 
             {/* Compra sin servicio: se abre (y se entrega) desde su detalle */}
             {compra && onAbrirCompra && (
-              <button onClick={() => onAbrirCompra(compra.id, todoListo && puedeProgramar)}
+              <button onClick={() => onAbrirCompra(compra.id)}
                 className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-xl text-[12px] font-bold transition-all hover:opacity-90"
                 style={todoListo
                   ? { background: COMPRA_COLOR.fuerte, color: '#fff' }
                   : { background: '#fff', color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
-                {todoListo
-                  ? <><Truck size={13} /> {puedeProgramar ? 'Programar entrega' : 'Abrir la compra para entregar'}</>
-                  : <>Abrir la compra CR-{compra.numero} <ArrowRight size={12} /></>}
+                {todoListo ? <><Truck size={13} /> Abrir la compra para entregar</> : <>Abrir la compra CR-{compra.numero} <ArrowRight size={12} /></>}
               </button>
             )}
 
@@ -1194,7 +1192,7 @@ export default function Produccion() {
   // Lo que pintan las vistas y cuentan las cifras: servicios + compras sin
   // servicio (en morado). Solo lectura: lo que escribe sigue separado.
   const tablero = compras.length ? [...recordatorios, ...compras] : recordatorios
-  const abrirCompra = (id, entrega = false) => navigate(`/compras-recordatorios?ver=${id}${entrega ? '&entrega=1' : ''}`)
+  const abrirCompra = id => navigate(`/compras-recordatorios?ver=${id}`)
 
   const stats = {
     pendientes: tablero.filter(r => r.estado === 'PENDIENTE').length,
@@ -1352,7 +1350,6 @@ export default function Produccion() {
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
             onAbrirCompra={abrirCompra}
-            puedeProgramar={esAdmin}
           />
         )}
         {vista === 'tabla' && (
@@ -1388,7 +1385,7 @@ export default function Produccion() {
           personal={personal}
           onClose={() => setModalItem(null)}
           onSaved={() => { setModalItem(null); cargarCompras() }}
-          onAbrirCompra={id => { setModalItem(null); abrirCompra(id, false) }}
+          onAbrirCompra={id => { setModalItem(null); abrirCompra(id) }}
         />
       )}
       {modalItem && !modalItem.__compra && (

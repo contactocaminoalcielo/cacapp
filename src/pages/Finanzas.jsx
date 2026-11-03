@@ -1048,12 +1048,8 @@ export default function Finanzas() {
         console.error('[Finanzas] No se pudieron verificar los comprobantes del cuadre:', err)
       }
     }
-    // Cobro al entregar una COMPRA sin servicio (migr. 204): no tiene
-    // servicio_id y su soporte vive en la entrega; la DB ya exige comprobante
-    // para un medio digital (entregas_cobro_digital_con_soporte_check).
     const faltanComprobante = cuadreItems.filter(it =>
-      !it.es_cancelado && Number(it.digital) > 0 && !(it.es_entrega && !it.servicio_id)
-      && !comprobantesCuadre.has(it.servicio_id))
+      !it.es_cancelado && Number(it.digital) > 0 && !comprobantesCuadre.has(it.servicio_id))
     const debenTecnico = cuadreItems.filter(tecnicoDebe)
     const cobrosDeMas = cuadreItems.filter(cobroDeMasSinRevisar)
     if (faltanComprobante.length || debenTecnico.length || cobrosDeMas.length) {
