@@ -1,35 +1,35 @@
 // Compras de recordatorios SIN servicio dentro del tablero de Producción.
 //
 // Las líneas de una compra (migración 168) no son `servicio_recordatorios`:
-// viven en `compra_recordatorio_items` y no tienen servicio. Meterlas al
-// mismo array del tablero rompería `autoCorregirEstados` (agrupa por
-// servicio_id y hace UPDATE a `servicios` con esa clave). Por eso son una
-// sección aparte, con su propia carga, su propio realtime y su propio modal,
-// que ESCRIBE POR EL BACKEND (toda escritura de una compra pasa por ahí).
-//
-// Se pinta solo cuando hay algo que producir: sin compras, el tablero se ve
-// exactamente como antes.
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+// viven en `compra_recordatorio_items` y no tienen servicio. Por eso:
+//   · se cargan aparte (`cargarItemsCompras`) y se guardan en OTRO estado de
+//     Produccion.jsx. `autoCorregirEstados` agrupa por servicio_id y hace
+//     UPDATE a `servicios`: nunca debe recibir una de estas filas;
+//   · `aItemsTablero` las disfraza de fila del tablero (mismas claves que leen
+//     las vistas) con `__compra` para que cada vista las pinte en morado y el
+//     clic abra SU modal;
+//   · el modal ESCRIBE POR EL BACKEND (toda escritura de una compra pasa por
+//     ahí), nunca directo a la tabla.
+import { useState } from 'react'
 import { Modal } from '@/components/ui/dialog'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { db, dbTodo } from '@/lib/supabase'
-import { agruparRefresco } from '@/lib/realtime'
-import { petEmoji } from '@/lib/utils'
-import { actualizarItem, ESTADOS_ITEM, ESTADO_ITEM_META } from '@/lib/comprasRecordatorios'
-import { ShoppingBag, ExternalLink, Zap, Lock } from 'lucide-react'
+import { actualizarItem, ESTADOS_ITEM } from '@/lib/comprasRecordatorios'
+import { ExternalLink } from 'lucide-react'
 
-const initials = p => p ? `${(p.nombre || '')[0] || ''}${(p.apellido || '')[0] || ''}`.toUpperCase() : '?'
+/** Color que distingue en el tablero lo que es una compra sin servicio. */
+export const COMPRA_COLOR = { borde: '#A78BFA', fuerte: '#7C3AED', suave: '#F5F3FF', texto: '#5B21B6' }
 
 /** Lo que el tablero necesita de cada línea, con su compra, mascota y cliente. */
 export async function cargarItemsCompras() {
   return dbTodo(() => db.from('compra_recordatorio_items')
     .select(`id, compra_id, recordatorio_id, nombre, cantidad, estado, asignado_a, notas,
              imagenes_urls, datos_cliente, fecha_inicio_prod, fecha_fin_prod, created_at,
-             recordatorios ( id, nombre, requiere_imagen, solo_nombre, tiempo_produccion_dias ),
+             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre, recolecta_tecnico,
+                             tiempo_produccion_dias, maquina_id ),
              compras_recordatorios!inner ( id, numero, created_at, anulada_en, origen,
                mascotas ( nombre, especies ( nombre ) ),
                clientes ( nombre, apellido, whatsapp ) )`)
@@ -39,119 +39,68 @@ export async function cargarItemsCompras() {
     .order('id'))
 }
 
-export default function ComprasEnProduccion({ filtroEstado = 'todos', filtroPersona = '', personal = [], onCambio }) {
-  const { alert: showAlert } = useConfirm()
-  const navigate = useNavigate()
-  const [items, setItems] = useState([])
-  const [modal, setModal] = useState(null)
+const tieneFotos = ci => (ci.imagenes_urls || []).length > 0
+const pideFotos  = ci => ci.recordatorios?.requiere_imagen && !ci.recordatorios?.solo_nombre
 
-  async function cargar() {
-    try { setItems(await cargarItemsCompras() || []) }
-    catch (e) { console.error('Compras en producción:', e.message) }   // no tumba el tablero
-  }
-
-  useEffect(() => {
-    cargar()
-    const refrescar = agruparRefresco(cargar)
-    const canal = db.channel('produccion-compras')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'compra_recordatorio_items' }, refrescar)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'compras_recordatorios' }, refrescar)
-      .subscribe()
-    return () => { refrescar.cancelar(); db.removeChannel(canal) }
-  }, [])
-
-  const compras = useMemo(() => {
-    const filtrados = items.filter(r => {
-      if (filtroPersona && r.asignado_a !== filtroPersona) return false
-      if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
-      if (filtroEstado === 'en_proceso') return r.estado === 'EN_PROCESO'
-      if (filtroEstado === 'listos')     return r.estado === 'LISTO'
-      return true
-    })
-    const por = {}
-    for (const r of filtrados) {
-      const c = r.compras_recordatorios
-      if (!por[c.id]) por[c.id] = { compra: c, items: [] }
-      por[c.id].items.push(r)
+/**
+ * Líneas de compra → filas con la forma de `servicio_recordatorios` que leen
+ * las vistas. Las líneas de una misma compra comparten la «tarjeta»
+ * (`servicio_id = compra:<id>`) y un `servicios` falso:
+ *   · `planes.nombre` → «Compra CR-n» (lo que se ve donde iría el plan);
+ *   · `estado = 'LISTO'` cuando todas sus líneas están listas, para que la
+ *     tarjeta suba arriba y no se esconda con el filtro «Pendientes», igual
+ *     que un servicio listo para entregar;
+ *   · `fecha_imagenes_recibidas` es POR LÍNEA: en una compra las fotos se
+ *     cargan por recordatorio, no una vez por servicio.
+ */
+export function aItemsTablero(items) {
+  const porCompra = {}
+  for (const ci of items) (porCompra[ci.compra_id] ||= []).push(ci)
+  const out = []
+  for (const lineas of Object.values(porCompra)) {
+    const c = lineas[0].compras_recordatorios
+    const listo = lineas.every(l => l.estado === 'LISTO')
+    for (const ci of lineas) {
+      out.push({
+        ...ci,
+        __compra: c,
+        servicio_id: `compra:${ci.compra_id}`,
+        maquina_id: null,
+        imagenes_cliente_urls: ci.imagenes_urls || [],
+        servicios: {
+          id: null,
+          estado: listo ? 'LISTO' : null,
+          mascotas: c?.mascotas,
+          planes: { nombre: `Compra CR-${c?.numero} · sin servicio funerario` },
+          // Lo único que la tarjeta lee de aquí es «¿hay fotos?»: por línea.
+          fecha_imagenes_recibidas: !pideFotos(ci) || tieneFotos(ci) ? ci.created_at : null,
+        },
+      })
     }
-    return Object.values(por)
-  }, [items, filtroEstado, filtroPersona])
+  }
+  return out
+}
 
-  if (!compras.length) return null
-
+/** Marca morada «CR-n» que acompaña a una línea de compra en cualquier vista. */
+export function MarcaCompra({ compra, chica = false }) {
+  if (!compra) return null
   return (
-    <div className="mb-5">
-      <div className="flex items-center gap-2 mb-2 text-[11px] font-bold uppercase tracking-wider text-gray-500">
-        <ShoppingBag size={12} /> Compra de recordatorio – Cliente sin servicio funerario
-        <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full text-[10px]">{compras.length}</span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {compras.map(({ compra, items: its }) => {
-          const listos = its.filter(i => i.estado === 'LISTO').length
-          const todoListo = listos === its.length
-          return (
-            <div key={compra.id} className="bg-white rounded-xl border p-3 shadow-sm"
-              style={{ borderColor: todoListo ? '#6EE7B7' : '#F3E8FF', borderLeft: '4px solid #7C3AED' }}>
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="min-w-0">
-                  <div className="font-bold text-gray-900 text-[13px] truncate">
-                    {petEmoji(compra.mascotas?.especies?.nombre)} {compra.mascotas?.nombre || 'Mascota'}
-                  </div>
-                  <div className="text-[11px] text-gray-500 truncate">
-                    {compra.clientes?.nombre} {compra.clientes?.apellido} · CR-{compra.numero}
-                  </div>
-                  {compra.origen === 'CATALOGO_WEB' && (
-                    <div className="text-[10px] font-bold text-green-700 mt-0.5">🛒 Pedido del catálogo web</div>
-                  )}
-                </div>
-                <button onClick={() => navigate(`/compras-recordatorios?ver=${compra.id}`)}
-                  className="text-[10px] font-bold text-[#7C3AED] hover:underline flex items-center gap-1 flex-shrink-0" title="Abrir la compra">
-                  Compra <ExternalLink size={10} />
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {its.map(it => {
-                  const m = ESTADO_ITEM_META[it.estado] || ESTADO_ITEM_META.PENDIENTE
-                  const rec = it.recordatorios
-                  const necesitaFoto = rec?.requiere_imagen && !rec?.solo_nombre && !(it.imagenes_urls || []).length
-                  const asig = personal.find(p => p.id === it.asignado_a)
-                  return (
-                    <button key={it.id} onClick={() => setModal(it)}
-                      title={necesitaFoto ? 'Sin foto todavía: se adjunta en la compra' : 'Click para gestionar'}
-                      style={{ background: m.bg, color: m.text, border: `1.5px solid ${m.border}`, borderRadius: 20,
-                               padding: '5px 10px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      {necesitaFoto ? <Lock size={10} /> : rec?.solo_nombre ? <Zap size={10} style={{ color: '#059669' }} /> : null}
-                      <span>{it.nombre}{it.cantidad > 1 ? ` ×${it.cantidad}` : ''}</span>
-                      {asig && (
-                        <span style={{ background: 'rgba(0,0,0,0.12)', borderRadius: '50%', width: 16, height: 16, fontSize: 8, fontWeight: 800,
-                                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{initials(asig)}</span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="mt-2 text-[10px] text-gray-400">
-                {listos}/{its.length} listos{todoListo && ' · lista para entregar: se marca ENTREGADO desde la compra'}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {modal && (
-        <ModalItemCompra item={modal} personal={personal} onClose={() => setModal(null)}
-          onSaved={() => { setModal(null); cargar(); onCambio?.() }} showAlert={showAlert} />
-      )}
-    </div>
+    <span title="Compra de recordatorio – cliente sin servicio funerario"
+      className={`inline-flex items-center gap-0.5 rounded-full font-bold whitespace-nowrap ${chica ? 'text-[9px] px-1.5 py-px' : 'text-[10px] px-2 py-0.5'}`}
+      style={{ background: COMPRA_COLOR.suave, color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
+      🛒 CR-{compra.numero}
+    </span>
   )
 }
 
-function ModalItemCompra({ item, personal, onClose, onSaved, showAlert }) {
+export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompra }) {
+  const { alert: showAlert } = useConfirm()
   const [estado, setEstado]     = useState(item.estado)
   const [asignado, setAsignado] = useState(item.asignado_a || '')
   const [notas, setNotas]       = useState(item.notas || '')
   const [saving, setSaving]     = useState(false)
   const c = item.compras_recordatorios
+  const cli = c?.clientes
 
   async function guardar() {
     setSaving(true)
@@ -164,14 +113,24 @@ function ModalItemCompra({ item, personal, onClose, onSaved, showAlert }) {
   }
 
   return (
-    <Modal open onClose={onClose} title={`${item.nombre} · ${c?.mascotas?.nombre || ''} (CR-${c?.numero})`}
+    <Modal open onClose={onClose} title={`${item.nombre}${item.cantidad > 1 ? ` ×${item.cantidad}` : ''} · ${c?.mascotas?.nombre || ''}`}
       footer={<>
+        {onAbrirCompra && (
+          <Button variant="ghost" onClick={() => onAbrirCompra(item.compra_id)} disabled={saving} className="mr-auto">
+            <ExternalLink size={13} /> Abrir la compra
+          </Button>
+        )}
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
         <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</Button>
       </>}>
       <div className="space-y-4">
-        {/* Lo que mandó el cliente del catálogo web: las fotos ya son URLs públicas
-            (las de una compra interna son rutas privadas y se ven en la compra). */}
+        <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: COMPRA_COLOR.suave, border: `1px solid ${COMPRA_COLOR.borde}`, color: COMPRA_COLOR.texto }}>
+          <strong>Compra CR-{c?.numero}</strong> · cliente sin servicio funerario
+          {c?.origen === 'CATALOGO_WEB' && ' · pedido del catálogo web'}
+          {cli && <span className="text-gray-500"> · {[cli.nombre, cli.apellido].filter(Boolean).join(' ')}{cli.whatsapp ? ` (${cli.whatsapp})` : ''}</span>}
+        </div>
+        {/* Las fotos del catálogo web ya son URLs públicas; las de una compra
+            interna son rutas privadas y se ven en el detalle de la compra. */}
         {(item.imagenes_urls || []).some(u => /^https?:\/\//i.test(u)) && (
           <div>
             <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fotos del cliente</label>
@@ -183,6 +142,12 @@ function ModalItemCompra({ item, personal, onClose, onSaved, showAlert }) {
               ))}
             </div>
           </div>
+        )}
+        {(item.imagenes_urls || []).length > 0 && !(item.imagenes_urls || []).some(u => /^https?:\/\//i.test(u)) && (
+          <p className="text-[12px] text-gray-500">Tiene {item.imagenes_urls.length} foto{item.imagenes_urls.length !== 1 ? 's' : ''}: se ven en el detalle de la compra.</p>
+        )}
+        {pideFotos(item) && !tieneFotos(item) && (
+          <p className="text-[12px] font-semibold text-amber-700">Todavía no tiene foto: se adjunta en el detalle de la compra.</p>
         )}
         {item.datos_cliente && Object.keys(item.datos_cliente).length > 0 && (
           <div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import Topbar from '@/components/layout/Topbar'
@@ -19,7 +20,7 @@ import { petEmoji, parsearErrorDB, today, parseDate, fmt } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
-import ComprasEnProduccion from '@/components/produccion/ComprasEnProduccion'
+import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
@@ -50,18 +51,21 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
   const rec   = item.recordatorios
   const soloN = rec?.solo_nombre
   const reqImg = rec?.requiere_imagen && !soloN
-  const bloqueado = reqImg && !fotos_ok && item.estado === 'PENDIENTE'
+  // En una compra sin servicio las fotos van por línea, no por tarjeta.
+  const fotosOk = item.__compra ? !!item.servicios?.fecha_imagenes_recibidas : fotos_ok
+  const bloqueado = reqImg && !fotosOk && item.estado === 'PENDIENTE'
   const asig  = personal.find(p => p.id === item.asignado_a)
   const maq   = maquinas.find(m => m.id === item.maquina_id) || maquinas.find(m => m.id === rec?.maquina_id)
 
   return (
     <button
       onClick={() => onClick(item)}
-      title={bloqueado ? 'Esperando fotos del cliente' : `Click para gestionar`}
+      title={`${item.__compra ? `Compra CR-${item.__compra.numero} (sin servicio funerario) · ` : ''}${bloqueado ? 'Esperando fotos del cliente' : 'Click para gestionar'}`}
       style={{
         background: bloqueado ? '#F9FAFB' : col.bg,
         color: bloqueado ? '#9CA3AF' : col.text,
-        border: `1.5px solid ${bloqueado ? '#E5E7EB' : col.border}`,
+        // Compra sin servicio: borde morado punteado, el estado sigue en el fondo.
+        border: item.__compra ? `1.5px dashed ${COMPRA_COLOR.fuerte}` : `1.5px solid ${bloqueado ? '#E5E7EB' : col.border}`,
         borderRadius: '20px',
         padding: '5px 10px',
         fontSize: '11px',
@@ -80,7 +84,7 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
         : soloN
           ? <Zap size={10} style={{ color: '#059669' }} />
           : null}
-      <span>{rec?.nombre || 'Ítem'}</span>
+      <span>{rec?.nombre || item.nombre || 'Ítem'}{item.__compra && item.cantidad > 1 ? ` ×${item.cantidad}` : ''}</span>
       {asig && (
         <span style={{
           background: 'rgba(0,0,0,0.12)', borderRadius: '50%',
@@ -333,7 +337,7 @@ function EstadoEntrega({ ent }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega, onAbrirCompra }) {
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     // Va ANTES del atajo de los LISTO: si no, un servicio listo que no es
@@ -357,6 +361,11 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
     }
     porServicio[r.servicio_id].items.push(r)
   })
+  // Compra sin servicio: las fotos van por línea. La tarjeta tiene «fotos OK»
+  // cuando ninguna de sus líneas sigue esperando una.
+  for (const g of Object.values(porServicio)) {
+    if (g.items[0]?.__compra) g.fotos_ok = g.items.every(i => !!i.servicios?.fecha_imagenes_recibidas)
+  }
 
   // Servicios LISTO primero, ordenados por fecha límite de entrega (el más
   // próximo a vencer arriba; sin límite al final). El resto conserva su orden.
@@ -393,8 +402,10 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         const fechaFotos  = fotos_ok ? fmtCorta(parseDate(servicio.fecha_imagenes_recibidas)) : null
         const listosCnt = items.filter(i => ['LISTO', 'ENTREGADO'].includes(i.estado)).length
         const pct = items.length > 0 ? Math.round((listosCnt / items.length) * 100) : 0
+        const compra = items[0]?.__compra || null
+        const fotoDe = i => compra ? !!i.servicios?.fecha_imagenes_recibidas : fotos_ok
         const bloqueados = items.filter(i =>
-          i.recordatorios?.requiere_imagen && !i.recordatorios?.solo_nombre && !fotos_ok && i.estado === 'PENDIENTE'
+          i.recordatorios?.requiere_imagen && !i.recordatorios?.solo_nombre && !fotoDe(i) && i.estado === 'PENDIENTE'
         ).length
         const listosProd = items.filter(i =>
           i.recordatorios?.solo_nombre && i.estado === 'PENDIENTE'
@@ -410,11 +421,15 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
 
         return (
           <div key={sId} className="bg-surface border rounded-2xl p-4 shadow-sm"
-            style={{
-              borderColor: todoListo ? '#6EE7B7' : (esVip ? VIP_ORO.borde : 'rgba(30,80,40,0.1)'),
-              borderWidth: todoListo || esVip ? 2 : 1,
-              background:  esVip ? VIP_ORO.bg : undefined,
-            }}>
+            style={compra
+              // Compra sin servicio funerario: tarjeta morada, inconfundible.
+              ? { borderColor: todoListo ? '#6EE7B7' : COMPRA_COLOR.borde, borderWidth: todoListo ? 2 : 1,
+                  borderLeft: `5px solid ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+              : {
+                  borderColor: todoListo ? '#6EE7B7' : (esVip ? VIP_ORO.borde : 'rgba(30,80,40,0.1)'),
+                  borderWidth: todoListo || esVip ? 2 : 1,
+                  background:  esVip ? VIP_ORO.bg : undefined,
+                }}>
             {/* Header */}
             <div className="flex items-start gap-2 mb-2.5">
               <span className="text-xl mt-0.5">{petEmoji(mascota?.especies?.nombre)}</span>
@@ -422,8 +437,16 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                 <div className="flex items-center gap-1 min-w-0">
                   <span className="font-bold text-ink text-[13px] truncate">{mascota?.nombre || 'Sin nombre'}</span>
                   {esVip && <VipStar />}
+                  {compra && <MarcaCompra compra={compra} chica />}
                 </div>
-                <div className="text-[11px] text-ink3 truncate">{plan?.nombre}</div>
+                {compra ? (
+                  <div className="text-[11px] truncate" style={{ color: COMPRA_COLOR.texto }}>
+                    Sin servicio funerario · {[compra.clientes?.nombre, compra.clientes?.apellido].filter(Boolean).join(' ')}
+                    {compra.origen === 'CATALOGO_WEB' && ' · catálogo web'}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-ink3 truncate">{plan?.nombre}</div>
+                )}
               </div>
               <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
                 {todoListo && (
@@ -488,7 +511,7 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                   Se pinta siempre que las fotos estén frenando producción, incluso
                   sin contactos: "sin contactar" ES la respuesta, y su ausencia no
                   se distinguiría de una etiqueta que no cargó. */}
-              {!fotos_ok && bloqueados > 0 && (
+              {!compra && !fotos_ok && bloqueados > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                   title={etapa?.numero
                     ? `Ya se le enviaron ${etapa.numero} contacto(s) por WhatsApp pidiendo las fotos`
@@ -524,6 +547,17 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
               ))}
             </div>
 
+            {/* Compra sin servicio: se abre (y se entrega) desde su detalle */}
+            {compra && onAbrirCompra && (
+              <button onClick={() => onAbrirCompra(compra.id)}
+                className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-xl text-[12px] font-bold transition-all hover:opacity-90"
+                style={todoListo
+                  ? { background: COMPRA_COLOR.fuerte, color: '#fff' }
+                  : { background: '#fff', color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
+                {todoListo ? <><Truck size={13} /> Abrir la compra para entregar</> : <>Abrir la compra CR-{compra.numero} <ArrowRight size={12} /></>}
+              </button>
+            )}
+
             {/* Traza: cuándo quedó listo el servicio */}
             {todoListo && servicio?.fecha_listo && (
               <div className="flex items-center gap-1.5 mt-2 text-[10px] font-semibold" style={{ color: '#059669' }}>
@@ -533,7 +567,7 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
             )}
 
             {/* Botón preparar entrega cuando está LISTO + en qué va */}
-            {todoListo && onPrepararEntrega && (
+            {todoListo && !compra && onPrepararEntrega && (
               <>
                 <button
                   onClick={() => onPrepararEntrega(sId)}
@@ -587,12 +621,14 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                     return (
                       <button key={item.id} onClick={() => onClickItem(item)}
                         className="w-full text-left p-2.5 rounded-xl transition-colors hover:bg-surface2"
-                        style={{ border: '1px solid rgba(30,80,40,0.08)' }}>
+                        style={item.__compra
+                          ? { border: `1px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+                          : { border: '1px solid rgba(30,80,40,0.08)' }}>
                         <div className="flex items-center gap-2">
                           <span className="text-base">{petEmoji(mascota?.especies?.nombre)}</span>
                           <div className="flex-1 min-w-0">
                             <div className="text-[12px] font-bold text-ink truncate">{item.recordatorios?.nombre}</div>
-                            <div className="text-[11px] text-ink3 truncate">{mascota?.nombre}</div>
+                            <div className="text-[11px] text-ink3 truncate flex items-center gap-1">{mascota?.nombre} <MarcaCompra compra={item.__compra} chica /></div>
                           </div>
                           {asig && (
                             <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
@@ -632,9 +668,11 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                 return (
                   <button key={item.id} onClick={() => onClickItem(item)}
                     className="w-full text-left p-2.5 rounded-xl transition-colors hover:bg-surface2"
-                    style={{ border: '1px solid rgba(30,80,40,0.08)' }}>
+                    style={item.__compra
+                      ? { border: `1px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+                      : { border: '1px solid rgba(30,80,40,0.08)' }}>
                     <div className="text-[12px] font-bold text-ink">{item.recordatorios?.nombre}</div>
-                    <div className="text-[11px] text-ink3">{mascota?.nombre}</div>
+                    <div className="text-[11px] text-ink3 flex items-center gap-1">{mascota?.nombre} <MarcaCompra compra={item.__compra} chica /></div>
                   </button>
                 )
               })}
@@ -752,11 +790,16 @@ function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPer
               const reqImg   = rec?.requiere_imagen && !soloN
               const bloqueado = reqImg && !fotosOk && r.estado === 'PENDIENTE'
               return (
-                <Tr key={r.id} onClick={() => onClickItem(r)}>
+                <Tr key={r.id} onClick={() => onClickItem(r)}
+                  style={r.__compra ? { background: COMPRA_COLOR.suave, boxShadow: `inset 4px 0 0 ${COMPRA_COLOR.fuerte}` } : undefined}>
                   <Td className="font-semibold whitespace-nowrap">
                     {petEmoji(mascota?.especies?.nombre)} {mascota?.nombre || 'Sin nombre'}
                   </Td>
-                  <Td className="whitespace-nowrap">{r.servicios?.planes?.nombre || '—'}</Td>
+                  <Td className="whitespace-nowrap">
+                    {r.__compra
+                      ? <span className="inline-flex items-center gap-1.5"><MarcaCompra compra={r.__compra} /><span className="text-[11px]" style={{ color: COMPRA_COLOR.texto }}>sin servicio</span></span>
+                      : (r.servicios?.planes?.nombre || '—')}
+                  </Td>
                   <Td className="whitespace-nowrap font-semibold">{rec?.nombre || 'Ítem'}</Td>
                   <Td>
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
@@ -970,7 +1013,11 @@ export default function Produccion() {
   const { alert: showAlert } = useConfirm()
   const { personalData } = useAuth()
   const esAdmin = personalData?.rol === 'ADMIN' || personalData?.rol === 'COORDINADOR'
+  const navigate = useNavigate()
   const [recordatorios, setRecordatorios] = useState([])
+  // Líneas de compras SIN servicio (migr. 168). Estado aparte A PROPÓSITO:
+  // `autoCorregirEstados` y `handleSaved` solo ven `recordatorios`.
+  const [compras,       setCompras]       = useState([])
   const [etapas,        setEtapas]        = useState({})   // servicio_id → etapa de contacto
   const [entregas,      setEntregas]      = useState({})   // servicio_id → entrega (pool / asignada)
   const [personal,      setPersonal]      = useState([])
@@ -1001,6 +1048,8 @@ export default function Produccion() {
       .channel('produccion-cambios')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'servicio_recordatorios' }, refrescar)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'servicios' }, refrescar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'compra_recordatorio_items' }, refrescar)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'compras_recordatorios' }, refrescar)
       .subscribe()
     return () => { refrescar.cancelar(); db.removeChannel(canal) }
   }, [esAdmin])
@@ -1052,6 +1101,8 @@ export default function Produccion() {
       setRecordatorios(recs || [])
       setPersonal(per || [])
       setMaquinas(maq || [])
+      // Compras sin servicio: si fallan, el tablero de servicios sigue igual.
+      cargarCompras()
       // Estado de la entrega de los servicios ya LISTO: si está publicada al pool,
       // si alguien la tomó y quién. Es el control de entregas del coordinador.
       cargarEntregas((recs || [])
@@ -1081,6 +1132,12 @@ export default function Produccion() {
     }
   }
 
+  async function cargarCompras() {
+    try { setCompras(aItemsTablero(await cargarItemsCompras() || [])) }
+    catch (e) { console.error('Compras en producción:', e.message) }
+  }
+
+  // NUNCA recibe líneas de compra: agrupa por servicio_id y escribe `servicios`.
   async function autoCorregirEstados(recs) {
     const porServicio = {}
     recs.forEach(r => {
@@ -1132,11 +1189,16 @@ export default function Produccion() {
     setRecordatorios(prev => prev.map(r => r.id === updatedItem.id ? { ...r, ...updatedItem } : r))
   }
 
+  // Lo que pintan las vistas y cuentan las cifras: servicios + compras sin
+  // servicio (en morado). Solo lectura: lo que escribe sigue separado.
+  const tablero = compras.length ? [...recordatorios, ...compras] : recordatorios
+  const abrirCompra = id => navigate(`/compras-recordatorios?ver=${id}`)
+
   const stats = {
-    pendientes: recordatorios.filter(r => r.estado === 'PENDIENTE').length,
-    enProceso:  recordatorios.filter(r => r.estado === 'EN_PROCESO').length,
-    listos:     recordatorios.filter(r => r.estado === 'LISTO').length,
-    sinFotos:   recordatorios.filter(r =>
+    pendientes: tablero.filter(r => r.estado === 'PENDIENTE').length,
+    enProceso:  tablero.filter(r => r.estado === 'EN_PROCESO').length,
+    listos:     tablero.filter(r => r.estado === 'LISTO').length,
+    sinFotos:   tablero.filter(r =>
       r.recordatorios?.requiere_imagen && !r.recordatorios?.solo_nombre &&
       !r.servicios?.fecha_imagenes_recibidas && r.estado === 'PENDIENTE'
     ).length,
@@ -1154,14 +1216,14 @@ export default function Produccion() {
 
   // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
   const recOpciones = [...new Map(
-    recordatorios
+    tablero
       .filter(r => r.recordatorios && r.estado !== 'NA')
       .map(r => [r.recordatorios.id, r.recordatorios.nombre])
   ).entries()].sort((a, b) => a[1].localeCompare(b[1], 'es'))
 
   // Resumen del recordatorio filtrado: cuántos hay por estado y en cuántas mascotas
   const itemsRecSel = filtroRec
-    ? recordatorios.filter(r => String(r.recordatorio_id) === String(filtroRec) && r.estado !== 'NA')
+    ? tablero.filter(r => String(r.recordatorio_id) === String(filtroRec) && r.estado !== 'NA')
     : []
   const recSelResumen = filtroRec ? {
     nombre:     recOpciones.find(([id]) => String(id) === String(filtroRec))?.[1] || 'Recordatorio',
@@ -1253,6 +1315,9 @@ export default function Produccion() {
           )}
 
           <div className="ml-auto flex items-center gap-3 text-[11px] text-ink3">
+            <span className="inline-flex items-center gap-1" title="Compra de recordatorio – cliente sin servicio funerario">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ border: `1.5px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }} /> Sin servicio (CR)
+            </span>
             <span className="inline-flex items-center gap-1"><Zap size={10} style={{ color: '#059669' }} /> Sin fotos OK</span>
             <span className="inline-flex items-center gap-1"><Lock size={10} style={{ color: '#92400E' }} /> Bloqueado</span>
             <span className="inline-flex items-center gap-1"><Cpu size={10} /> Máquina</span>
@@ -1274,25 +1339,22 @@ export default function Produccion() {
           </div>
         )}
 
-        {/* Contenido según vista */}
-        {/* Compras de recordatorios sin servicio (migración 168): sección aparte,
-            con su propia carga y su propio modal. Solo aparece si hay algo. */}
-        {vista === 'servicio' && !filtroRec && !soloAnticipados && (
-          <ComprasEnProduccion filtroEstado={filtroEstado} filtroPersona={filtroPersona} personal={personal} />
-        )}
+        {/* Contenido según vista. Las compras sin servicio (migr. 168) van
+            dentro, en morado; su clic abre su propio modal (escribe por backend). */}
         {vista === 'servicio' && (
           <VistaPorServicio
-            recordatorios={recordatorios} personal={personal} maquinas={maquinas} etapas={etapas}
+            recordatorios={tablero} personal={personal} maquinas={maquinas} etapas={etapas}
             entregas={entregas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             soloAnticipados={soloAnticipados}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
+            onAbrirCompra={abrirCompra}
           />
         )}
         {vista === 'tabla' && (
           <VistaTabla
-            recordatorios={recordatorios} personal={personal} maquinas={maquinas}
+            recordatorios={tablero} personal={personal} maquinas={maquinas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
             soloAnticipados={soloAnticipados}
             onClickItem={setModalItem}
@@ -1300,13 +1362,13 @@ export default function Produccion() {
         )}
         {vista === 'maquina' && (
           <VistaPorMaquina
-            recordatorios={recordatorios} personal={personal} maquinas={maquinas}
+            recordatorios={tablero} personal={personal} maquinas={maquinas}
             onClickItem={setModalItem}
           />
         )}
         {vista === 'persona' && (
           <VistaPorPersona
-            recordatorios={recordatorios} personal={personal} maquinas={maquinas}
+            recordatorios={tablero} personal={personal} maquinas={maquinas}
             onClickItem={setModalItem}
           />
         )}
@@ -1317,7 +1379,16 @@ export default function Produccion() {
       </div>
 
       {/* Modal gestión ítem */}
-      {modalItem && (
+      {modalItem?.__compra && (
+        <ModalItemCompra
+          item={modalItem}
+          personal={personal}
+          onClose={() => setModalItem(null)}
+          onSaved={() => { setModalItem(null); cargarCompras() }}
+          onAbrirCompra={id => { setModalItem(null); abrirCompra(id) }}
+        />
+      )}
+      {modalItem && !modalItem.__compra && (
         <ModalItem
           item={modalItem}
           personal={personal}
