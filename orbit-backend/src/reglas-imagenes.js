@@ -68,6 +68,11 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   // Forma: { nombre, idioma, categoria, vars:[tokens] } — ver TOKENS_PLANTILLA.
   plantilla_contacto_2:   null,
   plantilla_contacto_3:   null,
+
+  // Aviso de plazo cuando la familia termina el portal (REPORTE ORBIT 2026-11-03).
+  // null → no se envía. La siembra `scripts/crear-plantilla-recibido.mjs` cuando
+  // Meta la aprueba. Forma: { nombre, idioma, categoria }.
+  plantilla_recibido:     null,
 }
 
 /** Tokens permitidos en `vars` de las plantillas de seguimiento. */
@@ -150,6 +155,28 @@ export function mensajeSolicitud({ nombre, mascota, enlace }) {
   return `Hola, ${n}. Recibe un saludo de Camino al Cielo. Para continuar con los ` +
     `recordatorios de ${mascota || 'tu mascota'}, por favor adjunta las fotografías ` +
     `solicitadas en el siguiente enlace: ${enlace}. Gracias por confiar en nosotros.`
+}
+
+/**
+ * Plazo que se le promete a la familia al recibir todo: los días del plan y dos
+ * de holgura. Con los planes de 8 días queda el "8 a 10" que pidió David; el
+ * Ángel (3) y el eco-grupal (20) no pueden recibir ese mismo número.
+ */
+export function plazoEntrega(dias) {
+  const d = Number(dias) > 0 ? Math.round(Number(dias)) : 8
+  return `${d} a ${d + 2}`
+}
+
+// Cuerpo de la plantilla `recordatorios_recibidos_plazo`: {{1}} mascota, {{2}} plazo.
+// El script de creación lo sube tal cual; `mensajeRecibido` es su espejo.
+export const CUERPO_RECIBIDO =
+  'Te confirmamos que hemos recibido la información para la elaboración de los recordatorios de {{1}} 🤍\n\n'
+  + 'Ten presente que el tiempo aproximado de elaboración y entrega es de {{2}} días hábiles, contados a partir '
+  + 'del momento en que recibimos de manera completa toda la información y fotografías requeridas.\n\n'
+  + 'Los días hábiles se contabilizan de lunes a viernes, sin incluir festivos. — Camino al Cielo'
+
+export function mensajeRecibido({ mascota, plazo }) {
+  return CUERPO_RECIBIDO.replace('{{1}}', mascota || 'tu mascota').replace('{{2}}', plazo)
 }
 
 /**

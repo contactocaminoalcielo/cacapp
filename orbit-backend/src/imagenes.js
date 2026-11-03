@@ -13,7 +13,7 @@
 import { pool, log } from './db.js'
 import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
-  plantillaSolicitud, mensajeSolicitudCompetsSinRec,
+  plantillaSolicitud, mensajeSolicitudCompetsSinRec, plazoEntrega, mensajeRecibido,
 } from './reglas-imagenes.js'
 import {
   ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
@@ -416,7 +416,7 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
 
     const { rows: svcRows } = await client.query(
       `SELECT s.id, s.estado, s.fecha_imagenes_recibidas, s.plan_id,
-              p.codigo AS plan_codigo, p.tipo_proceso
+              p.codigo AS plan_codigo, p.tipo_proceso, p.dias_entrega_prometidos
        FROM public.servicios s
        LEFT JOIN public.planes p ON p.id = s.plan_id
        WHERE s.codigo_fotos = $1
@@ -667,7 +667,7 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     // entrega (fn_calcular_fecha_entrega), o sea el compromiso con la familia.
     // "anticipados" solo aplica a compostaje INDIVIDUAL; en eco-grupal no se pregunta ni se guarda.
     const esCompostaje = (s.tipo_proceso || '') === 'COMPOSTAJE_INDIVIDUAL'
-    await client.query(
+    const { rows: [svcFin] } = await client.query(
       `UPDATE public.servicios
        SET fecha_imagenes_recibidas = COALESCE(fecha_imagenes_recibidas, public.fn_hoy_bogota()),
            comentarios_cliente = COALESCE($2, comentarios_cliente),
@@ -675,7 +675,8 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
            datos_entrega_cliente = COALESCE($5::jsonb, datos_entrega_cliente),
            datos_entrega_recibidos_en = CASE WHEN $5 IS NOT NULL THEN now() ELSE datos_entrega_recibidos_en END,
            estado = CASE WHEN estado = 'EN_CUARTO_FRIO' THEN 'EN_PROCESO' ELSE estado END
-       WHERE id = $1`,
+       WHERE id = $1
+       RETURNING fecha_limite_entrega`,
       [s.id,
        payload.comentarios?.trim() ? payload.comentarios.trim() : null,
        esCompostaje && typeof payload.anticipados === 'boolean',
@@ -732,8 +733,20 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
           ? `ofertas=${respuestas.map(r => `${r.oferta.titulo}:${r.acepta ? 'ACEPTADA' : 'RECHAZADA'}`).join(', ')}`
           : '',
         ofertasFallidas.length ? `⚠ ${ofertasFallidas.length} oferta(s) NO cargada(s) — ver alerta ALTA` : '')
+
+    // Plazo para la familia: solo si el reloj arrancó hoy (el trigger fijó
+    // fecha_limite_entrega) y hay algún recordatorio que hacer. Compostaje que
+    // los recibe al final no tiene fecha todavía: decirle "8 a 10 días" sería falso.
+    const hayRecordatorios = items.some(it => !declinados.has(String(it.sr_id))) || ofertaSrIds.length > 0
+    const plazo = svcFin?.fecha_limite_entrega && hayRecordatorios
+      ? plazoEntrega(s.dias_entrega_prometidos) : null
+    // Fuera de la transacción y sin esperar: el WhatsApp no puede demorar ni
+    // tumbar la respuesta del portal; si falla queda en el log.
+    if (plazo) avisarPlazoRecibido(s.id, plazo).catch(e =>
+      log('[imagenes/recibir] aviso de plazo FALLÓ', cod, e.message))
+
     return { status: 200, body: {
-      ok: true, recibido: true, items: items.length,
+      ok: true, recibido: true, items: items.length, plazo,
       ofertas_aceptadas: ofertaSrIds.length,
       // Compat con la PWA vieja, que lee el booleano.
       oferta_aceptada: ofertaSrIds.length > 0,
@@ -742,6 +755,38 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
+}
+
+// WhatsApp "recibimos todo, el plazo es X días hábiles". Va por plantilla
+// porque la familia casi nunca le ha escrito a la línea (la ventana de 24 h
+// está cerrada). Sin plantilla sembrada no se envía.
+async function avisarPlazoRecibido(servicioId, plazo) {
+  const client = await pool.connect()
+  let config, d
+  try {
+    config = await cargarConfigImagenes(client)
+    const { rows } = await client.query(
+      `SELECT m.nombre AS mascota, c.whatsapp,
+              TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario
+       FROM public.servicios s
+       JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+       WHERE s.id = $1`, [servicioId])
+    d = rows[0]
+  } finally { client.release() }
+
+  const raw = config.plantilla_recibido
+  const p = typeof raw === 'string' ? (() => { try { return JSON.parse(raw) } catch { return null } })() : raw
+  if (!p?.nombre) { log('[imagenes/recibir] aviso de plazo sin plantilla sembrada — no se envía'); return }
+  if (!d?.whatsapp) { log('[imagenes/recibir] aviso de plazo: el cliente no tiene WhatsApp', servicioId); return }
+
+  const r = await enviarPlantillaGenerica({
+    telefono: d.whatsapp, nombre: d.propietario || '',
+    plantillaNombre: p.nombre, idioma: p.idioma || 'es_MX', category: p.categoria || 'UTILITY',
+    mensaje: mensajeRecibido({ mascota: d.mascota, plazo }),
+    bodyParams: [d.mascota || 'tu mascota', plazo],
+  })
+  log('[imagenes/recibir] aviso de plazo enviado', servicioId, plazo, r?.messageId || '')
 }
 
 // ¿El recordatorio recibió todos sus requisitos? (imágenes completas + textos requeridos)

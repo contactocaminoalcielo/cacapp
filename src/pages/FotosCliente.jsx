@@ -83,6 +83,7 @@ function itemListo(item, fotos, textos) {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function FotosCliente({ codigo: codigoProp }) {
   const [fase,        setFase]       = useState(codigoProp ? 'cargando' : 'entrada')
+  const [plazo,       setPlazo]      = useState(null)   // "8 a 10": días hábiles que le prometemos (lo calcula el backend)
   const [cInput,      setCInput]     = useState(codigoProp || '')
   const [codigo,      setCodigo]     = useState((codigoProp || '').toUpperCase())
   const [servicio,    setServicio]   = useState(null)
@@ -378,7 +379,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
         oferta: ofertasPayload[0],
       }
       const r = await portalRecibir(codigo, payload)
-      if (r.ok || r.ya_recibido) { setFase('enviado'); return }
+      if (r.ok || r.ya_recibido) { setPlazo(r.plazo || null); setFase('enviado'); return }
       if (r.error === 'incompleto')
         throw new Error('Faltan imágenes o datos: ' + (r.faltantes || []).join(', '))
       if (r.error === 'entrega_incompleta')
@@ -437,7 +438,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       texto={`Esta pantalla quedó con una versión anterior y por eso no pudimos recibir las fotos de ${mascota}. Toca el botón para actualizarla y vuelve a seleccionarlas: solo toma un momento.`}
       cta={{ label: 'Actualizar y volver a intentar', fn: () => { limpiarYRecargar() } }} />
   )
-  if (fase === 'enviado') return <PantallaEnviado mascota={mascota} />
+  if (fase === 'enviado') return <PantallaEnviado mascota={mascota} plazo={plazo} />
 
   // ── WIZARD ────────────────────────────────────────────────────────────────
   const pasosVisibles = totalPasos - 1
@@ -1599,7 +1600,7 @@ function EntradaScreen({ cInput, setCInput, onBuscar }) {
   )
 }
 
-function PantallaEnviado({ mascota }) {
+function PantallaEnviado({ mascota, plazo }) {
   return (
     <Centrado>
       <motion.div initial={{ scale: 0.88, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
@@ -1610,6 +1611,12 @@ function PantallaEnviado({ mascota }) {
       <p className="text-[15px] leading-relaxed max-w-xs text-center" style={{ color: APAGADO }}>
         Recibimos las fotos de <strong style={{ color: TINTA }}>{mascota}</strong>.<br /><br />Nuestro equipo comenzará a trabajar con mucho cariño.
       </p>
+      {plazo && (
+        <p className="text-[14px] leading-relaxed max-w-xs text-center mt-5 px-4 py-3 rounded-2xl"
+          style={{ color: TINTA, background: '#F4F8F2' }}>
+          El tiempo aproximado de elaboración y entrega de los recordatorios es de <strong>{plazo} días hábiles</strong> (lunes a viernes, sin festivos), desde hoy que recibimos todo.
+        </p>
+      )}
       <p className="text-[13px] text-gray-400 mt-6">Puede cerrar esta ventana.</p>
     </Centrado>
   )
