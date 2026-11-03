@@ -21,6 +21,7 @@ import { aplicarRecalculoPorPeso, planComisiona, comisionInconsistente, COLS_CON
 import { desgloseReciboTecnico } from '@/lib/reciboDesglose'
 import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import { orbitApi } from '@/lib/orbitApi'
+import { completarEntregaCompra } from '@/lib/comprasRecordatorios'
 import { EMPRESA } from '@/lib/reciboPdf'
 
 const POLL = 30_000
@@ -1173,6 +1174,42 @@ function CardRecogida({ svc, tecnico, neverasList = NEVERAS_DEFAULT, onIniciar, 
   )
 }
 
+// ─── ENTREGA DE UNA COMPRA SIN SERVICIO (migr. 204) ─────────────────────
+// Una compra de recordatorios sin servicio funerario no tiene `servicios`. Se
+// le arma uno «de mentiras» con lo que leen las tarjetas (mascota, cliente,
+// saldo, nombre del plan) para que se vean y se cobren igual que las de un
+// servicio. Lo que ESCRIBE una entrega así nunca toca `servicios`: va por el
+// backend (`completarEntregaCompra`). `__compra` es la marca para bifurcar.
+function entregaDeCompraComoServicio(e) {
+  const c = e?.compra
+  if (!e?.compra_id || !c) return e
+  const items = c.compra_recordatorio_items || []
+  return {
+    ...e,
+    __compra: c,
+    // Anulada o ya entregada (coordinación la cerró a mano): ya no es tarea.
+    __compraCerrada: !!c.anulada_en || (items.length > 0 && items.every(i => i.estado === 'ENTREGADO')),
+    servicios: {
+      id: null,
+      estado: c.anulada_en ? 'CANCELADO' : 'LISTO',
+      valor_total:  Number(c.total) || 0,
+      valor_pagado: Number(c.valor_pagado) || 0,
+      mascotas: { ...(c.mascotas || {}), clientes: c.clientes },
+      planes: { nombre: `Compra CR-${c.numero} · ${items.map(i => i.nombre + (i.cantidad > 1 ? ` ×${i.cantidad}` : '')).join(', ')}` },
+    },
+  }
+}
+
+function MarcaCompraEntrega({ ent }) {
+  if (!ent?.__compra) return null
+  return (
+    <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2"
+      style={{ background: '#F5F3FF', color: '#5B21B6', border: '1px dashed #7C3AED' }}>
+      🛒 Compra de recordatorios CR-{ent.__compra.numero} · sin servicio funerario
+    </div>
+  )
+}
+
 // ─── CARD ENTREGA DISPONIBLE (pool) ─────────────────────────────────────
 // Lo justo para decidir si me sirve: qué mascota, para dónde, cuándo y si hay
 // plata por cobrar. El detalle completo aparece cuando ya es mía.
@@ -1184,7 +1221,8 @@ function CardDisponible({ ent, tomando, onTomar }) {
   const zona    = [ent.barrio, ent.localidad, ent.ciudad].filter(Boolean).join(' · ')
 
   return (
-    <div className="bg-white rounded-2xl border p-4 mb-3 shadow-sm" style={{ borderColor: '#C7D2FE' }}>
+    <div className="bg-white rounded-2xl border p-4 mb-3 shadow-sm" style={{ borderColor: ent.__compra ? '#C4B5FD' : '#C7D2FE' }}>
+      <MarcaCompraEntrega ent={ent} />
       <div className="flex items-start gap-3 mb-2.5">
         <span style={{ fontSize: 26 }}>{emoji}</span>
         <div className="min-w-0 flex-1">
@@ -1414,6 +1452,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
     <div className="bg-white rounded-2xl border p-4 mb-3 shadow-sm"
       style={{ borderColor: ent.estado === 'EN_CAMINO' ? '#93C5FD' : '#F0F0F0', borderWidth: ent.estado === 'EN_CAMINO' ? 2 : 1 }}>
 
+      <MarcaCompraEntrega ent={ent} />
       {/* Header mascota */}
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
@@ -1479,13 +1518,14 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
         </div>
       )}
 
-      {/* Botón certificado */}
-      <button onClick={descargarCertificado} disabled={genCert}
+      {/* Botón certificado — el certificado es del servicio funerario; una
+          compra sin servicio no lo lleva. */}
+      {!ent.__compra && <button onClick={descargarCertificado} disabled={genCert}
         className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[12px] font-bold mb-3 transition-all active:scale-98 disabled:opacity-60"
         style={{ background: '#EDE9FE', color: '#5B21B6' }}>
         {genCert ? <div className="w-3.5 h-3.5 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" /> : <FileText size={13} />}
         Descargar certificado de entrega
-      </button>
+      </button>}
 
       {actErr && (
         <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs mb-3"
@@ -1534,7 +1574,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
           {/* Cobro del saldo — solo si el servicio debe plata */}
           {saldo > 0 && (
             <PanelCobroEntrega
-              servicioId={ent.servicio_id}
+              servicioId={ent.servicio_id || `compra-${ent.compra_id}`}
               entregaId={ent.id}
               saldo={saldo}
               cobro={cobro}
@@ -1570,7 +1610,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
         </div>
       )}
 
-      <ComentariosSection servicioId={ent.servicio_id} personalId={tecnico?.id} />
+      {!ent.__compra && <ComentariosSection servicioId={ent.servicio_id} personalId={tecnico?.id} />}
 
       <ContactoSheet modal={contactoModal} onClose={() => setContactoModal(null)} />
     </div>
@@ -1925,6 +1965,12 @@ export default function TecnicoApp() {
         clientes:cliente_id ( nombre, apellido, whatsapp, telefono, telefono2 )
       ),
       planes:plan_id ( nombre )
+    ),
+    compra:compra_id (
+      id, numero, total, valor_pagado, anulada_en,
+      mascotas:mascota_id ( nombre, especie_id, especies ( nombre ) ),
+      clientes:cliente_id ( nombre, apellido, whatsapp, telefono, telefono2 ),
+      compra_recordatorio_items ( nombre, cantidad, estado )
     )
   `
   const CF_COLS = 'id, servicio_id, nevera_codigo, posicion, peso_kg, foto_pesaje_url'
@@ -1948,7 +1994,24 @@ export default function TecnicoApp() {
     .not('servicios.estado', 'in', '(ENTREGADO,CANCELADO)')
     .order('fecha_programada', { ascending: true, nullsFirst: true })
     .limit(500)
-  const sinCancelados = lista => (lista || []).filter(e => e.servicios?.estado !== 'CANCELADO')
+  // Entregas de COMPRAS de recordatorios sin servicio (migr. 204): no tienen
+  // servicio, así que el `!inner` de arriba las deja por fuera. Van en su
+  // propia consulta; la compra anulada o ya entregada se descarta al normalizar.
+  const consultaPoolCompras = () => db.from('entregas')
+    .select(SELECT_ENTREGA)
+    .eq('estado', 'DISPONIBLE')
+    .not('compra_id', 'is', null)
+    .order('fecha_programada', { ascending: true, nullsFirst: true })
+    .limit(200)
+  const consultaPoolTodo = async () => {
+    const [a, b] = await Promise.all([consultaPool(), consultaPoolCompras()])
+    if (b.error) console.error('[entregas] pool de compras:', b.error.message)   // el pool de servicios sigue
+    const data = [...(a.data || []), ...(b.data || [])]
+      .sort((x, y) => (x.fecha_programada || '').localeCompare(y.fecha_programada || ''))
+    return { data, error: a.error }
+  }
+  const sinCancelados = lista => (lista || []).map(entregaDeCompraComoServicio)
+    .filter(e => e.servicios?.estado !== 'CANCELADO' && !e.__compraCerrada)
 
   // Refresco liviano de SOLO entregas (mías + pool). Lo dispara el canal de
   // `entregas` —que no tiene filtro: cualquier entrega de cualquier compañero—
@@ -1956,7 +2019,7 @@ export default function TecnicoApp() {
   // los técnicos a la vez.
   const cargarEntregas = useLecturaSerial(async () => {
     if (!tecnico) return
-    const [{ data: entData }, { data: poolData }] = await Promise.all([consultaEntregasMias(), consultaPool()])
+    const [{ data: entData }, { data: poolData }] = await Promise.all([consultaEntregasMias(), consultaPoolTodo()])
     ultimoPoolRef.current = Date.now()
     setEntregas(sinCancelados(entData))
     setDisponibles(sinCancelados(poolData))
@@ -2003,7 +2066,7 @@ export default function TecnicoApp() {
           .is('nevera_codigo', null),
         // 4. Entregas mías; el pool solo cuando toca (pesa: una fila con joins por entrega).
         consultaEntregasMias(),
-        conPool ? consultaPool() : Promise.resolve({ data: null }),
+        conPool ? consultaPoolTodo() : Promise.resolve({ data: null }),
         // 5. Reporte del día y neveras activas (desde tabla neveras)
         db.from('estado_cuarto_frio')
           .select('*, estado_nevera_reporte(*)')
@@ -2743,7 +2806,8 @@ export default function TecnicoApp() {
       .update({ estado: 'EN_CAMINO', aceptada_en: new Date().toISOString() })
       .eq('id', ent.id)
     if (error) throw new Error(error.message)
-    await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', ent.servicio_id)
+    // Una compra sin servicio no tiene servicio que mover a EN_ENTREGA.
+    if (!ent.__compra) await db.from('servicios').update({ estado: 'EN_ENTREGA' }).eq('id', ent.servicio_id)
     // Notificar coordinadores
     const coords = await getCoordinadores()
     const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
@@ -2778,6 +2842,41 @@ export default function TecnicoApp() {
           patch.foto_firma_url = publicUrl
         }
       } catch (_) { /* no bloquear si falla subida firma */ }
+    }
+
+    // ── Compra de recordatorios sin servicio (migr. 204) ────────────────
+    // Todo lo que escribe va por el backend en UNA transacción: el cobro al
+    // libro de la compra Y a `entregas.cobro_*` (su cuadre), las líneas a
+    // ENTREGADO y la bitácora. El saldo lo relee el servidor, no esta tarjeta.
+    if (ent.__compra) {
+      const r = await completarEntregaCompra(ent.id, {
+        foto_entrega_url: fotoUrl || null,
+        foto_firma_url:   patch.foto_firma_url || null,
+        nombre_cliente:   nombreCliente || null,
+        cobro: {
+          decision:         cobro?.decision || '',
+          metodo:           cobro?.metodo || null,
+          comprobante_path: cobro?.comprobante?.path || null,
+          saldo_mostrado:   cobro?.saldoMostrado || 0,
+          motivo:           cobro?.motivo || '',
+        },
+      })
+      const coords = await getCoordinadores()
+      const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+      const plata = r.cobro_monto != null
+        ? ` Cobró ${fmt(r.cobro_monto)} en ${r.cobro_metodo}.${r.aviso === 'SALDO_YA_EN_CERO' ? ' ⚠️ La compra ya figuraba pagada — revisar doble cobro.' : ''}`
+        : cobro?.decision === 'NO_COBRE' ? ` ⚠️ Sin cobrar: ${cobro.motivo.trim()}` : ''
+      await Promise.all(coords.map(c => crearNotificacion({
+        para_personal_id: c.id,
+        de_personal_id:   tecnico?.id,
+        tipo:             'ENTREGA_COMPLETADA',
+        titulo:           'Entrega completada',
+        mensaje:          `Compra CR-${ent.__compra.numero} · ${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.${plata}`,
+        servicio_id:      null,
+        datos:            { compra_id: ent.compra_id },
+      })))
+      await cargar()
+      return
     }
 
     // ── Dinero cobrado en la puerta ──────────────────────────────────────
