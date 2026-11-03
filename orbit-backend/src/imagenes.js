@@ -553,9 +553,10 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
            ON CONFLICT DO NOTHING`,
           [s.id, MOD,
            `${mascota}: la familia respondió el paso de la planta pero no se pudo guardar.`,
-           'Registrar a mano la especie y, si los pidió, los restos cálcicos (ver metadata).',
+           'Registrar a mano la especie y, si la pidió, la segunda planta (ver metadata).',
            `planta-fallida:${s.id}`,
-           JSON.stringify({ planta_id: plantaPay.planta_id || null, restos_calcicos: plantaPay.restos_calcicos === true,
+           JSON.stringify({ planta_id: plantaPay.planta_id || null, adicionales: plantaPay.adicionales || [],
+                            restos_calcicos: plantaPay.restos_calcicos === true,
                             error: res.error?.message || null })]
         ))
       }

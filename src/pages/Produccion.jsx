@@ -21,6 +21,7 @@ import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCir
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
+import CenizariosRestos from '@/components/produccion/CenizariosRestos'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
@@ -1262,6 +1263,9 @@ export default function Produccion() {
           <StatCard label="Bloqueados (sin fotos)" value={stats.sinFotos} valueColor="#92400E"
             sub={stats.sinFotos > 0 ? 'Esperan imágenes del cliente' : 'Todo al día'} />
         </div>
+
+        {/* Cenizarios de restos cálcicos (migr. 205): aparte de los recordatorios */}
+        <CenizariosRestos />
 
         {/* Tabs de vista */}
         <div className="flex flex-wrap gap-3 mb-5 items-center">

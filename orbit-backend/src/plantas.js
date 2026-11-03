@@ -406,61 +406,12 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
     }
 
     // ── Extras: el precio sale de la DB, y solo de la DB ──
-    const pedidos = Array.isArray(payload.adicionales) ? payload.adicionales.slice(0, 20) : []
-    const ids = [...new Set(pedidos.map(a => uuidOrNull(a?.planta_id)).filter(Boolean))]
-    let comprados = []
-    let totalExtras = 0
-    if (ids.length) {
-      const { rows: disp } = await client.query(
-        `SELECT id, nombre, precio FROM public.plantas
-          WHERE id = ANY($1::uuid[]) AND activo = true AND adicional = true`, [ids]
-      )
-      const porId = new Map(disp.map(p => [p.id, p]))
-      for (const pedido of pedidos) {
-        const p = porId.get(uuidOrNull(pedido?.planta_id))
-        if (!p) continue
-        const cantidad = Math.max(1, Math.min(parseInt(pedido?.cantidad) || 1, 10))
-        const precio = Number(p.precio) || 0
-        const total = precio * cantidad
-        // ON CONFLICT DO NOTHING + RETURNING: si ya lo había comprado, no
-        // devuelve fila y NO se le vuelve a sumar al servicio.
-        const { rows: ins } = await client.query(
-          `INSERT INTO public.planta_adicionales
-             (eleccion_id, servicio_id, planta_id, nombre, cantidad, precio_unitario, total)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (eleccion_id, planta_id) DO NOTHING
-           RETURNING id`,
-          [e.id, e.servicio_id, p.id, p.nombre, cantidad, precio, total]
-        )
-        if (!ins[0]) continue
-        comprados.push({ nombre: p.nombre, cantidad, precio, total })
-        totalExtras += total
-      }
-    }
+    const { comprados, totalExtras, ids } = await comprarExtras(client, {
+      eleccionId: e.id, servicioId: e.servicio_id, pedidos: payload.adicionales,
+    })
 
     // ── Dinero: mismo criterio que Ofertas (migración 078) ──
-    // `estado_pago` se RECALCULA siempre: un servicio COMPLETO al que se le
-    // suma un extra debe bajar a PARCIAL, o el saldo desaparece de la cartera.
-    let valorAntes = null, valorDespues = null
-    if (totalExtras > 0) {
-      const { rows: sv } = await client.query(
-        `UPDATE public.servicios
-            SET valor_total = COALESCE(valor_total, 0) + $2,
-                -- NULL = "este servicio no lleva desglose de adicionales";
-                -- ponerle el monto suelto mentiría sobre los adicionales previos.
-                valor_adicionales = CASE WHEN valor_adicionales IS NULL
-                                         THEN NULL ELSE valor_adicionales + $2 END,
-                estado_pago = CASE
-                  WHEN COALESCE(valor_pagado, 0) >= COALESCE(valor_total, 0) + $2 THEN 'COMPLETO'
-                  WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
-                  ELSE 'PENDIENTE' END
-          WHERE id = $1
-        RETURNING valor_total`,
-        [e.servicio_id, totalExtras]
-      )
-      const despues = Number(sv[0]?.valor_total)
-      if (Number.isFinite(despues)) { valorDespues = despues; valorAntes = despues - totalExtras }
-    }
+    const { valorAntes, valorDespues } = await sumarAlServicio(client, e.servicio_id, totalExtras)
 
     // PISA lo anterior a propósito (el portal de fotos hace COALESCE y conserva).
     // Aquí la familia acaba de MIRAR estos datos y decir que son los buenos: si
@@ -542,11 +493,102 @@ export async function guardarEleccionPlanta({ codigo, payload = {}, contexto = {
   }
 }
 
+
+// ─── Dinero y extras: un solo camino para los tres portales ─────────────────
+// Portal de la planta, portal de fotos (segunda planta, 205) y portal de visita
+// (restos, 205) cobran igual: el precio sale de la DB y se suma al servicio en
+// la misma transacción.
+
+/**
+ * Suma `monto` al total del servicio y RECALCULA `estado_pago`: un servicio
+ * COMPLETO al que se le suma algo debe bajar a PARCIAL, o el saldo desaparece
+ * de la cartera (mismo criterio que Ofertas, migración 078).
+ */
+async function sumarAlServicio(client, servicioId, monto) {
+  if (!(monto > 0)) return { valorAntes: null, valorDespues: null }
+  const { rows: sv } = await client.query(
+    `UPDATE public.servicios
+        SET valor_total = COALESCE(valor_total, 0) + $2,
+            -- NULL = "este servicio no lleva desglose de adicionales";
+            -- ponerle el monto suelto mentiría sobre los adicionales previos.
+            valor_adicionales = CASE WHEN valor_adicionales IS NULL
+                                     THEN NULL ELSE valor_adicionales + $2 END,
+            estado_pago = CASE
+              WHEN COALESCE(valor_pagado, 0) >= COALESCE(valor_total, 0) + $2 THEN 'COMPLETO'
+              WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
+              ELSE 'PENDIENTE' END
+      WHERE id = $1
+    RETURNING valor_total`,
+    [servicioId, monto]
+  )
+  const despues = Number(sv[0]?.valor_total)
+  return Number.isFinite(despues)
+    ? { valorAntes: despues - monto, valorDespues: despues }
+    : { valorAntes: null, valorDespues: null }
+}
+
+/**
+ * Compra plantas extra (`plantas.adicional = true`) para una elección. Solo
+ * ids y cantidades del navegador; el precio, de `plantas`. Lo ya comprado no
+ * se vuelve a cobrar (UNIQUE eleccion_id + planta_id). NO suma al servicio:
+ * eso lo hace quien llama con `sumarAlServicio`, una sola vez por todo.
+ */
+async function comprarExtras(client, { eleccionId, servicioId, pedidos }) {
+  const lista = Array.isArray(pedidos) ? pedidos.slice(0, 20) : []
+  const ids = [...new Set(lista.map(a => uuidOrNull(a?.planta_id)).filter(Boolean))]
+  const comprados = []
+  let totalExtras = 0
+  if (!ids.length) return { comprados, totalExtras, ids }
+  const { rows: disp } = await client.query(
+    `SELECT id, nombre, precio FROM public.plantas
+      WHERE id = ANY($1::uuid[]) AND activo = true AND adicional = true`, [ids]
+  )
+  const porId = new Map(disp.map(p => [p.id, p]))
+  for (const pedido of lista) {
+    const p = porId.get(uuidOrNull(pedido?.planta_id))
+    if (!p) continue
+    const cantidad = Math.max(1, Math.min(parseInt(pedido?.cantidad) || 1, 10))
+    const precio = Number(p.precio) || 0
+    const total = precio * cantidad
+    // ON CONFLICT DO NOTHING + RETURNING: si ya lo había comprado, no
+    // devuelve fila y NO se le vuelve a sumar al servicio.
+    const { rows: ins } = await client.query(
+      `INSERT INTO public.planta_adicionales
+         (eleccion_id, servicio_id, planta_id, nombre, cantidad, precio_unitario, total)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (eleccion_id, planta_id) DO NOTHING
+       RETURNING id`,
+      [eleccionId, servicioId, p.id, p.nombre, cantidad, precio, total]
+    )
+    if (!ins[0]) continue
+    comprados.push({ nombre: p.nombre, cantidad, precio, total })
+    totalExtras += total
+  }
+  return { comprados, totalExtras, ids }
+}
+
+/** La fila de la elección del servicio; si no existe, la crea RESERVADA. */
+async function eleccionReservada(client, { servicioId, codigo }) {
+  const { rows } = await client.query(
+    `SELECT id, estado, planta_id, planta_nombre, restos_calcicos, restos_respuesta, restos_foto_url
+       FROM public.planta_elecciones WHERE servicio_id = $1 FOR UPDATE`, [servicioId]
+  )
+  if (rows[0]) return rows[0]
+  const { rows: ins } = await client.query(
+    `INSERT INTO public.planta_elecciones (servicio_id, estado, codigo, enlace)
+     VALUES ($1, 'RESERVADA', $2, $3)
+     RETURNING id, estado, planta_id, planta_nombre, restos_calcicos, restos_respuesta, restos_foto_url`,
+    [servicioId, codigo, construirEnlacePlanta(codigo)]
+  )
+  return ins[0]
+}
+
 // ─── Primer contacto: el paso de la planta en el portal de fotos ────────────
-// Migración 176. La familia de Compets elige la especie y, si quiere, compra
-// los restos cálcicos desde la solicitud de imágenes, meses antes de que se
-// cumpla el compostaje. Se guarda en la MISMA fila de `planta_elecciones`
-// (estado RESERVADA); el job la despierta al cumplirse el compostaje.
+// Migraciones 176 y 205. La familia de Compets elige la especie y, si quiere,
+// una SEGUNDA PLANTA (producto adicional con su precio) desde la solicitud de
+// imágenes. Los restos cálcicos YA NO se preguntan aquí: pasaron al portal de
+// visita (205), más cerca del proceso en planta. Todo en la MISMA fila de
+// `planta_elecciones` (estado RESERVADA); el job la despierta al cumplirse.
 
 /**
  * Lo que el portal de fotos muestra en el paso de la planta, o null si a este
@@ -556,23 +598,30 @@ export async function plantaParaPortalFotos(client, { servicioId, tipoProceso })
   if (tipoProceso !== 'COMPOSTAJE_INDIVIDUAL') return null
   const cfg = await cargarConfigPlantas(client)
   const { rows } = await client.query(
-    `SELECT estado, planta_id, planta_nombre, restos_calcicos
+    `SELECT id, estado, planta_id, planta_nombre
        FROM public.planta_elecciones WHERE servicio_id = $1`, [servicioId]
   )
   const e = rows[0]
   if (e?.estado === 'CANCELADA') return null
 
-  const opciones = e?.planta_id ? [] : await catalogo(client, 'elegible')
-  const precio = precioRestosCalcicos(cfg)
-  const ofrecerRestos = !e?.restos_calcicos && precio != null
-  if (!opciones.length && !ofrecerRestos) return null
+  const { rows: comprados } = e ? await client.query(
+    `SELECT planta_id, nombre, cantidad, total FROM public.planta_adicionales
+      WHERE eleccion_id = $1 ORDER BY created_at`, [e.id]
+  ) : { rows: [] }
+
+  const [opciones, adicionales] = await Promise.all([
+    e?.planta_id ? [] : catalogo(client, 'elegible'),
+    catalogo(client, 'adicional', parseInt(cfg.max_adicionales) || 4, comprados.map(c => c.planta_id)),
+  ])
+  if (!opciones.length && !adicionales.length) return null
 
   return {
     // Sin precios: la especie va incluida en el plan.
     opciones: opciones.map(({ id, nombre, descripcion, imagen_url }) => ({ id, nombre, descripcion, imagen_url })),
     elegida: e?.planta_id ? { planta_id: e.planta_id, nombre: e.planta_nombre } : null,
-    // El precio va solo para MOSTRARLO; al cobrar se vuelve a leer de config.
-    restos_calcicos: ofrecerRestos ? { precio } : null,
+    // La segunda planta: el precio va solo para MOSTRARLO; al cobrar se relee.
+    adicionales,
+    comprados: comprados.map(c => ({ nombre: c.nombre, cantidad: c.cantidad, total: Number(c.total) })),
   }
 }
 
@@ -580,126 +629,300 @@ export async function plantaParaPortalFotos(client, { servicioId, tipoProceso })
  * Guarda el paso de la planta del portal de fotos. Corre DENTRO de la
  * transacción del portal (quien llama hace BEGIN/COMMIT).
  *
- * payload: `{ planta_id, restos_calcicos: boolean }` — nunca un precio.
+ * payload: `{ planta_id, adicionales: [{planta_id, cantidad}] }` — nunca un precio.
+ * (`restos_calcicos: true` lo puede mandar todavía una pestaña con el portal
+ * viejo en caché: se respeta para no perder una compra que la familia hizo.)
  * Devuelve `{ ok:false, error }` si falta la especie (el portal responde 422),
- * o `{ ok:true, planta, restos_valor }`.
+ * o `{ ok:true, planta, extras, restos_valor }`.
  */
 export async function reservarPlantaPortalFotos(client, { servicioId, codigo, mascota, payload }) {
   const p = payload && typeof payload === 'object' ? payload : {}
-  const cfg = await cargarConfigPlantas(client)
   const { rows } = await client.query(
-    `SELECT id, estado, planta_id, planta_nombre, restos_calcicos
-       FROM public.planta_elecciones WHERE servicio_id = $1 FOR UPDATE`, [servicioId]
+    `SELECT id, estado, planta_id FROM public.planta_elecciones WHERE servicio_id = $1 FOR UPDATE`, [servicioId]
   )
-  const e = rows[0]
-  if (e?.estado === 'CANCELADA') return { ok: true, planta: null, restos_valor: 0 }
+  if (rows[0]?.estado === 'CANCELADA') return { ok: true, planta: null, extras: [], restos_valor: 0 }
 
   // ── Especie: solo si todavía no hay una ──
-  let plantaId = e?.planta_id || null
-  let plantaNombre = e?.planta_nombre || null
-  let especieNueva = false
-  if (!plantaId) {
+  let plantaId = null, plantaNombre = null
+  if (!rows[0]?.planta_id) {
     const opciones = await catalogo(client, 'elegible')
     if (opciones.length) {
       const elegida = opciones.find(o => o.id === uuidOrNull(p.planta_id))
       if (!elegida) return { ok: false, error: 'planta_requerida' }
       plantaId = elegida.id
       plantaNombre = elegida.nombre
-      especieNueva = true
     }
   }
+  const pideExtras = Array.isArray(p.adicionales) && p.adicionales.length > 0
+  const pideRestos = p.restos_calcicos === true
+  if (!plantaId && !pideExtras && !pideRestos) return { ok: true, planta: null, extras: [], restos_valor: 0 }
 
-  // ── Restos cálcicos: el precio sale de config, y solo de config ──
-  const precio = precioRestosCalcicos(cfg)
-  const compraRestos = p.restos_calcicos === true && !e?.restos_calcicos && precio != null
-  if (!especieNueva && !compraRestos) return { ok: true, planta: null, restos_valor: 0 }
-
-  let eleccionId = e?.id
-  if (!eleccionId) {
-    const { rows: ins } = await client.query(
-      `INSERT INTO public.planta_elecciones
-         (servicio_id, estado, codigo, enlace, planta_id, planta_nombre, fecha_eleccion)
-       VALUES ($1, 'RESERVADA', $2, $3, $4, $5, CASE WHEN $4::uuid IS NULL THEN NULL ELSE now() END)
-       RETURNING id`,
-      [servicioId, codigo, construirEnlacePlanta(codigo), plantaId, plantaNombre]
-    )
-    eleccionId = ins[0].id
-  } else if (especieNueva) {
+  const e = await eleccionReservada(client, { servicioId, codigo })
+  if (plantaId) {
     await client.query(
       `UPDATE public.planta_elecciones
           SET planta_id = $2, planta_nombre = $3, fecha_eleccion = COALESCE(fecha_eleccion, now())
-        WHERE id = $1`,
-      [eleccionId, plantaId, plantaNombre]
+        WHERE id = $1 AND planta_id IS NULL`,
+      [e.id, plantaId, plantaNombre]
     )
   }
 
-  // ── Dinero: mismo criterio que los extras y Ofertas (migración 078) ──
-  let restosValor = 0, valorAntes = null, valorDespues = null
-  if (compraRestos) {
-    // `AND restos_calcicos = false`: el candado anti doble cobro si la familia
-    // reenvía. Sin fila devuelta no se suma nada al servicio.
-    const { rows: rc } = await client.query(
-      `UPDATE public.planta_elecciones
-          SET restos_calcicos = true, restos_calcicos_valor = $2, restos_calcicos_en = now()
-        WHERE id = $1 AND restos_calcicos = false
-        RETURNING id`,
-      [eleccionId, precio]
-    )
-    if (rc[0]) {
-      restosValor = precio
-      const { rows: sv } = await client.query(
-        `UPDATE public.servicios
-            SET valor_total = COALESCE(valor_total, 0) + $2,
-                valor_adicionales = CASE WHEN valor_adicionales IS NULL
-                                         THEN NULL ELSE valor_adicionales + $2 END,
-                estado_pago = CASE
-                  WHEN COALESCE(valor_pagado, 0) >= COALESCE(valor_total, 0) + $2 THEN 'COMPLETO'
-                  WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
-                  ELSE 'PENDIENTE' END
-          WHERE id = $1
-        RETURNING valor_total`,
-        [servicioId, precio]
-      )
-      const despues = Number(sv[0]?.valor_total)
-      if (Number.isFinite(despues)) { valorDespues = despues; valorAntes = despues - precio }
-    }
-  }
+  // ── Segunda planta ──
+  const { comprados, totalExtras, ids } = await comprarExtras(client, {
+    eleccionId: e.id, servicioId, pedidos: p.adicionales,
+  })
+  const { valorAntes, valorDespues } = await sumarAlServicio(client, servicioId, totalExtras)
 
-  // ── Que se nos vea: novedad en la ficha ──
-  const precioTxt = `$${restosValor.toLocaleString('es-CO')}`
   const partes = []
-  if (especieNueva) partes.push(`Desde el portal de fotos, la familia eligió la planta "${plantaNombre}" para ${mascota}.`)
-  if (restosValor) partes.push(`Compró los RESTOS CÁLCICOS de ${mascota} (${precioTxt}). Pendiente de cobro.`)
+  if (plantaId) partes.push(`Desde el portal de fotos, la familia eligió la planta "${plantaNombre}" para ${mascota}.`)
+  if (comprados.length) {
+    partes.push('Compró ' + comprados.map(c => `${c.cantidad}× ${c.nombre} ($${c.total.toLocaleString('es-CO')})`).join(', ') +
+      ' como planta adicional. Pendiente de cobro.')
+  }
+  if (partes.length) {
+    await client.query(
+      `INSERT INTO public.novedades_servicio
+         (servicio_id, tipo_novedad, descripcion, valor_ajuste, valor_antes, valor_despues, motivo_valor)
+       VALUES ($1, 'NOTA', $2, $3, $4, $5, $6)`,
+      [servicioId, partes.join(' '), totalExtras || null, valorAntes, valorDespues,
+       valorAntes == null ? null : 'ADICIONAL']
+    )
+  }
+  if (comprados.length) {
+    await client.query(
+      `INSERT INTO public.alertas_operativas
+         (servicio_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+       VALUES ($1, $2, 'PLANTA_ELEGIDA', 'ALTA', $3, $4, $5, $6::jsonb)
+       ON CONFLICT DO NOTHING`,
+      [servicioId, MOD,
+       `${mascota}: la familia compró una segunda planta desde el primer contacto (` +
+         comprados.map(c => `${c.cantidad}× ${c.nombre}`).join(', ') + `).`,
+       'Ya quedó sumada al total del servicio. Prever la planta adicional y confirmar el cobro en la entrega.',
+       `planta:extras:${e.id}:${[...ids].sort().join(',')}`,
+       JSON.stringify({ eleccion_id: e.id, extras: comprados, valor_extras: totalExtras, origen: 'PORTAL_FOTOS' })]
+    )
+  }
+
+  let restosValor = 0
+  if (pideRestos && !e.restos_calcicos) {
+    restosValor = await cobrarRestos(client, { eleccionId: e.id, servicioId, mascota, origen: 'portal de fotos' })
+  }
+
+  return { ok: true, planta: plantaId ? plantaNombre : null, extras: comprados, restos_valor: restosValor }
+}
+
+// ─── Restos cálcicos (migración 205: se piden en el portal de VISITA) ───────
+
+/**
+ * Cobra los restos cálcicos y avisa a quien los tiene que separar (Tenjo) y a
+ * coordinación. Devuelve lo cobrado (0 si ya estaban o no hay precio).
+ * `AND restos_calcicos = false` es el candado anti doble cobro si la familia
+ * reenvía: sin fila devuelta no se suma nada al servicio.
+ */
+async function cobrarRestos(client, { eleccionId, servicioId, mascota, origen }) {
+  const precio = precioRestosCalcicos(await cargarConfigPlantas(client))
+  if (precio == null) return 0
+  const { rows: rc } = await client.query(
+    `UPDATE public.planta_elecciones
+        SET restos_calcicos = true, restos_calcicos_valor = $2, restos_calcicos_en = now(),
+            restos_respuesta = 'SI', restos_respuesta_en = now()
+      WHERE id = $1 AND restos_calcicos = false
+      RETURNING id`,
+    [eleccionId, precio]
+  )
+  if (!rc[0]) return 0
+  const { valorAntes, valorDespues } = await sumarAlServicio(client, servicioId, precio)
+  const precioTxt = `$${precio.toLocaleString('es-CO')}`
+
   await client.query(
     `INSERT INTO public.novedades_servicio
        (servicio_id, tipo_novedad, descripcion, valor_ajuste, valor_antes, valor_despues, motivo_valor)
      VALUES ($1, 'NOTA', $2, $3, $4, $5, $6)`,
-    [servicioId, partes.join(' '), restosValor || null, valorAntes, valorDespues,
-     valorAntes == null ? null : 'ADICIONAL']
+    [servicioId, `Desde el ${origen}, la familia pidió los RESTOS CÁLCICOS de ${mascota} (${precioTxt}). Pendiente de cobro.`,
+     precio, valorAntes, valorDespues, valorAntes == null ? null : 'ADICIONAL']
   )
+  await client.query(
+    `INSERT INTO public.alertas_operativas
+       (servicio_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
+     VALUES ($1, $2, 'RESTOS_CALCICOS', 'ALTA', $3, $4, $5, $6::jsonb)
+     ON CONFLICT DO NOTHING`,
+    [servicioId, MOD,
+     `⚠️ ESTE SERVICIO TIENE SOLICITUD DE RESTOS CÁLCICOS — ${mascota} (${precioTxt}).`,
+     'Planta Tenjo: separar los restos cálcicos al sacar la mascota del cubículo. Se entregan con la planta, en su cenizario personalizado. Confirmar el cobro en la entrega.',
+     `restos:${servicioId}`,
+     JSON.stringify({ eleccion_id: eleccionId, valor: precio })]
+  )
+  // OPERARIO = el equipo de la planta de Tenjo, que es quien los separa.
+  await client.query(
+    `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, datos)
+     SELECT p.id, 'RESTOS_CALCICOS', '⚠️ Servicio con solicitud de restos cálcicos', $1, $2::jsonb
+     FROM public.personal p JOIN public.roles_personal r ON r.id = p.rol_principal_id
+     WHERE r.nombre IN ('COORDINADOR','ADMIN','OPERARIO') AND p.activo`,
+    [`${mascota}: la familia pidió los restos cálcicos (${precioTxt}). Separarlos al sacarla del cubículo y entregarlos con la planta.`,
+     JSON.stringify({ servicio_id: servicioId })]
+  )
+  return precio
+}
 
-  // ── Y la alerta de los restos: es lo que no se puede pasar por alto ──
-  if (restosValor) {
-    await client.query(
-      `INSERT INTO public.alertas_operativas
-         (servicio_id, modulo_origen, tipo_alerta, prioridad, mensaje, accion_recomendada, clave_dedupe, metadata)
-       VALUES ($1, $2, 'RESTOS_CALCICOS', 'ALTA', $3, $4, $5, $6::jsonb)
-       ON CONFLICT DO NOTHING`,
-      [servicioId, MOD,
-       `${mascota}: la familia compró los restos cálcicos (${precioTxt}).`,
-       'Separar los restos cálcicos al sacar la mascota del cubículo y entregarlos con la planta. Confirmar el cobro en la entrega.',
-       `restos:${servicioId}`,
-       JSON.stringify({ eleccion_id: eleccionId, valor: restosValor })]
+/** Base pública de una foto subida desde el portal de visita (la valida el backend). */
+function prefijoFotoRestos(codigo) {
+  const base = (process.env.STORAGE_PUBLIC_BASE || 'https://db.orbitacac.com/storage/v1/').replace(/\/?$/, '/')
+  return `${base}object/public/fotos-clientes/restos-calcicos/${codigo}/`
+}
+
+/**
+ * Lo que el portal de visita muestra de los restos, o null si no aplica:
+ * no es compostaje individual, la elección se canceló, no hay precio, ya dijo
+ * que no, o ya está todo (pidió y mandó la foto).
+ */
+export async function restosParaPortalVisita(client, { servicioId }) {
+  const { rows: sv } = await client.query(
+    `SELECT pl.tipo_proceso FROM public.servicios s LEFT JOIN public.planes pl ON pl.id = s.plan_id WHERE s.id = $1`,
+    [servicioId]
+  )
+  if (sv[0]?.tipo_proceso !== 'COMPOSTAJE_INDIVIDUAL') return null
+  const { rows } = await client.query(
+    `SELECT estado, restos_calcicos, restos_respuesta, restos_foto_url
+       FROM public.planta_elecciones WHERE servicio_id = $1`, [servicioId]
+  )
+  const e = rows[0]
+  if (e?.estado === 'CANCELADA') return null
+  if (e?.restos_respuesta === 'NO') return null
+  if (e?.restos_calcicos) return { precio: null, comprado: true, falta_foto: !e.restos_foto_url }
+  const precio = precioRestosCalcicos(await cargarConfigPlantas(client))
+  return precio == null ? null : { precio, comprado: false, falta_foto: true }
+}
+
+/**
+ * La familia responde los restos desde el portal de visita.
+ * payload: `{ respuesta: 'SI'|'NO', foto_url }`. Con SÍ la foto es obligatoria
+ * (David 2026-11-03: sin foto no queda solicitud), y tiene que ser una subida
+ * a la carpeta de ESTE enlace — una URL cualquiera no entra.
+ */
+export async function responderRestosVisita({ codigo, payload = {} }) {
+  const cod = (codigo || '').trim().toUpperCase()
+  if (!cod) return { status: 400, body: { ok: false, error: 'Código requerido' } }
+  const respuesta = String(payload.respuesta || '').toUpperCase()
+  if (!['SI', 'NO'].includes(respuesta)) return { status: 422, body: { ok: false, error: 'respuesta_invalida' } }
+  const fotoUrl = typeof payload.foto_url === 'string' ? payload.foto_url.trim() : ''
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await lockClave(client, `restos:${cod}`)
+    const { rows } = await client.query(
+      `SELECT a.servicio_id, s.estado AS estado_servicio, s.codigo_fotos, i.cubiculo_liberado_en, m.nombre AS mascota
+         FROM public.avisos_mitad_compostaje a
+         JOIN public.servicios s ON s.id = a.servicio_id
+         JOIN public.mascotas m  ON m.id_mascota = s.mascota_id
+         LEFT JOIN public.lotes_tenjo_items i ON i.id = a.lote_item_id
+        WHERE a.codigo = $1 AND s.estado <> 'CANCELADO'
+        LIMIT 1`,
+      [cod]
     )
+    const a = rows[0]
+    if (!a) { await client.query('ROLLBACK'); return { status: 404, body: { ok: false, error: 'no_encontrado' } } }
+    // Ya salió del cubículo: los restos se separan ahí, después no hay cómo.
+    if (a.cubiculo_liberado_en || a.estado_servicio === 'ENTREGADO') {
+      await client.query('ROLLBACK'); return { status: 410, body: { ok: false, error: 'cerrado' } }
+    }
+    const info = await restosParaPortalVisita(client, { servicioId: a.servicio_id })
+    if (!info || (info.comprado && !info.falta_foto)) {
+      await client.query('ROLLBACK'); return { status: 409, body: { ok: false, error: 'no_aplica' } }
+    }
+
+    const e = await eleccionReservada(client, { servicioId: a.servicio_id, codigo: a.codigo_fotos || cod })
+
+    if (respuesta === 'NO') {
+      if (info.comprado) { await client.query('ROLLBACK'); return { status: 409, body: { ok: false, error: 'ya_comprados' } } }
+      await client.query(
+        `UPDATE public.planta_elecciones SET restos_respuesta = 'NO', restos_respuesta_en = now() WHERE id = $1`, [e.id])
+      await client.query('COMMIT')
+      return { status: 200, body: { ok: true, respuesta: 'NO' } }
+    }
+
+    if (!fotoUrl || !fotoUrl.startsWith(prefijoFotoRestos(cod))) {
+      await client.query('ROLLBACK'); return { status: 422, body: { ok: false, error: 'foto_requerida' } }
+    }
+    const valor = info.comprado ? 0
+      : await cobrarRestos(client, { eleccionId: e.id, servicioId: a.servicio_id, mascota: a.mascota, origen: 'portal de visita' })
+    if (!info.comprado && !valor) {
+      // Sin precio configurado o ya cobrados por otra pestaña: no se finge una compra.
+      await client.query('ROLLBACK'); return { status: 409, body: { ok: false, error: 'no_aplica' } }
+    }
+    await client.query(
+      `UPDATE public.planta_elecciones
+          SET restos_foto_url = $2, restos_foto_en = now(),
+              restos_respuesta = 'SI', restos_respuesta_en = COALESCE(restos_respuesta_en, now())
+        WHERE id = $1`,
+      [e.id, fotoUrl]
+    )
+    await client.query(
+      `INSERT INTO public.novedades_servicio (servicio_id, tipo_novedad, descripcion)
+       VALUES ($1, 'NOTA', $2)`,
+      [a.servicio_id, `La familia envió la FOTO – CENIZARIO RESTOS CÁLCICOS de ${a.mascota} desde el portal de visita.`]
+    )
+    // PRODUCTOR = Diseño/Producción: con la foto ya pueden personalizar el cenizario.
     await client.query(
       `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, datos)
-       SELECT p.id, 'RESTOS_CALCICOS', 'Lleva restos cálcicos', $1, $2::jsonb
+       SELECT p.id, 'RESTOS_CALCICOS', 'Foto para el cenizario de restos cálcicos', $1, $2::jsonb
        FROM public.personal p JOIN public.roles_personal r ON r.id = p.rol_principal_id
-       WHERE r.nombre IN ('COORDINADOR','ADMIN') AND p.activo`,
-      [`${mascota}: la familia compró los restos cálcicos (${precioTxt}). Se entregan con la planta.`,
-       JSON.stringify({ servicio_id: servicioId })]
+       WHERE r.nombre IN ('PRODUCTOR','COORDINADOR','ADMIN') AND p.activo`,
+      [`${a.mascota}: llegó la foto para personalizar el cenizario de sus restos cálcicos. Ver Producción.`,
+       JSON.stringify({ servicio_id: a.servicio_id })]
     )
+    await client.query('COMMIT')
+    return { status: 200, body: { ok: true, respuesta: 'SI', valor } }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
   }
+}
 
-  return { ok: true, planta: especieNueva ? plantaNombre : null, restos_valor: restosValor }
+// ─── Tablero Producción–Diseño: cenizarios de restos (migración 205) ────────
+// Seguimiento APARTE de las líneas de recordatorio (David 2026-11-03): marcar
+// el cenizario listo no mueve el estado del servicio.
+
+export async function cenizariosRestos() {
+  const { rows } = await pool.query(
+    `SELECT pe.id, pe.servicio_id, pe.restos_calcicos_en, pe.restos_foto_url, pe.restos_foto_en,
+            pe.restos_cenizario_listo_en, pe.planta_nombre,
+            trim(coalesce(pl.nombre, '') || ' ' || coalesce(pl.apellido, '')) AS listo_por,
+            m.nombre AS mascota, esp.nombre AS especie,
+            trim(coalesce(c.nombre, '') || ' ' || coalesce(c.apellido, '')) AS propietario,
+            cu.codigo AS cubiculo, s.estado AS servicio_estado, i.cubiculo_liberado_en
+       FROM public.planta_elecciones pe
+       JOIN public.servicios s ON s.id = pe.servicio_id
+       JOIN public.mascotas m  ON m.id_mascota = s.mascota_id
+       LEFT JOIN public.especies esp ON esp.id = m.especie_id
+       LEFT JOIN public.clientes c   ON c.id_cliente = m.cliente_id
+       LEFT JOIN public.personal pl  ON pl.id = pe.restos_cenizario_listo_por
+       LEFT JOIN LATERAL (
+         SELECT li.cubiculo_id, li.cubiculo_liberado_en FROM public.lotes_tenjo_items li
+          WHERE li.servicio_id = pe.servicio_id ORDER BY li.created_at DESC LIMIT 1
+       ) i ON true
+       LEFT JOIN public.cubiculos cu ON cu.id = i.cubiculo_id
+      WHERE pe.restos_calcicos = true AND pe.estado <> 'CANCELADA'
+        AND s.estado NOT IN ('CANCELADO', 'ENTREGADO')
+      ORDER BY (pe.restos_cenizario_listo_en IS NOT NULL), (pe.restos_foto_url IS NOT NULL), pe.restos_calcicos_en`
+  )
+  return { status: 200, body: { ok: true, cenizarios: rows } }
+}
+
+export async function marcarCenizarioRestos({ eleccionId, listo, personalId }) {
+  const id = uuidOrNull(eleccionId)
+  if (!id) return { status: 400, body: { ok: false, error: 'Elección inválida' } }
+  const { rows } = await pool.query(
+    `UPDATE public.planta_elecciones
+        SET restos_cenizario_listo_en  = CASE WHEN $2 THEN now() ELSE NULL END,
+            restos_cenizario_listo_por = CASE WHEN $2 THEN $3::uuid ELSE NULL END
+      WHERE id = $1 AND restos_calcicos = true
+        AND ($2 = false OR restos_foto_url IS NOT NULL)
+      RETURNING id`,
+    [id, listo === true, uuidOrNull(personalId)]
+  )
+  if (!rows[0]) return { status: 409, body: { ok: false, error: listo ? 'Sin la foto no se puede marcar listo' : 'No encontrado' } }
+  return { status: 200, body: { ok: true } }
 }

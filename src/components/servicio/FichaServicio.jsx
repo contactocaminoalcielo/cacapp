@@ -365,7 +365,18 @@ export default function FichaServicio({ servicioId, onClose }) {
                     ⚠ Lleva restos cálcicos adicionales
                     {Number(e.restos_calcicos_valor) > 0 && <span className="font-semibold"> · {fmt(e.restos_calcicos_valor)}</span>}
                     <div className="text-[10.5px] font-medium mt-0.5">Separarlos al sacar la mascota del cubículo y entregarlos con la planta.</div>
+                    {/* Migración 205: la foto del cenizario llega del portal de visita */}
+                    <div className="text-[10.5px] font-semibold mt-1">
+                      FOTO – CENIZARIO RESTOS CÁLCICOS:{' '}
+                      {e.restos_foto_url
+                        ? <a href={e.restos_foto_url} target="_blank" rel="noreferrer" className="underline">ver foto</a>
+                        : 'pendiente (la familia la sube desde el enlace de visita)'}
+                      {e.restos_cenizario_listo_en && ' · cenizario listo'}
+                    </div>
                   </div>
+                )}
+                {!e.restos_calcicos && e.restos_respuesta === 'NO' && (
+                  <div className="my-2 text-[11px] text-ink3">Restos cálcicos: la familia dijo que no.</div>
                 )}
                 <Dato label="Cumplió el compostaje">{e.fecha_cumplida ? fmtD(e.fecha_cumplida) : (e.estado === 'RESERVADA' ? 'En curso' : null)}</Dato>
                 <Dato label="Aviso enviado">{e.fecha_envio ? fmtTS(e.fecha_envio) : null}</Dato>

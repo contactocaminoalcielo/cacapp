@@ -22,7 +22,8 @@ import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
-import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta } from './plantas.js'
+import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta, responderRestosVisita,
+  cenizariosRestos, marcarCenizarioRestos } from './plantas.js'
 import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, enviarEvidencia,
          marcarEnviadaManual, descartarEvidencia, puedeGestionarEvidencias } from './evidencia-inicio.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
@@ -1639,6 +1640,39 @@ app.post('/portal/visita/:codigo', async (req, res) => {
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'portal/visita POST', e)
+  }
+})
+
+// Restos cálcicos desde el mismo enlace (migración 205): Sí con foto obligatoria
+// o No. Aparte de la visita: se pueden pedir sin pedir visita.
+app.post('/portal/visita/:codigo/restos', async (req, res) => {
+  try {
+    const r = await responderRestosVisita({ codigo: req.params.codigo, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/visita/restos POST', e)
+  }
+})
+
+// ── Tablero Producción–Diseño: cenizarios de restos cálcicos (migración 205) ──
+// Seguimiento aparte de los recordatorios: no mueve el estado del servicio.
+const rolCenizarios = requireRol('PRODUCTOR', 'COORDINADOR', 'ADMIN')
+app.get('/produccion/restos-calcicos', requireAuth, rolCenizarios, async (_req, res) => {
+  try {
+    const r = await cenizariosRestos()
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[produccion/restos-calcicos] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+app.post('/produccion/restos-calcicos/:id/listo', requireAuth, rolCenizarios, async (req, res) => {
+  try {
+    const r = await marcarCenizarioRestos({ eleccionId: req.params.id, listo: req.body?.listo !== false, personalId: req.personal?.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[produccion/restos-calcicos/listo] ERROR', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 

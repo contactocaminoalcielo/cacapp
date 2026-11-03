@@ -16,7 +16,7 @@
 // la misma marca en el mismo momento.
 import { useState, useEffect } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
-import { portalVisita, portalPedirVisita, FRANJA_LABEL } from '@/lib/visitas'
+import { portalVisita, portalPedirVisita, portalResponderRestos, subirFotoRestos, FRANJA_LABEL } from '@/lib/visitas'
 import { Ilustracion, ESTILOS, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, VIVO, BORDE } from '@/components/portal/Botanica'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
@@ -160,6 +160,148 @@ function NotaDisponibilidad() {
   )
 }
 
+/**
+ * Restos cálcicos (migración 205). Se preguntan aquí —y no en el primer
+ * contacto— porque es la etapa más cercana a la planta: se separan al sacar la
+ * mascota del cubículo. Es independiente de pedir la visita.
+ *
+ * Con «Sí» la foto es OBLIGATORIA (David 2026-11-03): es la FOTO – CENIZARIO
+ * RESTOS CÁLCICOS, con la que se personaliza el cenizario donde se entregan.
+ * Sin foto no queda solicitud, para que Diseño no tenga que volver a escribir.
+ * Quien ya los compró en el primer contacto (176) solo ve la parte de la foto.
+ */
+function TarjetaRestos({ codigo, mascota, info }) {
+  const comprado = info?.comprado === true
+  const [eleccion, setEleccion] = useState(comprado ? 'SI' : null)
+  const [archivo,  setArchivo]  = useState(null)
+  const [preview,  setPreview]  = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [error,    setError]    = useState('')
+  const [hecho,    setHecho]    = useState(null)   // 'SI' | 'NO'
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview) }, [preview])
+
+  if (comprado && !info?.falta_foto && !hecho) return null
+
+  function elegirArchivo(f) {
+    setError('')
+    setArchivo(f || null)
+    setPreview(f ? URL.createObjectURL(f) : '')
+  }
+
+  async function confirmar() {
+    if (enviando || !eleccion || (eleccion === 'SI' && !archivo)) return
+    setEnviando(true); setError('')
+    try {
+      const foto_url = eleccion === 'SI' ? await subirFotoRestos(codigo, archivo) : null
+      const r = await portalResponderRestos(codigo, { respuesta: eleccion, foto_url })
+      if (!r.ok) {
+        setError(r.error === 'cerrado'
+          ? `${mascota} ya salió del cubículo, así que no alcanzamos a separar los restos. Escríbenos por WhatsApp.`
+          : r.error === 'foto_requerida' ? 'Falta la foto para personalizar el cenizario.'
+          : 'No pudimos registrar tu respuesta. Inténtalo de nuevo o escríbenos por WhatsApp.')
+        return
+      }
+      setHecho(eleccion)
+    } catch (e) {
+      setError(e.message || 'No pudimos conectar. Revisa tu conexión e inténtalo de nuevo.')
+    } finally {
+      setEnviando(false)
+    }
+  }
+
+  if (hecho) {
+    return (
+      <div className="mt-8 rounded-3xl px-5 py-5 text-center" style={{ background: '#EAF3ED', border: `1.5px solid ${VIVO}` }}>
+        <p className="font-serif italic text-[19px]" style={{ color: HONDO }}>
+          {hecho === 'SI' ? '¡Listo! Separaremos sus restos cálcicos' : 'Gracias por contarnos'}
+        </p>
+        <p className="text-[13px] leading-relaxed mt-2" style={{ color: APAGADO }}>
+          {hecho === 'SI'
+            ? `Recibimos la foto. Con ella personalizamos el cenizario donde te entregaremos los restos de ${mascota}, junto con su planta.`
+            : 'No separaremos los restos cálcicos. Si cambias de opinión, escríbenos por WhatsApp.'}
+        </p>
+      </div>
+    )
+  }
+
+  const boton = (valor, texto) => {
+    const activo = eleccion === valor
+    return (
+      <button type="button" onClick={() => setEleccion(valor)} aria-pressed={activo}
+        className="cac-foco cac-suave flex-1 min-h-[52px] rounded-2xl px-3 text-[14px] font-semibold transition-all duration-200 cursor-pointer"
+        style={{
+          background: activo ? (valor === 'SI' ? VERDE : '#F3EFE7') : PAPEL,
+          color: activo && valor === 'SI' ? '#fff' : TINTA,
+          border: `1.5px solid ${activo ? (valor === 'SI' ? VERDE : '#B8AE9C') : BORDE}`,
+        }}>
+        {texto}
+      </button>
+    )
+  }
+
+  return (
+    <div className="mt-8 rounded-3xl px-5 py-5" style={{ background: PAPEL, border: `1.5px solid ${BORDE}` }}>
+      <h2 className="font-serif italic text-[20px] leading-tight" style={{ color: HONDO }}>
+        {comprado ? `La foto para el cenizario de ${mascota}` : `¿Deseas recibir los restos cálcicos resultantes del proceso de ${mascota}?`}
+      </h2>
+      <p className="text-[13px] leading-relaxed mt-2" style={{ color: APAGADO }}>
+        {comprado
+          ? `Ya nos pediste sus restos cálcicos. Envíanos una foto de ${mascota} para personalizar el cenizario donde te los entregaremos.`
+          : `Al terminar el compostaje quedan los restos cálcicos de ${mascota}. Si lo deseas, los separamos y te los entregamos en un cenizario personalizado con su foto, junto con su planta.`}
+      </p>
+      {!comprado && info?.precio > 0 && (
+        <p className="mt-3 text-[13px]" style={{ color: TINTA }}>
+          <strong className="text-[18px]" style={{ color: VERDE }}>${Number(info.precio).toLocaleString('es-CO')}</strong>
+          {' '}adicional, se paga en la entrega.
+        </p>
+      )}
+
+      {!comprado && (
+        <div className="flex gap-2.5 mt-4">
+          {boton('NO', 'No, gracias')}
+          {boton('SI', 'Sí, deseo recibirlos')}
+        </div>
+      )}
+
+      {eleccion === 'SI' && (
+        <div className="mt-5">
+          <p className="text-[12px] font-bold uppercase tracking-[0.1em]" style={{ color: APAGADO }}>
+            Fotografía para personalizar el cenizario <span style={{ color: '#A33A2A' }}>*</span>
+          </p>
+          <p className="text-[12px] mt-1" style={{ color: APAGADO }}>
+            Una foto de {mascota}, nítida y donde se le vea bien la carita.
+          </p>
+          <label className="cac-foco mt-3 flex items-center gap-3 rounded-2xl px-4 py-3 cursor-pointer"
+            style={{ background: '#fff', border: `1.5px dashed ${archivo ? VIVO : BORDE}` }}>
+            {preview
+              ? <img src={preview} alt={`Foto de ${mascota}`} className="w-16 h-16 rounded-xl object-cover shrink-0" />
+              : <span className="w-16 h-16 rounded-xl shrink-0 flex items-center justify-center text-[24px]" style={{ background: PAPEL2 }} aria-hidden="true">📷</span>}
+            <span className="text-[14px] font-semibold" style={{ color: archivo ? VERDE : TINTA }}>
+              {archivo ? 'Cambiar la foto' : 'Elegir la foto'}
+            </span>
+            <input type="file" accept="image/*" className="sr-only"
+              onChange={e => { elegirArchivo(e.target.files?.[0]); e.target.value = '' }} />
+          </label>
+        </div>
+      )}
+
+      {error && <p role="alert" className="text-[13px] mt-3" style={{ color: '#A33A2A' }}>{error}</p>}
+
+      {eleccion && (
+        <div className="mt-5">
+          <Boton onClick={confirmar} disabled={enviando || (eleccion === 'SI' && !archivo)}>
+            {enviando ? 'Enviando…' : eleccion === 'SI' ? (comprado ? 'Enviar la foto' : 'Confirmar y enviar la foto') : 'Confirmar'}
+          </Boton>
+          {eleccion === 'SI' && !archivo && (
+            <p className="text-[12px] mt-2 text-center" style={{ color: APAGADO }}>Falta la foto para continuar</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Pantalla ────────────────────────────────────────────────────────────────
 
 export default function VisitaCliente({ codigo: codigoProp }) {
@@ -211,6 +353,10 @@ export default function VisitaCliente({ codigo: codigoProp }) {
   const dias      = datos?.dias || []
   const franjas   = datos?.franjas || []
   const visita    = datos?.visita || null
+  const restos    = datos?.restos || null
+  const tarjetaRestos = restos && (
+    <TarjetaRestos codigo={codigo} mascota={mascota} info={restos} />
+  )
 
   // Un botón apagado sin decir por qué es una pantalla que no se deja usar.
   // Se nombra lo PRIMERO que falta, no todo a la vez.
@@ -303,6 +449,7 @@ export default function VisitaCliente({ codigo: codigoProp }) {
             escríbenos por WhatsApp y con gusto te contamos.
           </p>
         </div>
+        {tarjetaRestos}
         <Firma />
       </Marco>
     )
@@ -339,6 +486,7 @@ export default function VisitaCliente({ codigo: codigoProp }) {
             </p>
           )}
         </motion.div>
+        {tarjetaRestos}
         <Firma />
       </Marco>
     )
@@ -365,6 +513,8 @@ export default function VisitaCliente({ codigo: codigoProp }) {
           </p>
           <Avance inicio={datos?.proceso?.inicio} fin={datos?.proceso?.fin} />
         </div>
+
+        {tarjetaRestos}
 
         {/* La invitación */}
         <div className="mt-10">

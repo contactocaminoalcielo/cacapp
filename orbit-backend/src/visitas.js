@@ -16,6 +16,7 @@ import { pool, log } from './db.js'
 import { cargarConfig as cargarConfigTenjo } from './reglas.js'
 import { autorizacionDelPayload, registrarAutorizacion, titularDeServicio, FALTA_AUTORIZACION }
   from './autorizaciones.js'
+import { restosParaPortalVisita } from './plantas.js'
 
 const MOD = 'VISITAS_TENJO'
 
@@ -166,6 +167,15 @@ export async function datosPortalVisita({ codigo }) {
 
     const dias = (cerrado || visita) ? [] : await diasDisponiblesVisita(client, cfgV)
 
+    // Restos cálcicos (migración 205): se preguntan aquí y no en el primer
+    // contacto. Solo mientras la mascota siga en el cubículo — ahí se separan.
+    // Aislado: si falla (migración sin aplicar), la visita sigue igual.
+    let restos = null
+    if (!a.cubiculo_liberado_en && a.estado_servicio !== 'ENTREGADO') {
+      try { restos = await restosParaPortalVisita(client, { servicioId: a.servicio_id }) }
+      catch (e) { log('[visitas/portal] restos omitidos:', e.message) }
+    }
+
     return { status: 200, body: {
       ok: true,
       cerrado,
@@ -180,6 +190,7 @@ export async function datosPortalVisita({ codigo }) {
       visita,
       dias,
       franjas: franjasDe(cfgV),
+      restos,
     } }
   } finally {
     client.release()

@@ -128,10 +128,10 @@ function ChipsPlanta({ item }) {
           style={{ background: '#E8F3EB', color: '#1D8A55' }}>🌱 {p.planta_nombre}</span>
       )}
       {p.restos_calcicos && (
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md"
           style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D' }}
-          title="La familia compró los restos cálcicos: separarlos al sacarla y entregarlos con la planta.">
-          ⚠ Restos cálcicos
+          title="La familia pidió los restos cálcicos: separarlos al sacarla y entregarlos con la planta, en su cenizario personalizado.">
+          ⚠️ ESTE SERVICIO TIENE SOLICITUD DE RESTOS CÁLCICOS
         </span>
       )}
     </div>
@@ -190,6 +190,8 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   const [desde,   setDesde]   = useState(desdePorDefecto)
   const [sel,     setSel]     = useState(() => new Set())
   const [modalSacar,  setModalSacar]  = useState(null)  // { items: [] }
+  // Restos cálcicos (176/205): no se registra la salida sin confirmar que se separaron.
+  const [restosOk,    setRestosOk]    = useState(false)
   const [modalFecha,  setModalFecha]  = useState(null)  // item a corregir
   const [fechaForm,   setFechaForm]   = useState('')
   const [modalAplazar, setModalAplazar] = useState(null) // { items: [] }
@@ -288,12 +290,14 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
   function abrirSacar(items) {
     if (!items.length) return
     setFechaForm(hoyLocalISO())
+    setRestosOk(false)
     setModalSacar({ items })
   }
 
   async function confirmarSacar() {
     const items = modalSacar?.items || []
     if (!items.length || !fechaForm) return
+    if (items.some(it => it.planta?.restos_calcicos) && !restosOk) return
     setSaving(true)
     const fallidas = []
     try {
@@ -767,7 +771,8 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
             : `Sacar ${modalSacar.items.length} mascotas del cubículo`}
           footer={<>
             <Button variant="secondary" onClick={() => setModalSacar(null)}>Cancelar</Button>
-            <Button onClick={confirmarSacar} disabled={saving || !fechaForm}>
+            <Button onClick={confirmarSacar}
+              disabled={saving || !fechaForm || (modalSacar.items.some(it => it.planta?.restos_calcicos) && !restosOk)}>
               {saving ? 'Registrando…' : 'Registrar salida'}
             </Button>
           </>}>
@@ -790,6 +795,19 @@ export default function SalidasTab({ canPlan = false, personalData = null, onCha
                 </div>
               ))}
             </div>
+            {modalSacar.items.some(it => it.planta?.restos_calcicos) && (
+              <div className="rounded-xl px-3 py-2.5 text-[12px]" style={{ background: '#FEF3C7', border: '1px solid #FCD34D', color: '#92400E' }}>
+                <div className="font-bold">⚠️ ESTE SERVICIO TIENE SOLICITUD DE RESTOS CÁLCICOS</div>
+                <div className="mt-0.5">
+                  {modalSacar.items.filter(it => it.planta?.restos_calcicos).map(it => it.servicios?.mascotas?.nombre || 'Una mascota').join(', ')}:
+                  {' '}separa sus restos cálcicos antes de liberar el cubículo. Se entregan con la planta, en su cenizario.
+                </div>
+                <label className="flex items-center gap-2 mt-2 font-semibold cursor-pointer">
+                  <input type="checkbox" checked={restosOk} onChange={e => setRestosOk(e.target.checked)} />
+                  Ya separé los restos cálcicos
+                </label>
+              </div>
+            )}
             <p className="text-[11px] text-ink3">
               El cubículo queda libre para otra mascota.
             </p>

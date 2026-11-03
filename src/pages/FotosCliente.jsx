@@ -110,10 +110,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [confirmando,   setConfirmando]  = useState(false)  // secuencia de confirmaciones finales
   // ── Planta del compostaje (Compets, migración 176) ──
   // `plantaInfo` lo manda el backend solo si a este servicio le aplica:
-  // { opciones:[{id,nombre,…}], elegida:{nombre}|null, restos_calcicos:{precio}|null }
+  // { opciones:[{id,nombre,…}], elegida:{nombre}|null, adicionales:[{id,nombre,precio,…}], comprados:[] }
+  // Los restos cálcicos ya NO se preguntan aquí (migración 205): pasaron al
+  // portal de visita. En su lugar se ofrece una segunda planta (adicional).
   const [plantaInfo,    setPlantaInfo]   = useState(null)
   const [plantaSel,     setPlantaSel]    = useState('')
-  const [restos,        setRestos]       = useState(null)   // true | false | null (sin responder)
+  const [extrasPlanta,  setExtrasPlanta] = useState({})     // { [planta_id]: cantidad } — segunda planta
   const [avisoAutoriza, setAvisoAutoriza] = useState(0)     // sube → la casilla se sacude
   const casillaRef = useRef(null)
 
@@ -136,8 +138,8 @@ export default function FotosCliente({ codigo: codigoProp }) {
   // (David 2026-10-07). Como paso, no se puede pasar de largo.
   //
   // La planta (Compets) va después de las ofertas y antes de la entrega: la
-  // especie y los restos cálcicos se deciden aquí, desde el primer contacto,
-  // para que coordinación sepa qué comprar y no se le pasen los restos.
+  // especie se decide aquí, desde el primer contacto, para que coordinación
+  // sepa qué comprar; y se ofrece una segunda planta como adicional (205).
   const hayPasoPlanta = !!plantaInfo
   const pasoPlanta   = hayPasoPlanta ? items.length + ofertas.length : -1
   const pasoEntrega  = pedirEntrega ? items.length + ofertas.length + (hayPasoPlanta ? 1 : 0) : -1
@@ -146,8 +148,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const enEntrega    = paso === pasoEntrega
   const enPlanta     = paso === pasoPlanta
   const pideEspecie  = !!plantaInfo?.opciones?.length
-  const ofreceRestos = !!plantaInfo?.restos_calcicos
-  const plantaLista  = !hayPasoPlanta || ((!pideEspecie || !!plantaSel) && (!ofreceRestos || restos != null))
+  const plantaLista  = !hayPasoPlanta || !pideEspecie || !!plantaSel
   const ofertaIdx    = paso - items.length
   const ofertaActual = (ofertaIdx >= 0 && ofertaIdx < ofertas.length) ? ofertas[ofertaIdx] : null
   const enOferta     = !!ofertaActual
@@ -265,7 +266,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
       setOfertaTextos(Object.fromEntries(ofs.map(of => [of.id, iniTextos(of.recordatorio)])))
       setPlantaInfo(r.planta || null)
       setPlantaSel('')
-      setRestos(null)
+      setExtrasPlanta({})
 
       const fi = {}
       it.forEach(item => {
@@ -366,8 +367,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
         entrega: entregaLlena ? entrega : undefined,
         autorizacion: { aceptada: autorizo, politica_version: POLITICA_VERSION },
         ofertas: ofertasPayload.length ? ofertasPayload : undefined,
-        // Solo ids y un sí/no: el precio de los restos lo pone el backend.
-        planta: hayPasoPlanta ? { planta_id: plantaSel || null, restos_calcicos: restos === true } : undefined,
+        // Solo ids y cantidades: el precio de la segunda planta lo pone el backend.
+        planta: hayPasoPlanta ? {
+          planta_id: plantaSel || null,
+          adicionales: Object.entries(extrasPlanta).map(([planta_id, cantidad]) => ({ planta_id, cantidad })),
+        } : undefined,
         // Compat: un backend viejo solo entiende `oferta` (singular). El nuevo
         // ignora esta clave cuando `ofertas` viene como array, así que mandar
         // ambas hace que el orden de despliegue no importe.
@@ -497,7 +501,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
               {enPlanta && (
                 <PasoPlanta mascota={mascota} info={plantaInfo}
                   elegida={plantaSel} onElegir={setPlantaSel}
-                  restos={restos} onRestos={setRestos} />
+                  extras={extrasPlanta} onExtras={setExtrasPlanta} />
               )}
               {enEntrega && (
                 <PasoEntrega mascota={mascota} entrega={entrega} setEntrega={setEntrega} />
@@ -515,7 +519,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                   ofertas={ofertas} ofertaResp={ofertaResp}
                   onIrOferta={of => ir(pasoDeOferta(of))}
                   onQuiereOferta={of => quiereOferta(of)}
-                  plantaInfo={plantaInfo} plantaSel={plantaSel} restos={restos}
+                  plantaInfo={plantaInfo} plantaSel={plantaSel} extrasPlanta={extrasPlanta}
                   onIrPlanta={() => ir(pasoPlanta)}
                   onGoTo={ir}
                 />
@@ -580,9 +584,7 @@ export default function FotosCliente({ codigo: codigoProp }) {
                 )
               ) : enPlanta ? (!plantaLista && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
-                  {pideEspecie && !plantaSel
-                    ? 'Elige la planta para continuar.'
-                    : 'Cuéntanos si deseas los restos cálcicos para continuar.'}
+                  Elige la planta para continuar.
                 </p>
               )) : enEntrega ? (!entregaReqOk && (
                 <p className="text-center text-[13px] font-medium" style={{ color: '#B45309' }}>
@@ -1009,13 +1011,19 @@ function PasoOferta({ oferta, mascota, acepta, orden, yaLoTiene, onResponder, fi
 }
 
 // ── PasoPlanta ────────────────────────────────────────────────────────────────
-// Compets (migración 176): la especie en la que seguirá la mascota y, si la
-// familia quiere, sus restos cálcicos. Se pregunta desde el primer contacto
-// para que nada de esto se decida a última hora. La especie va incluida en el
-// plan; los restos son un adicional con su precio a la vista.
-function PasoPlanta({ mascota, info, elegida, onElegir, restos, onRestos }) {
+// Compets (migraciones 176 y 205): la especie en la que seguirá la mascota y,
+// si la familia quiere, una SEGUNDA PLANTA como producto adicional con su
+// precio a la vista. La especie va incluida en el plan. Los restos cálcicos ya
+// no van aquí: se preguntan en el portal de visita, más cerca de la planta.
+function PasoPlanta({ mascota, info, elegida, onElegir, extras, onExtras }) {
   const opciones = info?.opciones || []
-  const precio   = info?.restos_calcicos?.precio
+  const adicionales = info?.adicionales || []
+  const comprados = info?.comprados || []
+  const alternar = id => onExtras(p => {
+    const n = { ...p }
+    if (n[id]) delete n[id]; else n[id] = 1
+    return n
+  })
   return (
     <div className="space-y-6">
       <div>
@@ -1070,39 +1078,57 @@ function PasoPlanta({ mascota, info, elegida, onElegir, restos, onRestos }) {
         </div>
       )}
 
-      {precio != null && (
-        <div className="bg-white rounded-3xl border-2 overflow-hidden"
-          style={{ borderColor: restos === true ? G : restos === false ? R_MID : BORD }}>
+      {comprados.length > 0 && (
+        <div className="rounded-2xl border-2 px-5 py-4" style={{ borderColor: G_MID, background: G_LITE }}>
+          <p className="text-[15px]" style={{ color: G }}>
+            Ya agregaste {comprados.map(c => `${c.cantidad > 1 ? c.cantidad + ' × ' : ''}${c.nombre}`).join(', ')} como planta adicional.
+          </p>
+        </div>
+      )}
+
+      {adicionales.length > 0 && (
+        <div className="bg-white rounded-3xl border-2 overflow-hidden" style={{ borderColor: Object.keys(extras).length ? G : BORD }}>
           <div className="p-6 space-y-4">
             <div>
-              <p className="text-[16px] font-bold text-gray-800">Restos cálcicos de {mascota}</p>
+              <p className="text-[16px] font-bold text-gray-800">
+                ¿Deseas adquirir una segunda plantica para {mascota}?
+              </p>
               <p className="text-[14px] text-gray-500 mt-1.5 leading-relaxed">
-                Al terminar el compostaje quedan los restos cálcicos de {mascota}. Si lo deseas,
-                te los entregamos junto con su planta.
+                Es un producto adicional, opcional: una planta más para tener cerca a {mascota} en otro
+                lugar de tu casa o para compartir con alguien especial. Te la entregamos con la suya.
               </p>
             </div>
-            <div className="flex items-baseline gap-2 flex-wrap">
-              <span className="text-[24px] font-bold" style={{ color: G }}>{pesos(precio)}</span>
-              <span className="text-[13px] text-gray-500">adicional, se cobra en la entrega</span>
+            <div className="space-y-3">
+              {adicionales.map(p => {
+                const sel = !!extras[p.id]
+                return (
+                  <motion.button key={p.id} type="button" onClick={() => alternar(p.id)} whileTap={{ scale: 0.98 }}
+                    aria-pressed={sel}
+                    className="w-full rounded-2xl border-2 p-3.5 flex items-center gap-3.5 text-left transition-all"
+                    style={{ borderColor: sel ? G : BORD, background: sel ? G_LITE : 'white' }}>
+                    {p.imagen_url
+                      ? <img src={p.imagen_url} alt={`Fotografía de ${p.nombre}`} loading="lazy"
+                             className="w-[52px] h-[64px] rounded-xl object-cover flex-shrink-0" />
+                      : <div className="flex-shrink-0"><Ilustracion nombre={p.nombre} vivo={sel} tam={52} /></div>}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-serif text-[18px] leading-tight" style={{ color: sel ? HONDO : TINTA }}>{p.nombre}</p>
+                      <div className="flex items-baseline gap-2 flex-wrap mt-1">
+                        <span className="text-[17px] font-bold" style={{ color: G }}>{pesos(p.precio)}</span>
+                        {p.precio_antes > 0 && <span className="text-[13px] text-gray-400">antes <s>{pesos(p.precio_antes)}</s></span>}
+                        <span className="text-[12px] text-gray-500">adicional, se paga en la entrega</span>
+                      </div>
+                    </div>
+                    <div className="w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0"
+                      style={{ background: sel ? G : 'white', borderColor: sel ? G : BORD }}>
+                      {sel && <Check size={13} color="#fff" strokeWidth={3} />}
+                    </div>
+                  </motion.button>
+                )
+              })}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <motion.button type="button" onClick={() => onRestos(false)} whileTap={{ scale: 0.97 }}
-                className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
-                style={restos === false
-                  ? { borderColor: R, color: R, background: R_LITE }
-                  : { borderColor: BORD, color: '#6B7280', background: 'white' }}>
-                {restos === false && <X size={16} strokeWidth={3} />}
-                No, gracias
-              </motion.button>
-              <motion.button type="button" onClick={() => onRestos(true)} whileTap={{ scale: 0.97 }}
-                className="py-4 rounded-2xl font-bold text-[15px] border-2 transition-all flex items-center justify-center gap-1.5"
-                style={restos === true
-                  ? { borderColor: G, background: G, color: '#fff' }
-                  : { borderColor: G, background: 'white', color: G }}>
-                {restos === true && <Check size={16} strokeWidth={3} />}
-                {restos === true ? 'Los quiero' : 'Sí, los quiero'}
-              </motion.button>
-            </div>
+            <p className="text-[12px] text-gray-500">
+              {Object.keys(extras).length ? 'Toca de nuevo para quitarla.' : 'Si no deseas una segunda planta, simplemente continúa.'}
+            </p>
           </div>
         </div>
       )}
@@ -1111,10 +1137,10 @@ function PasoPlanta({ mascota, info, elegida, onElegir, restos, onRestos }) {
 }
 
 // Lo que decidió en el paso de la planta, en la revisión final.
-function ResumenPlanta({ mascota, info, elegida, restos, onEditar }) {
+function ResumenPlanta({ mascota, info, elegida, extras = {}, onEditar }) {
   const especie = info?.elegida?.nombre || (info?.opciones || []).find(o => o.id === elegida)?.nombre
-  const precio  = info?.restos_calcicos?.precio
-  const falta   = (!!info?.opciones?.length && !elegida) || (precio != null && restos == null)
+  const falta   = !!info?.opciones?.length && !elegida
+  const segunda = (info?.adicionales || []).filter(p => extras[p.id])
   return (
     <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: falta ? '#F59E0B' : BORD }}>
       <div className="px-5 py-3 border-b flex items-center justify-between gap-3" style={{ borderColor: BORD }}>
@@ -1125,15 +1151,11 @@ function ResumenPlanta({ mascota, info, elegida, restos, onEditar }) {
       </div>
       <div className="px-5 py-4 space-y-1.5 text-[15px] text-gray-800">
         <p>🌱 {especie || <span className="text-amber-600 font-semibold">Sin elegir</span>}</p>
-        {precio != null && (
-          <p>
-            Restos cálcicos:{' '}
-            {restos === true
-              ? <strong style={{ color: G }}>Sí · {pesos(precio)} se suman a tu servicio</strong>
-              : restos === false ? <span className="text-gray-500">No los deseas</span>
-              : <span className="text-amber-600 font-semibold">Sin responder</span>}
+        {segunda.map(p => (
+          <p key={p.id}>
+            Segunda planta: <strong style={{ color: G }}>{p.nombre} · {pesos(p.precio)} adicional</strong>
           </p>
-        )}
+        ))}
       </div>
     </div>
   )
@@ -1185,7 +1207,7 @@ function PasoEntrega({ mascota, entrega, setEntrega }) {
 }
 
 // ── PasoFinal ─────────────────────────────────────────────────────────────────
-function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, pedirEntrega, onIrEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, plantaInfo, plantaSel, restos, onIrPlanta, onGoTo }) {
+function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, interes, setInteres, esCompostaje, anticipados, setAnticipados, comentarios, setComentarios, entrega, pedirEntrega, onIrEntrega, ofertas, ofertaResp, onIrOferta, onQuiereOferta, plantaInfo, plantaSel, extrasPlanta, onIrPlanta, onGoTo }) {
   const [abierto, setAbierto] = useState(false)
 
   return (
@@ -1278,7 +1300,7 @@ function PasoFinal({ mascota, items, fotos, textos, declinados, catalogo, intere
       )}
 
       {plantaInfo && (
-        <ResumenPlanta mascota={mascota} info={plantaInfo} elegida={plantaSel} restos={restos} onEditar={onIrPlanta} />
+        <ResumenPlanta mascota={mascota} info={plantaInfo} elegida={plantaSel} extras={extrasPlanta} onEditar={onIrPlanta} />
       )}
 
       {/* Interés en un adicional → SOLO crea una solicitud para coordinación */}
