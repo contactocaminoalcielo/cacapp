@@ -58,6 +58,19 @@ export function generarNumeroContrato({ fechaInicio, cliente, nivel, tipo, numer
   return `${mes}${dd}${yy}${iniciales}${suma}-${ABREV_NIVEL[nivel] || '??'}${sufijo}`
 }
 
+// Número escrito a mano (contratos de la base antigua: conservan el del papel
+// y con él su antigüedad). Error si queda vacío o ya lo usa otro contrato.
+export async function validarNumeroContrato(numero, exceptoId = null) {
+  const n = String(numero || '').trim()
+  if (!n) throw new Error('El número de contrato no puede quedar vacío.')
+  let q = db.from('afiliacion_contratos').select('id').eq('numero_contrato', n).limit(1)
+  if (exceptoId) q = q.neq('id', exceptoId)
+  const { data, error } = await q
+  if (error) throw error
+  if (data?.length) throw new Error(`Ya existe otro contrato con el número ${n}.`)
+  return n
+}
+
 // ─── Descuentos (reglas cerradas con David 2026-07-29) ──────────────────────
 // Tres reglas, con el porcentaje editable en Configuración › Afiliaciones:
 //   · RENOVACION_ANTICIPADA      25 % — renueva en o antes del vencimiento.

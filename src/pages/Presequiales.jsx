@@ -13,7 +13,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { db } from '@/lib/supabase'
 import { fmt, waLink, today, parseDate, petEmoji } from '@/lib/utils'
 import {
-  NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, calcularCobroActivacion,
+  NIVELES, cargarConfigAfiliaciones, generarNumeroContrato, validarNumeroContrato, calcularCobroActivacion,
   sumarUnAnio, subirComprobanteAfiliacion, abrirArchivoStorage, generarContratoPdf, totalContrato,
   edadALaFecha, urlFirmadaContrato, mensajeContratoWa,
   mejorDescuento, aplicarDescuento, valorListaContrato, MOTIVOS_DESCUENTO,
@@ -1018,6 +1018,8 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [tipo, setTipo]   = useState('ANUAL')
   const [nivel, setNivel] = useState('BRONCE')
   const [fechaInicio, setFechaInicio] = useState(today())
+  // Contrato de la base antigua: se escribe el número del papel (null = automático)
+  const [numeroManual, setNumeroManual] = useState(null)
   const [valor, setValor] = useState('')
   const [valorTocado, setValorTocado] = useState(false)
   const [metodoPago, setMetodoPago] = useState('EFECTIVO')
@@ -1091,6 +1093,8 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   async function guardar() {
     setSaving(true)
     try {
+      // Antes de crear nada: un número a mano repetido no debe dejar cliente/mascotas a medias
+      const numeroPropio = numeroManual !== null ? await validarNumeroContrato(numeroManual) : null
       let clienteId = cliente?.id_cliente
       if (!clienteId) {
         const { data, error } = await db.from('clientes').insert({
@@ -1158,7 +1162,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         const comprobantes = []
         if (comprobanteFile) comprobantes.push(await subirComprobanteAfiliacion(afil.id, comprobanteFile))
 
-        const numeroContrato = generarNumeroContrato({
+        const numeroContrato = numeroPropio || generarNumeroContrato({
           fechaInicio, cliente: cliente || formCliente, nivel, tipo, numero: 0,
         })
         const { data: contrato, error: e2 } = await db.from('afiliacion_contratos').insert({
@@ -1392,9 +1396,24 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
               onAplicar={dcto.onAplicar} onQuitar={dcto.onQuitar} />
             <ResumenValor nMascotas={nMascotas} valorLista={valorNum} pct={dcto.pct} />
           </div>
-          {previewCodigo && (
+          {numeroManual !== null ? (
+            <div className="mt-2">
+              <label className={LABEL}>Nº de contrato (el del papel, base antigua)</label>
+              <div className="flex items-center gap-2">
+                <Input className="font-mono" value={numeroManual} autoFocus
+                  onChange={e => setNumeroManual(e.target.value.toUpperCase())} />
+                <button type="button" onClick={() => setNumeroManual(null)}
+                  className="text-[11px] font-semibold text-[#1A5CD8] hover:underline whitespace-nowrap">Usar el automático</button>
+              </div>
+              <p className="text-[10px] text-ink3 mt-1">Pon también la <b>fecha de afiliación</b> original para que conserve la antigüedad.</p>
+            </div>
+          ) : previewCodigo && (
             <p className="text-[11px] text-ink3 mt-2">Nº de contrato: <span className="font-mono font-bold text-ink">{previewCodigo}</span>
-              {nMascotas > 1 && <span> — uno solo para las {nMascotas} mascotas</span>}</p>
+              {nMascotas > 1 && <span> — uno solo para las {nMascotas} mascotas</span>}
+              <button type="button" onClick={() => setNumeroManual(previewCodigo)}
+                className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#1A5CD8] hover:underline">
+                <Pencil size={11} /> Editar (contrato de la base antigua)
+              </button></p>
           )}
         </section>
 
@@ -1463,6 +1482,7 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
   // Cuotas (migr. 183): un formulario abierto a la vez, por contrato
   const [formPago, setFormPago] = useState(null)  // { contratoId, modo: 'ABONO'|'DIFERIR', cuotas, monto, fecha, metodo, file }
   const [guardandoPago, setGuardandoPago] = useState(false)
+  const [editNumero, setEditNumero] = useState(null)   // { id, valor } — corregir el nº del contrato
   const nc = NIVEL_COLORS[a.nivel] || {}
   const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => y.numero - x.numero)
   const mascotas = mascotasDe(a)
@@ -1481,6 +1501,18 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
       await showAlert(e.message, { title: 'Error subiendo el comprobante' })
     } finally {
       setSubiendo(null)
+    }
+  }
+
+  async function guardarNumero(c) {
+    try {
+      const n = await validarNumeroContrato(editNumero.valor, c.id)
+      const { error } = await db.from('afiliacion_contratos').update({ numero_contrato: n }).eq('id', c.id)
+      if (error) throw error
+      setEditNumero(null)
+      await onChanged()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo cambiar el número' })
     }
   }
 
@@ -1832,7 +1864,22 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
           <div key={c.id} className="border rounded-xl px-3 py-2.5" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
-                <div className="font-mono font-bold text-ink text-[13px]">{c.numero_contrato}</div>
+                {editNumero?.id === c.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input className="font-mono h-8 text-[12px] w-56" value={editNumero.valor} autoFocus
+                      onChange={e => setEditNumero({ id: c.id, valor: e.target.value.toUpperCase() })}
+                      onKeyDown={e => { if (e.key === 'Enter') guardarNumero(c); if (e.key === 'Escape') setEditNumero(null) }} />
+                    <Button size="sm" onClick={() => guardarNumero(c)}>Guardar</Button>
+                    <button type="button" onClick={() => setEditNumero(null)} className="text-ink3 hover:text-ink"><X size={13} /></button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-bold text-ink text-[13px]">{c.numero_contrato}</span>
+                    <button type="button" title="Corregir el número (p. ej. el del papel de la base antigua)"
+                      onClick={() => setEditNumero({ id: c.id, valor: c.numero_contrato })}
+                      className="text-ink3 hover:text-[#1A5CD8]"><Pencil size={11} /></button>
+                  </div>
+                )}
                 <div className="text-[11px] text-ink3">
                   {c.numero === 0 ? (a.tipo === 'VITALICIO' ? 'Contrato vitalicio' : 'Contrato nuevo') : `Renovación Nº ${c.numero}`}
                   {' · '}{c.fecha_inicio}{c.fecha_vencimiento ? ` → ${c.fecha_vencimiento}` : ' → de por vida'}
