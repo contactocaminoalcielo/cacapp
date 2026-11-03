@@ -66,6 +66,9 @@ export function ChatWaProvider({ children }) {
   const [abierto, setAbierto] = useState(false)
   const [contactoActivo, setContactoActivo] = useState(null)
   const [lineaActiva, setLineaActiva] = useState(null)
+  // Abierto desde la alerta de espera: se lee sin marcarlo leído, para que siga
+  // en "no leídos" de la Bandeja hasta que alguien le responda (reporte 03-nov).
+  const [sinMarcarLeido, setSinMarcarLeido] = useState(false)
   const [lineaSeleccionada, setLineaSeleccionada] = useState(
     () => localStorage.getItem('orbit.wa.bandeja') || null
   )
@@ -121,9 +124,10 @@ export function ChatWaProvider({ children }) {
     setAvisos(a => a.filter(x => claveConversacion(x.contacto, x.linea) !== clave))
   }, [])
 
-  const abrirChat = useCallback((contacto, linea = null) => {
+  const abrirChat = useCallback((contacto, linea = null, { sinMarcar = false } = {}) => {
     setAbierto(true)
     setContactoActivo(contacto || null)
+    setSinMarcarLeido(!!contacto && sinMarcar)
     if (linea) {
       setLineaSeleccionada(linea)
       setLineaActiva(linea)
@@ -237,7 +241,7 @@ export function ChatWaProvider({ children }) {
 
   return (
     <ChatWaContext.Provider value={{
-      vigila, conversaciones: conversacionesLinea, sinLeer, avisos, abierto, contactoActivo,
+      vigila, conversaciones: conversacionesLinea, sinLeer, avisos, abierto, contactoActivo, sinMarcarLeido,
       lineas, lineaSeleccionada, lineaActiva, seleccionarLinea,
       conSonido, alternarSonido, abrirChat, cerrarChat, descartarAviso,
       marcarVistaLocal,

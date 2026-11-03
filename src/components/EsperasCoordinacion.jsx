@@ -13,17 +13,23 @@
 // pantalla gris bloqueó a producción en pleno trabajo (Diana, 24-sep): quien
 // coordina vive en el tablero, y es ahí donde la alerta tiene un destinatario.
 //
-// 🔑 La alerta se apaga RESPONDIENDO, no cerrándola. Una ✕ se cerraría "para
-// después" y volvería a pasar lo mismo. "Revisar conversación" solo la aparta
-// unos minutos mientras se escribe; si no se contesta, vuelve. La única salida
-// sin responder es "Ya lo resolví por teléfono", y deja quién y cuándo.
+// 🔑 La alerta se apaga RESPONDIENDO, no cerrándola. "Revisar conversación" solo
+// la aparta unos minutos mientras se escribe; si no se contesta, vuelve. La
+// única salida definitiva sin responder es "Ya lo resolví por teléfono", y deja
+// quién y cuándo.
+//
+// ✕ (reporte 03-nov): quien está en el tablero no siempre es quien atiende esa
+// línea (Veterinarias, Valeria…). La ✕ aparta la pantalla gris MIN_POSPUESTA
+// minutos SIN abrir el chat ni tocar la conversación: la isla sigue arriba, la
+// conversación sigue sin leer en la Bandeja y, si nadie contesta, vuelve.
+// Abrirla desde aquí tampoco la marca leída (ChatWaContext.sinMarcarLeido).
 //
 // Vive al lado de ChatFlotante (fuera del AppShell): necesita el ChatWaContext
 // para abrir el hilo, aunque solo se pinte en el tablero.
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { MessageCircle, ChevronDown, Phone } from 'lucide-react'
+import { MessageCircle, ChevronDown, Phone, X } from 'lucide-react'
 import { useChatWa, pitar } from '@/contexts/ChatWaContext'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -36,6 +42,8 @@ const MIN_PARA_BLOQUEAR = 10
 // Lo que "Revisar conversación" aparta la pantalla gris: lo justo para leer y
 // contestar. Si al volver sigue sin respuesta, es que no se contestó.
 const MIN_APARTADA = 3
+// Lo que la ✕ la aparta: deja trabajar, pero no tanto como para olvidarla.
+const MIN_POSPUESTA = 15
 
 const muelle = { type: 'spring', stiffness: 420, damping: 34, mass: 0.8 }
 
@@ -124,8 +132,12 @@ export default function EsperasCoordinacion() {
   const revisar = useCallback((e) => {
     setApartadas(a => ({ ...a, [e.id]: Date.now() + MIN_APARTADA * 60000 }))
     setAbierta(false)
-    chat?.abrirChat(e.contacto, e.phone_number_id)
+    chat?.abrirChat(e.contacto, e.phone_number_id, { sinMarcar: true })
   }, [chat])
+
+  const posponer = useCallback((e) => {
+    setApartadas(a => ({ ...a, [e.id]: Date.now() + MIN_POSPUESTA * 60000 }))
+  }, [])
 
   const resolver = useCallback(async (e) => {
     setCerrando(e.id)
@@ -239,7 +251,8 @@ export default function EsperasCoordinacion() {
       {/* ── La pantalla gris ────────────────────────────────────────────────
           Mismas clases que la alerta de inicio de ruta del Kanban
           (.cac-overlay/.cac-modal): solo anima la ENTRADA, ver index.css. Sin
-          Radix a propósito: ni Esc ni un clic fuera la cierran. */}
+          Radix a propósito: ni Esc ni un clic fuera la cierran; la ✕ la
+          pospone MIN_POSPUESTA minutos. */}
       {alerta && (
         <div
           className="cac-overlay fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4 backdrop-blur-[6px] print:hidden"
@@ -251,8 +264,17 @@ export default function EsperasCoordinacion() {
           <div
             key={alerta.id}
             data-state="open"
-            className="cac-modal w-[300px] max-w-full overflow-hidden rounded-[22px] bg-white/[0.94] text-center shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150"
+            className="cac-modal relative w-[300px] max-w-full overflow-hidden rounded-[22px] bg-white/[0.94] text-center shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150"
           >
+            <button
+              type="button"
+              onClick={() => posponer(alerta)}
+              title={`Cerrar por ahora: vuelve en ${MIN_POSPUESTA} min si nadie responde. No cambia la conversación.`}
+              aria-label="Cerrar por ahora"
+              className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-full text-gray-400 hover:bg-black/5 hover:text-gray-600"
+            >
+              <X size={15} />
+            </button>
             <div className="px-5 pb-4 pt-5">
               <div
                 className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full"
@@ -303,6 +325,13 @@ export default function EsperasCoordinacion() {
               >
                 <Phone size={13} />
                 {cerrando === alerta.id ? 'Guardando…' : 'Ya lo resolví por teléfono'}
+              </button>
+              <button
+                type="button"
+                onClick={() => posponer(alerta)}
+                className="flex w-full items-center justify-center py-2.5 text-[13px] text-gray-500 active:bg-black/5"
+              >
+                Cerrar por ahora · vuelve en {MIN_POSPUESTA} min
               </button>
             </div>
           </div>

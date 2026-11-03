@@ -98,7 +98,7 @@ function Lista({ conversaciones, onAbrir }) {
   )
 }
 
-function Hilo({ contacto, linea, onVolver }) {
+function Hilo({ contacto, linea, onVolver, sinMarcar = false }) {
   const { marcarVistaLocal } = useChatWa()
   const [hilo, setHilo] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -122,14 +122,14 @@ function Hilo({ contacto, linea, onVolver }) {
 
   useEffect(() => {
     cargar()
-    marcarLeido(contacto, linea).then(() => marcarVistaLocal(contacto, linea)).catch(() => {})
+    if (!sinMarcar) marcarLeido(contacto, linea).then(() => marcarVistaLocal(contacto, linea)).catch(() => {})
     // Refresco silencioso: NUNCA toca `cargando`, o la ventana parpadearía
     // cada cinco segundos mientras alguien escribe.
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') cargar({ silencioso: true })
     }, 5000)
     return () => clearInterval(id)
-  }, [contacto, linea, cargar, marcarVistaLocal])
+  }, [contacto, linea, cargar, marcarVistaLocal, sinMarcar])
 
   useEffect(() => { finRef.current?.scrollIntoView({ block: 'end' }) }, [hilo?.mensajes?.length])
 
@@ -238,7 +238,7 @@ export default function ChatFlotante() {
   if (!chat?.vigila) return null
 
   const {
-    conversaciones, sinLeer, avisos, abierto, contactoActivo,
+    conversaciones, sinLeer, avisos, abierto, contactoActivo, sinMarcarLeido,
     lineas, lineaSeleccionada, lineaActiva, seleccionarLinea,
     conSonido, alternarSonido, abrirChat, cerrarChat, descartarAviso,
   } = chat
@@ -298,7 +298,7 @@ export default function ChatFlotante() {
             </div>
 
             {contactoActivo
-              ? <Hilo contacto={contactoActivo} linea={lineaActiva || lineaSeleccionada}
+              ? <Hilo contacto={contactoActivo} linea={lineaActiva || lineaSeleccionada} sinMarcar={sinMarcarLeido}
                       onVolver={() => abrirChat(null)} />
               : <Lista conversaciones={conversaciones} onAbrir={abrirChat} />}
           </motion.div>
