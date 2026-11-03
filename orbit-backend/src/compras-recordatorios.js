@@ -149,7 +149,7 @@ async function leerDetalle(client, id) {
     [id]
   )
   if (!c) return null
-  const [{ rows: items }, { rows: pagos }, { rows: eventos }] = await Promise.all([
+  const [{ rows: items }, { rows: pagos }, { rows: eventos }, ruta] = await Promise.all([
     client.query(
       `SELECT i.*, i.fecha_inicio_prod::text AS fecha_inicio_prod,
               i.fecha_fin_prod::text AS fecha_fin_prod, i.fecha_entrega::text AS fecha_entrega,
@@ -174,8 +174,280 @@ async function leerDetalle(client, id) {
         WHERE ev.compra_id = $1
         ORDER BY ev.created_at DESC, ev.id DESC
         LIMIT 200`, [id]),
+    leerEntregaRuta(client, id),
   ])
-  return { ...c, items, pagos, eventos }
+  // `entrega` (jsonb) es lo que DECLARÓ el cliente del catálogo; `entrega_ruta`
+  // es la entrega real con mensajero (tabla entregas, migr. 204).
+  return { ...c, items, pagos, eventos, entrega_ruta: ruta }
+}
+
+// ── Entrega con mensajero (migr. 204) ───────────────────────────────────────
+
+// Hasta que la 204 esté aplicada, `entregas.compra_id` no existe: el detalle
+// y el resto del módulo tienen que seguir funcionando igual que antes.
+let hayCompraId = false
+async function entregasConCompra(client) {
+  if (hayCompraId) return true
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'entregas' AND column_name = 'compra_id'`)
+  hayCompraId = rows.length > 0
+  return hayCompraId
+}
+
+async function leerEntregaRuta(client, compraId) {
+  if (!(await entregasConCompra(client))) return null
+  const { rows: [e] } = await client.query(
+    `SELECT e.id, e.estado, e.mensajero_id, e.tipo_entrega, e.direccion_entrega, e.ciudad, e.barrio,
+            e.localidad, e.indicaciones, e.contacto_nombre, e.contacto_telefono, e.telefono_adicional,
+            e.horarios_atencion, e.fecha_programada::text AS fecha_programada, e.notas,
+            e.publicada_en, e.tomada_en, e.aceptada_en,
+            e.fecha_realizada::text AS fecha_realizada, e.hora_realizada::text AS hora_realizada,
+            e.foto_entrega_url, e.foto_firma_url,
+            e.cobro_monto, e.cobro_metodo, e.cobro_comprobante_path, e.cobro_no_realizado_motivo,
+            pm.nombre AS mensajero_nombre, pm.apellido AS mensajero_apellido
+       FROM public.entregas e
+       LEFT JOIN public.personal pm ON pm.id = e.mensajero_id
+      WHERE e.compra_id = $1`, [compraId])
+  return e || null
+}
+
+const ROLES_CAMPO   = ['TECNICO', 'MENSAJERO']
+const METODOS_SOPORTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
+const FECHA = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * POST /compras-recordatorios/:id/entrega — coordinación programa (o cambia)
+ * la entrega de la compra con un mensajero.
+ * Cuerpo: { destino: 'POOL' | 'MENSAJERO' | 'RETIRAR', mensajero_id?,
+ *           direccion_entrega, ciudad, barrio, localidad, indicaciones,
+ *           contacto_nombre, contacto_telefono, telefono_adicional,
+ *           horarios_atencion, fecha_programada, notas }
+ * POOL = la ve todo mensajero y la toma el primero; MENSAJERO = asignada
+ * directo; RETIRAR = sale de la ruta (vuelve a PENDIENTE, nadie la ve).
+ */
+export async function programarEntrega(req, res) {
+  const id = req.params.id
+  if (!esUuid(id)) return res.status(400).json({ error: 'Id inválido' })
+  const b = req.body || {}
+  const destino = String(b.destino || '').toUpperCase()
+  if (!['POOL', 'MENSAJERO', 'RETIRAR'].includes(destino)) return res.status(400).json({ error: 'Destino inválido.' })
+  const client = await pool.connect()
+  try {
+    if (!(await entregasConCompra(client))) throw new HttpError(409, 'Falta aplicar la migración 204 (entregas de compras).')
+    await client.query('BEGIN')
+    const { rows: [c] } = await client.query(
+      `SELECT id, numero, anulada_en, pago_cliente FROM public.compras_recordatorios WHERE id = $1 FOR UPDATE`, [id])
+    if (!c) throw new HttpError(404, 'Compra no encontrada')
+    if (c.anulada_en) throw new HttpError(400, 'La compra está anulada: no se entrega.')
+    const { rows: [e] } = await client.query(
+      `SELECT * FROM public.entregas WHERE compra_id = $1 FOR UPDATE`, [id])
+    if (e && ['EN_CAMINO', 'ENTREGADA'].includes(e.estado)) {
+      throw new HttpError(400, e.estado === 'ENTREGADA'
+        ? 'Esta compra ya se entregó.'
+        : 'El mensajero ya salió con esta entrega: no se puede cambiar ahora.')
+    }
+
+    if (destino === 'RETIRAR') {
+      if (!e) throw new HttpError(400, 'La compra no tiene entrega programada.')
+      await client.query(
+        `UPDATE public.entregas SET estado = 'PENDIENTE', mensajero_id = NULL, tomada_en = NULL,
+                publicada_en = NULL, publicada_por = NULL WHERE id = $1`, [e.id])
+      await evento(client, { compraId: id, tipo: 'ENTREGA', por: req.personal.id, detalle: { accion: 'RETIRADA' } })
+      await client.query('COMMIT')
+      return res.json(await leerDetalle(pool, id))
+    }
+
+    // El cliente del catálogo dijo «ya pagué» y nadie lo ha verificado: si el
+    // mensajero sale así, la app le pide cobrar el saldo y el cliente paga dos
+    // veces. Primero se verifica (o se descarta) ese pago.
+    if (c.pago_cliente?.modo === 'COMPROBANTE' && !c.pago_cliente?.revisado_en) {
+      throw new HttpError(400, 'El cliente adjuntó un comprobante que todavía no se ha verificado. Regístralo (o revísalo) antes de mandar la entrega, para que el mensajero no le cobre dos veces.')
+    }
+    const { rows: [{ pendientes }] } = await client.query(
+      `SELECT count(*) FILTER (WHERE estado <> 'ENTREGADO')::int AS pendientes
+         FROM public.compra_recordatorio_items WHERE compra_id = $1`, [id])
+    if (!pendientes) throw new HttpError(400, 'Todos los recordatorios ya figuran entregados.')
+
+    const dir = t(b.direccion_entrega, 300)
+    const tel = t(b.contacto_telefono, 20)
+    if (!dir) throw new HttpError(400, 'Escribe la dirección de entrega.')
+    if (!tel || tel.replace(/\D/g, '').length < 7) throw new HttpError(400, 'Escribe un teléfono de contacto para la entrega.')
+    const fecha = b.fecha_programada ? String(b.fecha_programada) : null
+    if (fecha && !FECHA.test(fecha)) throw new HttpError(400, 'Fecha programada inválida.')
+
+    let mensajero = null
+    if (destino === 'MENSAJERO') {
+      if (!esUuid(b.mensajero_id)) throw new HttpError(400, 'Elige el mensajero.')
+      const { rows: [m] } = await client.query(
+        `SELECT p.id, p.nombre, p.apellido FROM public.personal p
+           JOIN public.roles_personal r ON r.id = p.rol_principal_id
+          WHERE p.id = $1 AND p.activo AND r.nombre = ANY($2)`, [b.mensajero_id, ROLES_CAMPO])
+      if (!m) throw new HttpError(400, 'Esa persona no es un mensajero o técnico activo.')
+      mensajero = m
+    }
+
+    const vals = [
+      dir, t(b.ciudad, 80) || 'Bogotá', t(b.barrio, 80), t(b.localidad, 80), t(b.indicaciones, 500),
+      t(b.contacto_nombre, 80), tel, t(b.telefono_adicional, 20), t(b.horarios_atencion, 300),
+      fecha, t(b.notas, 1000),
+      mensajero?.id || null, mensajero ? 'ASIGNADA' : 'DISPONIBLE', req.personal.id,
+    ]
+    if (e) {
+      await client.query(
+        `UPDATE public.entregas SET
+           direccion_entrega = $2, ciudad = $3, barrio = $4, localidad = $5, indicaciones = $6,
+           contacto_nombre = $7, contacto_telefono = $8, telefono_adicional = $9, horarios_atencion = $10,
+           fecha_programada = $11::date, notas = $12,
+           mensajero_id = $13, estado = $14,
+           publicada_en = CASE WHEN $14 = 'DISPONIBLE' THEN now() ELSE publicada_en END,
+           publicada_por = CASE WHEN $14 = 'DISPONIBLE' THEN $15::uuid ELSE publicada_por END,
+           tomada_en = NULL
+         WHERE id = $1`, [e.id, ...vals])
+    } else {
+      await client.query(
+        `INSERT INTO public.entregas
+           (compra_id, tipo_entrega, direccion_entrega, ciudad, barrio, localidad, indicaciones,
+            contacto_nombre, contacto_telefono, telefono_adicional, horarios_atencion,
+            fecha_programada, notas, mensajero_id, estado, publicada_en, publicada_por)
+         VALUES ($1, 'DOMICILIO', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12, $13, $14,
+                 CASE WHEN $14 = 'DISPONIBLE' THEN now() END,
+                 CASE WHEN $14 = 'DISPONIBLE' THEN $15::uuid END)`, [id, ...vals])
+    }
+    await evento(client, { compraId: id, tipo: 'ENTREGA', por: req.personal.id, detalle: {
+      accion: e ? 'REPROGRAMADA' : 'PROGRAMADA', destino,
+      mensajero: mensajero ? [mensajero.nombre, mensajero.apellido].filter(Boolean).join(' ') : null,
+      fecha: fecha || null,
+    } })
+    await client.query('COMMIT')
+    log(MOD, `entrega CR-${c.numero} ${destino}`, mensajero?.nombre || '')
+    res.json(await leerDetalle(pool, id))
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message })
+    log(MOD, 'programarEntrega', err.message)
+    res.status(500).json({ error: 'No se pudo programar la entrega' })
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * POST /compras-recordatorios/entregas/:entregaId/completar — el mensajero
+ * (o coordinación) cierra la entrega de una compra. TODO en una transacción:
+ * el cobro entra al libro de la compra (compra_recordatorio_pagos → el trigger
+ * recalcula valor_pagado) Y queda en `entregas.cobro_*`, que es lo que lee su
+ * cuadre de caja. Mismo modelo que la entrega de un servicio (TecnicoApp).
+ * Cuerpo: { foto_entrega_url, foto_firma_url?, nombre_cliente?,
+ *           cobro: { decision: 'COBRE'|'NO_COBRE'|'', metodo, comprobante_path,
+ *                    saldo_mostrado, motivo } }
+ */
+export async function completarEntregaCompra(req, res) {
+  const entregaId = req.params.entregaId
+  if (!esUuid(entregaId)) return res.status(400).json({ error: 'Id inválido' })
+  const b = req.body || {}
+  const yo = req.personal
+  const esCoord = ['ADMIN', 'COORDINADOR'].includes(yo.rol)
+  const client = await pool.connect()
+  try {
+    if (!(await entregasConCompra(client))) throw new HttpError(409, 'Falta aplicar la migración 204 (entregas de compras).')
+    await client.query('BEGIN')
+    const { rows: [e] } = await client.query(
+      `SELECT * FROM public.entregas WHERE id = $1 FOR UPDATE`, [entregaId])
+    if (!e || !e.compra_id) throw new HttpError(404, 'Entrega no encontrada')
+    // Reintento de un guardado que sí alcanzó a aplicar (se cayó la señal): no
+    // se cobra ni se mueve nada dos veces.
+    if (e.estado === 'ENTREGADA') {
+      await client.query('COMMIT')
+      return res.json({ ok: true, ya_estaba: true, cobro_monto: e.cobro_monto, cobro_metodo: e.cobro_metodo })
+    }
+    if (!esCoord && e.mensajero_id !== yo.id) throw new HttpError(403, 'Esta entrega no es tuya.')
+    if (!['ASIGNADA', 'EN_CAMINO'].includes(e.estado)) throw new HttpError(400, 'Esta entrega no está en ruta.')
+
+    const { rows: [c] } = await client.query(
+      `SELECT id, numero, total, valor_pagado, anulada_en FROM public.compras_recordatorios WHERE id = $1 FOR UPDATE`,
+      [e.compra_id])
+    if (c.anulada_en) throw new HttpError(400, 'La compra fue anulada: no la entregues y avísale a coordinación.')
+
+    const foto  = t(b.foto_entrega_url, 500) || e.foto_entrega_url
+    const firma = t(b.foto_firma_url, 500)
+    const recibe = t(b.nombre_cliente, 120)
+    if (!foto) throw new HttpError(400, 'Falta la foto de la entrega.')
+    if (!firma && !recibe) throw new HttpError(400, 'Falta la firma o el nombre de quien recibe.')
+
+    // El saldo se RELEE aquí, con la compra bloqueada: nunca el que traía la app.
+    const saldo = Math.max(0, Math.round(Number(c.total) - Number(c.valor_pagado)))
+    const cobro = b.cobro || {}
+    let monto = null, metodo = null, soporte = null, motivo = null, aviso = null
+    if (cobro.decision === 'COBRE') {
+      metodo = String(cobro.metodo || '').toUpperCase()
+      if (!['EFECTIVO', ...METODOS_SOPORTE, 'OTRO'].includes(metodo)) throw new HttpError(400, 'Medio de pago inválido.')
+      soporte = t(cobro.comprobante_path, 500)
+      if (METODOS_SOPORTE.includes(metodo) && !soporte) throw new HttpError(400, 'Falta el comprobante del pago.')
+      if (saldo > 0) {
+        monto = saldo
+        await client.query(
+          `INSERT INTO public.compra_recordatorio_pagos
+             (compra_id, monto, metodo, referencia, comprobante_path, registrado_por)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [c.id, monto, metodo, 'Cobrado al entregar', soporte, yo.id])
+        await evento(client, { compraId: c.id, tipo: 'PAGO', por: yo.id,
+          detalle: { monto, metodo, referencia: 'Cobrado al entregar', en_entrega: true } })
+      } else {
+        // Ya estaba en saldo cero (coordinación registró el pago mientras iba
+        // en camino). El libro de la compra no se toca —sumarla otra vez la
+        // inflaría— pero la plata SÍ queda a su nombre: él la tiene en la mano
+        // y el cuadre se la va a pedir. Igual que en la entrega de un servicio.
+        const mostrado = Math.round(num(cobro.saldo_mostrado) || 0)
+        if (mostrado > 0) { monto = mostrado; aviso = 'SALDO_YA_EN_CERO' }
+      }
+    } else if (cobro.decision === 'NO_COBRE') {
+      if (saldo > 0) {
+        motivo = t(cobro.motivo, 500)
+        if (!motivo || motivo.length < 4) throw new HttpError(400, 'Escribe por qué no te pagaron.')
+      }
+    } else if (saldo > 0) {
+      throw new HttpError(400, 'Falta decir si te pagaron el saldo.')
+    }
+
+    await client.query(
+      `UPDATE public.entregas SET
+         estado = 'ENTREGADA',
+         fecha_realizada = public.fn_hoy_bogota(),
+         hora_realizada  = (now() AT TIME ZONE 'America/Bogota')::time(0),
+         foto_entrega_url = $2,
+         foto_firma_url   = COALESCE($3, foto_firma_url),
+         cobro_monto = $4, cobro_metodo = $5, cobro_comprobante_path = $6,
+         cobro_registrado_en  = CASE WHEN $4::numeric IS NOT NULL THEN now() END,
+         cobro_registrado_por = CASE WHEN $4::numeric IS NOT NULL THEN $7::uuid END,
+         cobro_no_realizado_motivo = $8
+       WHERE id = $1`,
+      [e.id, foto, firma, monto, monto != null ? metodo : null, monto != null ? soporte : null, yo.id, motivo])
+
+    const { rows: entregados } = await client.query(
+      `UPDATE public.compra_recordatorio_items SET
+         estado = 'ENTREGADO',
+         fecha_inicio_prod = COALESCE(fecha_inicio_prod, public.fn_hoy_bogota()),
+         fecha_fin_prod    = COALESCE(fecha_fin_prod, public.fn_hoy_bogota()),
+         fecha_entrega     = COALESCE(fecha_entrega, public.fn_hoy_bogota())
+       WHERE compra_id = $1 AND estado <> 'ENTREGADO'
+       RETURNING nombre`, [c.id])
+
+    await evento(client, { compraId: c.id, tipo: 'ENTREGA', por: yo.id, detalle: {
+      accion: 'COMPLETADA', recibe: recibe || null, items: entregados.map(r => r.nombre),
+      cobro: monto, metodo: monto != null ? metodo : null, sin_cobrar: motivo, aviso,
+    } })
+    await client.query('COMMIT')
+    log(MOD, `entrega CR-${c.numero} completada`, monto != null ? `${monto} ${metodo}` : 'sin cobro')
+    res.json({ ok: true, numero: c.numero, cobro_monto: monto, cobro_metodo: monto != null ? metodo : null, aviso })
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message })
+    log(MOD, 'completarEntregaCompra', err.message)
+    res.status(500).json({ error: 'No se pudo completar la entrega' })
+  } finally {
+    client.release()
+  }
 }
 
 export async function detalleCompra(req, res) {
@@ -501,6 +773,16 @@ export async function actualizarItem(req, res) {
       await evento(client, { compraId: id, itemId, tipo: 'DATOS_ITEM', por: req.personal.id,
         detalle: { campos: otros, item: it.nombre } })
     }
+    // Coordinación marcó todo ENTREGADO a mano: una entrega que siga en el pool
+    // o asignada (sin salir) ya no es una tarea. Misma idea que la migr. 173
+    // para los servicios. EN_CAMINO no se toca: el mensajero va con ella.
+    if (cambios.estado === 'ENTREGADO' && await entregasConCompra(client)) {
+      await client.query(
+        `UPDATE public.entregas SET estado = 'ENTREGADA', fecha_realizada = COALESCE(fecha_realizada, public.fn_hoy_bogota())
+          WHERE compra_id = $1 AND estado IN ('DISPONIBLE', 'ASIGNADA')
+            AND NOT EXISTS (SELECT 1 FROM public.compra_recordatorio_items
+                             WHERE compra_id = $1 AND estado <> 'ENTREGADO')`, [id])
+    }
     await client.query('COMMIT')
     res.json(await leerDetalle(pool, id))
   } catch (e) {
@@ -526,6 +808,18 @@ export async function anularCompra(req, res) {
       `SELECT numero, anulada_en, valor_pagado FROM public.compras_recordatorios WHERE id = $1 FOR UPDATE`, [id])
     if (!c) throw new HttpError(404, 'Compra no encontrada')
     if (c.anulada_en) throw new HttpError(400, 'Ya estaba anulada.')
+    // Si va en ruta: en el pool o asignada sale de la ruta; si el mensajero ya
+    // salió, primero hay que hablar con él (podría estar cobrando en la puerta).
+    if (await entregasConCompra(client)) {
+      const { rows: [e] } = await client.query(
+        `SELECT id, estado FROM public.entregas WHERE compra_id = $1 FOR UPDATE`, [id])
+      if (e?.estado === 'EN_CAMINO') throw new HttpError(400, 'El mensajero ya salió con esta compra. Habla con él y, si no la entregó, que la devuelva antes de anular.')
+      if (e && ['DISPONIBLE', 'ASIGNADA'].includes(e.estado)) {
+        await client.query(
+          `UPDATE public.entregas SET estado = 'FALLIDA', notas = concat_ws(' · ', notas, 'Compra anulada')
+            WHERE id = $1`, [e.id])
+      }
+    }
     await client.query(
       `UPDATE public.compras_recordatorios
           SET anulada_en = now(), anulada_por = $2, motivo_anulacion = $3
