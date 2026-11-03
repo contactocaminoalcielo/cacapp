@@ -420,6 +420,47 @@ export async function reautorizarCandidata({ servicioId }) {
   return data?.length || 0
 }
 
+// Items que aún no salieron de la nevera: se pueden sacar del lote sin tocar nada físico
+const ITEMS_LIBERABLES = ['PROPUESTO', 'APROBADO', 'AUTORIZADA_SALIDA']
+
+/**
+ * ¿Se puede liberar desde Candidatas? (migración 203). Solo lo que quedó
+ * colgado: un item de un lote cuya jornada ya pasó y que nunca salió de la
+ * nevera, o un traslado PROGRAMADO que ningún lote usa.
+ */
+export function motivoLiberable(c) {
+  if (c.item_activo_id) {
+    const vencido = c.item_activo_fecha && c.item_activo_fecha < today()
+    return vencido && ITEMS_LIBERABLES.includes(c.item_activo_estado)
+      ? `lote ${c.item_activo_lote} vencido` : null
+  }
+  if (c.traslado_activo && c.traslado_huerfano && c.traslado_activo_estado === 'PROGRAMADO')
+    return 'traslado sin lote'
+  return null
+}
+
+/**
+ * Libera una candidata ocupada por un lote vencido o un traslado huérfano:
+ * el item pasa a RETIRADO_DEL_LOTE (sin contar como reprogramación) y su
+ * traslado PROGRAMADO se cancela. Vuelve al pool de candidatas.
+ */
+export async function liberarCandidata({ candidata: c, personalId }) {
+  if (c.item_activo_id) {
+    const { data: item, error } = await db.from('lotes_tenjo_items')
+      .update({ estado: 'RETIRADO_DEL_LOTE', traslado_id: null, decidido_por: personalId || null })
+      .eq('id', c.item_activo_id).in('estado', ITEMS_LIBERABLES)
+      .select('id').maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!item) throw new Error('La mascota ya avanzó en su lote; recarga la página.')
+  }
+  if (c.traslado_activo_id) {
+    const { error } = await db.from('traslados_tenjo')
+      .update({ estado: 'CANCELADO' })
+      .eq('id', c.traslado_activo_id).eq('estado', 'PROGRAMADO')
+    if (error) throw new Error(error.message)
+  }
+}
+
 /**
  * Confirma el lote: revalida cada item APROBADO contra las candidatas
  * frescas, lo pasa a AUTORIZADA_SALIDA y crea su traslado PROGRAMADO.

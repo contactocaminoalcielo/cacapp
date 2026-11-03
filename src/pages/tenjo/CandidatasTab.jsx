@@ -7,14 +7,17 @@ import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { petEmoji, parsearErrorDB, parseDate } from '@/lib/utils'
-import { evaluarCandidato, CLASIF_CFG, nombreDia, fechaJornadaDestino, agregarCandidataALote, reautorizarCandidata } from '@/lib/tenjo'
-import { Search, X, Snowflake, Plus, Check, Truck, RotateCcw } from 'lucide-react'
+import { evaluarCandidato, CLASIF_CFG, nombreDia, fechaJornadaDestino, agregarCandidataALote, reautorizarCandidata, motivoLiberable, liberarCandidata } from '@/lib/tenjo'
+import { Search, X, Snowflake, Plus, Check, Truck, RotateCcw, Unlock } from 'lucide-react'
 import SetupNotice from './SetupNotice'
 
 function fmtFecha(ts) {
   const d = parseDate(ts)
   return d ? d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }) : '—'
 }
+
+// Fecha de jornada/traslado (YYYY-MM-DD, sin hora)
+const fmtDia = f => fmtFecha(f + 'T12:00:00')
 
 function ChipClasif({ clasificacion }) {
   const cfg = CLASIF_CFG[clasificacion] || {}
@@ -53,6 +56,26 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
       onChanged?.()
     } catch (e) {
       await showAlert(parsearErrorDB(e), { title: 'No se pudo reautorizar', variant: 'danger' })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  // Lote vencido o traslado sin lote que la tiene ocupada (migración 203)
+  async function liberar(c, motivo) {
+    const que = c.item_activo_id
+      ? `Saldrá del lote ${c.item_activo_lote} (jornada del ${fmtDia(c.item_activo_fecha)}, ya pasó)${c.traslado_activo ? ' y se cancela su traslado' : ''}.`
+      : `Se cancela su traslado del ${fmtDia(c.traslado_activo_fecha)}, que no pertenece a ningún lote.`
+    if (!await confirm(
+      `${que} ${c.mascota} vuelve a quedar disponible para programar. No cuenta como reprogramación.`,
+      { title: `¿Liberar a ${c.mascota}? (${motivo})`, variant: 'warning', confirmLabel: 'Liberar' }
+    )) return
+    setSavingId(c.servicio_id)
+    try {
+      await liberarCandidata({ candidata: c, personalId: personalData?.id })
+      onChanged?.()
+    } catch (e) {
+      await showAlert(parsearErrorDB(e), { title: 'No se pudo liberar', variant: 'danger' })
     } finally {
       setSavingId(null)
     }
@@ -146,8 +169,12 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
                 {filtradas.map(({ c, ev }) => {
                   const diasColor = c.dias_custodia >= (config.dias_custodia_critica ?? 8) ? '#C03030'
                     : c.dias_custodia >= (config.dias_custodia_alerta ?? 5) ? '#D97706' : '#374151'
-                  const programacion = c.traslado_activo ? 'Traslado activo'
-                    : c.item_activo_id ? 'En lote propuesto' : 'Sin programar'
+                  const liberable = motivoLiberable(c)
+                  const programacion = c.item_activo_id
+                    ? `En ${c.item_activo_lote || 'lote'}${c.item_activo_fecha ? ` · ${fmtDia(c.item_activo_fecha)}` : ''}`
+                    : c.traslado_activo
+                      ? `Traslado${c.traslado_activo_fecha ? ` ${fmtDia(c.traslado_activo_fecha)}` : ''}${c.traslado_huerfano ? ' · sin lote' : ''}`
+                      : 'Sin programar'
                   return (
                     <Tr key={c.cuarto_frio_id}>
                       <Td>
@@ -181,6 +208,7 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
                       <Td><span className="font-bold text-[13px]" style={{ color: diasColor }}>{c.dias_custodia}</span></Td>
                       <Td className="text-[11px] text-ink2">
                         {programacion}
+                        {liberable && <div className="text-[10px] font-semibold text-red-600">⚠ {liberable}</div>}
                         {c.veces_reprogramada > 0 && (
                           <div className="text-[10px] text-amber-600">↻ {c.veces_reprogramada} reprog.</div>
                         )}
@@ -194,13 +222,20 @@ export default function CandidatasTab({ candidatas, config, canPlan, personalDat
                       </Td>
                       {canPlan && (
                         <Td>
-                          {c.traslado_activo ? (
-                            <span className="text-[10px] text-ink3 inline-flex items-center gap-1 whitespace-nowrap">
-                              <Truck size={11} /> Traslado activo
-                            </span>
+                          {liberable ? (
+                            <Button size="sm" variant="secondary"
+                              disabled={savingId === c.servicio_id}
+                              title="La saca del lote vencido o cancela el traslado sin lote para poder programarla"
+                              onClick={() => liberar(c, liberable)}>
+                              <Unlock size={12} /> Liberar
+                            </Button>
                           ) : c.item_activo_id ? (
                             <span className="text-[10px] text-green-700 font-semibold inline-flex items-center gap-1 whitespace-nowrap">
                               <Check size={11} /> En el lote
+                            </span>
+                          ) : c.traslado_activo ? (
+                            <span className="text-[10px] text-ink3 inline-flex items-center gap-1 whitespace-nowrap">
+                              <Truck size={11} /> Traslado activo
                             </span>
                           ) : (c.veces_reprogramada || 0) >= maxReprog ? (
                             <Button size="sm" variant="secondary"

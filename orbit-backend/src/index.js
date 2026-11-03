@@ -4,6 +4,7 @@ import express from 'express'
 import { pool, log } from './db.js'
 import { requireJob, requireAuth, requireRol, tokenIgual } from './auth.js'
 import { generarPropuesta } from './jobs/propuesta.js'
+import { limpiezaTenjo } from './jobs/limpieza-tenjo.js'
 import { motorAlertas } from './jobs/alertas.js'
 import { confirmarLote, cerrarLote } from './lotes.js'
 import { jobReportesGrupales } from './jobs/grupales.js'
@@ -1236,10 +1237,25 @@ app.get('/agente/:agenteId/ejecuciones', requireAuth, rolAgente, async (req, res
 
 // ── Jobs (los dispara el cron del VPS a diario; cada job decide si aplica) ──
 app.post('/jobs/generar-propuesta', requireJob, async (req, res) => {
+  // Primero libera lo colgado (borradores/traslados vencidos) para que entre en
+  // la propuesta del día. Si la limpieza falla, la propuesta igual sale.
+  let limpieza
+  try { limpieza = await limpiezaTenjo() }
+  catch (e) { log('[limpieza-tenjo] ERROR', e.message); limpieza = { error: e.message } }
   try {
-    res.json(await generarPropuesta({ force: req.query.force === '1' }))
+    res.json({ limpieza, ...(await generarPropuesta({ force: req.query.force === '1' })) })
   } catch (e) {
     log('[propuesta] ERROR', e.message)
+    res.status(500).json({ error: e.message, limpieza })
+  }
+})
+
+// Manual / verificación: ?dry=1 dice qué limpiaría sin tocar nada
+app.post('/jobs/limpieza-tenjo', requireJob, async (req, res) => {
+  try {
+    res.json(await limpiezaTenjo({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[limpieza-tenjo] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
