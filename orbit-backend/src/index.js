@@ -87,6 +87,7 @@ import {
 } from './inventario.js'
 import {
   listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
+  programarEntrega, completarEntregaCompra,
 } from './compras-recordatorios.js'
 import { verCatalogo, abrirBorrador, crearCompraPublica } from './catalogo-publico.js'
 
@@ -222,6 +223,11 @@ app.post('/compras-recordatorios/:id/pagos',         requireAuth, rolCompras,  r
 // (localhost → prod) el preflight de un PATCH se cae mudo.
 app.post('/compras-recordatorios/:id/items/:itemId', requireAuth, rolComprasL, actualizarItem)
 app.post('/compras-recordatorios/:id/anular',        requireAuth, rolCompras,  anularCompra)
+// Entrega con mensajero (migr. 204): coordinación la programa; la completa el
+// mensajero dueño de la entrega (el handler lo verifica) o coordinación.
+app.post('/compras-recordatorios/:id/entrega',       requireAuth, rolCompras,  programarEntrega)
+app.post('/compras-recordatorios/entregas/:entregaId/completar', requireAuth,
+  requireRol('COORDINADOR', 'ADMIN', 'TECNICO', 'MENSAJERO'), completarEntregaCompra)
 
 // ── Catálogo público de recordatorios (migración 200) ──
 // Público a propósito: el enlace /#/catalogo se le comparte a cualquier cliente
