@@ -2060,8 +2060,11 @@ export default function TecnicoApp() {
         //    la nevera: el gate físico es cuarto_frio.fecha_salida (mismo
         //    principio que v_candidatos_tenjo). Sin esto, el técnico no puede
         //    registrar nevera/evidencia de esas mascotas. Medido: ~45 filas.
+        //    Solo las de MIS servicios (antes traía las de todos los técnicos y
+        //    esos ids iban a la URL de abajo; ver el lote de rezagados).
         db.from('cuarto_frio')
-          .select(CF_COLS)
+          .select(`${CF_COLS}, servicios!inner(id)`)
+          .eq('servicios.tecnico_id', tecnico.id)
           .is('fecha_salida', null)
           .is('nevera_codigo', null),
         // 4. Entregas mías; el pool solo cuando toca (pesa: una fila con joins por entrega).
@@ -2137,14 +2140,24 @@ export default function TecnicoApp() {
         .filter(id => !servicios.some(s => s.id === id))
       let rezagados = []
       if (idsRezag.length > 0) {
-        const { data: rezData } = await db.from('servicios')
-          .select(SELECT_SVC)
-          .eq('tecnico_id', tecnico.id)
-          .in('id', idsRezag)
-          .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
-          .gte('fecha_ingreso', FECHA_CORTE)
+        // 🩸 En lotes de 20. Con ~30 ids + SELECT_SVC la URL pasaba de 4 KB;
+        // PostgREST la devuelve entera en Content-Location y nginx respondía
+        // "upstream sent too big header" → marcaba Kong como caído y por unos
+        // segundos TODA petición de TODOS los usuarios salía 502 sin CORS
+        // ("Failed to fetch"). Con el poll de 30 s se repetía sin parar
+        // (2026-11-04: 1.231 502 en 24 h).
+        const rezData = []
+        for (let i = 0; i < idsRezag.length; i += 20) {
+          const { data } = await db.from('servicios')
+            .select(SELECT_SVC)
+            .eq('tecnico_id', tecnico.id)
+            .in('id', idsRezag.slice(i, i + 20))
+            .in('estado', ['EN_PROCESO', 'EN_PRODUCCION'])
+            .gte('fecha_ingreso', FECHA_CORTE)
+          rezData.push(...(data || []))
+        }
         const cfBySvc = Object.fromEntries(cfRezag.map(cf => [cf.servicio_id, cf]))
-        rezagados = (rezData || []).map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
+        rezagados = rezData.map(s => ({ ...s, cuarto_frio_data: cfBySvc[s.id] || null }))
       }
       // Pendientes de registro en C. Frío (seleccionaron nevera aún no) +
       // rezagados: en nevera sin registro aunque el servicio ya avanzó de estado.
