@@ -72,7 +72,9 @@ export async function leerContratoPdf({ pdfBase64 }) {
   const texto = await llamarClaude({
     system: SYSTEM,
     model: MODELO,
-    maxTokens: 2000,
+    // Sonnet 5 razona antes de responder y ese razonamiento cuenta dentro de
+    // max_tokens: con 2000 se comía el presupuesto y el JSON salía vacío o cortado.
+    maxTokens: 16000,
     canal: 'AFILIACIONES',
     content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } },

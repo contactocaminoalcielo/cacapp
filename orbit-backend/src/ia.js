@@ -51,5 +51,11 @@ export async function llamarClaude({ system, prompt, content, maxTokens = 1024, 
     cacheLectura:   u.cache_read_input_tokens || 0,
   })
 
-  return json.content?.[0]?.text ?? ''
+  // Los modelos que razonan (claude-sonnet-5) devuelven primero un bloque
+  // `thinking` y el texto después: leer solo content[0] devolvía '' y el lector
+  // de contratos PDF fallaba con "La IA no devolvió datos legibles".
+  const texto = (json.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+  if (!texto && json.stop_reason === 'max_tokens')
+    throw new Error('La IA se quedó sin espacio para responder (max_tokens). Intenta de nuevo.')
+  return texto
 }
