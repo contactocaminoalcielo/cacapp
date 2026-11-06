@@ -254,7 +254,7 @@ export function SeguimientoModal({ abierto, onCerrar, destino, existente = null,
 }
 
 /** Abrir un ticket (PQRS de la veterinaria). */
-export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
+export function TicketModal({ abierto, onCerrar, aliado = null, onCreado, inicial = null, titulo = 'Nuevo ticket' }) {
   const { equipo } = useCrm()
   const [vets, setVets] = useState([])
   const [buscar, setBuscar] = useState('')
@@ -265,9 +265,9 @@ export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
   useEffect(() => {
     if (!abierto) return
     setError(null); setBuscar('')
-    setF({ aliado_id: aliado?.id_aliado || '', tipo: 'RECLAMO', categoria: 'COMISION', prioridad: 'MEDIA', canal: 'LLAMADA', asunto: '', descripcion: '', responsable_id: '', servicio_id: '' })
+    setF({ aliado_id: aliado?.id_aliado || '', tipo: 'RECLAMO', categoria: 'COMISION', prioridad: 'MEDIA', canal: 'LLAMADA', asunto: '', descripcion: '', responsable_id: '', servicio_id: '', ...(inicial || {}) })
     if (!aliado) crm.cartera().then(r => setVets(r.aliados || [])).catch(() => {})
-  }, [abierto, aliado])
+  }, [abierto, aliado, inicial])
 
   const opciones = vets.filter(v => !buscar.trim() || v.nombre.toLowerCase().includes(buscar.trim().toLowerCase())).slice(0, 50)
 
@@ -281,7 +281,7 @@ export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
   }
 
   return (
-    <Modal open={abierto} onClose={onCerrar} title="Nuevo ticket" maxWidth="max-w-xl"
+    <Modal open={abierto} onClose={onCerrar} title={titulo} maxWidth="max-w-xl"
       footer={<>
         <span className="text-[12px] text-red-600">{error}</span>
         <div className="flex gap-2">
@@ -333,7 +333,7 @@ export function TicketModal({ abierto, onCerrar, aliado = null, onCreado }) {
           <Input value={f.asunto || ''} onChange={e => setF(x => ({ ...x, asunto: e.target.value }))} placeholder="Ej: No le han pagado la comisión de septiembre" />
         </Campo>
         <Campo label="Lo que manifestó la veterinaria">
-          <Textarea rows={4} value={f.descripcion || ''} onChange={e => setF(x => ({ ...x, descripcion: e.target.value }))} />
+          <Textarea rows={inicial?.descripcion ? 8 : 4} value={f.descripcion || ''} onChange={e => setF(x => ({ ...x, descripcion: e.target.value }))} />
         </Campo>
         {equipo.length > 1 && (
           <Campo label="Responsable">

@@ -189,6 +189,7 @@ export default function FichaVeterinaria() {
   const [segSel, setSegSel] = useState(null)
   const [pestana, setPestana] = useState('gestiones')
   const [copiado, setCopiado] = useState(false)
+  const [ticketInicial, setTicketInicial] = useState(null)
 
   const cargar = useCallback(() => {
     setError(null)
@@ -283,6 +284,10 @@ export default function FichaVeterinaria() {
                 <li key={i} className="flex gap-2 text-[13px] text-gray-700"><span style={{ color: ACENTO }}>•</span><span>{r}</span></li>
               ))}
             </ul>
+            {d.comisiones_pendientes?.length > 0 && (
+              <ComisionesPendientes filas={d.comisiones_pendientes}
+                onVerificar={inicial => { setTicketInicial(inicial); setModal('verificar-comision') }} />
+            )}
           </Seccion>
 
           <Copiloto destino={destino} whatsapp={wa} />
@@ -446,6 +451,9 @@ export default function FichaVeterinaria() {
       <RegistrarGestion abierto={modal === 'gestion'} onCerrar={() => setModal(null)} destino={destino} seguimiento={segSel} onGuardado={cargar} sinSiguiente={a.no_contactar} />
       <SeguimientoModal abierto={modal === 'seguimiento'} onCerrar={() => setModal(null)} destino={destino} existente={segSel} onGuardado={cargar} />
       <TicketModal abierto={modal === 'ticket'} onCerrar={() => setModal(null)} aliado={a} onCreado={cargar} />
+      <TicketModal abierto={modal === 'verificar-comision'} onCerrar={() => setModal(null)} aliado={a}
+        titulo="Enviar comisión a verificación" inicial={ticketInicial}
+        onCreado={() => { refrescarAlertas(); cargar() }} />
       <EnviarPlantillaCrm abierto={modal === 'plantilla'} onCerrar={() => setModal(null)} destino={destino} whatsapp={a.whatsapp} onEnviada={cargar} />
       <EnviarMaterialCrm abierto={modal === 'material'} onCerrar={() => setModal(null)} destino={destino} onEnviado={cargar} />
       <EditarFicha abierto={modal === 'editar'} onCerrar={() => setModal(null)} aliado={a} onGuardado={cargar} />
@@ -547,6 +555,89 @@ export function Bitacora({ actividades }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/**
+ * El detalle de la "comisión pendiente por pagarle" del resumen: servicio por
+ * servicio (mismo criterio que la cifra, así que suman lo mismo). Se marcan los
+ * que el comercial quiere que coordinación revise y sale un ticket de COMISIÓN
+ * con el detalle escrito, asignado a coordinación.
+ */
+function ComisionesPendientes({ filas, onVerificar }) {
+  const { equipo } = useCrm()
+  const [sel, setSel] = useState(() => new Set(filas.map(f => f.id)))
+  useEffect(() => { setSel(new Set(filas.map(f => f.id))) }, [filas])
+
+  const elegidas = filas.filter(f => sel.has(f.id))
+  const total = elegidas.reduce((acc, f) => acc + Number(f.pendiente || 0), 0)
+  const todas = elegidas.length === filas.length
+
+  function alternar(id) {
+    setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  function enviar() {
+    const lineas = elegidas.map(f => {
+      const parcial = Number(f.comision_pagada) > 0 ? ` (de ${pesos(f.comision_aliado)}, ya pagado ${pesos(f.comision_pagada)})` : ''
+      return `• ${fechaCorta(f.fecha_ingreso)} · ${f.mascota || 'Sin nombre'}${f.especie ? ` (${f.especie})` : ''}`
+        + `${f.cliente ? ` · familia ${f.cliente}` : ''} · ${f.plan || 'Sin plan'} · comisión ${pesos(f.pendiente)}${parcial}`
+    })
+    const coordinador = equipo.find(p => p.rol === 'COORDINADOR') || equipo.find(p => p.rol === 'ADMIN')
+    onVerificar({
+      tipo: 'PETICION', categoria: 'COMISION', prioridad: 'MEDIA', canal: 'OTRO',
+      asunto: `Verificar comisión pendiente: ${pesos(total)} (${elegidas.length} servicio${elegidas.length === 1 ? '' : 's'})`,
+      descripcion: `En el CRM figura esta comisión pendiente por pagarle. Por favor verificar si se debe y, si es así, programar el pago.\n\n${lineas.join('\n')}\n\nTotal: ${pesos(total)}`,
+      responsable_id: coordinador?.id || '',
+      servicio_id: elegidas.length === 1 ? elegidas[0].id : '',
+    })
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-800 mb-2">Detalle de la comisión pendiente</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="text-left text-[10.5px] uppercase tracking-wider text-gray-400">
+              <th className="py-1 pr-2 w-6">
+                <input type="checkbox" checked={todas} aria-label="Marcar todas"
+                  onChange={() => setSel(todas ? new Set() : new Set(filas.map(f => f.id)))} className="w-3.5 h-3.5" />
+              </th>
+              <th className="pr-2">Fecha</th><th className="pr-2">Mascota</th><th className="pr-2">Familia</th>
+              <th className="pr-2">Plan</th><th className="text-right">Comisión</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map(f => (
+              <tr key={f.id} className="border-t border-amber-100/70 cursor-pointer" onClick={() => alternar(f.id)}>
+                <td className="py-1.5 pr-2">
+                  <input type="checkbox" checked={sel.has(f.id)} onChange={() => alternar(f.id)} onClick={e => e.stopPropagation()} className="w-3.5 h-3.5" />
+                </td>
+                <td className="pr-2 whitespace-nowrap">{fechaCorta(f.fecha_ingreso)}</td>
+                <td className="pr-2">{f.mascota || '—'}{f.especie && <span className="text-gray-400"> · {f.especie}</span>}</td>
+                <td className="pr-2 text-gray-600">{f.cliente || '—'}</td>
+                <td className="pr-2 text-gray-600">{f.plan || 'Sin plan'}</td>
+                <td className="text-right tabular-nums font-semibold text-amber-700">
+                  {pesos(f.pendiente)}
+                  {Number(f.comision_pagada) > 0 && <div className="text-[10.5px] font-normal text-gray-400">de {pesos(f.comision_aliado)}</div>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5">
+        <span className="text-[12px] text-gray-600">
+          {elegidas.length} de {filas.length} · <b className="tabular-nums">{pesos(total)}</b>
+        </span>
+        <button onClick={enviar} disabled={!elegidas.length}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40"
+          style={{ background: ACENTO }}>
+          <Send size={13} /> Enviar a verificación de coordinación
+        </button>
+      </div>
+    </div>
   )
 }
 

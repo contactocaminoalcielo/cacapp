@@ -306,7 +306,7 @@ export async function fichaAliado(id) {
   const todas = await cartera()
   const m = todas.find(r => r.id_aliado === aliadoId) || {}
 
-  const [serie, planes, servicios, actividades, seguimientos, tickets, fotos, pqrs, conv, prospecto, contactos] = await Promise.all([
+  const [serie, planes, servicios, actividades, seguimientos, tickets, fotos, pqrs, conv, prospecto, contactos, comPend] = await Promise.all([
     pool.query(
       `WITH meses AS (
          SELECT generate_series(date_trunc('month', ${HOY_SQL}) - interval '11 months',
@@ -366,6 +366,25 @@ export async function fichaAliado(id) {
     pool.query(`SELECT id, nombre, rol, telefono, whatsapp, email, notas, principal, created_at
                   FROM public.crm_aliado_contactos WHERE aliado_id = $1 ORDER BY principal DESC, created_at`, [aliadoId])
       .catch(() => ({ rows: [] })),
+    // El detalle de la "comisión pendiente" del resumen: MISMO criterio que
+    // SQL_CARTERA (no cancelado, con fecha, no descontada, comisión − pagado > 0)
+    // para que la suma de estas filas sea exactamente la cifra que se muestra.
+    // Sin LIMIT: la lista de "Servicios" corta en 60 y aquí no puede faltar ninguno.
+    pool.query(
+      `SELECT s.id, s.fecha_ingreso::text AS fecha_ingreso, s.estado, s.valor_total, s.comision_aliado,
+              s.comision_pagada,
+              GREATEST(COALESCE(s.comision_aliado,0) - COALESCE(s.comision_pagada,0), 0) AS pendiente,
+              pl.nombre AS plan, m.nombre AS mascota, e.nombre AS especie,
+              TRIM(CONCAT_WS(' ', c.nombre, c.apellido)) AS cliente
+         FROM public.servicios s
+         LEFT JOIN public.planes pl ON pl.id = s.plan_id
+         LEFT JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+         LEFT JOIN public.especies e ON e.id = m.especie_id
+         LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+        WHERE s.aliado_origen_id = $1 AND s.estado <> 'CANCELADO' AND s.fecha_ingreso IS NOT NULL
+          AND NOT COALESCE(s.comision_descontada, false)
+          AND COALESCE(s.comision_aliado,0) - COALESCE(s.comision_pagada,0) > 0
+        ORDER BY s.fecha_ingreso, s.created_at`, [aliadoId]),
   ])
 
   const pqrs90 = pqrs.rows.filter(q => Date.now() - new Date(q.created_at).getTime() < 90 * 86400000).length
@@ -390,6 +409,7 @@ export async function fichaAliado(id) {
       conversaciones: conv.rows,
       prospecto: prospecto.rows[0] || null,
       contactos: contactos.rows,
+      comisiones_pendientes: comPend.rows,
       enlace_portal: enlacePortal,
     },
   }
