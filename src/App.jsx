@@ -17,6 +17,7 @@ const Login            = lazy(() => import('@/pages/Login'))
 const FotosCliente     = lazy(() => import('@/pages/FotosCliente'))
 const PlantaCliente    = lazy(() => import('@/pages/PlantaCliente'))
 const VisitaCliente    = lazy(() => import('@/pages/VisitaCliente'))
+const OpinionCliente   = lazy(() => import('@/pages/OpinionCliente'))
 const CatalogoRecordatorios = lazy(() => import('@/pages/CatalogoRecordatorios'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
 const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
@@ -141,7 +142,7 @@ function AppRoutes({ rol }) {
 // versión nueva de Orbit" se le estaba mostrando a familias en duelo dentro del
 // portal de la planta y del de fotos, con un botón que no significa nada para
 // ellas.
-const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita', '/privacidad', '/catalogo']
+const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita', '/opinion', '/privacidad', '/catalogo']
 const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
 
 /**
@@ -230,6 +231,16 @@ function InnerApp() {
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <CatalogoRecordatorios />
+      </Suspense>
+    )
+  }
+
+  // /opinion/CODIGO → comentario de la encuesta post-entrega (migr. 206), desde
+  //                   el botón «Contarnos» que recibe quien respondió Regular o Malo.
+  if (location.pathname.startsWith('/opinion/')) {
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <OpinionCliente codigo={location.pathname.replace('/opinion/', '')} />
       </Suspense>
     )
   }

@@ -19,6 +19,8 @@ import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
 import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
 import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.js'
 import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
+import { jobEncuestaEntrega } from './jobs/encuesta-entrega.js'
+import { datosPortalOpinion, guardarComentarioOpinion, marcarAtendido } from './encuesta-entrega.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
@@ -1354,6 +1356,49 @@ app.post('/jobs/mitad-compostaje', requireJob, async (req, res) => {
   } catch (e) {
     log('[mitad/job] ERROR', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Job: encuesta de satisfacción post-entrega (migración 206) ─────────
+// Al día siguiente de la entrega (10:00; domingo y festivo no). Exige
+// `arranque_desde`: hay 1384 POST_ENTREGA viejos que NO se deben encuestar.
+// ?dry=1 → solo cuenta a quién le tocaría, sin enviar.
+app.post('/jobs/encuesta-entrega', requireJob, async (req, res) => {
+  try {
+    res.json(await jobEncuestaEntrega({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[encuesta/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Portal público /#/opinion/CODIGO: el comentario de Regular / Malo ──
+// El código es propio de la encuesta (no el del portal de fotos).
+app.get('/portal/opinion/:codigo', async (req, res) => {
+  try {
+    const r = await datosPortalOpinion({ codigo: req.params.codigo })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/opinion GET', e)
+  }
+})
+
+app.post('/portal/opinion/:codigo', async (req, res) => {
+  try {
+    const r = await guardarComentarioOpinion({ codigo: req.params.codigo, payload: req.body || {} })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'portal/opinion POST', e)
+  }
+})
+
+// Coordinación cierra el seguimiento de un Regular / Malo desde /nps.
+app.post('/nps/:id/atender', requireAuth, requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR'), async (req, res) => {
+  try {
+    const r = await marcarAtendido({ npsId: req.params.id, nota: req.body?.nota, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, 'nps/atender', e)
   }
 })
 

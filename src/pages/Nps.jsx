@@ -6,7 +6,8 @@ import { Modal } from '@/components/ui/dialog'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
+import { orbitApi } from '@/lib/orbitApi'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
 import { Star, MessageCircle, RefreshCw } from 'lucide-react'
@@ -15,11 +16,20 @@ import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 const FILTROS = [
   { key: 'todos', label: 'Todos' },
   { key: 'PENDIENTE', label: 'Pendientes' },
+  // Regular / Malo de la encuesta automática que nadie ha cerrado (migr. 206).
+  { key: 'POR_ATENDER', label: 'Por atender' },
   { key: 'REALIZADO', label: 'Realizados' },
   { key: 'POST_ENTREGA', label: 'Post-entrega' },
   { key: 'RECORDATORIO_3M', label: '3 meses' },
   { key: 'RECORDATORIO_6M', label: '6 meses' },
 ]
+
+// Respuesta de la encuesta automática post-entrega (migr. 206).
+const SATISFACCION = {
+  BUENA:   { label: '😊 Bueno',   cls: 'bg-green-light text-primary-dark border-green-mid' },
+  REGULAR: { label: '😐 Regular', cls: 'bg-[#FFF3DC] text-[#9A5500] border-[#FFD980]' },
+  MALA:    { label: '☹️ Malo',    cls: 'bg-[#FDECEC] text-[#C03030] border-[#F3B7B7]' },
+}
 
 export default function Nps() {
   const [seguimientos, setSeguimientos] = useState([])
@@ -29,17 +39,36 @@ export default function Nps() {
   const [selected, setSelected] = useState(null)
   const [form, setForm] = useState({ nps: 5, canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false })
   const [saving, setSaving] = useState(false)
+  const [atender, setAtender] = useState(null)      // fila Regular/Malo que se está cerrando
+  const [nota, setNota] = useState('')
 
   useEffect(() => { cargar() }, [])
+
+  async function cerrarSeguimiento() {
+    setSaving(true)
+    try {
+      await orbitApi(`/nps/${atender.id}/atender`, { method: 'POST', body: { nota } })
+      setAtender(null); setNota('')
+      await cargar()
+    } catch (e) {
+      alert('Error: ' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function cargar() {
     try {
       setLoading(true)
-      const { data, error: err } = await db.from('nps_seguimiento')
+      // dbTodo y no un select suelto: son ~4.000 filas (3 por servicio entregado)
+      // y PostgREST corta en 1000 SIN avisar. Ordenado de la más vieja a la más
+      // nueva, el corte se comía justo las encuestas recientes. `id` desempata
+      // para que las páginas no se pisen.
+      const data = await dbTodo(() => db.from('nps_seguimiento')
         .select('*, servicios!inner(aliados:aliado_origen_id(vip),mascotas(nombre,clientes(nombre,apellido,whatsapp)),planes(nombre))')
         .gte('servicios.fecha_ingreso', FECHA_CORTE)
         .order('fecha_programada', { ascending: true })
-      if (err) throw err
+        .order('id', { ascending: true }))
       setSeguimientos(data || [])
     } catch (e) {
       setError(e.message)
@@ -68,7 +97,10 @@ export default function Nps() {
     }
   }
 
-  const filtrados = filtro === 'todos' ? seguimientos : seguimientos.filter(s => s.estado === filtro || s.tipo === filtro)
+  const filtrados = filtro === 'todos' ? seguimientos
+    : filtro === 'POR_ATENDER' ? seguimientos.filter(s => s.seguimiento === 'PENDIENTE')
+    : seguimientos.filter(s => s.estado === filtro || s.tipo === filtro)
+  const porAtender = seguimientos.filter(s => s.seguimiento === 'PENDIENTE').length
 
   if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
   if (error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
@@ -88,8 +120,9 @@ export default function Nps() {
       } />
       <div className="p-7">
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-7">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
           <StatCard label="Pendientes hoy" value={pendientesHoy} valueColor="#C03030" />
+          <StatCard label="Por atender" value={porAtender} sub="Regular o Malo de la encuesta" valueColor="#9A5500" />
           <StatCard label="NPS promedio" value={npsPromedio} sub="Escala 1-5" valueColor="#1D8A55" />
           <StatCard label="Pre-Exequiales aceptados" value={presequialesAceptados} valueColor="#9A5500" />
           <StatCard label="Total contactos" value={seguimientos.length} />
@@ -151,7 +184,25 @@ export default function Nps() {
                       </span>
                     </Td>
                     <Td>
-                      {s.nps ? (
+                      {s.satisfaccion ? (
+                        <div className="max-w-[260px]">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${SATISFACCION[s.satisfaccion].cls}`}>
+                            {SATISFACCION[s.satisfaccion].label}
+                          </span>
+                          {s.seguimiento === 'PENDIENTE' && (
+                            <span className="ml-1 text-[10px] font-bold text-[#9A5500]">· por atender</span>
+                          )}
+                          {s.seguimiento === 'ATENDIDO' && (
+                            <span className="ml-1 text-[10px] text-ink3">· atendido</span>
+                          )}
+                          {s.pqr_id && <span className="ml-1 text-[10px] font-bold text-[#C03030]">· PQR</span>}
+                          {s.comentario && (
+                            <p className="text-[11px] text-ink2 mt-1 line-clamp-2" title={s.comentario}>«{s.comentario}»</p>
+                          )}
+                        </div>
+                      ) : s.envio_estado === 'ENVIADO' ? (
+                        <span className="text-[10px] text-ink3">Encuesta enviada · sin respuesta</span>
+                      ) : s.nps ? (
                         <div className="flex gap-0.5">
                           {[1,2,3,4,5].map(n => (
                             <Star key={n} size={12} className={n <= s.nps ? 'fill-[#C4A87A] text-[#C4A87A]' : 'text-[#DDD]'} />
@@ -161,6 +212,11 @@ export default function Nps() {
                     </Td>
                     <Td>
                       <div className="flex gap-1.5">
+                        {s.seguimiento === 'PENDIENTE' && (
+                          <Button size="sm" onClick={() => { setAtender(s); setNota('') }}>
+                            Atender
+                          </Button>
+                        )}
                         {isPendiente && (
                           <Button size="sm" onClick={() => { setSelected(s); setForm({ nps: 5, canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false }) }}>
                             Registrar
@@ -186,6 +242,35 @@ export default function Nps() {
           </Table>
         </TableWrap>
       </div>
+
+      {/* Modal cerrar seguimiento de un Regular / Malo (migr. 206) */}
+      {atender && (
+        <Modal open={!!atender} onClose={() => setAtender(null)} title="Cerrar seguimiento"
+          maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setAtender(null)}>Cancelar</Button>
+              <Button onClick={cerrarSeguimiento} disabled={saving}>{saving ? 'Guardando...' : 'Marcar atendido'}</Button>
+            </>
+          }>
+          <div className="space-y-4">
+            <div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${SATISFACCION[atender.satisfaccion]?.cls || ''}`}>
+                {SATISFACCION[atender.satisfaccion]?.label || atender.satisfaccion}
+              </span>
+              <span className="ml-2 text-[12px] font-semibold text-ink">{atender.servicios?.mascotas?.nombre}</span>
+              {atender.pqr_id && <span className="ml-2 text-[11px] text-[#C03030] font-bold">PQR (queja) abierta en la ficha del servicio</span>}
+            </div>
+            <div className="text-[13px] text-ink2 bg-surface2 rounded-lg p-3 whitespace-pre-wrap">
+              {atender.comentario ? `«${atender.comentario}»` : 'La familia todavía no ha escrito qué pasó.'}
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1">¿Qué se hizo? (opcional)</label>
+              <Textarea value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej.: se llamó a la familia, se repuso el recordatorio…" />
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Modal registrar NPS */}
       {selected && (

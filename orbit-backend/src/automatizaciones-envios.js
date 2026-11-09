@@ -30,6 +30,7 @@ import { forzarContacto } from './seguimiento-imagenes.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
 import { enviarAvisoPlanta } from './plantas.js'
 import { enviarAvisoMitad } from './mitad-compostaje.js'
+import { enviarEncuesta } from './encuesta-entrega.js'
 import { enviarAutomatico } from './digitales.js'
 import { enviarReporte } from './grupales.js'
 import { explicarErrorWa } from './errores-wa.js'
@@ -182,6 +183,27 @@ const FUENTES = {
       JOIN public.servicios s     ON s.id = av.servicio_id
       JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id`,
+
+  // Encuesta post-entrega (migr. 206): solo filas que tocó la automatización.
+  encuesta_entrega: `
+    SELECT n.id, n.servicio_id,
+           COALESCE(n.envio_en, n.created_at) AS fecha,
+           n.envio_estado AS estado, n.envio_error AS error, n.envio_intentos::int AS intentos,
+           m.nombre AS mascota, ${PROPIETARIO} AS destinatario,
+           COALESCE(n.whatsapp_destino, c.whatsapp) AS destino,
+           n.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           ('Entregado el ' || to_char(n.fecha_programada, 'DD/MM')
+             || CASE n.satisfaccion WHEN 'BUENA' THEN ' · 😊 Bueno'
+                                    WHEN 'REGULAR' THEN ' · 😐 Regular'
+                                    WHEN 'MALA' THEN ' · ☹️ Malo'
+                                    ELSE ' · sin respuesta' END
+             || CASE WHEN n.comentario_en IS NOT NULL THEN ' · dejó comentario' ELSE '' END) AS detalle,
+           '{}'::jsonb AS extra
+      FROM public.nps_seguimiento n
+      JOIN public.servicios s     ON s.id = n.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+     WHERE n.tipo = 'POST_ENTREGA' AND n.envio_estado IS NOT NULL`,
 
   // Una fila por INTENTO. `resuelto` = ese servicio ya tiene un envío bueno
   // (aunque este intento haya fallado), para no ofrecer relanzar lo ya entregado.
@@ -427,6 +449,18 @@ const RELANZAR = {
                         WHERE id = $1 AND estado = 'ENVIADO'`, [f.id])
     }
     return desdeMotivo(await enviarAvisoMitad({ avisoId: f.id, personalId: personal.id }))
+  },
+
+  async encuesta_entrega(f, personal) {
+    // ENVIANDO huérfano (se cayó a mitad) o ENVIADO que Meta no entregó → ERROR,
+    // y `enviarEncuesta` lo retoma. Una encuesta ya respondida no se relanza.
+    if (f.estado === 'ENVIANDO' || (f.estado === 'ENVIADO' && f.acuse === 'failed')) {
+      await destrabar(`UPDATE public.nps_seguimiento
+                          SET envio_estado = 'ERROR', envio_error = COALESCE(envio_error, $2)
+                        WHERE id = $1 AND envio_estado IN ('ENVIANDO', 'ENVIADO') AND satisfaccion IS NULL`,
+                      [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega'])
+    }
+    return desdeMotivo(await enviarEncuesta({ npsId: f.id, personalId: personal.id }))
   },
 
   async digitales(f, personal) {

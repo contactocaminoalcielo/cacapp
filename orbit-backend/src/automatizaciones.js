@@ -141,6 +141,24 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'encuesta_entrega',
+    nombre: 'Encuesta de satisfacción post-entrega',
+    descripcion: 'Al día siguiente de la entrega: «¿cómo calificarías tu experiencia?» con 😊 Bueno · 😐 Regular · ☹️ Malo. Bueno recibe el enlace de reseña en Google; Regular y Malo, un formulario y quedan por atender en NPS (Malo abre una PQR).',
+    quien: 'A la familia',
+    cron: '10:00, lunes a sábado (sin festivos)',
+    interruptor: { modulo: 'ENCUESTA_ENTREGA', clave: 'activo' },
+    plantillaCfg: { modulo: 'ENCUESTA_ENTREGA', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.nps_seguimiento',
+      fecha: 'envio_en',
+      // Solo lo que tocó la automatización: las 1384 viejas tienen envio_estado NULL.
+      filtro: "tipo = 'POST_ENTREGA' AND envio_estado IS NOT NULL",
+      ok: "envio_estado = 'ENVIADO'",
+      error: "envio_estado = 'ERROR'",
+      pendiente: "envio_estado IN ('PENDIENTE', 'ENVIANDO')",
+    },
+  },
+  {
     clave: 'digitales',
     nombre: 'Entrega de digitales y memorial',
     descripcion: 'Manda los enlaces de las piezas digitales cuando están listas. ⚠️ El interruptor solo gobierna el envío AUTOMÁTICO: los números incluyen también lo que manda una persona desde Digitales.',

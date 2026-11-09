@@ -18,6 +18,7 @@ import crypto from 'node:crypto'
 import { pool, log } from './db.js'
 import { responderSiAplica, mantenerEscribiendo } from './agente-wa.js'
 import { guardarMedia, transcribir, esVoz } from './whatsapp-media.js'
+import { manejarRespuestaEncuesta } from './encuesta-entrega.js'
 
 const MOD = '[wa-webhook]'
 
@@ -188,6 +189,9 @@ function extraerEventos(payload) {
           resumen:       m?.type || 'desconocido',
           tipo:          m?.type || 'text',
           texto:         textoDeMensaje(m),
+          // El texto crudo del botón tocado (plantilla o interactivo). Lo lee la
+          // encuesta post-entrega para saber si fue Bueno, Regular o Malo.
+          boton:         m?.button?.text ?? m?.interactive?.button_reply?.title ?? null,
           ocurridoEn:    fechaMeta(m?.timestamp),
           perfilNombre:  perfiles.get(m?.from) ?? null,
           mediaId:       adj?.id ?? null,
@@ -404,6 +408,21 @@ async function normalizar(ev) {
               AND COALESCE(nombre_perfil, '') <> $2`,
           [ev.fromNumber, ev.perfilNombre, ev.phoneNumberId]
         )
+      }
+
+      // ── Encuesta post-entrega (migración 206) ──
+      // Si es el botón de la encuesta (😊 Bueno / 😐 Regular / ☹️ Malo), se
+      // registra y se contesta aquí, y el agente NO se despierta: si no, el
+      // modelo recibe un «Bueno» suelto y le arma una conversación encima. Si
+      // esto falla, sigue el camino normal y el agente atiende.
+      if (ev.boton && fila?.id) {
+        try {
+          if (await manejarRespuestaEncuesta({
+            phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo, boton: ev.boton,
+          })) return
+        } catch (e) {
+          log(MOD, 'encuesta: no se pudo procesar el botón —', e.message)
+        }
       }
 
       // ── Agente (migración 088) ──
