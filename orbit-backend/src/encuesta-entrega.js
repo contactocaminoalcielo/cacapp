@@ -48,7 +48,9 @@ export const CUERPO_PLANTILLA =
   + '¿Cómo calificarías tu experiencia?'
 
 // Texto exacto de los tres botones (tope de Meta: 25 caracteres por botón).
-export const BOTONES = ['😊 Bueno', '😐 Regular', '☹️ Malo']
+// SIN emojis: Meta rechaza la plantilla si un botón los trae (error 2388060,
+// «Los botones no pueden contener variables, nuevas líneas, emojis…», 10-nov).
+export const BOTONES = ['Bueno', 'Regular', 'Malo']
 
 const TEXTO_BUENA =
   '🤍 Nos alegra mucho saber que tu experiencia fue positiva.\n\n'
