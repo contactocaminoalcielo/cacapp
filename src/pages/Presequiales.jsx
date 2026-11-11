@@ -1487,6 +1487,8 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
   const [editMasc, setEditMasc] = useState(null)    // id de afiliacion_mascotas en edición
   const [formMasc, setFormMasc] = useState({ nombre: '', especie_id: '', raza: '', peso_kg: '', edad: '' })
   const [guardandoMasc, setGuardandoMasc] = useState(false)
+  const [editCli, setEditCli] = useState(null)      // formulario del titular, o null si está cerrado
+  const [guardandoCli, setGuardandoCli] = useState(false)
   // Cuotas (migr. 183): un formulario abierto a la vez, por contrato
   const [formPago, setFormPago] = useState(null)  // { contratoId, modo: 'ABONO'|'DIFERIR', cuotas, monto, fecha, metodo, file }
   const [guardandoPago, setGuardandoPago] = useState(false)
@@ -1577,6 +1579,64 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
     const { error } = await db.from('afiliacion_pagos').delete().eq('id', p.id)
     if (error) { await showAlert(error.message, { title: 'No se pudo borrar el abono' }); return }
     await onChanged()
+  }
+
+  // Datos del titular: el contrato los imprime en el encabezado (nombre y
+  // cédula) y en la firma (cédula, celular, fijo, correo). Se corrigen sobre
+  // `clientes`, que es de donde los lee el PDF — y el PDF se regenera en cada
+  // descarga o envío, así que el siguiente ya sale corregido.
+  function abrirEdicionTitular() {
+    if (editCli) { setEditCli(null); return }
+    const c = a.clientes || {}
+    setEditCli({
+      nombre: c.nombre || '', apellido: c.apellido || '', cedula_nit: c.cedula_nit || '',
+      whatsapp: c.whatsapp || '', telefono: c.telefono || '', email: c.email || '',
+      direccion: c.direccion || '', ciudad: c.ciudad || '',
+    })
+  }
+
+  async function guardarDatosTitular() {
+    const id = a.clientes?.id_cliente
+    if (!id || !editCli) return
+    const f = Object.fromEntries(Object.entries(editCli).map(([k, v]) => [k, String(v).trim()]))
+    // nombre y apellido son NOT NULL; cédula y WhatsApp los exige el contrato
+    const falta = [['nombre', 'el nombre'], ['apellido', 'el apellido'], ['cedula_nit', 'la cédula'], ['whatsapp', 'el WhatsApp']]
+      .find(([k]) => !f[k])
+    if (falta) {
+      await showAlert(`Falta ${falta[1]} del titular.`, { title: 'Dato obligatorio', variant: 'warning' })
+      return
+    }
+    if (f.email && !/^\S+@\S+\.\S+$/.test(f.email)) {
+      await showAlert('El correo no tiene un formato válido.', { title: 'Revisa el correo', variant: 'warning' })
+      return
+    }
+    setGuardandoCli(true)
+    try {
+      // Una cédula que ya es de OTRO cliente casi siempre es un error de digitación
+      if (f.cedula_nit !== (a.clientes?.cedula_nit || '')) {
+        const { data: otros, error: eDup } = await db.from('clientes')
+          .select('id_cliente,nombre,apellido').eq('cedula_nit', f.cedula_nit).neq('id_cliente', id).limit(1)
+        if (eDup) throw eDup
+        if (otros?.length) {
+          const ok = await confirm(
+            `La cédula ${f.cedula_nit} ya está registrada a nombre de ${otros[0].nombre} ${otros[0].apellido || ''}. ¿Guardarla también en este titular?`,
+            { title: 'Cédula repetida', confirmLabel: 'Sí, guardar' })
+          if (!ok) return
+        }
+      }
+      const { error } = await db.from('clientes').update({
+        nombre: f.nombre, apellido: f.apellido, cedula_nit: f.cedula_nit, whatsapp: f.whatsapp,
+        telefono: f.telefono || null, email: f.email.toLowerCase() || null,
+        direccion: f.direccion || null, ciudad: f.ciudad || 'Bogotá',
+      }).eq('id_cliente', id)
+      if (error) throw error
+      setEditCli(null)
+      await onChanged()
+    } catch (e) {
+      await showAlert(e.message, { title: 'Error guardando los datos del titular' })
+    } finally {
+      setGuardandoCli(false)
+    }
   }
 
   // Los cinco datos que la tabla del contrato imprime (nombre, especie, raza,
@@ -1727,8 +1787,48 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ background: nc.bg, color: nc.text, borderColor: nc.border }}>{a.nivel}</span>
         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-surface2 text-ink2">{a.tipo === 'VITALICIO' ? 'VITALICIO' : 'ANUAL'}</span>
         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${ESTADO_BADGE[a.estado] || ''}`}>{a.estado}</span>
-        <span className="text-[11px] text-ink3">CC {a.clientes?.cedula_nit} · {a.clientes?.whatsapp}{a.clientes?.telefono ? ` · fijo ${a.clientes.telefono}` : ''}</span>
+        <span className="text-[11px] text-ink3">CC {a.clientes?.cedula_nit} · {a.clientes?.whatsapp}{a.clientes?.telefono ? ` · fijo ${a.clientes.telefono}` : ''}{a.clientes?.email ? ` · ${a.clientes.email}` : ''}</span>
+        {a.clientes?.id_cliente && (
+          <Button size="sm" variant="ghost" onClick={abrirEdicionTitular}
+            title="Corregir nombre, cédula, teléfonos, correo y dirección del titular">
+            <Pencil size={11} /> Editar titular
+          </Button>
+        )}
       </div>
+
+      {editCli && (
+        <form className="rounded-xl border px-3.5 py-3 mb-4" style={{ borderColor: 'rgba(30,80,40,0.12)' }}
+          onSubmit={e => { e.preventDefault(); guardarDatosTitular() }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {[
+              ['nombre', 'Nombre *'], ['apellido', 'Apellido *'],
+              ['cedula_nit', 'Cédula / NIT *'], ['whatsapp', 'WhatsApp *'],
+              ['telefono', 'Teléfono fijo'], ['email', 'Email'],
+              ['ciudad', 'Ciudad'], ['direccion', 'Dirección'],
+            ].map(([k, label], i) => (
+              <div key={k}>
+                <label className={LABEL}>{label}</label>
+                <Input value={editCli[k]} autoFocus={i === 0}
+                  type={k === 'email' ? 'email' : 'text'}
+                  inputMode={k === 'whatsapp' || k === 'telefono' ? 'tel' : undefined}
+                  onChange={e => setEditCli(p => ({ ...p, [k]: e.target.value }))} />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <Button size="sm" type="submit" disabled={guardandoCli}>
+              {guardandoCli ? 'Guardando...' : 'Guardar'}
+            </Button>
+            <Button size="sm" variant="ghost" type="button" onClick={() => setEditCli(null)}>Cancelar</Button>
+          </div>
+          <p className="text-[10px] text-ink3 mt-2">
+            Son los datos del cliente en <b>todo Orbit</b>: al corregirlos aquí cambian también en
+            sus servicios, recibos y en el WhatsApp al que se le escribe. El contrato sale con
+            ellos la próxima vez que toques <b>PDF</b>, <b>WA</b> o <b>Correo</b>. El número del
+            contrato no cambia solo: si hay que ajustarlo, usa el lápiz que tiene al lado.
+          </p>
+        </form>
+      )}
 
       {a.estado === 'CANCELADA' && (
         <div className="rounded-xl px-3.5 py-3 mb-4 text-[12px] bg-danger-light border border-danger/30">
