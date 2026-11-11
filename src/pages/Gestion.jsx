@@ -42,9 +42,15 @@ const nullify = (obj, keys) => {
 
 function useSearch(data, fields) {
   const [q, setQ] = useState('')
-  const filtered = data.filter(item =>
-    !q || fields.some(f => String(item[f] || '').toLowerCase().includes(q.toLowerCase()))
-  )
+  // Cada palabra debe aparecer en ALGÚN campo, sin importar tildes ni mayúsculas.
+  // Antes se comparaba la frase entera contra cada campo por separado, así que
+  // "Sandra Rodriguez" no encontraba a nombre=Sandra / apellido=Rodríguez.
+  const norm = v => String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const palabras = norm(q).split(/\s+/).filter(Boolean)
+  const filtered = !palabras.length ? data : data.filter(item => {
+    const texto = fields.map(f => norm(item[f])).join(' ')
+    return palabras.every(p => texto.includes(p))
+  })
   return { q, setQ, filtered }
 }
 
