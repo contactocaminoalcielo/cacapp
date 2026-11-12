@@ -10,7 +10,7 @@ import { db, dbTodo } from '@/lib/supabase'
 import { orbitApi } from '@/lib/orbitApi'
 import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
-import { Star, MessageCircle, RefreshCw } from 'lucide-react'
+import { MessageCircle, RefreshCw } from 'lucide-react'
 import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 
 const FILTROS = [
@@ -18,6 +18,10 @@ const FILTROS = [
   { key: 'PENDIENTE', label: 'Pendientes' },
   // Regular / Malo de la encuesta automática que nadie ha cerrado (migr. 206).
   { key: 'POR_ATENDER', label: 'Por atender' },
+  // Quién calificó qué, lo más reciente arriba.
+  { key: 'BUENA', label: '😊 Bueno' },
+  { key: 'REGULAR', label: '😐 Regular' },
+  { key: 'MALA', label: '☹️ Malo' },
   { key: 'REALIZADO', label: 'Realizados' },
   { key: 'POST_ENTREGA', label: 'Post-entrega' },
   { key: 'RECORDATORIO_3M', label: '3 meses' },
@@ -30,6 +34,18 @@ const SATISFACCION = {
   REGULAR: { label: '😐 Regular', cls: 'bg-[#FFF3DC] text-[#9A5500] border-[#FFD980]' },
   MALA:    { label: '☹️ Malo',    cls: 'bg-[#FDECEC] text-[#C03030] border-[#F3B7B7]' },
 }
+const CALIFICACIONES = Object.keys(SATISFACCION)
+// `nps` (1-5) se sigue llenando en espejo para lo que aún lo lea.
+const NPS_DE = { BUENA: 5, REGULAR: 3, MALA: 1 }
+
+// La calificación de una fila. Las que se registraron con estrellas antes de
+// pasar a Bueno/Regular/Malo se leen con la misma equivalencia (4-5, 3, 1-2).
+const califDe = s => s.satisfaccion
+  || (s.nps ? (s.nps >= 4 ? 'BUENA' : s.nps === 3 ? 'REGULAR' : 'MALA') : null)
+
+// Cuándo calificó: la hora del botón de WhatsApp o, a mano, el día registrado.
+const fechaCalif = s => s.respondido_en ? new Date(s.respondido_en)
+  : s.fecha_realizada ? parseDate(s.fecha_realizada) : null
 
 export default function Nps() {
   const [seguimientos, setSeguimientos] = useState([])
@@ -37,7 +53,7 @@ export default function Nps() {
   const [error, setError] = useState(null)
   const [filtro, setFiltro] = useState('PENDIENTE')
   const [selected, setSelected] = useState(null)
-  const [form, setForm] = useState({ nps: 5, canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false })
+  const [form, setForm] = useState({ satisfaccion: 'BUENA', canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false })
   const [saving, setSaving] = useState(false)
   const [atender, setAtender] = useState(null)      // fila Regular/Malo que se está cerrando
   const [nota, setNota] = useState('')
@@ -80,14 +96,20 @@ export default function Nps() {
   async function registrar() {
     setSaving(true)
     try {
-      await db.from('nps_seguimiento').update({
+      // Misma forma que deja la encuesta automática: Regular y Malo quedan
+      // «por atender» hasta que alguien cierre el seguimiento.
+      const { error } = await db.from('nps_seguimiento').update({
         estado: 'REALIZADO',
         fecha_realizada: today(),
-        nps: form.nps,
+        respondido_en: new Date().toISOString(),
+        satisfaccion: form.satisfaccion,
+        nps: NPS_DE[form.satisfaccion],
+        seguimiento: form.satisfaccion === 'BUENA' ? null : 'PENDIENTE',
         canal: form.canal,
         comentario: form.comentario,
         oferta_presequial_aceptada: form.oferta_presequial_aceptada,
       }).eq('id', selected.id)
+      if (error) throw error
       await cargar()
       setSelected(null)
     } catch (e) {
@@ -99,15 +121,18 @@ export default function Nps() {
 
   const filtrados = filtro === 'todos' ? seguimientos
     : filtro === 'POR_ATENDER' ? seguimientos.filter(s => s.seguimiento === 'PENDIENTE')
+    : SATISFACCION[filtro]
+      ? seguimientos.filter(s => califDe(s) === filtro)
+          .sort((a, b) => (fechaCalif(b)?.getTime() || 0) - (fechaCalif(a)?.getTime() || 0))
     : seguimientos.filter(s => s.estado === filtro || s.tipo === filtro)
   const porAtender = seguimientos.filter(s => s.seguimiento === 'PENDIENTE').length
+  const conteo = Object.fromEntries(CALIFICACIONES.map(k => [k, seguimientos.filter(s => califDe(s) === k).length]))
+  const calificados = CALIFICACIONES.reduce((a, k) => a + conteo[k], 0)
 
   if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
   if (error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
 
-  const npsPromedio = seguimientos.filter(s => s.nps).length > 0
-    ? (seguimientos.filter(s => s.nps).reduce((acc, s) => acc + s.nps, 0) / seguimientos.filter(s => s.nps).length).toFixed(1)
-    : '-'
+  const pctBueno = calificados > 0 ? `${Math.round(conteo.BUENA * 100 / calificados)}%` : '-'
   const presequialesAceptados = seguimientos.filter(s => s.oferta_presequial_aceptada).length
   const pendientesHoy = seguimientos.filter(s => s.estado === 'PENDIENTE' && s.fecha_programada <= today()).length
 
@@ -123,7 +148,8 @@ export default function Nps() {
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
           <StatCard label="Pendientes hoy" value={pendientesHoy} valueColor="#C03030" />
           <StatCard label="Por atender" value={porAtender} sub="Regular o Malo de la encuesta" valueColor="#9A5500" />
-          <StatCard label="NPS promedio" value={npsPromedio} sub="Escala 1-5" valueColor="#1D8A55" />
+          <StatCard label="Calificaron Bueno" value={pctBueno}
+            sub={`😊 ${conteo.BUENA} · 😐 ${conteo.REGULAR} · ☹️ ${conteo.MALA}`} valueColor="#1D8A55" />
           <StatCard label="Pre-Exequiales aceptados" value={presequialesAceptados} valueColor="#9A5500" />
           <StatCard label="Total contactos" value={seguimientos.length} />
         </div>
@@ -134,7 +160,7 @@ export default function Nps() {
             <button key={f.key}
               className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all whitespace-nowrap ${filtro === f.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
               onClick={() => setFiltro(f.key)}>
-              {f.label}
+              {f.label}{SATISFACCION[f.key] ? ` (${conteo[f.key]})` : ''}
             </button>
           ))}
         </div>
@@ -149,7 +175,7 @@ export default function Nps() {
                 <Th>Tipo</Th>
                 <Th>Programado</Th>
                 <Th>Estado</Th>
-                <Th>NPS</Th>
+                <Th>Calificación</Th>
                 <Th>Acciones</Th>
               </tr>
             </thead>
@@ -158,6 +184,8 @@ export default function Nps() {
                 const m = s.servicios?.mascotas
                 const c = m?.clientes
                 const isPendiente = s.estado === 'PENDIENTE'
+                const calif = califDe(s)
+                const cuando = fechaCalif(s)
                 return (
                   <Tr key={s.id}>
                     <Td>
@@ -184,11 +212,12 @@ export default function Nps() {
                       </span>
                     </Td>
                     <Td>
-                      {s.satisfaccion ? (
+                      {calif ? (
                         <div className="max-w-[260px]">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${SATISFACCION[s.satisfaccion].cls}`}>
-                            {SATISFACCION[s.satisfaccion].label}
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${SATISFACCION[calif].cls}`}>
+                            {SATISFACCION[calif].label}
                           </span>
+                          {cuando && <span className="ml-1 text-[10px] text-ink3">{cuando.toLocaleDateString('es-CO')}</span>}
                           {s.seguimiento === 'PENDIENTE' && (
                             <span className="ml-1 text-[10px] font-bold text-[#9A5500]">· por atender</span>
                           )}
@@ -202,12 +231,6 @@ export default function Nps() {
                         </div>
                       ) : s.envio_estado === 'ENVIADO' ? (
                         <span className="text-[10px] text-ink3">Encuesta enviada · sin respuesta</span>
-                      ) : s.nps ? (
-                        <div className="flex gap-0.5">
-                          {[1,2,3,4,5].map(n => (
-                            <Star key={n} size={12} className={n <= s.nps ? 'fill-[#C4A87A] text-[#C4A87A]' : 'text-[#DDD]'} />
-                          ))}
-                        </div>
                       ) : '-'}
                     </Td>
                     <Td>
@@ -218,7 +241,7 @@ export default function Nps() {
                           </Button>
                         )}
                         {isPendiente && (
-                          <Button size="sm" onClick={() => { setSelected(s); setForm({ nps: 5, canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false }) }}>
+                          <Button size="sm" onClick={() => { setSelected(s); setForm({ satisfaccion: 'BUENA', canal: 'WHATSAPP', comentario: '', oferta_presequial_aceptada: false }) }}>
                             Registrar
                           </Button>
                         )}
@@ -284,14 +307,18 @@ export default function Nps() {
           }>
           <div className="space-y-4">
             <div>
-              <label className="text-[11px] font-bold text-ink3 block mb-2">NPS (1-5 estrellas)</label>
-              <div className="flex gap-2">
-                {[1,2,3,4,5].map(n => (
-                  <button key={n} onClick={() => setForm(p => ({ ...p, nps: n }))}>
-                    <Star size={28} className={`transition-all ${n <= form.nps ? 'fill-[#C4A87A] text-[#C4A87A]' : 'text-[#DDD] hover:text-[#C4A87A]'}`} />
+              <label className="text-[11px] font-bold text-ink3 block mb-2">¿Cómo calificó su experiencia?</label>
+              <div className="grid grid-cols-3 gap-2">
+                {CALIFICACIONES.map(k => (
+                  <button key={k} type="button" onClick={() => setForm(p => ({ ...p, satisfaccion: k }))}
+                    className={`px-2 py-2.5 rounded-xl border text-[13px] font-bold transition-all ${form.satisfaccion === k ? SATISFACCION[k].cls + ' ring-2 ring-primary-dark/30' : 'bg-white text-ink3 border-[rgba(30,80,40,0.12)] hover:bg-surface2'}`}>
+                    {SATISFACCION[k].label}
                   </button>
                 ))}
               </div>
+              {form.satisfaccion !== 'BUENA' && (
+                <p className="text-[10px] text-ink3 mt-1.5">Queda en «Por atender» hasta que se cierre el seguimiento.</p>
+              )}
             </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">Canal</label>

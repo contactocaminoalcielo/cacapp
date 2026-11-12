@@ -91,7 +91,10 @@ export default function Dashboard() {
       setServicios(kanban || [])
       setAlertas(alts || [])
       if (nps?.length > 0) {
-        setNpsPromedio((nps.reduce((a, n) => a + n.nps, 0) / nps.length).toFixed(1))
+        // Ya no es un promedio 1-5: la encuesta es Bueno/Regular/Malo y `nps`
+        // va en espejo (5/3/1). Se muestra qué parte calificó Bueno (4 o 5).
+        const buenos = nps.filter(n => n.nps >= 4).length
+        setNpsPromedio({ pct: Math.round(buenos * 100 / nps.length), n: nps.length })
       }
     } catch (e) {
       // Un fallo en un refresco de fondo NO debe tumbar la pantalla (el
@@ -209,12 +212,14 @@ function DashboardGeneral({ servicios, alertas, npsPromedio, navigate }) {
           </div>
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-1">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-              <Star size={12} />NPS {mesLabel}
+              <Star size={12} />Satisfacción {mesLabel}
             </div>
-            <div className="text-3xl font-bold" style={{ color: npsPromedio >= 4 ? '#10B981' : npsPromedio >= 3 ? '#F59E0B' : '#EF4444' }}>
-              {npsPromedio ? `${npsPromedio}/5` : '—'}
+            <div className="text-3xl font-bold" style={{ color: !npsPromedio ? '#9CA3AF' : npsPromedio.pct >= 80 ? '#10B981' : npsPromedio.pct >= 60 ? '#F59E0B' : '#EF4444' }}>
+              {npsPromedio ? `${npsPromedio.pct}%` : '—'}
             </div>
-            <div className="text-[11px] text-gray-400">Promedio del mes</div>
+            <div className="text-[11px] text-gray-400">
+              {npsPromedio ? `calificó Bueno · ${npsPromedio.n} respuesta${npsPromedio.n === 1 ? '' : 's'}` : 'Sin respuestas este mes'}
+            </div>
           </div>
         </div>
 
