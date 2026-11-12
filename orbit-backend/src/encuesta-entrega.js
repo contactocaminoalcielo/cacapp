@@ -224,11 +224,14 @@ export async function manejarRespuestaEncuesta({ phoneNumberId, contacto, tipo, 
 
   if (n.satisfaccion !== satisfaccion) {
     // Cambiar de opinión antes de comentar vale: manda la última que tocó.
+    // 🪤 Los dos $2 van con ::text: sin el cast Postgres deduce varchar en uno
+    // y text en el otro y rechaza la consulta («inconsistent types deduced for
+    // parameter $2») — el botón no se registraba y caía al agente (11-nov).
     await pool.query(
       `UPDATE public.nps_seguimiento
-          SET satisfaccion = $2, nps = $3, respondido_en = now(),
+          SET satisfaccion = $2::text, nps = $3, respondido_en = now(),
               estado = 'REALIZADO', fecha_realizada = public.fn_hoy_bogota(), canal = 'WHATSAPP',
-              seguimiento = CASE WHEN $2 = 'BUENA' THEN NULL ELSE 'PENDIENTE' END
+              seguimiento = CASE WHEN $2::text = 'BUENA' THEN NULL ELSE 'PENDIENTE' END
         WHERE id = $1`,
       [n.id, satisfaccion, NPS_DE[satisfaccion]]
     )
@@ -256,7 +259,16 @@ async function responderSegunCalificacion({ phoneNumberId, contacto, satisfaccio
       if (!r?.body?.ok) throw new Error(r?.body?.error || 'envío rechazado')
       return r
     }
-    return enviarCta({ contacto, linea, cuerpo: TEXTO_BUENA, boton: '⭐ Dejar reseña', url })
+    // 🪤 El enlace de Google va ESCRITO en el texto, no en un botón cta_url:
+    // WhatsApp abre los botones en su navegador interno, donde Google no ve
+    // la sesión del cliente y le pide iniciar sesión para reseñar (12-nov).
+    // Un enlace en el texto abre el navegador del teléfono o Google Maps.
+    // La API no tiene parámetro para forzar el navegador externo en un botón.
+    const texto = `${TEXTO_BUENA}\n\n⭐ Deja tu reseña aquí:\n${url}`
+    const r = await enviarSobre({ contacto, linea, tipo: 'text', texto,
+      payload: { type: 'text', text: { body: texto, preview_url: true } } })
+    if (!r?.body?.ok) throw new Error(r?.body?.error || 'envío rechazado')
+    return r
   }
   const cuerpo = satisfaccion === 'MALA' ? TEXTO_MALA : TEXTO_REGULAR
   const boton = satisfaccion === 'MALA' ? 'Contarnos qué pasó' : 'Contarnos'
