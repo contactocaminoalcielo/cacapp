@@ -95,7 +95,7 @@ function etapaDe(n, acuse, { hoy, atraso, activo }) {
   if (!activo) return { key: 'POR_ENVIAR', motivo: 'La automatización está APAGADA: no saldrá hasta encenderla' }
   return {
     key: 'POR_ENVIAR',
-    motivo: n.fecha_programada >= hoy ? 'Sale el próximo día hábil a las 10:00' : 'Sale en la próxima corrida (10:00, lunes a sábado)',
+    motivo: n.fecha_programada >= hoy ? 'Sale el próximo día hábil a las 10:00' : 'Sale en la próxima corrida (10:00, lunes a viernes)',
   }
 }
 
@@ -251,7 +251,7 @@ export default function PanelEncuesta({ rol, onAtender, recargarToken }) {
       )}
       {config?.arranque && (
         <p className="text-[11px] text-ink3 mb-4">
-          Entregas desde el {parseDate(config.arranque).toLocaleDateString('es-CO')} · sale al día siguiente a las 10:00 (lunes a sábado) · plazo de {config.atraso} días
+          Entregas desde el {parseDate(config.arranque).toLocaleDateString('es-CO')} · sale el siguiente día hábil a las 10:00 (lunes a viernes) · plazo de {config.atraso} días
         </p>
       )}
 

@@ -68,10 +68,10 @@
 25 7 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/mitad-compostaje >> /var/log/orbit-backend-cron.log 2>&1
 
 # Encuesta de satisfaccion post-entrega (migr. 206) — al dia siguiente de la
-# entrega, 10:00, lunes a sabado (el job tambien salta festivos). Sin
+# entrega, 10:00, lunes a viernes (el job tambien salta sabados y festivos). Sin
 # arranque_desde NO envia: hay 1384 POST_ENTREGA viejos que no se encuestan.
 # Idempotente: reclama la fila (PENDIENTE/ERROR -> ENVIANDO) antes de enviar.
-0 10 * * 1-6 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/encuesta-entrega >> /var/log/orbit-backend-cron.log 2>&1
+0 10 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/encuesta-entrega >> /var/log/orbit-backend-cron.log 2>&1
 
 # CRM comercial (migr. 180) — hitos de veterinarias (primer servicio, N servicios,
 # N en el mes, reactivacion). Solo mira hitos cruzados en los ultimos 7 dias.

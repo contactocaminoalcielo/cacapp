@@ -145,7 +145,7 @@ export const FLUJOS = [
     nombre: 'Encuesta de satisfacción post-entrega',
     descripcion: 'Al día siguiente de la entrega: «¿cómo calificarías tu experiencia?» con 😊 Bueno · 😐 Regular · ☹️ Malo. Bueno recibe el enlace de reseña en Google; Regular y Malo, un formulario y quedan por atender en NPS (Malo abre una PQR).',
     quien: 'A la familia',
-    cron: '10:00, lunes a sábado (sin festivos)',
+    cron: '10:00, lunes a viernes (sin festivos)',
     interruptor: { modulo: 'ENCUESTA_ENTREGA', clave: 'activo' },
     plantillaCfg: { modulo: 'ENCUESTA_ENTREGA', clave: 'plantilla' },
     sql: {

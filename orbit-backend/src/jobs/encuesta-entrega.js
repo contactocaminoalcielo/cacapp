@@ -4,8 +4,9 @@
 // pasar el servicio a ENTREGADO (`fecha_programada` = día de la entrega) y le
 // manda la encuesta a la familia al DÍA SIGUIENTE o después:
 //   · nunca el mismo día de la entrega (decisión de David, 2026-11-09);
-//   · ni domingo ni festivo: esos días el job no escribe y la encuesta sale el
-//     siguiente día que corra (el sábado sí se envía);
+//   · solo de LUNES A VIERNES y nunca en festivo (decisión de David,
+//     2026-11-13): sábado, domingo y festivo el job no escribe y la encuesta
+//     sale el siguiente día hábil (lo del viernes y el fin de semana, el lunes);
 //   · solo entregas desde `arranque_desde` y de hace como mucho
 //     `dias_max_atraso` días.
 //
@@ -29,9 +30,9 @@ export async function jobEncuestaEntrega({ dryRun = false } = {}) {
   }
 
   const { rows: [hoy] } = await pool.query(
-    `SELECT extract(isodow FROM public.fn_hoy_bogota())::int = 7
+    `SELECT extract(isodow FROM public.fn_hoy_bogota())::int IN (6, 7)
             OR EXISTS (SELECT 1 FROM public.festivos f WHERE f.fecha = public.fn_hoy_bogota()) AS descanso`)
-  if (hoy.descanso) { log(TAG, 'domingo o festivo — hoy no se escribe'); return { activo: true, descanso: true } }
+  if (hoy.descanso) { log(TAG, 'fin de semana o festivo — hoy no se escribe'); return { activo: true, descanso: true } }
 
   const tope   = Math.min(parseInt(config.max_envios_por_corrida) || 40, 200)
   const atraso = Math.min(parseInt(config.dias_max_atraso) || 7, 30)
