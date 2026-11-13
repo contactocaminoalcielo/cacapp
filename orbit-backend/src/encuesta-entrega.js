@@ -10,6 +10,12 @@
 //   Ni Regular ni Mala ven nunca el enlace de Google (decisión de David,
 //   2026-11-09, tomada sabiendo que la política de Google lo prohíbe).
 //
+// El COMENTARIO (migr. 207, 13-nov) llega por el formulario o escrito en el
+// chat (`capturarComentarioChat`, antes del agente). Cualquiera de los dos:
+// queda como PQR (Malo → QUEJA, Regular → SUGERENCIA; coordinación cambia el
+// tipo y pone el TEMA al atender en /nps), avisa al equipo y se le agradece a
+// la familia por WhatsApp (TEXTO_GRACIAS).
+//
 // 🔑 No hay tabla propia: se llena la fila POST_ENTREGA de `nps_seguimiento`
 // que crea el trigger `crear_nps_al_entregado` (037). /nps la sigue leyendo.
 //
@@ -239,7 +245,7 @@ export async function manejarRespuestaEncuesta({ phoneNumberId, contacto, tipo, 
   }
 
   if (satisfaccion === 'MALA' && !n.pqr_id) {
-    await abrirQueja({ npsId: n.id, servicioId: n.servicio_id, mascota: n.mascota, comentario: null })
+    await abrirQueja({ npsId: n.id, servicioId: n.servicio_id, mascota: n.mascota })
   }
 
   const cfg = await cargarConfigEncuesta()
@@ -293,35 +299,58 @@ async function enviarCta({ contacto, linea, cuerpo, boton, url }) {
 }
 
 // ─── PQR y avisos internos ──────────────────────────────────────────────────
-async function abrirQueja({ npsId, servicioId, mascota, comentario }) {
-  const descripcion = comentario
-    ? `Encuesta post-entrega: calificó MALO. La familia escribió: «${comentario}»`
-    : 'Encuesta post-entrega: la familia calificó su experiencia como MALA. Todavía no ha escrito qué pasó (se le envió el formulario).'
+// Todo comentario de la encuesta queda como PQR (migr. 207, decisión de David
+// 13-nov): Malo → QUEJA, Regular → SUGERENCIA. Coordinación puede cambiar el
+// tipo y ponerle TEMA al atenderlo en /nps.
+export const TIPO_PQR_DE = { REGULAR: 'SUGERENCIA', MALA: 'QUEJA' }
+export const TIPOS_PQR = ['PETICION', 'QUEJA', 'RECLAMO', 'SUGERENCIA', 'FELICITACION']
+export const TEMAS_PQR = ['RECORDATORIOS', 'TIEMPOS', 'ATENCION', 'MENSAJERO', 'COBRO', 'OTRO']
+
+const ETIQUETA = { BUENA: 'BUENO', REGULAR: 'REGULAR', MALA: 'MALO' }
+
+function descripcionPqr(satisfaccion, comentario, canal) {
+  if (!comentario) {
+    return `Encuesta post-entrega: la familia calificó su experiencia como ${ETIQUETA[satisfaccion] || satisfaccion}. `
+      + 'Todavía no ha escrito qué pasó (se le envió el formulario).'
+  }
+  const donde = canal === 'CHAT' ? 'por WhatsApp' : 'en el formulario'
+  return `Encuesta post-entrega: calificó ${ETIQUETA[satisfaccion] || satisfaccion}. La familia escribió ${donde}: «${comentario}»`
+}
+
+/**
+ * Abre la PQR de una encuesta (una sola por fila: candado FOR UPDATE).
+ * Devuelve el id, o null si ya tenía una o si falló.
+ */
+async function abrirPqr({ npsId, servicioId, tipo, descripcion }) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    // Candado por fila: dos toques casi simultáneos no abren dos quejas.
     const { rows: [fila] } = await client.query(
       `SELECT pqr_id FROM public.nps_seguimiento WHERE id = $1 FOR UPDATE`, [npsId])
-    if (!fila || fila.pqr_id) { await client.query('ROLLBACK'); return }
+    if (!fila || fila.pqr_id) { await client.query('ROLLBACK'); return null }
     const { rows: [p] } = await client.query(
       `INSERT INTO public.pqrs (servicio_id, tipo, canal, descripcion)
-       VALUES ($1, 'QUEJA', 'WHATSAPP', $2) RETURNING id`,
-      [servicioId, descripcion]
+       VALUES ($1, $2, 'WHATSAPP', $3) RETURNING id`,
+      [servicioId, tipo, descripcion]
     )
     await client.query(`UPDATE public.nps_seguimiento SET pqr_id = $2 WHERE id = $1`, [npsId, p.id])
     await client.query('COMMIT')
+    return p.id
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     log(TAG, 'no se pudo abrir la PQR', npsId, e.message)
-    return
+    return null
   } finally { client.release() }
+}
+
+/** Al tocar Malo, sin esperar el comentario: el caso no se pierde si nunca escribe. */
+async function abrirQueja({ npsId, servicioId, mascota }) {
+  const id = await abrirPqr({ npsId, servicioId, tipo: 'QUEJA', descripcion: descripcionPqr('MALA', null) })
+  if (!id) return
   await avisarEquipo({
     servicioId, tipo: 'ENCUESTA_MALA',
     titulo: `☹️ Experiencia MALA — ${mascota || 'servicio'}`,
-    mensaje: comentario
-      ? comentario.slice(0, 280)
-      : 'La familia calificó la entrega como Mala. Se abrió una PQR (queja) y se le pidió contar qué pasó.',
+    mensaje: 'La familia calificó la entrega como Mala. Se abrió una PQR (queja) y se le pidió contar qué pasó.',
   })
 }
 
@@ -359,6 +388,22 @@ export async function datosPortalOpinion({ codigo }) {
   } }
 }
 
+// ─── El comentario de la familia (formulario o chat) ────────────────────────
+// Lo que se le contesta por WhatsApp apenas deja su comentario (textos
+// aprobados por David el 13-nov).
+export const TEXTO_GRACIAS = {
+  REGULAR: '🤍 Gracias por tomarte el tiempo de contarnos. Ya recibimos tu comentario y nuestro equipo lo está revisando; '
+    + 'nos ayuda mucho a seguir mejorando la forma en que acompañamos a cada familia.',
+  MALA: '🤍 Gracias por contarnos lo que pasó. Ya registramos tu caso y nuestro equipo lo revisará con prioridad. '
+    + 'Una persona se comunicará contigo lo más pronto posible para darte respuesta.',
+}
+
+// Cuánto tiempo después de tocar Regular/Malo un texto en el chat cuenta como
+// su comentario, y cuánto después del primero se le suman los siguientes (la
+// gente escribe en varios mensajes seguidos). Constantes: no vienen del usuario.
+const VENTANA_COMENTARIO_CHAT = '48 hours'
+const VENTANA_CONTINUACION    = '15 minutes'
+
 export async function guardarComentarioOpinion({ codigo, payload = {} }) {
   if (!CODIGO_VALIDO.test(String(codigo || ''))) return { status: 404, body: { ok: false, error: 'no_encontrado' } }
   const comentario = String(payload.comentario || '').trim().slice(0, 3000)
@@ -368,10 +413,10 @@ export async function guardarComentarioOpinion({ codigo, payload = {} }) {
   // formulario no duplican la alerta ni la PQR).
   const { rows: [n] } = await pool.query(
     `UPDATE public.nps_seguimiento
-        SET comentario = $2, comentario_en = now(), seguimiento = 'PENDIENTE'
+        SET comentario = $2, comentario_en = now(), comentario_canal = 'FORMULARIO', seguimiento = 'PENDIENTE'
       WHERE codigo = $1 AND comentario_en IS NULL
         AND satisfaccion IN ('REGULAR', 'MALA')
-      RETURNING id, servicio_id, satisfaccion, pqr_id`,
+      RETURNING id, servicio_id, satisfaccion, pqr_id, whatsapp_destino`,
     [codigo, comentario]
   )
   if (!n) {
@@ -379,46 +424,175 @@ export async function guardarComentarioOpinion({ codigo, payload = {} }) {
     if (r.status !== 200) return r
     return { status: 409, body: { ok: false, error: r.body.ya_comento ? 'ya_comento' : 'sin_calificacion' } }
   }
-
-  const { rows: [d] } = await pool.query(
-    `SELECT m.nombre AS mascota FROM public.servicios s
-       JOIN public.mascotas m ON m.id_mascota = s.mascota_id WHERE s.id = $1`, [n.servicio_id])
-
-  if (n.satisfaccion === 'MALA' && !n.pqr_id) {
-    // Lo normal es que la PQR ya exista (se abre al tocar Malo); esto cubre
-    // que esa apertura haya fallado. abrirQueja ya avisa al equipo.
-    await abrirQueja({ npsId: n.id, servicioId: n.servicio_id, mascota: d?.mascota, comentario })
-  } else {
-    if (n.satisfaccion === 'MALA') {
-      await pool.query(
-        `UPDATE public.pqrs SET descripcion = $2 WHERE id = $1`,
-        [n.pqr_id, `Encuesta post-entrega: calificó MALO. La familia escribió: «${comentario}»`]
-      ).catch(e => log(TAG, 'no se pudo completar la PQR', n.pqr_id, e.message))
-    }
-    await avisarEquipo({
-      servicioId: n.servicio_id,
-      tipo: n.satisfaccion === 'MALA' ? 'ENCUESTA_MALA' : 'ENCUESTA_REGULAR',
-      titulo: `${n.satisfaccion === 'MALA' ? '☹️ Mala' : '😐 Regular'} — ${d?.mascota || 'servicio'}: la familia escribió`,
-      mensaje: comentario.slice(0, 280),
-    })
-  }
-  log(TAG, 'comentario recibido', n.id, n.satisfaccion)
+  await registrarComentario({ n, comentario, canal: 'FORMULARIO', contacto: null, linea: null })
   return { status: 200, body: { ok: true } }
 }
 
-// ─── Seguimiento interno (/nps) ─────────────────────────────────────────────
-export async function marcarAtendido({ npsId, nota = null, personalId }) {
-  if (!uuidOrNull(npsId)) return { status: 400, body: { ok: false, error: 'id_invalido' } }
-  const { rowCount } = await pool.query(
-    `UPDATE public.nps_seguimiento
-        SET seguimiento = 'ATENDIDO', seguimiento_nota = $2,
-            atendido_por = $3, atendido_en = now()
-      WHERE id = $1 AND seguimiento = 'PENDIENTE'`,
-    [npsId, String(nota || '').trim().slice(0, 2000) || null, uuidOrNull(personalId)]
+/**
+ * ¿Este texto del chat es el comentario de una encuesta? La familia calificó
+ * Regular o Malo y, en vez de abrir el formulario, escribió en WhatsApp. Si lo
+ * es, se guarda como su comentario, se le agradece y devuelve true → el
+ * webhook NO despierta al agente (decisión de David, 13-nov).
+ *
+ * Solo la línea de familias (de ahí sale la encuesta), solo texto y notas de
+ * voz (ya transcritas), y solo en las 48 h siguientes a la calificación. Lo que
+ * escriba en los 15 min siguientes al primer mensaje se le suma al comentario.
+ */
+export async function capturarComentarioChat({ phoneNumberId, contacto, tipo, mensajeId }) {
+  if (String(phoneNumberId || '') !== String(LINEA_WA_ID)) return false
+  if (!['text', 'audio'].includes(tipo)) return false
+  const ultimos10 = String(contacto || '').replace(/\D/g, '').slice(-10)
+  if (ultimos10.length < 10) return false
+
+  const { rows: [n] } = await pool.query(
+    `SELECT n.id, n.servicio_id, n.satisfaccion, n.pqr_id, n.whatsapp_destino,
+            n.comentario_en IS NOT NULL AS continuacion
+       FROM public.nps_seguimiento n
+      WHERE n.tipo = 'POST_ENTREGA' AND n.envio_estado = 'ENVIADO'
+        AND n.envio_en > now() - interval '30 days'
+        AND n.satisfaccion IN ('REGULAR', 'MALA')
+        AND right(regexp_replace(COALESCE(n.whatsapp_destino, ''), '\\D', '', 'g'), 10) = $1
+        AND ((n.comentario_en IS NULL AND n.respondido_en > now() - interval '${VENTANA_COMENTARIO_CHAT}')
+          OR (n.comentario_canal = 'CHAT' AND n.comentario_en > now() - interval '${VENTANA_CONTINUACION}'))
+      ORDER BY n.respondido_en DESC
+      LIMIT 1`,
+    [ultimos10]
   )
-  return rowCount
-    ? { status: 200, body: { ok: true } }
-    : { status: 409, body: { ok: false, error: 'No está pendiente de seguimiento' } }
+  if (!n) return false
+
+  // El texto se lee de la bandeja: para una nota de voz es la transcripción
+  // que el webhook ya dejó ahí («[nota de voz] …»).
+  const { rows: [msg] } = await pool.query(
+    `SELECT texto FROM public.whatsapp_mensajes WHERE id = $1`, [mensajeId])
+  const texto = String(msg?.texto || '').trim().slice(0, 3000)
+    || (tipo === 'audio' ? '[nota de voz sin transcribir]' : '')
+  if (!texto) return false
+
+  if (n.continuacion) {
+    const { rows: [u] } = await pool.query(
+      `UPDATE public.nps_seguimiento
+          SET comentario = left(COALESCE(comentario, '') || chr(10) || $2, 4000)
+        WHERE id = $1 RETURNING comentario`,
+      [n.id, texto]
+    )
+    if (n.pqr_id && u) {
+      await pool.query(`UPDATE public.pqrs SET descripcion = $2 WHERE id = $1`,
+        [n.pqr_id, descripcionPqr(n.satisfaccion, u.comentario, 'CHAT')])
+        .catch(e => log(TAG, 'no se pudo completar la PQR', n.pqr_id, e.message))
+    }
+    log(TAG, 'comentario por chat (continuación)', n.id)
+    return true
+  }
+
+  // Candado: solo el primero que llegue lo toma (dos mensajes casi juntos).
+  const { rows: [tomado] } = await pool.query(
+    `UPDATE public.nps_seguimiento
+        SET comentario = $2, comentario_en = now(), comentario_canal = 'CHAT', seguimiento = 'PENDIENTE'
+      WHERE id = $1 AND comentario_en IS NULL
+      RETURNING id, servicio_id, satisfaccion, pqr_id, whatsapp_destino`,
+    [n.id, texto]
+  )
+  if (!tomado) return true   // otro mensaje lo tomó en el mismo instante: ya se atendió
+  await registrarComentario({ n: tomado, comentario: texto, canal: 'CHAT', contacto, linea: phoneNumberId })
+  return true
+}
+
+/** PQR clasificada + aviso al equipo + agradecimiento. Nada de esto lanza. */
+async function registrarComentario({ n, comentario, canal, contacto, linea }) {
+  const { rows: [d] } = await pool.query(
+    `SELECT m.nombre AS mascota FROM public.servicios s
+       JOIN public.mascotas m ON m.id_mascota = s.mascota_id WHERE s.id = $1`, [n.servicio_id])
+  const descripcion = descripcionPqr(n.satisfaccion, comentario, canal)
+  if (n.pqr_id) {
+    await pool.query(`UPDATE public.pqrs SET descripcion = $2 WHERE id = $1`, [n.pqr_id, descripcion])
+      .catch(e => log(TAG, 'no se pudo completar la PQR', n.pqr_id, e.message))
+  } else {
+    await abrirPqr({ npsId: n.id, servicioId: n.servicio_id, tipo: TIPO_PQR_DE[n.satisfaccion] || 'SUGERENCIA', descripcion })
+  }
+  await avisarEquipo({
+    servicioId: n.servicio_id,
+    tipo: n.satisfaccion === 'MALA' ? 'ENCUESTA_MALA' : 'ENCUESTA_REGULAR',
+    titulo: `${n.satisfaccion === 'MALA' ? '☹️ Mala' : '😐 Regular'} — ${d?.mascota || 'servicio'}: la familia escribió`,
+    mensaje: comentario.slice(0, 280),
+  })
+  await enviarGracias({ n, contacto, linea })
+    .catch(e => log(TAG, 'no se pudo agradecer el comentario', n.id, e.message))
+  log(TAG, 'comentario recibido', n.id, n.satisfaccion, canal)
+}
+
+/**
+ * El agradecimiento por WhatsApp. Va como texto libre: la ventana de 24 h está
+ * abierta porque la familia acaba de tocar un botón. Si escribió por el
+ * formulario días después y la ventana ya cerró, Meta lo rechaza y solo queda
+ * el registro (el formulario ya le dio las gracias en pantalla).
+ */
+async function enviarGracias({ n, contacto, linea }) {
+  const texto = TEXTO_GRACIAS[n.satisfaccion]
+  if (!texto) return
+  const lin = linea || LINEA_WA_ID
+  let destino = contacto
+  if (!destino) {
+    // El número del cliente puede estar sin indicativo; la conversación de la
+    // bandeja tiene el número tal como lo manda Meta.
+    const ultimos10 = String(n.whatsapp_destino || '').replace(/\D/g, '').slice(-10)
+    if (ultimos10.length < 10) return
+    const { rows: [c] } = await pool.query(
+      `SELECT contacto FROM public.whatsapp_contactos
+        WHERE phone_number_id = $1 AND right(contacto, 10) = $2 LIMIT 1`, [lin, ultimos10])
+    destino = c?.contacto
+  }
+  if (!destino) return
+  const r = await enviarSobre({ contacto: destino, linea: lin, tipo: 'text', texto,
+    payload: { type: 'text', text: { body: texto } } })
+  if (!r?.body?.ok) throw new Error(r?.body?.error || 'envío rechazado')
+}
+
+// ─── Seguimiento interno (/nps) ─────────────────────────────────────────────
+/**
+ * Cierra un Regular/Malo. Con `tipo` y/o `tema` clasifica su PQR (y la crea si
+ * no la tenía: un Regular que nunca escribió y coordinación llamó).
+ */
+export async function marcarAtendido({ npsId, nota = null, personalId, tipo = null, tema = null }) {
+  if (!uuidOrNull(npsId)) return { status: 400, body: { ok: false, error: 'id_invalido' } }
+  if (tipo && !TIPOS_PQR.includes(tipo)) return { status: 400, body: { ok: false, error: 'tipo_invalido' } }
+  if (tema && !TEMAS_PQR.includes(tema)) return { status: 400, body: { ok: false, error: 'tema_invalido' } }
+  const notaLimpia = String(nota || '').trim().slice(0, 2000) || null
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: [n] } = await client.query(
+      `UPDATE public.nps_seguimiento
+          SET seguimiento = 'ATENDIDO', seguimiento_nota = $2,
+              atendido_por = $3, atendido_en = now()
+        WHERE id = $1 AND seguimiento = 'PENDIENTE'
+        RETURNING id, servicio_id, satisfaccion, pqr_id, comentario, comentario_canal`,
+      [npsId, notaLimpia, uuidOrNull(personalId)]
+    )
+    if (!n) {
+      await client.query('ROLLBACK')
+      return { status: 409, body: { ok: false, error: 'No está pendiente de seguimiento' } }
+    }
+    if (n.pqr_id && (tipo || tema)) {
+      await client.query(
+        `UPDATE public.pqrs SET tipo = COALESCE($2::text, tipo), tema = COALESCE($3::text, tema) WHERE id = $1`,
+        [n.pqr_id, tipo, tema])
+    } else if (!n.pqr_id && tipo) {
+      const descripcion = n.comentario
+        ? descripcionPqr(n.satisfaccion, n.comentario, n.comentario_canal)
+        : `${descripcionPqr(n.satisfaccion, null)}${notaLimpia ? ` Seguimiento: ${notaLimpia}` : ''}`
+      const { rows: [p] } = await client.query(
+        `INSERT INTO public.pqrs (servicio_id, tipo, tema, canal, descripcion, registrado_por)
+         VALUES ($1, $2, $3, 'WHATSAPP', $4, $5) RETURNING id`,
+        [n.servicio_id, tipo, tema, descripcion, uuidOrNull(personalId)])
+      await client.query(`UPDATE public.nps_seguimiento SET pqr_id = $2 WHERE id = $1`, [n.id, p.id])
+    }
+    await client.query('COMMIT')
+    return { status: 200, body: { ok: true } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
 }
 
 // ─── Utilidades ─────────────────────────────────────────────────────────────

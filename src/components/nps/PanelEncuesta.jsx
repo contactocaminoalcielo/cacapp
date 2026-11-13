@@ -26,6 +26,7 @@ import { ESTADO_ENVIO } from '@/lib/whatsappInbox'
 import { today, waLink, parseDate, fmtDateTime } from '@/lib/utils'
 import { MessageCircle, RefreshCw, RotateCcw, Search } from 'lucide-react'
 import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
+import { metaTipoPqr, labelTemaPqr } from '@/components/servicio/PqrServicio'
 
 export const SATISFACCION = {
   BUENA:   { label: '😊 Bueno',   cls: 'bg-green-light text-primary-dark border-green-mid' },
@@ -150,7 +151,7 @@ export default function PanelEncuesta({ rol, onAtender, recargarToken }) {
       // Solo POST_ENTREGA desde el arranque: son decenas por semana, pero se
       // usa dbTodo igual — el corte mudo de 1000 filas ya nos mordió en /nps.
       const data = await dbTodo(() => db.from('nps_seguimiento')
-        .select('id, servicio_id, fecha_programada, estado, satisfaccion, respondido_en, envio_estado, envio_en, envio_intentos, envio_error, whatsapp_destino, comentario, comentario_en, seguimiento, seguimiento_nota, atendido_en, pqr_id, servicios!inner(estado, aliados:aliado_origen_id(vip), mascotas(nombre, clientes(nombre, apellido, whatsapp)), planes(nombre))')
+        .select('id, servicio_id, fecha_programada, estado, satisfaccion, respondido_en, envio_estado, envio_en, envio_intentos, envio_error, whatsapp_destino, comentario, comentario_en, comentario_canal, seguimiento, seguimiento_nota, atendido_en, pqr_id, pqr:pqr_id(tipo, tema), servicios!inner(estado, aliados:aliado_origen_id(vip), mascotas(nombre, clientes(nombre, apellido, whatsapp)), planes(nombre))')
         .eq('tipo', 'POST_ENTREGA')
         .gte('fecha_programada', c.arranque)
         .order('fecha_programada', { ascending: false })
@@ -358,9 +359,10 @@ export default function PanelEncuesta({ rol, onAtender, recargarToken }) {
                       <>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${s.cls}`}>{s.label}</span>
                         {n.respondido_en && <span className="ml-1 text-[10px] text-ink3">{fmtDateTime(n.respondido_en)}</span>}
-                        {n.pqr_id && <span className="ml-1 text-[10px] font-bold text-[#C03030]">· PQR</span>}
                         {n.comentario
-                          ? <p className="text-[11px] text-ink2 mt-1 line-clamp-3" title={n.comentario}>«{n.comentario}»</p>
+                          ? <p className="text-[11px] text-ink2 mt-1 line-clamp-3 whitespace-pre-wrap" title={n.comentario}>
+                              «{n.comentario}»{n.comentario_canal === 'CHAT' && <span className="text-[10px] text-ink3"> · por WhatsApp</span>}
+                            </p>
                           : n.satisfaccion !== 'BUENA' && <p className="text-[10px] text-ink3 mt-1">Aún no escribió qué pasó</p>}
                       </>
                     ) : n.envio_estado === 'ENVIADO' ? (
@@ -368,6 +370,15 @@ export default function PanelEncuesta({ rol, onAtender, recargarToken }) {
                     ) : <span className="text-ink3">-</span>}
                   </td>
                   <td className="px-3 py-2.5 max-w-[220px]">
+                    {n.pqr && (
+                      <div className="flex flex-wrap items-center gap-1 mb-1">
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                          style={{ background: metaTipoPqr(n.pqr.tipo).bg, color: metaTipoPqr(n.pqr.tipo).color }}>
+                          {metaTipoPqr(n.pqr.tipo).label}
+                        </span>
+                        {n.pqr.tema && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600">{labelTemaPqr(n.pqr.tema)}</span>}
+                      </div>
+                    )}
                     {n.seguimiento === 'PENDIENTE' && <span className="text-[10px] font-bold text-[#9A5500]">Por atender</span>}
                     {n.seguimiento === 'ATENDIDO' && (
                       <>

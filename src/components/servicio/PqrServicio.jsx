@@ -23,11 +23,23 @@ export const PQR_TIPOS = [
 export const PQR_CANALES = ['WHATSAPP', 'LLAMADA', 'PRESENCIAL', 'CORREO', 'REDES', 'OTRO']
 export const metaTipoPqr = t => PQR_TIPOS.find(x => x.key === t) || PQR_TIPOS[1]
 
+// De qué trata (migr. 207): para saber qué falla más. NULL = sin clasificar.
+export const PQR_TEMAS = [
+  { key: 'RECORDATORIOS', label: 'Recordatorios' },
+  { key: 'TIEMPOS',       label: 'Tiempos' },
+  { key: 'ATENCION',      label: 'Atención' },
+  { key: 'MENSAJERO',     label: 'Mensajero / entrega' },
+  { key: 'COBRO',         label: 'Cobro' },
+  { key: 'OTRO',          label: 'Otro' },
+]
+export const labelTemaPqr = t => PQR_TEMAS.find(x => x.key === t)?.label || null
+
 export default function PqrServicio({ servicioId, onCambio }) {
   const [lista, setLista]     = useState(null)   // null = cargando
   const [abierto, setAbierto] = useState(false)  // formulario desplegado
   const [tipo, setTipo]       = useState('QUEJA')
   const [canal, setCanal]     = useState('LLAMADA')
+  const [tema, setTema]       = useState('')
   const [texto, setTexto]     = useState('')
   const [guardando, setGuardando] = useState(false)
   const [error, setError]     = useState('')
@@ -46,7 +58,7 @@ export default function PqrServicio({ servicioId, onCambio }) {
     let vivo = true
     setLista(null)
     db.from('pqrs')
-      .select('id, tipo, canal, descripcion, created_at, personal:registrado_por(nombre, apellido)')
+      .select('id, tipo, tema, canal, descripcion, created_at, personal:registrado_por(nombre, apellido)')
       .eq('servicio_id', servicioId)
       .order('created_at', { ascending: false })
       .then(({ data, error: e }) => { if (vivo) setLista(e ? [] : (data || [])) })
@@ -61,13 +73,14 @@ export default function PqrServicio({ servicioId, onCambio }) {
       const { data, error: e } = await db.from('pqrs').insert({
         servicio_id:    servicioId,
         tipo,
+        tema:           tema || null,
         canal:          canal || null,
         descripcion,
         registrado_por: personalData?.id || null,
-      }).select('id, tipo, canal, descripcion, created_at, personal:registrado_por(nombre, apellido)').single()
+      }).select('id, tipo, tema, canal, descripcion, created_at, personal:registrado_por(nombre, apellido)').single()
       if (e) throw e
       setLista(prev => [data, ...(prev || [])])
-      setTexto(''); setAbierto(false)
+      setTexto(''); setTema(''); setAbierto(false)
       onCambio?.()
     } catch (e) {
       setError(parsearErrorDB(e))
@@ -123,6 +136,14 @@ export default function PqrServicio({ servicioId, onCambio }) {
               <option value="">Sin especificar</option>
             </select>
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Tema</span>
+            <select value={tema} onChange={e => setTema(e.target.value)}
+              className="flex-1 text-[12px] border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-rose-200">
+              <option value="">Sin clasificar</option>
+              {PQR_TEMAS.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </div>
           <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={3}
             placeholder="Qué dijeron, con sus palabras…"
             className="w-full text-[12px] text-gray-700 bg-white border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-rose-200" />
@@ -153,6 +174,9 @@ export default function PqrServicio({ servicioId, onCambio }) {
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: meta.bg, color: meta.color }}>
                 {meta.label}
               </span>
+              {p.tema && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600">{labelTemaPqr(p.tema)}</span>
+              )}
               <span className="text-[10px] text-gray-400">
                 {cuando(p.created_at)}
                 {p.canal ? ` · ${p.canal.charAt(0) + p.canal.slice(1).toLowerCase()}` : ''}

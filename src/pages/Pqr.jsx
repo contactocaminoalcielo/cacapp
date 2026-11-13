@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { TableWrap, Table, Th, Td, Tr } from '@/components/ui/table'
 import FichaServicio from '@/components/servicio/FichaServicio'
-import { PQR_TIPOS, PQR_CANALES, metaTipoPqr } from '@/components/servicio/PqrServicio'
+import { PQR_TIPOS, PQR_CANALES, PQR_TEMAS, metaTipoPqr, labelTemaPqr } from '@/components/servicio/PqrServicio'
 import { db, dbTodo } from '@/lib/supabase'
 import { petEmoji } from '@/lib/utils'
 import { Search, RefreshCw, MessageSquare } from 'lucide-react'
@@ -27,6 +27,7 @@ export default function Pqr() {
   const [error, setError]     = useState(null)
   const [tipo, setTipo]       = useState('')
   const [canal, setCanal]     = useState('')
+  const [tema, setTema]       = useState('')     // '' todos · 'SIN' sin clasificar · clave
   const [desde, setDesde]     = useState('')
   const [hasta, setHasta]     = useState('')
   const [busqueda, setBusqueda] = useState('')
@@ -40,7 +41,7 @@ export default function Pqr() {
       // `dbTodo` pagina: el tope mudo de 1000 filas recortaría la bandeja el día
       // que haya más, y nadie cuenta las filas de una lista antes de fiarse.
       const data = await dbTodo(() => db.from('pqrs')
-        .select('id, servicio_id, tipo, canal, descripcion, created_at, ' +
+        .select('id, servicio_id, tipo, tema, canal, descripcion, created_at, ' +
                 'personal:registrado_por(nombre, apellido), ' +
                 'servicios!inner(fecha_ingreso, planes(nombre), mascotas(nombre, especies(nombre), clientes(nombre, apellido)))')
         .order('created_at', { ascending: false })
@@ -63,6 +64,7 @@ export default function Pqr() {
   const filtradas = filas.filter(p => {
     if (tipo && p.tipo !== tipo) return false
     if (canal && (p.canal || '') !== canal) return false
+    if (tema === 'SIN' ? p.tema : (tema && p.tema !== tema)) return false
     const dia = diaLocal(p.created_at)
     if (desde && dia < desde) return false
     if (hasta && dia > hasta) return false
@@ -79,7 +81,13 @@ export default function Pqr() {
   const cuenta = k => filas.filter(p => p.tipo === k).length
   const fmtFecha = ts => new Date(ts).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })
   const bonito = s => s ? s.charAt(0) + s.slice(1).toLowerCase() : '—'
-  const hayFiltros = tipo || canal || desde || hasta || busqueda
+  const hayFiltros = tipo || canal || tema || desde || hasta || busqueda
+  // ¿Qué falla más? Conteo por tema (migr. 207) sobre lo que dejan los demás filtros.
+  const porTema = PQR_TEMAS.map(t => ({ ...t, n: filas.filter(p => p.tema === t.key).length }))
+  const sinTema = filas.filter(p => !p.tema).length
+  // Las que abre la encuesta post-entrega no tienen quién las registró.
+  const registro = p => p.personal ? `${p.personal.nombre || ''} ${p.personal.apellido || ''}`.trim()
+    : (p.descripcion || '').startsWith('Encuesta post-entrega') ? 'Encuesta automática' : '—'
 
   if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando PQR...</span></div>
   if (error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
@@ -97,6 +105,21 @@ export default function Pqr() {
           <StatCard label="Reclamos" value={cuenta('RECLAMO')} valueColor="#9F1239" />
           <StatCard label="Felicitaciones" value={cuenta('FELICITACION')} valueColor="#15803D" />
           <StatCard label="Total registradas" value={filas.length} />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 mb-5">
+          <span className="text-[11px] font-bold text-ink3 mr-1">¿De qué tratan?</span>
+          {porTema.map(t => (
+            <button key={t.key} onClick={() => setTema(tema === t.key ? '' : t.key)}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-full border transition-all ${tema === t.key ? 'bg-primary-dark text-white border-primary-dark' : 'bg-white text-ink2 hover:bg-surface2'}`}
+              style={tema === t.key ? undefined : { borderColor: 'rgba(30,80,40,0.15)' }}>
+              {t.label} ({t.n})
+            </button>
+          ))}
+          <button onClick={() => setTema(tema === 'SIN' ? '' : 'SIN')}
+            className={`text-[11px] font-bold px-2.5 py-1 rounded-full border transition-all ${tema === 'SIN' ? 'bg-[#9A5500] text-white border-[#9A5500]' : 'bg-[#FFF8E6] text-[#9A5500] border-[#FFD980]'}`}>
+            Sin clasificar ({sinTema})
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 mb-5">
@@ -121,7 +144,7 @@ export default function Pqr() {
             <Input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="w-36" />
           </div>
           {hayFiltros && (
-            <button onClick={() => { setTipo(''); setCanal(''); setDesde(''); setHasta(''); setBusqueda('') }}
+            <button onClick={() => { setTipo(''); setCanal(''); setTema(''); setDesde(''); setHasta(''); setBusqueda('') }}
               className="text-[11px] font-semibold text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors">
               × Limpiar filtros
             </button>
@@ -176,13 +199,14 @@ export default function Pqr() {
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: meta.bg, color: meta.color }}>
                           {meta.label}
                         </span>
+                        {p.tema && <div className="text-[10px] text-ink3 mt-1">{labelTemaPqr(p.tema)}</div>}
                       </Td>
                       <Td className="text-ink3">{bonito(p.canal)}</Td>
                       <Td>
                         <div className="text-[12px] text-ink max-w-md whitespace-pre-wrap break-words line-clamp-3">{p.descripcion}</div>
                       </Td>
                       <Td className="text-ink3 whitespace-nowrap">
-                        {p.personal ? `${p.personal.nombre || ''} ${p.personal.apellido || ''}`.trim() : '—'}
+                        {registro(p)}
                       </Td>
                     </Tr>
                   )

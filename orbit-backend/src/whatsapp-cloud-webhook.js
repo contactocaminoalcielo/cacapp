@@ -18,7 +18,7 @@ import crypto from 'node:crypto'
 import { pool, log } from './db.js'
 import { responderSiAplica, mantenerEscribiendo } from './agente-wa.js'
 import { guardarMedia, transcribir, esVoz } from './whatsapp-media.js'
-import { manejarRespuestaEncuesta } from './encuesta-entrega.js'
+import { manejarRespuestaEncuesta, capturarComentarioChat } from './encuesta-entrega.js'
 
 const MOD = '[wa-webhook]'
 
@@ -422,6 +422,21 @@ async function normalizar(ev) {
           })) return
         } catch (e) {
           log(MOD, 'encuesta: no se pudo procesar el botón —', e.message)
+        }
+      }
+
+      // ── Comentario de la encuesta escrito en el chat (migración 207) ──
+      // Calificó Regular/Malo y en vez de abrir el formulario escribió aquí:
+      // ese texto es su comentario. Se guarda, abre/completa su PQR, se le
+      // agradece y el agente NO contesta (decisión de David, 13-nov). Va
+      // después de bajar el archivo: una nota de voz llega ya transcrita.
+      if (!ev.boton && fila?.id) {
+        try {
+          if (await capturarComentarioChat({
+            phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo, mensajeId: fila.id,
+          })) return
+        } catch (e) {
+          log(MOD, 'encuesta: no se pudo guardar el comentario del chat —', e.message)
         }
       }
 

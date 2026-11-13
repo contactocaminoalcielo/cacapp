@@ -1395,7 +1395,10 @@ app.post('/portal/opinion/:codigo', async (req, res) => {
 // Coordinación cierra el seguimiento de un Regular / Malo desde /nps.
 app.post('/nps/:id/atender', requireAuth, requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR'), async (req, res) => {
   try {
-    const r = await marcarAtendido({ npsId: req.params.id, nota: req.body?.nota, personalId: req.personal.id })
+    const r = await marcarAtendido({
+      npsId: req.params.id, nota: req.body?.nota, personalId: req.personal.id,
+      tipo: req.body?.tipo || null, tema: req.body?.tema || null,
+    })
     res.status(r.status).json(r.body)
   } catch (e) {
     errorInterno(res, 'nps/atender', e)

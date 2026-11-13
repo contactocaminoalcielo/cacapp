@@ -14,6 +14,10 @@ import { MessageCircle, RefreshCw } from 'lucide-react'
 import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
 import { useAuth } from '@/contexts/AuthContext'
 import PanelEncuesta from '@/components/nps/PanelEncuesta'
+import { PQR_TIPOS, PQR_TEMAS } from '@/components/servicio/PqrServicio'
+
+// Tipo de PQR con el que llega cada calificación (migr. 207); se puede cambiar al atender.
+const TIPO_PQR_DE = { REGULAR: 'SUGERENCIA', MALA: 'QUEJA' }
 
 // Dos vistas (2026-11-13): la ENCUESTA automática post-entrega (migr. 206), que
 // es lo que hoy se opera, y el seguimiento MANUAL de siempre (3 y 6 meses y las
@@ -71,6 +75,12 @@ export default function Nps() {
   const [saving, setSaving] = useState(false)
   const [atender, setAtender] = useState(null)      // fila Regular/Malo que se está cerrando
   const [nota, setNota] = useState('')
+  const [clasif, setClasif] = useState({ tipo: '', tema: '' })   // PQRSF + tema al atender (migr. 207)
+
+  function abrirAtender(n) {
+    setAtender(n); setNota('')
+    setClasif({ tipo: n.pqr?.tipo || TIPO_PQR_DE[n.satisfaccion] || 'SUGERENCIA', tema: n.pqr?.tema || '' })
+  }
 
   // El histórico manual son ~4.000 filas: solo se bajan al abrir esa vista.
   const [cargado, setCargado] = useState(false)
@@ -79,7 +89,7 @@ export default function Nps() {
   async function cerrarSeguimiento() {
     setSaving(true)
     try {
-      await orbitApi(`/nps/${atender.id}/atender`, { method: 'POST', body: { nota } })
+      await orbitApi(`/nps/${atender.id}/atender`, { method: 'POST', body: { nota, tipo: clasif.tipo, tema: clasif.tema } })
       setAtender(null); setNota('')
       setToken(t => t + 1)
       if (cargado) await cargar()
@@ -174,7 +184,7 @@ export default function Nps() {
 
         {vista === 'ENCUESTA' ? (
           <PanelEncuesta rol={personalData?.rol} recargarToken={token}
-            onAtender={n => { setAtender(n); setNota('') }} />
+            onAtender={abrirAtender} />
         ) : (<>
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
@@ -268,7 +278,7 @@ export default function Nps() {
                     <Td>
                       <div className="flex gap-1.5">
                         {s.seguimiento === 'PENDIENTE' && (
-                          <Button size="sm" onClick={() => { setAtender(s); setNota('') }}>
+                          <Button size="sm" onClick={() => { abrirAtender(s) }}>
                             Atender
                           </Button>
                         )}
@@ -306,7 +316,10 @@ export default function Nps() {
           footer={
             <>
               <Button variant="secondary" onClick={() => setAtender(null)}>Cancelar</Button>
-              <Button onClick={cerrarSeguimiento} disabled={saving}>{saving ? 'Guardando...' : 'Marcar atendido'}</Button>
+              <Button onClick={cerrarSeguimiento} disabled={saving || !clasif.tema}
+                title={!clasif.tema ? 'Elige el tema para cerrarlo' : undefined}>
+                {saving ? 'Guardando...' : 'Marcar atendido'}
+              </Button>
             </>
           }>
           <div className="space-y-4">
@@ -315,10 +328,41 @@ export default function Nps() {
                 {SATISFACCION[atender.satisfaccion]?.label || atender.satisfaccion}
               </span>
               <span className="ml-2 text-[12px] font-semibold text-ink">{atender.servicios?.mascotas?.nombre}</span>
-              {atender.pqr_id && <span className="ml-2 text-[11px] text-[#C03030] font-bold">PQR (queja) abierta en la ficha del servicio</span>}
+              {atender.comentario_canal === 'CHAT' && <span className="ml-2 text-[11px] text-ink3">escribió por WhatsApp</span>}
             </div>
             <div className="text-[13px] text-ink2 bg-surface2 rounded-lg p-3 whitespace-pre-wrap">
               {atender.comentario ? `«${atender.comentario}»` : 'La familia todavía no ha escrito qué pasó.'}
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1.5">¿Qué es? (PQR)</label>
+              <div className="flex flex-wrap gap-1">
+                {PQR_TIPOS.map(t => {
+                  const activo = clasif.tipo === t.key
+                  return (
+                    <button key={t.key} type="button" onClick={() => setClasif(c => ({ ...c, tipo: t.key }))}
+                      className={`text-[11px] font-bold px-2 py-1 rounded-lg border transition-all ${activo ? 'shadow-sm' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                      style={{ background: t.bg, color: t.color, borderColor: activo ? t.color : 'transparent' }}>
+                      {t.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-ink3 block mb-1.5">¿De qué trata?</label>
+              <div className="flex flex-wrap gap-1">
+                {PQR_TEMAS.map(t => {
+                  const activo = clasif.tema === t.key
+                  return (
+                    <button key={t.key} type="button" onClick={() => setClasif(c => ({ ...c, tema: t.key }))}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-full border transition-all ${activo ? 'bg-primary-dark text-white border-primary-dark' : 'bg-white text-ink2 hover:bg-surface2'}`}
+                      style={activo ? undefined : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                      {t.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {!clasif.tema && <p className="text-[10px] text-ink3 mt-1">Elige el tema para poder cerrarlo: así se ve qué falla más en /pqr.</p>}
             </div>
             <div>
               <label className="text-[11px] font-bold text-ink3 block mb-1">¿Qué se hizo? (opcional)</label>
