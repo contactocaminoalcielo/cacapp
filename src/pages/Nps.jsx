@@ -12,6 +12,17 @@ import { FECHA_CORTE } from '@/lib/constants'
 import { petEmoji, today, waLink, parseDate } from '@/lib/utils'
 import { MessageCircle, RefreshCw } from 'lucide-react'
 import { esAliadoVip, VipStar } from '@/components/servicio/VipAliado'
+import { useAuth } from '@/contexts/AuthContext'
+import PanelEncuesta from '@/components/nps/PanelEncuesta'
+
+// Dos vistas (2026-11-13): la ENCUESTA automática post-entrega (migr. 206), que
+// es lo que hoy se opera, y el seguimiento MANUAL de siempre (3 y 6 meses y las
+// POST_ENTREGA viejas). Antes todo iba en una sola tabla y las encuestas
+// enviadas quedaban enterradas bajo ~1.400 pendientes viejos.
+const VISTAS = [
+  { key: 'ENCUESTA', label: 'Encuesta post-entrega' },
+  { key: 'MANUAL', label: 'Seguimiento manual (3 y 6 meses)' },
+]
 
 const FILTROS = [
   { key: 'todos', label: 'Todos' },
@@ -48,6 +59,9 @@ const fechaCalif = s => s.respondido_en ? new Date(s.respondido_en)
   : s.fecha_realizada ? parseDate(s.fecha_realizada) : null
 
 export default function Nps() {
+  const { personalData } = useAuth()
+  const [vista, setVista] = useState('ENCUESTA')
+  const [token, setToken] = useState(0)          // recarga el panel de la encuesta
   const [seguimientos, setSeguimientos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -58,14 +72,17 @@ export default function Nps() {
   const [atender, setAtender] = useState(null)      // fila Regular/Malo que se está cerrando
   const [nota, setNota] = useState('')
 
-  useEffect(() => { cargar() }, [])
+  // El histórico manual son ~4.000 filas: solo se bajan al abrir esa vista.
+  const [cargado, setCargado] = useState(false)
+  useEffect(() => { if (vista === 'MANUAL' && !cargado) { setCargado(true); cargar() } }, [vista])   // eslint-disable-line react-hooks/exhaustive-deps
 
   async function cerrarSeguimiento() {
     setSaving(true)
     try {
       await orbitApi(`/nps/${atender.id}/atender`, { method: 'POST', body: { nota } })
       setAtender(null); setNota('')
-      await cargar()
+      setToken(t => t + 1)
+      if (cargado) await cargar()
     } catch (e) {
       alert('Error: ' + e.message)
     } finally {
@@ -129,8 +146,8 @@ export default function Nps() {
   const conteo = Object.fromEntries(CALIFICACIONES.map(k => [k, seguimientos.filter(s => califDe(s) === k).length]))
   const calificados = CALIFICACIONES.reduce((a, k) => a + conteo[k], 0)
 
-  if (loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
-  if (error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
+  if (vista === 'MANUAL' && loading) return <div className="flex items-center justify-center h-64 gap-3"><div className="spinner" /><span className="text-sm text-ink3">Cargando...</span></div>
+  if (vista === 'MANUAL' && error) return <div className="p-7"><div className="bg-danger-light text-danger border border-danger/30 rounded-lg p-3 text-sm">Error: {error}</div></div>
 
   const pctBueno = calificados > 0 ? `${Math.round(conteo.BUENA * 100 / calificados)}%` : '-'
   const presequialesAceptados = seguimientos.filter(s => s.oferta_presequial_aceptada).length
@@ -139,11 +156,26 @@ export default function Nps() {
   return (
     <div>
       <Topbar actions={
-        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2" onClick={cargar}>
+        <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
+          onClick={() => { setToken(t => t + 1); if (cargado) cargar() }}>
           <RefreshCw size={15} />
         </button>
       } />
       <div className="p-7">
+        <div className="flex gap-1 bg-surface2 rounded-[10px] p-1 border mb-6 w-fit max-w-full overflow-x-auto" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
+          {VISTAS.map(v => (
+            <button key={v.key}
+              className={`px-4 py-2 rounded-lg text-[13px] font-bold transition-all whitespace-nowrap ${vista === v.key ? 'bg-primary-dark text-white' : 'text-ink2 hover:bg-surface3'}`}
+              onClick={() => setVista(v.key)}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+
+        {vista === 'ENCUESTA' ? (
+          <PanelEncuesta rol={personalData?.rol} recargarToken={token}
+            onAtender={n => { setAtender(n); setNota('') }} />
+        ) : (<>
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-7">
           <StatCard label="Pendientes hoy" value={pendientesHoy} valueColor="#C03030" />
@@ -264,6 +296,7 @@ export default function Nps() {
             </tbody>
           </Table>
         </TableWrap>
+        </>)}
       </div>
 
       {/* Modal cerrar seguimiento de un Regular / Malo (migr. 206) */}
