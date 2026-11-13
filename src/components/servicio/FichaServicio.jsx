@@ -375,7 +375,13 @@ export default function FichaServicio({ servicioId, onClose }) {
                     </div>
                   </div>
                 )}
-                {!e.restos_calcicos && e.restos_respuesta === 'NO' && (
+                {!e.restos_calcicos && e.restos_cancelado_en && (
+                  <div className="my-2 text-[11px] font-semibold text-gray-500">
+                    <span className="line-through">Restos cálcicos</span> · CANCELADOS el {fmtDateTime(e.restos_cancelado_en)} (la familia se retractó)
+                    {e.restos_cancelado_motivo && <div className="text-[10.5px] font-normal">Motivo: {e.restos_cancelado_motivo}</div>}
+                  </div>
+                )}
+                {!e.restos_calcicos && !e.restos_cancelado_en && e.restos_respuesta === 'NO' && (
                   <div className="my-2 text-[11px] text-ink3">Restos cálcicos: la familia dijo que no.</div>
                 )}
                 <Dato label="Cumplió el compostaje">{e.fecha_cumplida ? fmtD(e.fecha_cumplida) : (e.estado === 'RESERVADA' ? 'En curso' : null)}</Dato>

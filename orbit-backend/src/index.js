@@ -25,7 +25,7 @@ import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
 import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta, responderRestosVisita,
-  cenizariosRestos, marcarCenizarioRestos } from './plantas.js'
+  cenizariosRestos, marcarCenizarioRestos, cancelarRestos } from './plantas.js'
 import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, enviarEvidencia,
          marcarEnviadaManual, descartarEvidencia, puedeGestionarEvidencias } from './evidencia-inicio.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
@@ -1720,6 +1720,17 @@ app.post('/produccion/restos-calcicos/:id/listo', requireAuth, rolCenizarios, as
     res.status(r.status).json(r.body)
   } catch (e) {
     log('[produccion/restos-calcicos/listo] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+// La familia se retractó de los restos cálcicos (migración 208): coordinación
+// los cancela desde el Kanban y se resta su valor del servicio.
+app.post('/servicios/:id/restos-calcicos/cancelar', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await cancelarRestos({ servicioId: req.params.id, motivo: req.body?.motivo, personalId: req.personal?.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[servicios/restos-calcicos/cancelar] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

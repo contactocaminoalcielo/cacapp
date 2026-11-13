@@ -115,7 +115,7 @@ export async function borrarPlanta(id) {
 /** Devuelve `{ eleccion, adicionales }` o null si el servicio no tiene aviso. */
 export async function eleccionDeServicio(servicioId) {
   const { data, error } = await db.from('planta_elecciones')
-    .select('id, estado, codigo, enlace, fecha_cumplida, fecha_envio, fecha_eleccion, planta_nombre, error, restos_calcicos, restos_calcicos_valor, restos_respuesta, restos_foto_url, restos_cenizario_listo_en')
+    .select('id, estado, codigo, enlace, fecha_cumplida, fecha_envio, fecha_eleccion, planta_nombre, error, restos_calcicos, restos_calcicos_valor, restos_respuesta, restos_foto_url, restos_cenizario_listo_en, restos_cancelado_en, restos_cancelado_motivo')
     .eq('servicio_id', servicioId)
     .maybeSingle()
   if (error || !data) return null

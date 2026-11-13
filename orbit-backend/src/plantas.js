@@ -727,6 +727,7 @@ async function cobrarRestos(client, { eleccionId, servicioId, mascota, origen })
         SET restos_calcicos = true, restos_calcicos_valor = $2, restos_calcicos_en = now(),
             restos_respuesta = 'SI', restos_respuesta_en = now()
       WHERE id = $1 AND restos_calcicos = false
+        AND restos_cancelado_en IS NULL   -- se retractó (208): una pestaña vieja no los vuelve a cobrar
       RETURNING id`,
     [eleccionId, precio]
   )
@@ -925,4 +926,99 @@ export async function marcarCenizarioRestos({ eleccionId, listo, personalId }) {
   )
   if (!rows[0]) return { status: 409, body: { ok: false, error: listo ? 'Sin la foto no se puede marcar listo' : 'No encontrado' } }
   return { status: 200, body: { ok: true } }
+}
+
+// ─── Cancelar los restos cálcicos (migración 208) ───────────────────────────
+/**
+ * La familia se retractó. Deshace lo que hizo `cobrarRestos`, en una sola
+ * transacción: quita la marca (Tenjo, Producción, certificado y recibo dejan de
+ * contarlos), resta el valor del servicio y recalcula `estado_pago`, descarta
+ * la alerta y avisa a Tenjo y Producción para que no los separen ni hagan el
+ * cenizario. La foto, el valor y la fecha de compra se conservan como historia.
+ * Si ya estaba pagado, queda saldo a favor: se devuelve en `saldo_a_favor`.
+ */
+export async function cancelarRestos({ servicioId, motivo, personalId }) {
+  const id = uuidOrNull(servicioId)
+  if (!id) return { status: 400, body: { ok: false, error: 'Servicio inválido' } }
+  const motivoLimpio = String(motivo || '').trim().slice(0, 500)
+  if (motivoLimpio.length < 3) return { status: 422, body: { ok: false, error: 'Escribe el motivo' } }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: [s] } = await client.query(
+      `SELECT s.estado::text AS estado, m.nombre AS mascota
+         FROM public.servicios s JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+        WHERE s.id = $1 FOR UPDATE OF s`, [id])
+    if (!s) { await client.query('ROLLBACK'); return { status: 404, body: { ok: false, error: 'No encontrado' } } }
+    if (['ENTREGADO', 'CANCELADO'].includes(s.estado)) {
+      await client.query('ROLLBACK')
+      return { status: 409, body: { ok: false, error: `El servicio ya está ${s.estado.toLowerCase()}: no se pueden cancelar los restos` } }
+    }
+    const { rows: [e] } = await client.query(
+      `UPDATE public.planta_elecciones
+          SET restos_calcicos = false,
+              restos_respuesta = 'NO', restos_respuesta_en = now(),
+              restos_cancelado_en = now(), restos_cancelado_por = $2, restos_cancelado_motivo = $3
+        WHERE servicio_id = $1 AND restos_calcicos = true
+        RETURNING id, restos_calcicos_valor, restos_cenizario_listo_en`,
+      [id, uuidOrNull(personalId), motivoLimpio])
+    if (!e) { await client.query('ROLLBACK'); return { status: 409, body: { ok: false, error: 'Este servicio no tiene restos cálcicos pedidos' } } }
+
+    const valor = Number(e.restos_calcicos_valor) || 0
+    let valorAntes = null, valorDespues = null, saldoAFavor = 0, estadoPago = null
+    if (valor > 0) {
+      // Espejo de sumarAlServicio: lo que se sumó como adicional se resta igual.
+      const { rows: [sv] } = await client.query(
+        `UPDATE public.servicios
+            SET valor_total = GREATEST(COALESCE(valor_total, 0) - $2, 0),
+                valor_adicionales = CASE WHEN valor_adicionales IS NULL
+                                         THEN NULL ELSE GREATEST(valor_adicionales - $2, 0) END,
+                estado_pago = CASE
+                  WHEN COALESCE(valor_pagado, 0) >= GREATEST(COALESCE(valor_total, 0) - $2, 0) THEN 'COMPLETO'
+                  WHEN COALESCE(valor_pagado, 0) > 0 THEN 'PARCIAL'
+                  ELSE 'PENDIENTE' END
+          WHERE id = $1
+        RETURNING valor_total, estado_pago, COALESCE(valor_pagado, 0) AS pagado`,
+        [id, valor])
+      estadoPago = sv.estado_pago
+      valorDespues = Number(sv.valor_total)
+      valorAntes = valorDespues + valor
+      saldoAFavor = Math.max(Number(sv.pagado) - valorDespues, 0)
+    }
+    const valorTxt = `$${valor.toLocaleString('es-CO')}`
+    await client.query(
+      `INSERT INTO public.novedades_servicio
+         (servicio_id, tipo_novedad, descripcion, valor_ajuste, valor_antes, valor_despues, motivo_valor, registrado_por)
+       VALUES ($1, 'NOTA', $2, $3, $4, $5, $6, $7)`,
+      [id,
+       `Restos cálcicos de ${s.mascota} CANCELADOS: la familia se retractó. `
+         + (valor > 0 ? `Se descuentan ${valorTxt} del valor a cobrar. ` : '')
+         + (saldoAFavor > 0 ? `Ya estaba pagado: queda saldo a favor de $${saldoAFavor.toLocaleString('es-CO')}. ` : '')
+         + `Motivo: ${motivoLimpio}`,
+       valor > 0 ? -valor : null, valorAntes, valorDespues, valorAntes == null ? null : 'ITEM_QUITADO',
+       uuidOrNull(personalId)])
+    await client.query(
+      `UPDATE public.alertas_operativas
+          SET estado = 'DESCARTADA', fecha_resolucion = now(), usuario_resolvio = $2
+        WHERE clave_dedupe = $1 AND estado IN ('ABIERTA', 'EN_GESTION')`,
+      [`restos:${id}`, uuidOrNull(personalId)])
+    // Los mismos que recibieron el pedido (Tenjo) y la foto (Producción).
+    await client.query(
+      `INSERT INTO public.notificaciones (para_personal_id, tipo, titulo, mensaje, datos)
+       SELECT p.id, 'RESTOS_CALCICOS', '❌ Restos cálcicos cancelados', $1, $2::jsonb
+       FROM public.personal p JOIN public.roles_personal r ON r.id = p.rol_principal_id
+       WHERE r.nombre IN ('COORDINADOR','ADMIN','OPERARIO','PRODUCTOR') AND p.activo`,
+      [`${s.mascota}: la familia ya NO quiere los restos cálcicos. No separarlos ni hacer su cenizario`
+         + (e.restos_cenizario_listo_en ? ' (el cenizario ya estaba listo: apartarlo).' : '.'),
+       JSON.stringify({ servicio_id: id })])
+    await client.query('COMMIT')
+    log('[restos-calcicos]', 'cancelados', id, valor, saldoAFavor ? `saldo a favor ${saldoAFavor}` : '')
+    return { status: 200, body: { ok: true, valor, valor_total: valorDespues, estado_pago: estadoPago, saldo_a_favor: saldoAFavor } }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
 }

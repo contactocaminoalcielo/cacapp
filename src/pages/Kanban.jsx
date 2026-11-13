@@ -437,6 +437,8 @@ export default function Kanban() {
 
   // ── Estado tablero activo (solo para ADMIN) ───────────────────────────────
   const [tableroActivo, setTableroActivo] = useState('coordinacion') // 'coordinacion' | 'produccion'
+  // Cancelar los restos cálcicos cuando la familia se retracta (migración 208)
+  const [cancelRestos, setCancelRestos] = useState(null) // null | { motivo, guardando }
 
   // Derivados de rol — COORDINADOR tiene los mismos permisos que ADMIN
   const esAdmin     = ['ADMIN', 'COORDINADOR'].includes(rol)
@@ -1695,6 +1697,7 @@ export default function Kanban() {
     setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
     setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
+    setCancelRestos(null)
 
     // Si está cancelado, traer la trazabilidad en query aparte (defensivo: si
     // las columnas de cancelación aún no existen en DB, el detalle normal no se rompe)
@@ -1744,7 +1747,7 @@ export default function Kanban() {
     // cambió de tarjeta antes de que respondiera.
     if (s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL') {
       db.from('planta_elecciones')
-        .select('servicio_id, estado, planta_nombre, restos_calcicos, restos_calcicos_valor')
+        .select('servicio_id, estado, planta_nombre, restos_calcicos, restos_calcicos_valor, restos_cancelado_en, restos_cancelado_motivo')
         .eq('servicio_id', s.servicio_id).maybeSingle()
         .then(({ data }) => { if (data) setDetalle(d => d ? { ...d, planta: data } : d) })
         .catch(() => {})
@@ -4678,7 +4681,7 @@ export default function Kanban() {
 
             {/* ── Planta del compostaje y restos cálcicos (migración 176) ── */}
             {detalle?.planta?.servicio_id === selected.servicio_id
-              && (detalle.planta.planta_nombre || detalle.planta.restos_calcicos) && (
+              && (detalle.planta.planta_nombre || detalle.planta.restos_calcicos || detalle.planta.restos_cancelado_en) && (
               <div className="rounded-xl border-2 px-3 py-2.5 space-y-1"
                 style={detalle.planta.restos_calcicos
                   ? { borderColor: '#FCD34D', background: '#FFFBEB' }
@@ -4697,6 +4700,64 @@ export default function Kanban() {
                     <div className="text-[10px]" style={{ color: '#78350F' }}>
                       Separarlos al sacar la mascota del cubículo y entregarlos con la planta.
                     </div>
+                    {/* Migración 208: la familia se retractó → coordinación los cancela */}
+                    {esAdmin && !['ENTREGADO', 'CANCELADO'].includes(selected.estado) && (
+                      cancelRestos ? (
+                        <div className="mt-2 space-y-1.5">
+                          <textarea value={cancelRestos.motivo} rows={2} autoFocus
+                            onChange={ev => setCancelRestos(c => ({ ...c, motivo: ev.target.value }))}
+                            placeholder="Motivo (ej: la familia llamó y ya no los quiere)"
+                            className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-[11px]" />
+                          <div className="flex gap-1.5 justify-end">
+                            <button type="button" disabled={cancelRestos.guardando}
+                              onClick={() => setCancelRestos(null)}
+                              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg text-gray-600 hover:bg-white">
+                              Volver
+                            </button>
+                            <button type="button"
+                              disabled={cancelRestos.guardando || cancelRestos.motivo.trim().length < 3}
+                              onClick={async () => {
+                                const valor = Number(detalle.planta.restos_calcicos_valor) || 0
+                                if (!await confirm(
+                                  `Tenjo no los separará, Producción no hará el cenizario${valor > 0 ? ` y se descontarán ${fmt(valor)} del valor del servicio` : ''}.`,
+                                  { title: '¿Cancelar los restos cálcicos?', variant: 'warning', confirmLabel: 'Sí, cancelar' })) return
+                                setCancelRestos(c => ({ ...c, guardando: true }))
+                                try {
+                                  const r = await orbitApi(`/servicios/${selected.servicio_id}/restos-calcicos/cancelar`,
+                                    { method: 'POST', body: { motivo: cancelRestos.motivo } })
+                                  if (r.saldo_a_favor > 0) {
+                                    await showAlert(`El servicio ya estaba pagado: queda un saldo a favor de ${fmt(r.saldo_a_favor)} para devolverle a la familia.`,
+                                      { title: 'Restos cancelados' })
+                                  }
+                                  cargar()
+                                  abrirModal({ ...selected,
+                                    valor_total: r.valor_total ?? selected.valor_total,
+                                    estado_pago: r.estado_pago ?? selected.estado_pago })
+                                } catch (e) {
+                                  await showAlert(e.message || 'No se pudieron cancelar los restos.', { title: 'Error' })
+                                  setCancelRestos(c => c && ({ ...c, guardando: false }))
+                                }
+                              }}
+                              className="text-[11px] font-bold px-2.5 py-1 rounded-lg text-white bg-red-600 hover:bg-red-700 disabled:opacity-50">
+                              {cancelRestos.guardando ? 'Cancelando…' : 'Cancelar restos'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => setCancelRestos({ motivo: '', guardando: false })}
+                          className="mt-1.5 text-[10.5px] font-semibold underline" style={{ color: '#B91C1C' }}>
+                          La familia se retractó — cancelar restos
+                        </button>
+                      )
+                    )}
+                  </div>
+                )}
+                {!detalle.planta.restos_calcicos && detalle.planta.restos_cancelado_en && (
+                  <div className="text-[11px] font-semibold text-gray-500">
+                    <span className="line-through">Restos cálcicos</span> · CANCELADOS el {fmtDateTime(detalle.planta.restos_cancelado_en)}
+                    {detalle.planta.restos_cancelado_motivo && (
+                      <div className="text-[10px] font-normal">Motivo: {detalle.planta.restos_cancelado_motivo}</div>
+                    )}
                   </div>
                 )}
               </div>
