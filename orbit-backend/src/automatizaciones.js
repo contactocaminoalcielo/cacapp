@@ -159,6 +159,25 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'condolencias',
+    nombre: 'Condolencias al mes del fallecimiento',
+    descripcion: 'Un mensaje de cariño recordando a la mascotica al cumplirse un mes del fallecimiento, solo si el servicio ya se entregó (y nunca antes de 3 días tras la entrega). Lo programado del día se ve en /condolencias.',
+    quien: 'A la familia',
+    cron: '11:00, lunes a viernes (sin festivos)',
+    interruptor: { modulo: 'CONDOLENCIAS', clave: 'activo' },
+    // Al encender, `arranque_desde` = hoy: nada de lo programado mientras estuvo apagado.
+    arranqueAlEncender: true,
+    plantillaCfg: { modulo: 'CONDOLENCIAS', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.condolencias',
+      fecha: 'fecha_envio',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      // Solo lo que ya tocaba: lo programado para la otra semana no está «por enviar».
+      pendiente: "estado IN ('PENDIENTE', 'ENVIANDO') AND fecha_programada <= public.fn_hoy_bogota()",
+    },
+  },
+  {
     clave: 'digitales',
     nombre: 'Entrega de digitales y memorial',
     descripcion: 'Manda los enlaces de las piezas digitales cuando están listas. ⚠️ El interruptor solo gobierna el envío AUTOMÁTICO: los números incluyen también lo que manda una persona desde Digitales.',
@@ -283,6 +302,14 @@ export async function cambiarInterruptor({ clave, activo }) {
     [destino.modulo, destino.clave, activo ? 'true' : 'false']
   )
   if (!rowCount) return { status: 404, body: { ok: false, error: 'config_no_encontrada' } }
+  // «Solo de aquí en adelante» (condolencias): al encender, lo programado para
+  // los días en que estuvo apagado NO sale de golpe — el arranque es hoy.
+  const flujo = FLUJOS.find(f => f.clave === clave)
+  if (activo && flujo?.arranqueAlEncender) {
+    await pool.query(
+      `UPDATE public.config_operativa SET valor = to_jsonb(public.fn_hoy_bogota()::text)
+        WHERE modulo = $1 AND clave = 'arranque_desde'`, [destino.modulo])
+  }
   log('[automatizaciones]', clave, activo ? 'ENCENDIDO' : 'APAGADO')
   return { status: 200, body: { ok: true, clave, activo: !!activo } }
 }

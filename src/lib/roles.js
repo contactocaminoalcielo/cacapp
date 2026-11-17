@@ -11,6 +11,8 @@ const ACCESO_TOTAL = {
   routes: new Set([
     '/', '/kanban', '/registro', '/calendario', '/cuarto-frio',
     '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps', '/pqr',
+    // Condolencias al mes del fallecimiento (migr. 209): ver y excluir lo programado.
+    '/condolencias',
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
     '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',

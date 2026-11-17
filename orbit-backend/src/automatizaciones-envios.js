@@ -31,6 +31,7 @@ import { avisarVetRecogida } from './recogidas-aviso.js'
 import { enviarAvisoPlanta } from './plantas.js'
 import { enviarAvisoMitad } from './mitad-compostaje.js'
 import { enviarEncuesta } from './encuesta-entrega.js'
+import { enviarCondolencia } from './condolencias.js'
 import { enviarAutomatico } from './digitales.js'
 import { enviarReporte } from './grupales.js'
 import { explicarErrorWa } from './errores-wa.js'
@@ -205,6 +206,27 @@ const FUENTES = {
       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
      WHERE n.tipo = 'POST_ENTREGA' AND n.envio_estado IS NOT NULL`,
 
+  // Condolencias al mes (migr. 209). EXCLUIDO se pinta como CANCELADO: no se relanza
+  // desde aquí — se reincluye en /condolencias, donde se ve el motivo.
+  condolencias: `
+    SELECT k.id, k.servicio_id,
+           COALESCE(k.fecha_envio, k.fecha_programada::timestamptz) AS fecha,
+           (CASE k.estado WHEN 'EXCLUIDO' THEN 'CANCELADO' ELSE k.estado END) AS estado,
+           COALESCE(k.error, k.motivo_exclusion) AS error, k.intentos::int AS intentos,
+           m.nombre AS mascota, ${PROPIETARIO} AS destinatario,
+           COALESCE(k.whatsapp_destino, c.whatsapp) AS destino,
+           k.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           ('Falleció el ' || to_char(k.fecha_fallecimiento, 'DD/MM')
+             || ' · entregado el ' || to_char(k.fecha_entrega, 'DD/MM')
+             || CASE WHEN k.estado = 'EXCLUIDO' THEN ' · excluida' ELSE '' END) AS detalle,
+           jsonb_build_object('updated_at', k.updated_at) AS extra
+      FROM public.condolencias k
+      JOIN public.servicios s     ON s.id = k.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+     -- Solo lo que ya tocaba: una PENDIENTE de la otra semana no se «relanza» antes de tiempo.
+     WHERE k.fecha_programada <= public.fn_hoy_bogota() OR k.fecha_envio IS NOT NULL`,
+
   // Una fila por INTENTO. `resuelto` = ese servicio ya tiene un envío bueno
   // (aunque este intento haya fallado), para no ofrecer relanzar lo ya entregado.
   digitales: `
@@ -360,6 +382,7 @@ const MOTIVOS = {
   sin_hora:       'La recogida no tiene hora programada.',
   no_es_clinica:  'La recogida no es en una clínica aliada.',
   sin_recogida:   'El servicio no tiene recogida.',
+  no_entregado:   'El servicio ya no está ENTREGADO: sale cuando se vuelva a entregar.',
   error_envio:    'Meta rechazó el envío.',
   error_interno:  'Error interno al enviar.',
 }
@@ -461,6 +484,17 @@ const RELANZAR = {
                       [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega'])
     }
     return desdeMotivo(await enviarEncuesta({ npsId: f.id, personalId: personal.id }))
+  },
+
+  async condolencias(f, personal) {
+    // ENVIANDO huérfano o ENVIADO que Meta no entregó → ERROR, y se retoma.
+    if (f.estado === 'ENVIANDO' || (f.estado === 'ENVIADO' && f.acuse === 'failed')) {
+      await destrabar(`UPDATE public.condolencias
+                          SET estado = 'ERROR', error = COALESCE(error, $2), updated_at = now()
+                        WHERE id = $1 AND estado IN ('ENVIANDO', 'ENVIADO')`,
+                      [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega'])
+    }
+    return desdeMotivo(await enviarCondolencia({ id: f.id, personalId: personal.id }))
   },
 
   async digitales(f, personal) {

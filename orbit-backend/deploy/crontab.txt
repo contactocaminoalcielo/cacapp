@@ -73,6 +73,12 @@
 # Idempotente: reclama la fila (PENDIENTE/ERROR -> ENVIANDO) antes de enviar.
 0 10 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/encuesta-entrega >> /var/log/orbit-backend-cron.log 2>&1
 
+# Condolencias al mes del fallecimiento (migr. 209) — 11:00, lunes a viernes (el
+# job salta festivos). Prepara SIEMPRE (aunque este apagado) y envia solo
+# encendido y con plantilla. Solo servicios ENTREGADOS, nunca antes de 3 dias
+# tras la entrega. Idempotente: UNIQUE(servicio_id) + reclama PENDIENTE->ENVIANDO.
+0 11 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/condolencias >> /var/log/orbit-backend-cron.log 2>&1
+
 # CRM comercial (migr. 180) — hitos de veterinarias (primer servicio, N servicios,
 # N en el mes, reactivacion). Solo mira hitos cruzados en los ultimos 7 dias.
 # Los de modo PROPONER quedan en "Por enviar" del CRM; solo los AUTOMATICO salen

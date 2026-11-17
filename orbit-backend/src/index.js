@@ -21,6 +21,8 @@ import { resumenAutomatizaciones, cambiarInterruptor } from './automatizaciones.
 import { listarEnvios, relanzarEnvio } from './automatizaciones-envios.js'
 import { jobEncuestaEntrega } from './jobs/encuesta-entrega.js'
 import { datosPortalOpinion, guardarComentarioOpinion, marcarAtendido } from './encuesta-entrega.js'
+import { jobCondolencias } from './jobs/condolencias.js'
+import { listarCondolencias, excluirCondolencia, reincluirCondolencia } from './condolencias.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
@@ -1369,6 +1371,48 @@ app.post('/jobs/encuesta-entrega', requireJob, async (req, res) => {
   } catch (e) {
     log('[encuesta/job] ERROR', e.message)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Condolencias al mes del fallecimiento (migración 209) ──────────────
+// Job 11:00 L-V: prepara siempre; envía solo encendido y con plantilla.
+// ?dry=1 → solo cuenta, sin escribir ni enviar.
+app.post('/jobs/condolencias', requireJob, async (req, res) => {
+  try {
+    res.json(await jobCondolencias({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[condolencias/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Módulo /condolencias: lo de un día (?fecha=YYYY-MM-DD, por defecto hoy).
+app.get('/condolencias', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    res.json({ ok: true, ...(await listarCondolencias({ fecha: req.query.fecha || null })) })
+  } catch (e) {
+    log('[condolencias] ERROR listar', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/condolencias/:id/excluir', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await excluirCondolencia({ id: req.params.id, motivo: req.body?.motivo, personalId: req.personal.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[condolencias] ERROR excluir', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/condolencias/:id/reincluir', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await reincluirCondolencia({ id: req.params.id })
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log('[condolencias] ERROR reincluir', e.message)
+    res.status(500).json({ ok: false, error: e.message })
   }
 })
 

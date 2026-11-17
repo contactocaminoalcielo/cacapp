@@ -17,6 +17,7 @@ const PAGE_META = {
   '/imagenes':     { title: 'Imágenes',               sub: 'Solicitudes y recepción de fotos' },
   '/gestion':      { title: 'Gestión',                sub: 'Clientes, mascotas, aliados y personal' },
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
+  '/condolencias': { title: 'Condolencias',           sub: 'El mensaje de cariño al mes del fallecimiento' },
   '/pqr':          { title: 'PQR',                    sub: 'Lo que la familia nos dijo de cada servicio' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/ofertas':      { title: 'Ofertas',                sub: 'Anuncios que ve el cliente en el portal de fotos' },
