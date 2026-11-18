@@ -17,7 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { db, dbTodo } from '@/lib/supabase'
-import { actualizarItem, ESTADOS_ITEM } from '@/lib/comprasRecordatorios'
+import { actualizarItem, ESTADOS_ITEM, rotuloOrigen, esCedula } from '@/lib/comprasRecordatorios'
 import { ExternalLink } from 'lucide-react'
 
 /** Color que distingue en el tablero lo que es una compra sin servicio. */
@@ -84,11 +84,14 @@ export function aItemsTablero(items) {
 /** Marca morada «CR-n» que acompaña a una línea de compra en cualquier vista. */
 export function MarcaCompra({ compra, chica = false }) {
   if (!compra) return null
+  // Las de la oferta posterior (migr. 210) SÍ son de una familia con servicio:
+  // se marcan aparte para que Diseño las reconozca como «COMPRA ADICIONAL».
+  const adicional = compra.origen === 'OFERTA_POSTERIOR'
   return (
-    <span title="Compra de recordatorio – cliente sin servicio funerario"
+    <span title={adicional ? 'COMPRA ADICIONAL – oferta posterior al servicio' : 'Compra de recordatorio – cliente sin servicio funerario'}
       className={`inline-flex items-center gap-0.5 rounded-full font-bold whitespace-nowrap ${chica ? 'text-[9px] px-1.5 py-px' : 'text-[10px] px-2 py-0.5'}`}
       style={{ background: COMPRA_COLOR.suave, color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
-      🛒 CR-{compra.numero}
+      {adicional ? '🎁' : '🛒'} CR-{compra.numero}
     </span>
   )
 }
@@ -125,8 +128,7 @@ export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompr
       </>}>
       <div className="space-y-4">
         <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: COMPRA_COLOR.suave, border: `1px solid ${COMPRA_COLOR.borde}`, color: COMPRA_COLOR.texto }}>
-          <strong>Compra CR-{c?.numero}</strong> · cliente sin servicio funerario
-          {c?.origen === 'CATALOGO_WEB' && ' · pedido del catálogo web'}
+          <strong>Compra CR-{c?.numero}</strong> · {rotuloOrigen(c?.origen, esCedula(item.nombre))?.produccion || 'cliente sin servicio funerario'}
           {cli && <span className="text-gray-500"> · {[cli.nombre, cli.apellido].filter(Boolean).join(' ')}{cli.whatsapp ? ` (${cli.whatsapp})` : ''}</span>}
         </div>
         {/* Las fotos del catálogo web ya son URLs públicas; las de una compra

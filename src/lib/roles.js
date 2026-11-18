@@ -13,6 +13,8 @@ const ACCESO_TOTAL = {
     '/tenjo', '/produccion', '/imagenes', '/gestion', '/nps', '/pqr',
     // Condolencias al mes del fallecimiento (migr. 209): ver y excluir lo programado.
     '/condolencias',
+    // Oferta posterior al servicio (migr. 210): oportunidades, envíos y «no contactar».
+    '/ventas-posteriores',
     '/presequiales', '/reportes', '/configuracion', '/lotes-grupales', '/recibos', '/finanzas', '/certificados',
     '/inventario',
     '/eutanasias', '/digitales', '/ofertas', '/whatsapp', '/agentes', '/costos-ia', '/plantillas-whatsapp',

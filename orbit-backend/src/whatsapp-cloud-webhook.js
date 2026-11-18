@@ -19,6 +19,7 @@ import { pool, log } from './db.js'
 import { responderSiAplica, mantenerEscribiendo } from './agente-wa.js'
 import { guardarMedia, transcribir, esVoz } from './whatsapp-media.js'
 import { manejarRespuestaEncuesta, capturarComentarioChat } from './encuesta-entrega.js'
+import { manejarRespuestaOferta } from './oferta-posterior.js'
 
 const MOD = '[wa-webhook]'
 
@@ -422,6 +423,23 @@ async function normalizar(ev) {
           })) return
         } catch (e) {
           log(MOD, 'encuesta: no se pudo procesar el botón —', e.message)
+        }
+      }
+
+      // ── Oferta posterior al servicio (migración 210) ──
+      // Los cuatro botones de la plantilla (Recordatorios adicionales / Planes
+      // preexequiales / Cedulas para mascotas / No deseo informacion). Se
+      // registra el interés (o la baja), se contesta con el enlace del portal
+      // y el agente NO se despierta. Solo responde `true` si ese número tiene
+      // una oferta enviada: un botón parecido de otra plantilla sigue su camino.
+      // Si esto falla, sigue el camino normal y el agente atiende.
+      if (ev.boton && fila?.id) {
+        try {
+          if (await manejarRespuestaOferta({
+            phoneNumberId: ev.phoneNumberId, contacto: ev.fromNumber, tipo: ev.tipo, boton: ev.boton,
+          })) return
+        } catch (e) {
+          log(MOD, 'oferta posterior: no se pudo procesar el botón —', e.message)
         }
       }
 

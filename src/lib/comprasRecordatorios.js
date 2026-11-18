@@ -91,6 +91,44 @@ export const ESTADO_ENTREGA = {
 export const esCedula = nombre => /c[eé]dula/i.test(String(nombre || ''))
 
 /**
+ * ¿La compra la armó el propio cliente en un portal? Hay dos: el catálogo
+ * público (migr. 200, clientes SIN servicio funerario) y la oferta posterior al
+ * servicio (migr. 210, familias que YA tomaron un servicio). Las dos traen lo
+ * mismo que una compra interna no trae: los datos de entrega y lo que el
+ * cliente DECLARÓ del pago (`pago_cliente`), que hay que verificar.
+ *
+ * 🪤 Preguntar solo por 'CATALOGO_WEB' deja a las de la oferta sin dirección de
+ * entrega ni comprobante a la vista: usar siempre esta función.
+ */
+export const esPedidoDelCliente = origen => origen === 'CATALOGO_WEB' || origen === 'OFERTA_POSTERIOR'
+
+/** Cómo se rotula una compra según de dónde vino. `conCedula` = alguna línea es una cédula. */
+export function rotuloOrigen(origen, conCedula = false) {
+  if (origen === 'OFERTA_POSTERIOR') {
+    const que = conCedula ? 'CÉDULA' : 'RECORDATORIO'
+    return {
+      corto: '🎁 Oferta posterior',
+      largo: `🎁 COMPRA ADICIONAL – ${que} · oferta posterior al servicio`,
+      quien: 'La hizo la familia desde la oferta posterior',
+      evento: 'Compra adicional (oferta posterior)',
+      ayuda: 'La hizo la familia desde el portal de la oferta posterior al servicio',
+      produccion: `COMPRA ADICIONAL – ${que}`,
+    }
+  }
+  if (origen === 'CATALOGO_WEB') {
+    return {
+      corto: '🛒 Catálogo web',
+      largo: '🛒 Compra de recordatorio – Cliente sin servicio funerario · catálogo web',
+      quien: 'La hizo el cliente desde el catálogo web',
+      evento: 'Pedido del catálogo web',
+      ayuda: 'La hizo el cliente desde el catálogo público',
+      produccion: 'cliente sin servicio funerario · pedido del catálogo web',
+    }
+  }
+  return null
+}
+
+/**
  * Descarga el PDF de la cédula (orbit-backend, plantilla cedula-mascota.js).
  * El backend no puede leer el bucket privado: se le manda la URL FIRMADA de la
  * foto, que él baja e incrusta. Sin foto, la cédula sale con el recuadro vacío.

@@ -27,7 +27,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const esUuid = v => typeof v === 'string' && UUID.test(v)
 const soloDigitos = v => String(v ?? '').replace(/\D/g, '')
 const STORAGE_BASE = process.env.STORAGE_PUBLIC_BASE || 'https://db.orbitacac.com/storage/v1/'
-const prefijoFotos = borrador => `${STORAGE_BASE}object/public/fotos-clientes/compra-web/${borrador}/`
+export const prefijoFotos = borrador => `${STORAGE_BASE}object/public/fotos-clientes/compra-web/${borrador}/`
 
 async function leerConfig(client) {
   const { rows } = await client.query(
@@ -128,7 +128,7 @@ async function crearMascotaPublica(client, m, clienteId) {
   return r
 }
 
-function leerEntrega(e, hayFisico) {
+export function leerEntrega(e, hayFisico) {
   if (!hayFisico) return null
   const entrega = {
     direccion:     t(e?.direccion, 200),
@@ -145,7 +145,7 @@ function leerEntrega(e, hayFisico) {
   return entrega
 }
 
-function leerPagoCliente(p, borrador) {
+export function leerPagoCliente(p, borrador) {
   if (p?.modo === 'DESPUES') return { modo: 'DESPUES', declarado_en: new Date().toISOString() }
   if (p?.modo !== 'COMPROBANTE') throw new HttpError(400, 'Indica cómo vas a pagar.')
   const metodo = String(p?.metodo || '').toUpperCase()

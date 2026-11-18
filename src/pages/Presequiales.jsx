@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import Topbar from '@/components/layout/Topbar'
 import { StatCard } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -228,8 +228,51 @@ function agruparFilasImportacion(filas) {
   return [...grupos.values()]
 }
 
+/**
+ * Una solicitud de la oferta posterior (la manda /ventas-posteriores por el
+ * `state` de la navegación) → los valores de arranque de ModalNuevaAfiliacion.
+ * La familia da la edad como fecha de nacimiento o como texto («3 años»); el
+ * contrato la imprime en años.
+ */
+function solicitudAInicial(vp) {
+  const p = vp.propietario || {}
+  const aniosDe = m => {
+    if (m.fecha_nacimiento) {
+      const n = Math.floor((Date.now() - new Date(m.fecha_nacimiento + 'T12:00:00').getTime()) / (365.25 * 86400000))
+      return Number.isFinite(n) && n >= 0 ? String(Math.min(n, 40)) : ''
+    }
+    // «8 meses» NO son 8 años: un cachorro o una edad en semanas va como 0, y
+    // lo que no se entiende se deja vacío para que coordinación lo complete.
+    const texto = String(m.edad || '').toLowerCase()
+    if (/mes|semana|d[ií]a/.test(texto)) return '0'
+    const n = /^\s*\d{1,2}\s*(a[nñ]o|$)/.test(texto) ? parseInt(texto) : NaN
+    return Number.isFinite(n) && n >= 0 ? String(Math.min(n, 40)) : ''
+  }
+  // Nequi y Daviplata son transferencias para el contrato (no tiene esos medios).
+  const medio = { TRANSFERENCIA: 'TRANSFERENCIA', NEQUI: 'TRANSFERENCIA', DAVIPLATA: 'TRANSFERENCIA', TARJETA: 'TARJETA', OTRO: 'OTRO' }
+  return {
+    ventaId: vp.id,
+    cliente: vp.cliente || null,
+    formCliente: {
+      nombre: p.nombre || '', apellido: p.apellido || '', cedula_nit: p.documento || '',
+      whatsapp: p.whatsapp || '', email: p.email || '', direccion: p.direccion || '', ciudad: p.ciudad || 'Bogotá',
+    },
+    mascotas: (vp.mascotas || []).map(m => ({
+      key: crypto.randomUUID(), nombre: m.nombre || '', especie_id: m.especie_id ? String(m.especie_id) : '',
+      raza: m.raza || '', sexo: m.sexo === 'Hembra' ? 'Hembra' : 'Macho', tamano: 'Mediano',
+      peso_kg: m.peso_kg ? String(m.peso_kg) : '', edad: aniosDe(m),
+    })),
+    tipo: vp.plan?.tipo, nivel: vp.plan?.nivel,
+    valorLista: Number(vp.valor_lista) || 0,
+    descuentoPct: Number(vp.descuento_pct) || 0,
+    metodoPago: medio[vp.metodo] || 'TRANSFERENCIA',
+    notas: 'Afiliación desde la oferta posterior al servicio (pago validado en Ventas posteriores).',
+  }
+}
+
 export default function Presequiales() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { confirm, alert: showAlert } = useConfirm()
   const { personalData } = useAuth()
 
@@ -242,7 +285,16 @@ export default function Presequiales() {
   const [filtro, setFiltro]     = useState('VIGENTES')
   const [busqueda, setBusqueda] = useState('')
 
-  const [modalNueva, setModalNueva]   = useState(false)
+  // false | true (botón «Nueva afiliación») | { inicial } (solicitud de la oferta posterior)
+  const [modalNueva, setModalNueva]   = useState(() => {
+    const vp = location.state?.ventaPosterior
+    return vp ? { inicial: solicitudAInicial(vp) } : false
+  })
+  // La solicitud llega una sola vez: se quita del historial para que recargar
+  // o volver atrás no reabra el modal con un contrato ya creado.
+  useEffect(() => {
+    if (location.state?.ventaPosterior) navigate('/presequiales', { replace: true, state: null })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [modalImportar, setModalImportar] = useState(false)
   const [modalPdf, setModalPdf] = useState(false)
   const [ficha, setFicha]             = useState(null)   // contrato abierto
@@ -507,10 +559,30 @@ export default function Presequiales() {
           onClose={() => setModalPdf(false)} onImported={cargar} />
       )}
 
-      {modalNueva && (
+      {/* Con una solicitud de la oferta se espera a que carguen precios y especies:
+          el modal toma sus valores de arranque una sola vez, al montarse. */}
+      {modalNueva && (modalNueva === true || !loading) && (
         <ModalNuevaAfiliacion config={config} especies={especies} personalData={personalData}
+          inicial={modalNueva === true ? null : modalNueva.inicial}
           onClose={() => setModalNueva(false)}
-          onSaved={async () => { setModalNueva(false); await cargar() }} />
+          onSaved={async (creada) => {
+            const ventaId = modalNueva === true ? null : modalNueva.inicial?.ventaId
+            setModalNueva(false)
+            // El contrato ya existe. Enlazarlo a su venta es lo que la deja en
+            // «Afiliación activa»; si falla, el contrato NO se pierde: se avisa
+            // para enlazarlo a mano desde Ventas posteriores.
+            if (ventaId && creada?.afiliacionId) {
+              try {
+                await orbitApi(`/ventas-posteriores/${ventaId}/afiliacion`, { method: 'POST', body: { afiliacion_id: creada.afiliacionId } })
+              } catch (e) {
+                await showAlert(
+                  `El contrato YA quedó creado, pero no se pudo marcar la venta como «Afiliación activa»: ${e.message}. `
+                  + 'NO vuelvas a crear el contrato: abre la venta en Ventas posteriores y pásala a «Afiliación activa» a mano.',
+                  { title: 'Contrato creado — falta enlazarlo' })
+              }
+            }
+            await cargar()
+          }} />
       )}
 
       {ficha && (
@@ -1000,7 +1072,14 @@ function ResumenValor({ nMascotas, valorLista, pct }) {
 const MASCOTA_VACIA = () => ({ key: crypto.randomUUID(), nombre: '', especie_id: '', raza: '', sexo: 'Macho', tamano: 'Pequeño', peso_kg: '', edad: '' })
 
 // ─── Nueva afiliación: buscar-o-crear cliente + N mascotas + primer contrato ──
-function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved }) {
+//
+// `inicial` (opcional) = una solicitud de la OFERTA POSTERIOR (migr. 210) que
+// coordinación convierte en contrato desde /ventas-posteriores, ya con el pago
+// validado. Solo pone los valores de arranque (titular, mascotas, plan y el
+// descuento de la oferta): todo sigue siendo editable y el contrato se crea
+// igual que siempre, con una persona pulsando «Afiliar». Sin `inicial` el modal
+// se comporta exactamente como antes.
+function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved, inicial = null }) {
   const { alert: showAlert } = useConfirm()
   const [saving, setSaving] = useState(false)
 
@@ -1008,14 +1087,17 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [clienteBusqueda, setClienteBusqueda] = useState('')
   const [resultados, setResultados] = useState([])
   const [cliente, setCliente] = useState(null)
-  const [clienteNuevo, setClienteNuevo] = useState(false)
-  const [formCliente, setFormCliente] = useState({ nombre: '', apellido: '', cedula_nit: '', whatsapp: '', telefono: '', email: '', direccion: '', ciudad: 'Bogotá' })
+  const [clienteNuevo, setClienteNuevo] = useState(!!inicial && !inicial.cliente)
+  const [formCliente, setFormCliente] = useState({
+    nombre: '', apellido: '', cedula_nit: '', whatsapp: '', telefono: '', email: '', direccion: '', ciudad: 'Bogotá',
+    ...(inicial && !inicial.cliente ? inicial.formCliente : {}),
+  })
   const debounceRef = useRef(null)
 
   // mascotas: varias por contrato — existentes marcadas + nuevas a crear
   const [mascotasCliente, setMascotasCliente] = useState([])
   const [seleccionadas, setSeleccionadas] = useState([])   // ids de mascotas existentes
-  const [nuevas, setNuevas] = useState([])                 // formularios de mascota nueva
+  const [nuevas, setNuevas] = useState(() => inicial?.mascotas || [])   // formularios de mascota nueva
   // Edad en años por mascota existente: el contrato la imprime y el cliente la
   // da en años, no como fecha de nacimiento (migración 056). El peso también se
   // imprime y cambia con el tiempo, así que se puede corregir aquí mismo.
@@ -1023,17 +1105,22 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   const [pesos, setPesos] = useState({})
 
   // plan + pago
-  const [tipo, setTipo]   = useState('ANUAL')
-  const [nivel, setNivel] = useState('BRONCE')
+  const [tipo, setTipo]   = useState(inicial?.tipo || 'ANUAL')
+  const [nivel, setNivel] = useState(inicial?.nivel || 'BRONCE')
   const [fechaInicio, setFechaInicio] = useState(today())
   // Contrato de la base antigua: se escribe el número del papel (null = automático)
   const [numeroManual, setNumeroManual] = useState(null)
-  const [valor, setValor] = useState('')
-  const [valorTocado, setValorTocado] = useState(false)
-  const [metodoPago, setMetodoPago] = useState('EFECTIVO')
+  // Con una solicitud de la oferta, el precio de lista es el que VIO la familia
+  // (quedó congelado al diligenciar): no se pisa con el de configuración.
+  const [valor, setValor] = useState(inicial?.valorLista > 0 ? String(inicial.valorLista) : '')
+  const [valorTocado, setValorTocado] = useState(inicial?.valorLista > 0)
+  const [metodoPago, setMetodoPago] = useState(inicial?.metodoPago || 'EFECTIVO')
   const [fechaPago, setFechaPago] = useState(today())
   const [comprobanteFile, setComprobanteFile] = useState(null)
-  const [notas, setNotas] = useState('')
+  const [notas, setNotas] = useState(inicial?.notas || '')
+  // Descuento de la oferta posterior: viene aplicado (es lo que se le prometió
+  // a la familia) y coordinación puede quitarlo.
+  const [usarDctoOferta, setUsarDctoOferta] = useState(inicial?.descuentoPct > 0)
   // Vitalicio diferido (migr. 183): nº de cuotas y lo que abona hoy. El
   // método, la fecha y el comprobante de arriba pasan a ser los de ese abono.
   const [cuotas, setCuotas] = useState(1)
@@ -1041,9 +1128,15 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 
   // Precio de configuración al cambiar tipo/nivel (editable si el coordinador lo pisa)
   useEffect(() => {
-    if (valorTocado) return
+    // El precio de la solicitud (oferta posterior) vale para EL PLAN que pidió
+    // la familia. Si coordinación cambia de tipo o nivel sin haber tocado el
+    // valor, ese precio ya no aplica: vuelve a mandar el de configuración.
+    const esElDeLaSolicitud = inicial?.valorLista > 0 && valor === String(inicial.valorLista)
+    if (esElDeLaSolicitud && tipo === inicial.tipo && nivel === inicial.nivel) return
+    if (valorTocado && !esElDeLaSolicitud) return
     const p = parseFloat(config?.precios?.[tipo]?.[nivel])
     setValor(p > 0 ? String(p) : '')
+    if (esElDeLaSolicitud) setValorTocado(false)
   }, [tipo, nivel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1060,9 +1153,15 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
     return () => clearTimeout(debounceRef.current)
   }, [clienteBusqueda, cliente])
 
-  async function elegirCliente(c) {
+  // El titular de la solicitud ya es cliente (tomó el servicio): se carga su
+  // ficha con sus mascotas vivas, SIN borrar las mascotas de la solicitud.
+  useEffect(() => {
+    if (inicial?.cliente) elegirCliente(inicial.cliente, { conservarNuevas: true })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function elegirCliente(c, { conservarNuevas = false } = {}) {
     setCliente(c); setClienteNuevo(false); setResultados([]); setClienteBusqueda('')
-    setSeleccionadas([]); setNuevas([]); setEdades({}); setPesos({})
+    setSeleccionadas([]); if (!conservarNuevas) setNuevas([]); setEdades({}); setPesos({})
     const { data } = await db.from('mascotas')
       .select('id_mascota,nombre,fallecida,peso_kg,edad_anios,edad_declarada_en,especies(nombre)')
       .eq('cliente_id', c.id_cliente).order('nombre')
@@ -1084,7 +1183,13 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   // `valor` es el precio de LISTA por mascota; el descuento se resta encima.
   const valorNum = parseFloat(valor) || 0
   const dcto = useDescuentoSugerido({ escenario: 'NUEVA', nMascotas, config })
-  const valorNeto = aplicarDescuento(valorNum, dcto.pct)
+  // Los descuentos NUNCA se suman: manda el mayor (regla de David, migr. 077).
+  // El de la oferta posterior compite con el de varias mascotas como uno más.
+  const pctOferta = usarDctoOferta ? (inicial?.descuentoPct || 0) : 0
+  const ganaOferta = pctOferta > 0 && pctOferta >= dcto.pct
+  const dctoPct = ganaOferta ? pctOferta : dcto.pct
+  const dctoMotivo = ganaOferta ? 'OFERTA_POSTERIOR' : dcto.motivo
+  const valorNeto = aplicarDescuento(valorNum, dctoPct)
   const diferido = tipo === 'VITALICIO' && cuotas > 1
   const totalPlan = valorNeto * nMascotas
   const cuotaSugerida = diferido ? Math.round(totalPlan / cuotas) : 0
@@ -1180,7 +1285,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
           // `valor` = lo que paga por mascota (ya con descuento); `valor_lista`
           // guarda el precio pleno, que es la base de la cláusula 5×/3×.
           valor: valorNeto, valor_lista: valorNum,
-          descuento_pct: dcto.pct, descuento_motivo: dcto.motivo,
+          descuento_pct: dctoPct, descuento_motivo: dctoMotivo,
           // Diferido: el pago de hoy es el primer abono y vive en
           // afiliacion_pagos; el contrato no dice "pagado" (no lo está).
           cuotas: diferido ? cuotas : 1,
@@ -1202,7 +1307,9 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         await db.from('afiliaciones').delete().eq('id', afil.id)
         throw e
       }
-      await onSaved()
+      // El id viaja para que quien abrió el modal desde una solicitud de la
+      // oferta posterior pueda enlazar el contrato; los demás lo ignoran.
+      await onSaved({ afiliacionId: afil.id })
     } catch (e) {
       await showAlert(e.message, { title: 'No se pudo guardar' })
     } finally {
@@ -1322,6 +1429,11 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
               })}
             </div>
           )}
+          {inicial && (
+            <p className="text-[11px] text-[#9A5500] bg-[#FFF8E6] border border-[#F0D9A0] rounded-lg px-2.5 py-1.5 mb-2">
+              Estas mascotas vienen de la solicitud de la familia. Si alguna <b>ya aparece arriba</b> como registrada, márcala allí y quita la «mascota nueva» repetida, para no duplicarla.
+            </p>
+          )}
           {cliente && vivasCliente.length === 0 && !nuevas.length && (
             <p className="text-[12px] text-ink3 mb-2">Este cliente no tiene mascotas vivas registradas — agrégalas con "+ Mascota nueva".</p>
           )}
@@ -1400,9 +1512,17 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
             <p className="text-[11px] text-[#9A5500] mt-1.5">Este nivel no tiene precio en Configuración › Afiliaciones — se usará el valor que digites.</p>
           )}
           <div className="mt-2 space-y-2">
+            {inicial?.descuentoPct > 0 && (
+              <AvisoDescuento aplicado={usarDctoOferta} valorLista={valorNum}
+                sugerido={{ pct: inicial.descuentoPct, etiqueta: MOTIVOS_DESCUENTO.OFERTA_POSTERIOR }}
+                onAplicar={() => setUsarDctoOferta(true)} onQuitar={() => setUsarDctoOferta(false)} />
+            )}
             <AvisoDescuento sugerido={dcto.sugerido} aplicado={dcto.aplicado} valorLista={valorNum}
               onAplicar={dcto.onAplicar} onQuitar={dcto.onQuitar} />
-            <ResumenValor nMascotas={nMascotas} valorLista={valorNum} pct={dcto.pct} />
+            {pctOferta > 0 && dcto.pct > 0 && (
+              <p className="text-[10.5px] text-ink3">Los descuentos no se suman: se aplica el mayor ({dctoPct}%).</p>
+            )}
+            <ResumenValor nMascotas={nMascotas} valorLista={valorNum} pct={dctoPct} />
           </div>
           {numeroManual !== null ? (
             <div className="mt-2">

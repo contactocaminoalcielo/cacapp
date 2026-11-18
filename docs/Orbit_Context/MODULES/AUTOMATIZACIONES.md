@@ -15,6 +15,11 @@ contacto por contacto de cada uno con el acuse real de Meta y el botón de relan
 | `mitad_compostaje` | «va con normalidad» + invitación a visitar | `avisos_mitad_compostaje` | `MITAD_COMPOSTAJE.activo` |
 | `digitales` | enlaces de las piezas digitales | `digitales_envios` | `DIGITALES.envio_automatico_activo` |
 | `grupales` | certificado del proceso grupal | `reportes_grupales_envios` | — |
+| `oferta_posterior` | oferta comercial ~60 días tras el fallecimiento, con 4 botones (migr. 210) | `ofertas_posteriores` | `OFERTA_POSTERIOR.activo` |
+
+`oferta_posterior` usa `arranqueAlEncender` (como condolencias): al encenderla, `arranque_desde` pasa
+a ser ese día. Su relanzamiento NO reenvía una oferta que Meta sí entregó. Detalle en
+[VENTAS_POSTERIORES.md](VENTAS_POSTERIORES.md).
 
 Agregar un flujo = una fila en `FLUJOS` (conteos) y una en `FUENTES` (lista de contactos).
 

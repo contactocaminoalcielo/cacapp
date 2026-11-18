@@ -178,6 +178,24 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'oferta_posterior',
+    nombre: 'Oferta posterior al servicio',
+    descripcion: 'Unos dos meses después del fallecimiento (y un mes después de las condolencias) le ofrece a la familia recordatorios adicionales, planes pre-exequiales y cédulas, con cuatro botones. No sale a quien pidió no recibir información, calificó mal la encuesta o tiene una queja. Lo programado y las oportunidades se ven en /ventas-posteriores.',
+    quien: 'A la familia',
+    cron: '14:00, lunes a viernes (sin festivos)',
+    interruptor: { modulo: 'OFERTA_POSTERIOR', clave: 'activo' },
+    // Al encender, `arranque_desde` = hoy: nada de lo programado mientras estuvo apagado.
+    arranqueAlEncender: true,
+    plantillaCfg: { modulo: 'OFERTA_POSTERIOR', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.ofertas_posteriores',
+      fecha: 'fecha_envio',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      pendiente: "estado IN ('PENDIENTE', 'ENVIANDO') AND fecha_programada <= public.fn_hoy_bogota()",
+    },
+  },
+  {
     clave: 'digitales',
     nombre: 'Entrega de digitales y memorial',
     descripcion: 'Manda los enlaces de las piezas digitales cuando están listas. ⚠️ El interruptor solo gobierna el envío AUTOMÁTICO: los números incluyen también lo que manda una persona desde Digitales.',

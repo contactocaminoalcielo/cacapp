@@ -442,7 +442,7 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                 </div>
                 {compra ? (
                   <div className="text-[11px] truncate" style={{ color: COMPRA_COLOR.texto }}>
-                    Sin servicio funerario · {[compra.clientes?.nombre, compra.clientes?.apellido].filter(Boolean).join(' ')}
+                    {compra.origen === 'OFERTA_POSTERIOR' ? 'COMPRA ADICIONAL' : 'Sin servicio funerario'} · {[compra.clientes?.nombre, compra.clientes?.apellido].filter(Boolean).join(' ')}
                     {compra.origen === 'CATALOGO_WEB' && ' · catálogo web'}
                   </div>
                 ) : (

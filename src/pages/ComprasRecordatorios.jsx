@@ -32,7 +32,7 @@ import {
   listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
   cargarCatalogos, buscarClientes, mascotasDeCliente, subirArchivoCompra, urlFirmada,
   METODOS_PAGO, ESTADOS_ITEM, ESTADO_ITEM_META, ESTADO_COMPRA, ESTADO_PAGO,
-  esCedula, descargarCedula, programarEntrega, ESTADO_ENTREGA,
+  esCedula, descargarCedula, programarEntrega, ESTADO_ENTREGA, esPedidoDelCliente, rotuloOrigen,
 } from '@/lib/comprasRecordatorios'
 import { db } from '@/lib/supabase'
 import { crearNotificacion } from '@/lib/notificaciones'
@@ -169,9 +169,9 @@ export default function ComprasRecordatorios() {
                 <Tr key={c.id} onClick={() => setVerId(c.id)} className={c.anulada_en ? 'opacity-60' : ''}>
                   <Td className="font-mono text-[12px] text-gray-500">
                     CR-{c.numero}
-                    {c.origen === 'CATALOGO_WEB' && (
-                      <div className="font-sans text-[10px] font-bold text-green-700 mt-0.5" title="La hizo el cliente desde el catálogo público">
-                        🛒 Catálogo web{c.pago_cliente && !c.pago_cliente.revisado_en
+                    {esPedidoDelCliente(c.origen) && (
+                      <div className="font-sans text-[10px] font-bold text-green-700 mt-0.5" title={rotuloOrigen(c.origen).ayuda}>
+                        {rotuloOrigen(c.origen).corto}{c.pago_cliente && !c.pago_cliente.revisado_en
                           ? (c.pago_cliente.modo === 'COMPROBANTE' ? ' · comprobante por revisar' : ' · paga después') : ''}
                       </div>
                     )}
@@ -818,15 +818,16 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
               {saldo > 0 && activa && <div className="text-[12px] font-semibold text-amber-700">Pendiente {fmt(saldo)}</div>}
               {Number(d.valor_envio) > 0 && <div className="text-[11px] text-gray-500">Incluye envío {fmt(d.valor_envio)}</div>}
               <div className="text-[11px] text-gray-400">
-                {d.origen === 'CATALOGO_WEB' ? 'La hizo el cliente desde el catálogo web' : `Registró ${d.registrado_por_nombre || '—'}`}
+                {esPedidoDelCliente(d.origen) ? rotuloOrigen(d.origen).quien : `Registró ${d.registrado_por_nombre || '—'}`}
               </div>
             </div>
           </div>
 
-          {/* Compra del catálogo público (migr. 200): entrega y lo que declaró el cliente del pago */}
-          {d.origen === 'CATALOGO_WEB' && (
+          {/* Pedido que armó el cliente (catálogo público, migr. 200, u oferta posterior,
+              migr. 210): entrega y lo que declaró del pago */}
+          {esPedidoDelCliente(d.origen) && (
             <div className="rounded-xl p-3 space-y-2 text-[12px]" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-              <div className="font-bold text-green-800">🛒 Compra de recordatorio – Cliente sin servicio funerario · catálogo web</div>
+              <div className="font-bold text-green-800">{rotuloOrigen(d.origen, (d.items || []).some(i => esCedula(i.nombre))).largo}</div>
               {d.entrega && (
                 <div className="text-gray-700">
                   <span className="text-gray-500">Entregar en:</span> {d.entrega.direccion}{d.entrega.barrio ? `, ${d.entrega.barrio}` : ''}, {d.entrega.ciudad}
@@ -1182,8 +1183,8 @@ function textoEvento(ev) {
   const x = ev.detalle || {}
   switch (ev.tipo) {
     case 'CREADA':
-      if (x.origen === 'CATALOGO_WEB') {
-        return `Pedido del catálogo web · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.envio ? ` (envío ${fmt(x.envio)})` : ''} · ${x.pago === 'COMPROBANTE' ? 'adjuntó comprobante' : 'paga después'}`
+      if (esPedidoDelCliente(x.origen)) {
+        return `${rotuloOrigen(x.origen).evento} · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.envio ? ` (envío ${fmt(x.envio)})` : ''}${x.descuento_pct ? ` · ${x.descuento_pct}% de descuento` : ''} · ${x.pago === 'COMPROBANTE' ? 'adjuntó comprobante' : 'paga después'}`
       }
       return `Compra registrada · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.cliente_nuevo ? ' · cliente nuevo' : ''}${x.mascota_nueva ? ' · mascota nueva' : ''}`
     case 'ESTADO_ITEM': return `${x.item}: ${ESTADO_ITEM_META[x.de]?.label || x.de} → ${ESTADO_ITEM_META[x.a]?.label || x.a}`

@@ -18,6 +18,7 @@ const PAGE_META = {
   '/gestion':      { title: 'Gestión',                sub: 'Clientes, mascotas, aliados y personal' },
   '/nps':          { title: 'NPS & Postventa',        sub: 'Seguimiento post-entrega' },
   '/condolencias': { title: 'Condolencias',           sub: 'El mensaje de cariño al mes del fallecimiento' },
+  '/ventas-posteriores': { title: 'Ventas posteriores', sub: 'Recordatorios, planes y cédulas que la familia pidió después del servicio' },
   '/pqr':          { title: 'PQR',                    sub: 'Lo que la familia nos dijo de cada servicio' },
   '/digitales':    { title: 'Digitales',              sub: 'Memorial, video y short — publicación y envío al cliente' },
   '/ofertas':      { title: 'Ofertas',                sub: 'Anuncios que ve el cliente en el portal de fotos' },
@@ -46,6 +47,7 @@ const TIPO_ICON = {
   RESTOS_CALCICOS:       '⚠️',
   EVIDENCIAS_POR_REVISAR: '📸',
   PLANTAS_PENDIENTES:    '🌱',
+  VENTA_POSTERIOR:       '🛍️',
 }
 
 /**

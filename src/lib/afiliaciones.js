@@ -84,6 +84,9 @@ export const MOTIVOS_DESCUENTO = {
   MULTIPLES_MASCOTAS:         'Más de una mascota en el mismo plan',
   RENOVACION_MULTIPLE_TARDIA: 'Renovación de varias mascotas después del vencimiento',
   MANUAL:                     'Descuento manual',
+  // Migr. 210: la familia que ya tomó un servicio afilia a sus otras mascotas.
+  // Lo aplica coordinación al crear el contrato desde una solicitud de la oferta.
+  OFERTA_POSTERIOR:           'Oferta posterior al servicio',
 }
 
 const pctConfig = (config, clave) => {

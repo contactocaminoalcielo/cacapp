@@ -19,6 +19,7 @@ const PlantaCliente    = lazy(() => import('@/pages/PlantaCliente'))
 const VisitaCliente    = lazy(() => import('@/pages/VisitaCliente'))
 const OpinionCliente   = lazy(() => import('@/pages/OpinionCliente'))
 const CatalogoRecordatorios = lazy(() => import('@/pages/CatalogoRecordatorios'))
+const OfertaCliente    = lazy(() => import('@/pages/OfertaCliente'))
 const SolicitudCliente = lazy(() => import('@/pages/SolicitudCliente'))
 const SolicitudAliado  = lazy(() => import('@/pages/SolicitudAliado'))
 const Privacidad       = lazy(() => import('@/pages/Privacidad'))
@@ -34,6 +35,7 @@ const SeguimientoImagenes = lazy(() => import('@/pages/SeguimientoImagenes'))
 const Gestion            = lazy(() => import('@/pages/Gestion'))
 const Nps                = lazy(() => import('@/pages/Nps'))
 const Condolencias       = lazy(() => import('@/pages/Condolencias'))
+const VentasPosteriores  = lazy(() => import('@/pages/VentasPosteriores'))
 const Pqr                = lazy(() => import('@/pages/Pqr'))
 const Reportes           = lazy(() => import('@/pages/Reportes'))
 const Presequiales       = lazy(() => import('@/pages/Presequiales'))
@@ -103,6 +105,7 @@ function AppRoutes({ rol }) {
             {routes.has('/gestion')      && <Route path="/gestion"      element={<Gestion />} />}
             {routes.has('/nps')          && <Route path="/nps"          element={<Nps />} />}
             {routes.has('/condolencias') && <Route path="/condolencias" element={<Condolencias />} />}
+            {routes.has('/ventas-posteriores') && <Route path="/ventas-posteriores" element={<VentasPosteriores />} />}
             {routes.has('/pqr')          && <Route path="/pqr"          element={<Pqr />} />}
             {routes.has('/reportes')     && <Route path="/reportes"     element={<Reportes />} />}
             {routes.has('/presequiales') && <Route path="/presequiales" element={<Presequiales />} />}
@@ -144,7 +147,7 @@ function AppRoutes({ rol }) {
 // versión nueva de Orbit" se le estaba mostrando a familias en duelo dentro del
 // portal de la planta y del de fotos, con un botón que no significa nada para
 // ellas.
-const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita', '/opinion', '/privacidad', '/catalogo']
+const RUTAS_PUBLICAS = ['/solicitud', '/aliado', '/fotos', '/planta', '/visita', '/opinion', '/privacidad', '/catalogo', '/oferta']
 const esRutaPublica = p => RUTAS_PUBLICAS.some(r => p === r || p.startsWith(r + '/'))
 
 /**
@@ -233,6 +236,19 @@ function InnerApp() {
     return (
       <Suspense fallback={<FullScreenLoader />}>
         <CatalogoRecordatorios />
+      </Suspense>
+    )
+  }
+
+  // /oferta/CODIGO[/recordatorios|planes|cedulas] → portal de la oferta posterior
+  //   al servicio (migr. 210), desde los botones del mensaje de WhatsApp. El código
+  //   es propio de la oferta (no el del portal de fotos). Ojo: `/ofertas` (con s)
+  //   es la pantalla INTERNA de anuncios; aquí solo entra `/oferta/…`.
+  if (location.pathname.startsWith('/oferta/')) {
+    const [codigo = '', seccion = ''] = location.pathname.replace('/oferta/', '').split('/')
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <OfertaCliente key={codigo} codigo={codigo} seccion={seccion} />
       </Suspense>
     )
   }

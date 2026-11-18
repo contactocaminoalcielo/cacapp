@@ -32,6 +32,7 @@ import { enviarAvisoPlanta } from './plantas.js'
 import { enviarAvisoMitad } from './mitad-compostaje.js'
 import { enviarEncuesta } from './encuesta-entrega.js'
 import { enviarCondolencia } from './condolencias.js'
+import { enviarOferta } from './oferta-posterior.js'
 import { enviarAutomatico } from './digitales.js'
 import { enviarReporte } from './grupales.js'
 import { explicarErrorWa } from './errores-wa.js'
@@ -227,6 +228,30 @@ const FUENTES = {
      -- Solo lo que ya tocaba: una PENDIENTE de la otra semana no se «relanza» antes de tiempo.
      WHERE k.fecha_programada <= public.fn_hoy_bogota() OR k.fecha_envio IS NOT NULL`,
 
+  // Oferta posterior al servicio (migr. 210). EXCLUIDO se pinta como CANCELADO: no se
+  // relanza desde aquí — se reincluye en /ventas-posteriores, donde se ve el motivo.
+  oferta_posterior: `
+    SELECT k.id, k.servicio_id,
+           COALESCE(k.fecha_envio, k.fecha_programada::timestamptz) AS fecha,
+           (CASE k.estado WHEN 'EXCLUIDO' THEN 'CANCELADO' ELSE k.estado END) AS estado,
+           COALESCE(k.error, k.motivo_exclusion) AS error, k.intentos::int AS intentos,
+           m.nombre AS mascota, ${PROPIETARIO} AS destinatario,
+           COALESCE(k.whatsapp_destino, c.whatsapp) AS destino,
+           k.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           ('Falleció el ' || to_char(k.fecha_fallecimiento, 'DD/MM')
+             || CASE k.respuesta WHEN 'RECORDATORIOS' THEN ' · le interesan recordatorios'
+                                 WHEN 'PREEXEQUIALES' THEN ' · le interesa un plan pre-exequial'
+                                 WHEN 'CEDULAS' THEN ' · le interesa una cédula'
+                                 WHEN 'NO_DESEA' THEN ' · no desea información'
+                                 ELSE CASE WHEN k.estado = 'ENVIADO' THEN ' · sin respuesta' ELSE '' END END
+             || CASE WHEN k.estado = 'EXCLUIDO' THEN ' · excluida' ELSE '' END) AS detalle,
+           jsonb_build_object('updated_at', k.updated_at) AS extra
+      FROM public.ofertas_posteriores k
+      JOIN public.servicios s     ON s.id = k.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
+     WHERE k.fecha_programada <= public.fn_hoy_bogota() OR k.fecha_envio IS NOT NULL`,
+
   // Una fila por INTENTO. `resuelto` = ese servicio ya tiene un envío bueno
   // (aunque este intento haya fallado), para no ofrecer relanzar lo ya entregado.
   digitales: `
@@ -383,6 +408,8 @@ const MOTIVOS = {
   no_es_clinica:  'La recogida no es en una clínica aliada.',
   sin_recogida:   'El servicio no tiene recogida.',
   no_entregado:   'El servicio ya no está ENTREGADO: sale cuando se vuelva a entregar.',
+  espera_condolencia: 'Todavía no ha pasado el tiempo mínimo desde su condolencia: se reprogramó sola.',
+  excluida:       'No se envía: la familia quedó excluida de la oferta.',
   error_envio:    'Meta rechazó el envío.',
   error_interno:  'Error interno al enviar.',
 }
@@ -495,6 +522,22 @@ const RELANZAR = {
                       [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega'])
     }
     return desdeMotivo(await enviarCondolencia({ id: f.id, personalId: personal.id }))
+  },
+
+  async oferta_posterior(f, personal) {
+    // 🔒 Un ENVIADO que Meta SÍ entregó no se relanza: es una oferta comercial y
+    // mandarla dos veces es justo lo que el reporte pide evitar. Solo se retoma
+    // el ENVIANDO huérfano o el ENVIADO que Meta no entregó. `enviarOferta`
+    // vuelve a mirar todas las exclusiones antes de escribir.
+    if (f.estado === 'ENVIANDO' || (f.estado === 'ENVIADO' && f.acuse === 'failed')) {
+      // `AND estado = $3` (el que se VIO en la lista): si entre la lista y el
+      // clic el job terminó de enviarla, ya no está en ese estado y no se toca.
+      await destrabar(`UPDATE public.ofertas_posteriores
+                          SET estado = 'ERROR', error = COALESCE(error, $2), updated_at = now()
+                        WHERE id = $1 AND estado = $3`,
+                      [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega', f.estado])
+    }
+    return desdeMotivo(await enviarOferta({ id: f.id, personalId: personal.id }))
   },
 
   async digitales(f, personal) {

@@ -179,6 +179,26 @@ Ver [MODULES/COMPRAS_RECORDATORIOS.md](../MODULES/COMPRAS_RECORDATORIOS.md).
 - `autorizaciones_datos.origen` gana el valor `COMPRA_RECORDATORIOS`
 - RLS: `authenticated` solo SELECT. Escribe **solo `orbit_backend`** (GRANT explícito, incluida la secuencia)
 - Migr. 170: `orbit_contadores.produccion` suma las líneas PENDIENTE de compras no anuladas; ambas tablas en `supabase_realtime`
+- Migr. 200/210: `origen` ∈ `INTERNO | CATALOGO_WEB | OFERTA_POSTERIOR` (CHECK). Migr. 210: `venta_posterior_id` → `ventas_posteriores.id`
+
+### Oferta posterior al servicio — tablas `ofertas_posteriores`, `ventas_posteriores`, `venta_posterior_eventos`, `oferta_exclusiones` (migración 210)
+
+Ver [MODULES/VENTAS_POSTERIORES.md](../MODULES/VENTAS_POSTERIORES.md).
+
+- `ofertas_posteriores`: una por servicio (`servicio_id` UNIQUE) · `codigo` text UNIQUE (32 hex, llave del portal)
+  · `estado` ∈ `PENDIENTE | ENVIANDO | ENVIADO | ERROR | EXCLUIDO` · `fecha_programada` date
+  · `respuesta` ∈ `RECORDATORIOS | PREEXEQUIALES | CEDULAS | NO_DESEA` · `forzada` bool (reincluida a mano)
+- `ventas_posteriores`: UNIQUE (`oferta_id`, `categoria`) · `categoria` ∈ `RECORDATORIOS | PREEXEQUIALES | CEDULAS`
+  · `estado` ∈ `INTERESADO | FORMULARIO_INICIADO | FORMULARIO_COMPLETO | PENDIENTE_PAGO | PAGO_REPORTADO |
+  PAGO_VALIDADO | PENDIENTE_CONTRATO | CONTRATO_GENERADO | AFILIACION_ACTIVA | COMPRA_REGISTRADA | CERRADA_SIN_VENTA`
+  · `solicitud` jsonb (plan, propietario, mascotas) · `valor_lista`, `descuento_pct`, `valor` = precio POR MASCOTA congelado
+  · `pago_cliente` jsonb = lo que la familia DECLARA · `pago_validado_en/por` = lo que una persona confirmó
+  · CHECK `ventas_post_contrato_exige_pago`: sin `pago_validado_en` no admite PENDIENTE_CONTRATO / CONTRATO_GENERADO / AFILIACION_ACTIVA
+- `venta_posterior_eventos`: bitácora (`tipo` libre, `detalle` jsonb, `por` NULL = la familia o el sistema)
+- `oferta_exclusiones`: `cliente_id` y/o `tel10` (últimos 10 dígitos) · `origen` ∈ `FAMILIA | EQUIPO` · se RETIRA (`retirado_en`), no se borra
+- `autorizaciones_datos.origen` y `afiliacion_contratos.descuento_motivo` ganan el valor `OFERTA_POSTERIOR`
+- RLS: las cuatro tablas están **cerradas a `anon` y `authenticated`** (sin políticas). Solo las lee y escribe `orbit_backend`
+- Config: `config_operativa` módulo `OFERTA_POSTERIOR` (20 claves)
 
 ### Elección de planta — tablas `plantas`, `planta_elecciones`, `planta_adicionales` (migraciones 149/150)
 

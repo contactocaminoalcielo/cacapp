@@ -79,6 +79,14 @@
 # tras la entrega. Idempotente: UNIQUE(servicio_id) + reclama PENDIENTE->ENVIANDO.
 0 11 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/condolencias >> /var/log/orbit-backend-cron.log 2>&1
 
+# Oferta posterior al servicio (migr. 210) — 14:00, lunes a viernes (el job salta
+# festivos). A las 14:00 para no salir pegada a la encuesta (10:00) ni a las
+# condolencias (11:00). Prepara y revisa exclusiones SIEMPRE (aunque este
+# apagado) y envia solo encendido y con plantilla. Solo servicios ENTREGADOS,
+# ~60 dias tras el fallecimiento y 30 tras la condolencia. Idempotente:
+# UNIQUE(servicio_id) + reclama PENDIENTE->ENVIANDO.
+0 14 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/oferta-posterior >> /var/log/orbit-backend-cron.log 2>&1
+
 # CRM comercial (migr. 180) — hitos de veterinarias (primer servicio, N servicios,
 # N en el mes, reactivacion). Solo mira hitos cruzados en los ultimos 7 dias.
 # Los de modo PROPONER quedan en "Por enviar" del CRM; solo los AUTOMATICO salen

@@ -20,6 +20,7 @@ import { pool, log } from '../db.js'
 import { renderPdf } from '../pdf.js'
 import { marco } from './marco.js'
 import { PALETA as P, LOGO, EMPRESA, esc, fechaLarga } from '../pdf-recursos.js'
+import { enlaceQrPropietario } from '../oferta-posterior-reglas.js'
 
 const STORAGE_BASE = process.env.STORAGE_PUBLIC_BASE || 'https://db.orbitacac.com/storage/v1/'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -89,7 +90,28 @@ export function numeroCedula(r) {
 const campo = (et, va) =>
   `<div class="c"><div class="et">${esc(et)}</div><div class="va">${esc(va || '—')}</div></div>`
 
-export function htmlCedulaMascota({ r, foto }) {
+/**
+ * El QR del reverso (pedido de David, 2026-11-17): se genera del número del
+ * propietario y, al escanearlo, abre un WhatsApp hacia él con el mensaje ya
+ * escrito — para quien encuentre a la mascotica perdida.
+ *
+ * Devuelve el SVG, o null si el dueño no tiene un celular válido o si la
+ * librería no está: una cédula SIN QR es mejor que una cédula que no se puede
+ * imprimir (o que lleva un QR a un número roto).
+ */
+export async function qrDelPropietario(r) {
+  const enlace = enlaceQrPropietario(r?.whatsapp || r?.telefono, r?.mascota)
+  if (!enlace) return null
+  try {
+    const { default: QRCode } = await import('qrcode')
+    return await QRCode.toString(enlace, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' })
+  } catch (e) {
+    log('[pdf] cédula sin QR:', e.message)
+    return null
+  }
+}
+
+export function htmlCedulaMascota({ r, foto, qr = null }) {
   const numero    = numeroCedula(r)
   const expedida  = fechaLarga(r.created_at)
   const nacimiento = dato(r.datos_cliente, 'nacim') || (r.fecha_nacimiento ? fechaLarga(r.fecha_nacimiento) : null)
@@ -125,17 +147,20 @@ export function htmlCedulaMascota({ r, foto }) {
   const reverso = `
 <div class="tarjeta reverso">
   <div class="banda banda-r"><div class="banda-t"><b>DATOS DE CONTACTO</b><span>Si me encuentras, por favor avisa a mi familia</span></div></div>
-  <div class="cuerpo-r">
-    <div class="g2">
-      ${campo('Mi familia', dueno)}
-      ${campo('Teléfono', contacto)}
-      ${campo('Ciudad', r.ciudad)}
-      ${campo('Señas particulares', senas)}
+  <div class="cuerpo-r${qr ? ' con-qr' : ''}">
+    <div class="datos-r">
+      <div class="g2">
+        ${campo('Mi familia', dueno)}
+        ${campo('Teléfono', contacto)}
+        ${campo('Ciudad', r.ciudad)}
+        ${campo('Señas particulares', senas)}
+      </div>
+      <div class="leyenda">
+        Esta cédula identifica a <b>${esc(r.mascota)}</b> como miembro de su familia.
+        Documento expedido por ${esc(EMPRESA.nombre)} · NIT ${esc(EMPRESA.nit)} · ${esc(EMPRESA.telefono)}.
+      </div>
     </div>
-    <div class="leyenda">
-      Esta cédula identifica a <b>${esc(r.mascota)}</b> como miembro de su familia.
-      Documento expedido por ${esc(EMPRESA.nombre)} · NIT ${esc(EMPRESA.nit)} · ${esc(EMPRESA.telefono)}.
-    </div>
+    ${qr ? `<div class="qr"><div class="qr-img">${qr}</div><div class="qr-t">Escanéame para<br>avisar a mi familia</div></div>` : ''}
   </div>
   <div class="pie-t"><span>No. ${esc(numero)}</span><span>${esc(EMPRESA.email)}</span></div>
 </div>`
@@ -182,6 +207,15 @@ export function htmlCedulaMascota({ r, foto }) {
 .pie-t { display: flex; justify-content: space-between; padding: 1mm 3mm 1.4mm; font-size: 5.6px; color: ${P.gris}; border-top: 0.2mm solid ${P.verdeLinea}; }
 .cuerpo-r { flex: 1; padding: 2.4mm 3mm 1mm; display: flex; flex-direction: column; gap: 1.8mm; }
 .cuerpo-r .c .va { white-space: normal; }
+.datos-r { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1.8mm; }
+/* Con QR el reverso va en dos columnas: datos a la izquierda, código a la derecha. */
+.cuerpo-r.con-qr { flex-direction: row; gap: 2.4mm; }
+.cuerpo-r.con-qr .g2 { grid-template-columns: 1fr; }
+.cuerpo-r.con-qr .leyenda { font-size: 5.4px; }
+.qr { width: 23mm; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 0.8mm; }
+.qr-img { width: 23mm; height: 23mm; }
+.qr-img svg { width: 100%; height: 100%; display: block; }
+.qr-t { font-size: 5.4px; font-weight: 700; line-height: 1.2; text-align: center; color: ${P.verde}; }
 .leyenda { margin-top: auto; font-size: 6.2px; line-height: 1.35; color: ${P.gris}; }
 .leyenda b { color: ${P.verde}; }
 .ficha { margin-top: 4mm; }
@@ -203,7 +237,7 @@ export async function cedulaMascotaPdf({ compraId, itemId, foto }) {
   }
   const [r, fotoImg] = await Promise.all([cargarCedula(compraId, itemId), resolverFoto(foto)])
   if (!r) { const e = new Error('No existe esa línea en esa compra'); e.status = 404; throw e }
-  const { html, numero } = htmlCedulaMascota({ r, foto: fotoImg })
+  const { html, numero } = htmlCedulaMascota({ r, foto: fotoImg, qr: await qrDelPropietario(r) })
   const pdf = await renderPdf({ html, formato: 'A4' })
   const archivo = `Cedula_${String(r.mascota || 'mascota').replace(/[^\w.-]+/g, '_')}_${numero}.pdf`
   return { pdf, archivo }

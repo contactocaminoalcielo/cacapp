@@ -23,6 +23,18 @@ import { jobEncuestaEntrega } from './jobs/encuesta-entrega.js'
 import { datosPortalOpinion, guardarComentarioOpinion, marcarAtendido } from './encuesta-entrega.js'
 import { jobCondolencias } from './jobs/condolencias.js'
 import { listarCondolencias, excluirCondolencia, reincluirCondolencia } from './condolencias.js'
+import { jobOfertaPosterior } from './jobs/oferta-posterior.js'
+import {
+  listarOfertas, excluirOferta, reincluirOferta,
+  listarExclusiones, crearExclusion, retirarExclusion,
+} from './oferta-posterior.js'
+import {
+  verOferta, eventoOferta, borradorOferta, comprarOferta,
+  solicitarAfiliacion, reportarPagoAfiliacion, bajaOferta,
+} from './oferta-portal.js'
+import {
+  listarVentas, detalleVenta, cambiarEstadoVenta, validarPagoVenta, notaVenta, vincularAfiliacion,
+} from './ventas-posteriores.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
 import { cedulaMascotaPdf } from './pdf-plantillas/cedula-mascota.js'
@@ -1415,6 +1427,86 @@ app.post('/condolencias/:id/reincluir', requireAuth, requireRol('COORDINADOR', '
     res.status(500).json({ ok: false, error: e.message })
   }
 })
+
+// ── Oferta posterior al servicio + Ventas posteriores (migración 210) ──
+// Job 14:00 L-V: prepara y revisa siempre; envía solo encendido y con plantilla.
+// ?dry=1 → solo cuenta, sin escribir ni enviar.
+app.post('/jobs/oferta-posterior', requireJob, async (req, res) => {
+  try {
+    res.json(await jobOfertaPosterior({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[oferta-posterior/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Todo /ventas-posteriores es de coordinación: las solicitudes traen cédula,
+// dirección y teléfono de la familia.
+const rolVentasPost = requireRol('COORDINADOR', 'ADMIN')
+const rutaVentasPost = (tag, fn) => async (req, res) => {
+  try {
+    const r = await fn(req)
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    log(`[ventas-posteriores] ERROR ${tag}`, e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+}
+
+// Pestaña «Envíos»: lo de un día (?fecha=YYYY-MM-DD, por defecto hoy).
+app.get('/oferta-posterior', requireAuth, rolVentasPost, rutaVentasPost('envios', async req =>
+  ({ status: 200, body: { ok: true, ...(await listarOfertas({ fecha: req.query.fecha || null })) } })))
+app.post('/oferta-posterior/:id/excluir', requireAuth, rolVentasPost, rutaVentasPost('excluir', req =>
+  excluirOferta({ id: req.params.id, motivo: req.body?.motivo, noVolver: req.body?.no_volver === true, personalId: req.personal.id })))
+app.post('/oferta-posterior/:id/reincluir', requireAuth, rolVentasPost, rutaVentasPost('reincluir', req =>
+  reincluirOferta({ id: req.params.id })))
+
+// Pestaña «No contactar».
+app.get('/oferta-posterior-exclusiones', requireAuth, rolVentasPost, rutaVentasPost('exclusiones', async () =>
+  ({ status: 200, body: { ok: true, exclusiones: await listarExclusiones() } })))
+app.post('/oferta-posterior-exclusiones', requireAuth, rolVentasPost, rutaVentasPost('excluir familia', req =>
+  crearExclusion({ telefono: req.body?.telefono, motivo: req.body?.motivo, personalId: req.personal.id })))
+app.post('/oferta-posterior-exclusiones/:id/retirar', requireAuth, rolVentasPost, rutaVentasPost('retirar exclusion', req =>
+  retirarExclusion({ id: req.params.id, personalId: req.personal.id })))
+
+// Las oportunidades. Todo cambio va por POST (el CORS no anuncia PATCH).
+app.get('/ventas-posteriores', requireAuth, rolVentasPost, rutaVentasPost('listar', async req =>
+  ({ status: 200, body: { ok: true, ...(await listarVentas({ categoria: req.query.categoria, estado: req.query.estado, q: req.query.q })) } })))
+app.get('/ventas-posteriores/:id', requireAuth, rolVentasPost, rutaVentasPost('detalle', req =>
+  detalleVenta({ id: req.params.id })))
+app.post('/ventas-posteriores/:id/estado', requireAuth, rolVentasPost, rutaVentasPost('estado', req =>
+  cambiarEstadoVenta({ id: req.params.id, estado: req.body?.estado, nota: req.body?.nota, personalId: req.personal.id })))
+app.post('/ventas-posteriores/:id/validar-pago', requireAuth, rolVentasPost, rutaVentasPost('validar pago', req =>
+  validarPagoVenta({ id: req.params.id, nota: req.body?.nota, personalId: req.personal.id })))
+app.post('/ventas-posteriores/:id/nota', requireAuth, rolVentasPost, rutaVentasPost('nota', req =>
+  notaVenta({ id: req.params.id, texto: req.body?.texto, personalId: req.personal.id })))
+app.post('/ventas-posteriores/:id/afiliacion', requireAuth, rolVentasPost, rutaVentasPost('afiliacion', req =>
+  vincularAfiliacion({ id: req.params.id, afiliacionId: req.body?.afiliacion_id, personalId: req.personal.id })))
+
+// ── Portal público /#/oferta/CODIGO (migración 210) ──
+// Sin sesión: la llave es el código de la oferta. El precio lo pone el backend.
+const rutaPortalOferta = (tag, fn) => async (req, res) => {
+  try {
+    const r = await fn(req)
+    res.status(r.status).json(r.body)
+  } catch (e) {
+    errorInterno(res, `portal/oferta ${tag}`, e)
+  }
+}
+app.get('/portal/oferta/:codigo', rutaPortalOferta('GET', req =>
+  verOferta({ codigo: req.params.codigo })))
+app.post('/portal/oferta/:codigo/evento', rutaPortalOferta('evento', req =>
+  eventoOferta({ codigo: req.params.codigo, payload: req.body || {} })))
+app.post('/portal/oferta/:codigo/borrador', rutaPortalOferta('borrador', req =>
+  borradorOferta({ codigo: req.params.codigo, contexto: contextoPeticion(req) })))
+app.post('/portal/oferta/:codigo/compra', rutaPortalOferta('compra', req =>
+  comprarOferta({ codigo: req.params.codigo, payload: req.body || {}, contexto: contextoPeticion(req) })))
+app.post('/portal/oferta/:codigo/afiliacion', rutaPortalOferta('afiliacion', req =>
+  solicitarAfiliacion({ codigo: req.params.codigo, payload: req.body || {}, contexto: contextoPeticion(req) })))
+app.post('/portal/oferta/:codigo/afiliacion/pago', rutaPortalOferta('pago', req =>
+  reportarPagoAfiliacion({ codigo: req.params.codigo, payload: req.body || {} })))
+app.post('/portal/oferta/:codigo/baja', rutaPortalOferta('baja', req =>
+  bajaOferta({ codigo: req.params.codigo })))
 
 // ── Portal público /#/opinion/CODIGO: el comentario de Regular / Malo ──
 // El código es propio de la encuesta (no el del portal de fotos).
