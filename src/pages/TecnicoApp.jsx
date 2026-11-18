@@ -6871,6 +6871,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           : `Hay ${mediosEnCero.length} medios de pago en $0 (${mediosEnCero.map(m => m.metodo).join(', ')}). Escribe sus montos o quítalos antes de guardar.`)
         return
       }
+      // 🔒 Pago digital SIN comprobante no se guarda (reporte de Orbit, 18-nov-2026).
+      // Antes el recibo se guardaba igual y la prueba quedaba «para después»:
+      // 4 de cada 10 llegaban tarde y coordinación tenía que perseguirlas.
+      if (comprobantesPendientes.length > 0) {
+        const nombres = comprobantesPendientes.map(m => m.metodo).join(', ')
+        setErr(comprobantesPendientes.some(m => m.subiendoComprobante)
+          ? `El comprobante de ${nombres} todavía se está subiendo. Espera a que termine y vuelve a guardar.`
+          : `Falta el comprobante de ${nombres}. Sube la foto o el PDF del pago para poder guardar el recibo.`)
+        return
+      }
     }
     // Cobrar más que el recibo se permite, pero SIEMPRE explicando la diferencia
     if (haySobrepago && !sobrepagoMotivo.trim()) {
@@ -6889,8 +6899,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   async function ejecutarGuardado() {
     setConfirmarGuardado(false)
-    // El comprobante NO bloquea la creación del recibo: si falta, el recibo
-    // se guarda igual y queda como "comprobante pendiente" para reintentar
+    // Desde el 18-nov-2026 `guardarRecibo` no deja llegar aquí con un pago
+    // digital sin comprobante; la lista queda vacía salvo en recibos viejos.
     const sinComprobante = comprobantesPendientes
     setGuardando(true); setErr('')
     try {
@@ -8313,7 +8323,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
                     {/* Upload comprobante */}
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                      Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#D97706' }}>(pendiente ⏳)</span>}
+                      Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#DC2626' }}>(obligatorio para guardar)</span>}
                     </div>
                     {/* Los inputs de archivo NO viven aquí: la subida se hace desde
                         una pantalla liviana (setComproOverlay) para no morir por RAM. */}
@@ -8355,7 +8365,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                             {reanudando ? 'Reanudando la subida…' : 'Subiendo comprobante…'}
                           </p>
                           <p className="text-[11px] text-blue-600">
-                            Puedes seguir con el recibo — se guarda solo cuando termine.
+                            Puedes seguir llenando el recibo — para guardarlo debe terminar de subir.
                           </p>
                         </div>
                       </div>
@@ -8785,13 +8795,6 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                       </p>
                     )}
 
-                    {comprobantesPendientes.length > 0 && (
-                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
-                        style={{ background: '#FFEDD5', color: '#9A3412' }}>
-                        ⏳ Falta el comprobante de {comprobantesPendientes.map(m => m.metodo).join(', ')}.
-                        El recibo se guarda igual y lo puedes subir después desde Recibos.
-                      </p>
-                    )}
                   </>
                 )}
               </div>
