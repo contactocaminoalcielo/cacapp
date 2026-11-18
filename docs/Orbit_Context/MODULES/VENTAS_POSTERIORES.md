@@ -132,6 +132,15 @@ Configuración: `config_operativa`, módulo `OFERTA_POSTERIOR` (20 claves). Se e
 | Precio de cada plan | Configuración › Afiliaciones |
 | Valor del envío y datos de pago | Los del catálogo público (los datos de pago se pueden pisar aquí) |
 
+
+## Burbuja del menú
+
+El número junto a «Ventas posteriores» es **lo que espera una acción del equipo**. Lo calcula `contarPendientes()` en `orbit-backend/src/ventas-posteriores.js` y lo sirve `GET /ventas-posteriores-pendientes` (solo COORDINADOR/ADMIN); `BadgesContext` lo pide cada 60 s. No va en el RPC `orbit_contadores` porque estas tablas están cerradas al navegador.
+
+- Pre-exequiales en `FORMULARIO_COMPLETO`, `PENDIENTE_PAGO`, `PAGO_REPORTADO`, `PAGO_VALIDADO`, `PENDIENTE_CONTRATO` o `CONTRATO_GENERADO`.
+- Compras de recordatorios o cédulas (no cerradas) con su compra viva y `valor_pagado < total`.
+
+No cuenta `INTERESADO` ni `FORMULARIO_INICIADO`: son interés, no tarea. Si falla, solo esa burbuja se queda quieta.
 ## Despliegue (en este orden)
 
 1. Migración 210 por `!` (ver `memory/ops_aplicar_migraciones_vps.md`).
