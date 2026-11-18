@@ -2192,39 +2192,7 @@ export default function TecnicoApp() {
         // cuadró y cerró con él.
         (async () => {
           try {
-            const { data: recs } = await db.from('recibos_tecnico')
-              .select('id, servicio_id, medios_pago, servicios!inner(fecha_ingreso, estado)')
-              .eq('tecnico_id', tecnico.id)
-              .gte('servicios.fecha_ingreso', FECHA_CORTE)
-              .order('created_at', { ascending: false }).limit(300)
-            const candidatos = (recs || []).filter(r =>
-              r.servicios?.estado !== 'CANCELADO' &&
-              Array.isArray(r.medios_pago) && r.medios_pago.some(m =>
-                METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0 && !m.comprobanteUrl)
-            )
-            const idsSvc = [...new Set(candidatos.map(r => r.servicio_id).filter(Boolean))]
-            let n = candidatos.length
-            if (idsSvc.length) {
-              const porSvc = {}, porRec = {}
-              const [comps, items] = await Promise.all([
-                dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
-                  q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO')),
-                dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc),
-              ])
-              for (const c of comps) {
-                if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
-                if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
-              }
-              const cuadrados = new Set(
-                items
-                  .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnico.id)
-                  .map(ci => ci.servicio_id)
-              )
-              n = candidatos.filter(r =>
-                (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0) && !cuadrados.has(r.servicio_id)
-              ).length
-            }
-            setCompPend(n)
+            setCompPend(await contarComprobantesPorSubir(tecnico.id))
           } catch (_) { /* badge best-effort */ }
         })(),
 
@@ -3248,6 +3216,23 @@ export default function TecnicoApp() {
 
       {/* ── Contenido — padding-bottom para no quedar tapado por la nav ── */}
       <div className="flex-1 p-4 pb-24">
+        {/* Aviso al abrir: comprobantes que le toca subir (18-nov-2026). Antes
+            solo había un numerito en la pestaña y se quedaban días sin subir. */}
+        {!loading && compPend > 0 && tab !== 'comprobantes' && (
+          <button onClick={() => setTab('comprobantes')}
+            className="w-full text-left flex items-center gap-3 px-4 py-3 rounded-2xl mb-3 active:scale-[0.99] transition-transform"
+            style={{ background: '#FEF2F2', border: '1.5px solid #FECACA' }}>
+            <AlertCircle size={20} style={{ color: '#DC2626' }} className="flex-shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] font-bold text-red-800">
+                Tienes {compPend} comprobante{compPend !== 1 ? 's' : ''} de pago por subir
+              </span>
+              <span className="block text-[11px] text-red-700 leading-snug">
+                Sin {compPend !== 1 ? 'ellos' : 'él'} no podrás confirmar tu cuadre. Toca aquí para subir{compPend !== 1 ? 'los' : 'lo'}.
+              </span>
+            </span>
+          </button>
+        )}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400">
             <div className="spinner" /><span className="text-sm">Cargando…</span>
@@ -3406,7 +3391,7 @@ export default function TecnicoApp() {
         ) : tab === 'comprobantes' ? (
           <ComprobanteTab tecnico={tecnico} onCount={setCompPend} />
         ) : tab === 'mis_cuadres' ? (
-          <MisCuadresTab tecnico={tecnico} />
+          <MisCuadresTab tecnico={tecnico} onIrComprobantes={() => setTab('comprobantes')} />
         ) : null}
       </div>
 
@@ -3557,7 +3542,10 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
 }
 
 // ─── MIS CUADRES (técnico ve sus pagos de cuadres CERRADOS) ────────────
-function MisCuadresTab({ tecnico }) {
+function MisCuadresTab({ tecnico, onIrComprobantes }) {
+  // 🔒 Candado (18-nov-2026): con comprobantes por subir no se confirma el
+  // cuadre. Es solo del front: la RPC `confirmar_cuadre_por_tecnico` no lo sabe.
+  const [porSubir, setPorSubir] = useState(0)
   // 'bitacora' | 'cuadres' — el aviso de cuadre pendiente abre directo en Cuadres
   // (deja la vista en localStorage antes de cambiar de pestaña; se lee y se limpia)
   const [vista, setVista] = useState(() => {
@@ -3606,6 +3594,8 @@ function CuadresList({ tecnico }) {
       .order('fecha_hasta', { ascending: false })
     setCuadres(data || [])
     setLoading(false)
+    // Si el conteo falla (señal), no se le cierra el cuadre por un error de red.
+    contarComprobantesPorSubir(tecnico.id).then(setPorSubir).catch(() => {})
   }
 
   async function toggle(c) {
@@ -3736,6 +3726,22 @@ function CuadresList({ tecnico }) {
                       Confirmaste este cuadre el {fechaHora(c.tecnico_confirmado_en)}.
                       {c.tecnico_observacion && <span className="block font-normal text-gray-600 mt-0.5">Tu observación: “{c.tecnico_observacion}”</span>}
                     </span>
+                  </div>
+                ) : porSubir > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-[12px] font-semibold text-red-700 flex items-start gap-1.5">
+                      <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        Tienes {porSubir} comprobante{porSubir !== 1 ? 's' : ''} de pago por subir.
+                        Súbelo{porSubir !== 1 ? 's' : ''} para poder confirmar tu cuadre. Si ya no
+                        lo{porSubir !== 1 ? 's' : ''} puedes conseguir, avísale a coordinación.
+                      </span>
+                    </p>
+                    <button onClick={onIrComprobantes}
+                      className="w-full py-2.5 rounded-xl text-[13px] font-bold text-white transition-all active:scale-95"
+                      style={{ background: '#DC2626' }}>
+                      Ir a subir comprobantes
+                    </button>
                   </div>
                 ) : (
                   <>
@@ -5398,6 +5404,72 @@ const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJET
 // Métodos que requieren comprobante/referencia
 const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
 
+// ── Motivos de «Pago pendiente» (18-nov-2026) ───────────────────────────────
+// Antes era un interruptor sin explicación: 1 de cada 5 recibos se cerraba así
+// y coordinación tenía que averiguar por qué. Se guarda en
+// `recibos_tecnico.datos_form.pago_pendiente_motivo` (+ `_detalle`).
+const MOTIVOS_PAGO_PENDIENTE = [
+  { key: 'VET_PAGA_DESPUES',   label: 'La veterinaria paga después' },
+  { key: 'CLIENTE_TRANSFIERE', label: 'El cliente transfiere más tarde' },
+  { key: 'SIN_COMPROBANTE',    label: 'Ya pagaron, no pude subir el comprobante' },
+  { key: 'NADIE_PAGA',         label: 'No había quién pagara' },
+  { key: 'OTRO',               label: 'Otro motivo' },
+]
+// Con estos dos motivos el comprobante lo debe conseguir el TÉCNICO: cuentan
+// como tarea suya (badge, pestaña Comprobantes y candado del cuadre). Los demás
+// son cuentas por cobrar de coordinación — puede que nunca se paguen.
+const MOTIVOS_PP_TAREA_TECNICO = ['CLIENTE_TRANSFIERE', 'SIN_COMPROBANTE']
+const etiquetaMotivoPP = k => MOTIVOS_PAGO_PENDIENTE.find(m => m.key === k)?.label || ''
+
+// Cuántos comprobantes le toca subir a este técnico. Fuente ÚNICA del badge,
+// del aviso al abrir la app y del candado de «Mis cuadres»; mismo criterio que
+// la pestaña Comprobantes (estado PENDIENTE), o el número manda a una pantalla
+// que ya está al día. Deja de ser tarea suya cuando: la oficina ya subió prueba
+// colgada del SERVICIO (`recibo_id` NULL), el servicio ya se cuadró y CERRÓ con
+// él o —en un pago pendiente— el servicio ya quedó pagado.
+async function contarComprobantesPorSubir(tecnicoId) {
+  if (!tecnicoId) return 0
+  const { data: recs, error } = await db.from('recibos_tecnico')
+    .select('id, servicio_id, medios_pago, pp:datos_form->>pago_pendiente, pp_motivo:datos_form->>pago_pendiente_motivo, servicios!inner(fecha_ingreso, estado, estado_pago, valor_total, valor_pagado)')
+    .eq('tecnico_id', tecnicoId)
+    .gte('servicios.fecha_ingreso', FECHA_CORTE)
+    .order('created_at', { ascending: false }).limit(300)
+  if (error) throw error
+  const digitales = r => (Array.isArray(r.medios_pago) ? r.medios_pago : [])
+    .filter(m => METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)
+  const faltaDigital = r => digitales(r).some(m => !m.comprobanteUrl)
+  // `->>` devuelve TEXTO ('true'), mismo patrón ya probado en Kanban.jsx
+  const esTareaPP    = r => r.pp === 'true' && digitales(r).length === 0
+    && MOTIVOS_PP_TAREA_TECNICO.includes(r.pp_motivo)
+  const candidatos = (recs || []).filter(r =>
+    r.servicios?.estado !== 'CANCELADO' && (faltaDigital(r) || esTareaPP(r)))
+  const idsSvc = [...new Set(candidatos.map(r => r.servicio_id).filter(Boolean))]
+  if (!idsSvc.length) return candidatos.length
+  const porSvc = {}, porRec = {}
+  const [comps, items] = await Promise.all([
+    dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
+      q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO')),
+    dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc),
+  ])
+  for (const c of comps) {
+    if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
+    if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
+  }
+  const cuadrados = new Set(
+    items
+      .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnicoId)
+      .map(ci => ci.servicio_id)
+  )
+  return candidatos.filter(r => {
+    if (cuadrados.has(r.servicio_id)) return false
+    if (faltaDigital(r)) return (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0)
+    const s = r.servicios || {}
+    const pagado = s.estado_pago === 'COMPLETO'
+      || (Number(s.valor_total) > 0 && Number(s.valor_pagado || 0) >= Number(s.valor_total))
+    return !pagado && !(porSvc[r.servicio_id] > 0)
+  }).length
+}
+
 // ─── COMPROBANTES (pestaña independiente) ───────────────────────────────────
 // Por qué existe separado del recibo: en celulares con poca RAM, abrir el
 // selector de archivos desde la pantalla PESADA del recibo (preview + firma +
@@ -5744,6 +5816,10 @@ function ComprobanteTab({ tecnico, onCount }) {
         // Cerrado como PAGO PENDIENTE: sin medios y sin cobro. Tiene su propio
         // grupo porque no es una tarea del técnico, es una cuenta por cobrar.
         const pagoPend   = esPagoPendiente(r) && digital.length === 0
+        // …salvo que el motivo diga que la prueba la consigue él («el cliente
+        // transfiere más tarde», «no pude subirlo»): eso SÍ es tarea suya.
+        const motivoPP   = pagoPend ? (r.datos_form?.pago_pendiente_motivo || '') : ''
+        const tareaPP    = pagoPend && MOTIVOS_PP_TAREA_TECNICO.includes(motivoPP)
         // Efectivo, o sin cobro en el recibo: no hay medio digital al que
         // colgarle la prueba. Como en un pago pendiente, solo se ADJUNTA.
         const sinDigital = !pagoPend && digital.length === 0
@@ -5782,14 +5858,16 @@ function ComprobanteTab({ tecnico, onCount }) {
           pagoPendiente: pagoPend,
           soloAdjunto,
           motivo,
-          estado: motivo ? 'RESUELTO' : (pagoPend ? 'PAGO_PENDIENTE' : 'PENDIENTE'),
+          motivoPP: etiquetaMotivoPP(motivoPP),
+          estado: motivo ? 'RESUELTO' : (pagoPend && !tareaPP ? 'PAGO_PENDIENTE' : 'PENDIENTE'),
         })
       }
       setItems(lista)
-      // El contador de la pestaña sigue contando SOLO los pagos digitales sin
-      // comprobante: son los que el técnico tiene que resolver. Un pago
-      // pendiente no es una tarea suya —puede que el cliente nunca pague— así
-      // que no debe encender el badge.
+      // El contador cuenta lo que el técnico tiene que resolver: pagos digitales
+      // sin comprobante y pagos pendientes cuyo motivo lo deja a su cargo
+      // (`MOTIVOS_PP_TAREA_TECNICO`). Los demás pagos pendientes no son tarea
+      // suya —puede que el cliente nunca pague— y no encienden el badge.
+      // Mismo criterio que `contarComprobantesPorSubir`.
       if (onCount) onCount(lista.filter(i => i.estado === 'PENDIENTE').length)
     } catch (e) {
       setListErr(e.message || 'Error al cargar comprobantes')
@@ -6009,7 +6087,9 @@ function ComprobanteTab({ tecnico, onCount }) {
                       </div>
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                         <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FFEDD5', color: '#9A3412' }}>
-                          {item.metodos.join(', ')} - {fmt(item.monto)}
+                          {item.pagoPendiente
+                            ? `PAGO PENDIENTE${item.motivoPP ? ' · ' + item.motivoPP : ''}`
+                            : `${item.metodos.join(', ')} - ${fmt(item.monto)}`}
                         </span>
                         <span className="text-[10px] text-gray-400">No. {item.numero}</span>
                       </div>
@@ -6045,7 +6125,7 @@ function ComprobanteTab({ tecnico, onCount }) {
                           </div>
                           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                             <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>
-                              PAGO PENDIENTE
+                              PAGO PENDIENTE{item.motivoPP ? ` · ${item.motivoPP}` : ''}
                             </span>
                             <span className="text-[10px] text-gray-400">No. {item.numero}</span>
                           </div>
@@ -6281,6 +6361,33 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   const [ajusteExistente,  setAjusteExistente]  = useState(null)   // anotación previa de esta mascota, si la hay
   const [bitacoraEncolada, setBitacoraEncolada] = useState(false)  // se respondió sin señal: sube sola después
   const [pagoPendiente, setPagoPendiente] = useState(reciboExistente?.datos_form?.pago_pendiente || false)
+  // Por qué queda pendiente (obligatorio desde el 18-nov-2026) — ver MOTIVOS_PAGO_PENDIENTE
+  const [ppMotivo,  setPpMotivo]  = useState(reciboExistente?.datos_form?.pago_pendiente_motivo  || '')
+  const [ppDetalle, setPpDetalle] = useState(reciboExistente?.datos_form?.pago_pendiente_detalle || '')
+  const ppMotivoTxt = pagoPendiente && ppMotivo
+    ? ` Motivo: ${etiquetaMotivoPP(ppMotivo)}${ppDetalle.trim() ? ' — ' + ppDetalle.trim() : ''}.`
+    : ''
+  // Aviso a coordinación en el momento (best-effort: nunca frena el guardado).
+  // Solo en recibos NUEVOS, o editar uno viejo volvería a avisar.
+  function avisarPagoPendiente() {
+    if (!pagoPendiente || reciboExistente) return
+    ;(async () => {
+      try {
+        const { data: coords } = await db.from('personal')
+          .select('id').in('rol_principal_id', [1, 6]).eq('activo', true)
+        const mascota = svcData?.mascotas?.nombre || 'la mascota'
+        await Promise.all((coords || []).map(c => crearNotificacion({
+          para_personal_id: c.id,
+          de_personal_id:   tecnico?.id,
+          tipo:             'RECIBO_PAGO_PENDIENTE',
+          titulo:           `${tecnico?.nombre || 'El técnico'} dejó un pago pendiente`,
+          mensaje:          `Recibo ${form.numero_recibo} de ${mascota} sin cobro.${ppMotivoTxt}`,
+          servicio_id:      servicioSel.id,
+          datos:            { recibo: form.numero_recibo, motivo: ppMotivo, detalle: ppDetalle.trim() || null },
+        })))
+      } catch (_) { /* best-effort */ }
+    })()
+  }
   // Comisiones viejas de la veterinaria marcadas para pagarle en este recibo
   // (migración 166). Los estados viven aquí arriba, con los demás: el efecto que
   // guarda el borrador los lleva en su lista de dependencias y esa lista se
@@ -6341,6 +6448,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }
       if (draft.tipoRecibo)                   setTipoRecibo(draft.tipoRecibo)
       if (draft.pagoPendiente !== undefined)  setPagoPendiente(draft.pagoPendiente)
+      if (draft.ppMotivo)                     setPpMotivo(draft.ppMotivo)
+      if (draft.ppDetalle)                    setPpDetalle(draft.ppDetalle)
       if (Array.isArray(draft.adicExcluidos)) setAdicExcluidos(new Set(draft.adicExcluidos))
       if (Array.isArray(draft.comisSel))      setComisSel(new Set(draft.comisSel))
       if (draft.eutanasiaCobro !== undefined)  setEutanasiaCobro(draft.eutanasiaCobro)
@@ -6351,7 +6460,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
     if (guardado) { localStorage.removeItem(DRAFT_KEY); return }
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        form, mediosPago, tipoRecibo, pagoPendiente,
+        form, mediosPago, tipoRecibo, pagoPendiente, ppMotivo, ppDetalle,
         // Sin esto, al volver de otra pestaña el importe seguía rebajado pero
         // las casillas salían todas marcadas: el técnico no entendía por qué.
         adicExcluidos: [...adicExcluidos], eutanasiaCobro,
@@ -6362,7 +6471,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       }))
     } catch (_) {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente, eutanasiaCobro, comisSel])
+  }, [form, mediosPago, tipoRecibo, guardado, pagoPendiente, ppMotivo, ppDetalle, eutanasiaCobro, comisSel])
 
   // ── Reanudar comprobantes que quedaron a medias si la app se reinició ──
   // El archivo quedó en IndexedDB (stashPut antes de subir); aquí se retoma
@@ -6798,7 +6907,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       : null
     let novedadNota = null
     if (pagoPendiente) {
-      novedadNota = `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`
+      novedadNota = `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.${ppMotivoTxt}`
     } else if (esFacturacionMensual) {
       const etiqueta = tipoRecibo === 'VETERINARIA' ? 'VET' : 'CLIENTE'
       novedadNota = comisionFueDescontada
@@ -6879,6 +6988,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         setErr(comprobantesPendientes.some(m => m.subiendoComprobante)
           ? `El comprobante de ${nombres} todavía se está subiendo. Espera a que termine y vuelve a guardar.`
           : `Falta el comprobante de ${nombres}. Sube la foto o el PDF del pago para poder guardar el recibo.`)
+        return
+      }
+    }
+    // 🔒 «Pago pendiente» ya no es un interruptor mudo: exige el motivo.
+    if (pagoPendiente && !esFacturacionMensual) {
+      if (!ppMotivo) {
+        setErr('Elige por qué queda el pago pendiente antes de guardar.')
+        return
+      }
+      if (ppMotivo === 'OTRO' && !ppDetalle.trim()) {
+        setErr('Escribe cuál es el motivo del pago pendiente antes de guardar.')
         return
       }
     }
@@ -6963,7 +7083,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         p_hora_emision:           horaActual,
         p_valor_total:            desglose.valorRecibo,
         p_medios:                 medios,
-        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados, eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null, eutanasia_valor: valorEutanasia || null, comisiones_cruzadas: cruces },
+        p_datos_form:             { ...form, pago_pendiente: pagoPendiente, pago_pendiente_motivo: pagoPendiente ? (ppMotivo || null) : null, pago_pendiente_detalle: pagoPendiente ? (ppDetalle.trim() || null) : null, facturacion_mensual: esFacturacionMensual, adicionales_no_cobrados: adicionalesNoCobrados, eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null, eutanasia_valor: valorEutanasia || null, comisiones_cruzadas: cruces },
         p_pago_pendiente:         pagoPendiente,
         p_es_facturacion_mensual: esFacturacionMensual,
         p_actor_id:               tecnico?.id || null,
@@ -7032,6 +7152,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       if (res.pago_registrado) setPagoRegistrado(true)
       setGuardado(true)
       setTipoFijado(true)
+      avisarPagoPendiente()
       limpiarIdemKey()
       abrirBitacoraDeEsteRecibo()
       marcarEutanasiaCobradaPorTecnico()
@@ -7070,7 +7191,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         valor_cobrado:   valorCobrado,
         medios_pago:     sinCobroAhora ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
         datos_form:      {
-          ...form, pago_pendiente: pagoPendiente, facturacion_mensual: esFacturacionMensual,
+          ...form, pago_pendiente: pagoPendiente, pago_pendiente_motivo: pagoPendiente ? (ppMotivo || null) : null, pago_pendiente_detalle: pagoPendiente ? (ppDetalle.trim() || null) : null, facturacion_mensual: esFacturacionMensual,
           adicionales_no_cobrados: adicionalesNoCobrados,
           eutanasia_cobrada_por: eutanasiaCobro || eutanasiaDecidida || null,
           eutanasia_valor: valorEutanasia || null,
@@ -7086,7 +7207,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         await db.from('novedades_servicio').insert({
           servicio_id:    servicioSel.id,
           tipo_novedad:   'NOTA',
-          descripcion:    `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.`,
+          descripcion:    `Recibo generado con pago pendiente — ${fmt(Math.max(0, (Number(svcData.valor_total) || 0) - montoEutanasiaFuera))}. El cliente liquidará posteriormente. No. ${form.numero_recibo}.${ppMotivoTxt}`,
           registrado_por: tecnico?.id || null,
         })
       } else if (esFacturacionMensual) {
@@ -7168,6 +7289,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
     setGuardado(true)
     setTipoFijado(true)
+    avisarPagoPendiente()
     limpiarIdemKey()
     abrirBitacoraDeEsteRecibo()
     marcarEutanasiaCobradaPorTecnico()
@@ -8244,7 +8366,46 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           <div className="rounded-2xl px-4 py-3 flex items-start gap-3"
             style={{ background: '#FFFBEB', border: '1.5px solid #FDE68A' }}>
             <span className="text-xl flex-shrink-0">⏳</span>
-            <div>
+            <div className="flex-1 min-w-0">
+              {/* Motivo obligatorio (18-nov-2026) */}
+              {!guardado && (
+                <div className="mb-3">
+                  <p className="text-[11px] font-bold text-amber-900 uppercase tracking-wide mb-1.5">
+                    ¿Por qué queda pendiente? <span style={{ color: '#DC2626' }}>(obligatorio)</span>
+                  </p>
+                  <div className="space-y-1.5">
+                    {MOTIVOS_PAGO_PENDIENTE.map(mt => {
+                      const sel = ppMotivo === mt.key
+                      return (
+                        <button key={mt.key} type="button" onClick={() => setPpMotivo(mt.key)}
+                          className="w-full text-left px-3 py-2.5 rounded-xl text-[12px] font-semibold flex items-center gap-2 active:scale-[0.99] transition-transform"
+                          style={{
+                            background: sel ? '#F59E0B' : '#fff',
+                            color:      sel ? '#fff' : '#92400E',
+                            border:     `1.5px solid ${sel ? '#F59E0B' : '#FDE68A'}`,
+                          }}>
+                          <span className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                            style={{ border: `2px solid ${sel ? '#fff' : '#FCD34D'}` }}>
+                            {sel && <span className="w-2 h-2 rounded-full bg-white" />}
+                          </span>
+                          {mt.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {ppMotivo && (
+                    <textarea rows={2} value={ppDetalle} onChange={e => setPpDetalle(e.target.value)}
+                      placeholder={ppMotivo === 'OTRO' ? 'Escribe el motivo (obligatorio)' : 'Detalle (opcional): quién paga, cuándo…'}
+                      className="w-full mt-2 px-3 py-2 rounded-xl border text-[12px] outline-none resize-none bg-white"
+                      style={{ borderColor: '#FCD34D' }} />
+                  )}
+                  {MOTIVOS_PP_TAREA_TECNICO.includes(ppMotivo) && (
+                    <p className="text-[11px] text-red-700 font-semibold mt-1.5 leading-snug">
+                      Te queda a ti subir el comprobante (pestaña Comprob.). Mientras no lo subas no podrás confirmar tu cuadre.
+                    </p>
+                  )}
+                </div>
+              )}
               <p className="text-[12px] font-bold text-amber-800">Pago pendiente — sin cobro en este momento</p>
               <p className="text-[11px] text-amber-700 mt-0.5">
                 El valor de <strong>{fmt(tipoRecibo === 'CLIENTE' && comisionFueDescontada ? precioServicio : saldoPendienteDoc)}</strong> quedará pendiente. El recibo se guarda como constancia del servicio.
