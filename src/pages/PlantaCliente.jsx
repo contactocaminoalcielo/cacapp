@@ -185,6 +185,25 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   // como confirmación, pero mirar una tarjeta de solo lectura no.
   const refEleccion = useRef(null)
   const refEntrega  = useRef(null)
+  // 🩸 La barra de envío es `fixed` y su alto CAMBIA (la casilla de datos se
+  // parte en más líneas en pantallas angostas, aparece el total de adicionales,
+  // aparece la pista). Con un hueco fijo de 10.5rem la última tarjeta —Pescadito—
+  // quedaba debajo de la barra y no se podía bajar más (reporte del 18-nov-2026).
+  // Se mide la barra de verdad y se reserva ese alto.
+  const [barraEnvio, setBarraEnvio] = useState(null)
+  const [altoBarra, setAltoBarra]   = useState(0)
+  useEffect(() => {
+    if (!barraEnvio) return
+    const medir = () => setAltoBarra(Math.ceil(barraEnvio.getBoundingClientRect().height))
+    medir()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', medir)
+      return () => window.removeEventListener('resize', medir)
+    }
+    const ro = new ResizeObserver(medir)
+    ro.observe(barraEnvio)
+    return () => ro.disconnect()
+  }, [barraEnvio])
   const [senalado, setSenalado] = useState('')
   const [entrega,    setEntrega]    = useState(ENTREGA_VACIA)
   const [autorizo,   setAutorizo]   = useState(false)
@@ -439,7 +458,7 @@ export default function PlantaCliente({ codigo: codigoProp }) {
   // ── Formulario ─────────────────────────────────────────────────────────────
   return (
     <Marco doble>
-      <motion.div {...entra} className="pt-14" style={{ paddingBottom: '10.5rem' }}>
+      <motion.div {...entra} className="pt-14" style={{ paddingBottom: altoBarra ? `${altoBarra + 28}px` : '16rem' }}>
 
         {/* El nombre de la mascota es lo más grande de la pantalla: es de lo
             único que trata. El saludo va DENTRO de la frase y no como rótulo
@@ -709,7 +728,8 @@ export default function PlantaCliente({ codigo: codigoProp }) {
       </motion.div>
 
       {/* ── Barra de envío ── */}
-      <div className="vv-vidrio vv-vidrio-hondo fixed left-0 right-0 bottom-0 z-20 px-5 pt-3.5"
+      <div ref={setBarraEnvio}
+           className="vv-vidrio vv-vidrio-hondo fixed left-0 right-0 bottom-0 z-20 px-5 pt-3.5"
            style={{ borderRadius: '28px 28px 0 0', borderBottom: 'none',
                     boxShadow: '0 -18px 40px -30px rgba(18,48,33,0.6)',
                     paddingBottom: 'calc(0.95rem + env(safe-area-inset-bottom))' }}>
