@@ -3,6 +3,7 @@ import { cargarContadores } from '@/lib/lecturasOperativas'
 import { lecturaSerial } from '@/lib/lecturas'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatWa } from '@/contexts/ChatWaContext'
+import { orbitApi } from '@/lib/orbitApi'
 
 const BadgesContext = createContext({ kanban: 0, produccion: 0, imagenes: 0, nps: 0, whatsapp: 0 })
 
@@ -14,19 +15,29 @@ export function BadgesProvider({ children }) {
   // pasan por aquí y el backend les respondería 403 cada minuto.
   // PRODUCTOR sí (21-oct): atiende la línea de familias y el backend se la fija.
   const veWhatsapp = ['COORDINADOR', 'ADMIN', 'PRODUCTOR'].includes(personalData?.rol)
+  // Ventas posteriores (migr. 210): sus tablas están cerradas al navegador, así
+  // que el número viene de orbit-backend, que solo responde a coordinación.
+  const veVentasPost = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
 
   useEffect(() => {
     let vivo = true
     const fetchBadges = lecturaSerial(async () => {
       if (!vivo) return
-      const datos = await cargarContadores()
+      const datos = { ...(await cargarContadores()) }
+      // Si el backend falla, la burbuja se queda como estaba: no tumba las demás.
+      if (veVentasPost) {
+        try {
+          const r = await orbitApi('/ventas-posteriores-pendientes')
+          datos.ventasPosteriores = Number(r?.total) || 0
+        } catch (e) { console.warn('[Badges] Ventas posteriores:', e.message) }
+      }
       if (vivo) setBadges(b => ({ ...b, ...datos }))
     })
     const tick = () => fetchBadges().catch(error => console.error('[Badges] Refresco falló:', error))
     tick()
     const id = setInterval(tick, 60000)
     return () => { vivo = false; clearInterval(id) }
-  }, [personalData?.id])
+  }, [personalData?.id, veVentasPost])
 
   // Mantener el total de TODAS las líneas, como antes. La línea seleccionada
   // del chat tiene su propio contador y no debe cambiar el badge global.

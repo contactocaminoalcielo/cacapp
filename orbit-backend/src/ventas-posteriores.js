@@ -169,6 +169,32 @@ export async function listarVentas({ categoria = null, estado = null, q = null }
   return { ventas, resumen }
 }
 
+/**
+ * El número de la burbuja del menú: lo que espera una ACCIÓN del equipo.
+ * No cuenta a quien solo tocó un botón o abrió el formulario (eso es interés,
+ * no una tarea). Sí cuenta:
+ *   · pre-exequiales con la solicitud completa y aún sin afiliación activa
+ *     (llamar, validar el pago o crear el contrato);
+ *   · compras de la oferta (recordatorios o cédulas) con pago sin confirmar.
+ */
+export const ESTADOS_PRE_PENDIENTES = [
+  'FORMULARIO_COMPLETO', 'PENDIENTE_PAGO', 'PAGO_REPORTADO',
+  'PAGO_VALIDADO', 'PENDIENTE_CONTRATO', 'CONTRATO_GENERADO',
+]
+export async function contarPendientes() {
+  const { rows: [r] } = await pool.query(
+    `SELECT
+       (SELECT count(*)::int FROM public.ventas_posteriores
+         WHERE categoria = 'PREEXEQUIALES' AND estado = ANY($1::text[])) AS preexequiales,
+       (SELECT count(DISTINCT v.id)::int
+          FROM public.ventas_posteriores v
+          JOIN public.compras_recordatorios k ON k.venta_posterior_id = v.id AND k.anulada_en IS NULL
+         WHERE v.categoria IN ('RECORDATORIOS', 'CEDULAS') AND v.estado <> 'CERRADA_SIN_VENTA'
+           AND COALESCE(k.valor_pagado, 0) < COALESCE(k.total, 0)) AS compras`,
+    [ESTADOS_PRE_PENDIENTES])
+  return { total: r.preexequiales + r.compras, preexequiales: r.preexequiales, compras: r.compras }
+}
+
 export async function detalleVenta({ id }) {
   if (!esUuid(id)) return { status: 400, body: { ok: false, error: 'Id inválido' } }
   const { rows: [v] } = await pool.query(

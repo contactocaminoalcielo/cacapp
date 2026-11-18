@@ -48,7 +48,7 @@ const ALL_NAV_GROUPS = [
       { path: '/gestion',      label: 'Gestión',         icon: Users },
       { path: '/nps',          label: 'NPS & Postventa',  icon: Star,  badge: 'nps' },
       { path: '/condolencias', label: 'Condolencias',     icon: HeartHandshake },
-      { path: '/ventas-posteriores', label: 'Ventas posteriores', icon: HandCoins },
+      { path: '/ventas-posteriores', label: 'Ventas posteriores', icon: HandCoins, badge: 'ventasPosteriores' },
       { path: '/pqr',          label: 'PQR',              icon: MessageSquare },
       { path: '/digitales',    label: 'Digitales',        icon: Film },
       { path: '/ofertas',      label: 'Ofertas',          icon: Tag },

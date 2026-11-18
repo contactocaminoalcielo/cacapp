@@ -34,6 +34,7 @@ import {
 } from './oferta-portal.js'
 import {
   listarVentas, detalleVenta, cambiarEstadoVenta, validarPagoVenta, notaVenta, vincularAfiliacion,
+  contarPendientes,
 } from './ventas-posteriores.js'
 import { estadoPdf } from './pdf.js'
 import { certificadoEntregaPdf } from './pdf-plantillas/certificado-entrega.js'
@@ -1468,6 +1469,11 @@ app.post('/oferta-posterior-exclusiones', requireAuth, rolVentasPost, rutaVentas
   crearExclusion({ telefono: req.body?.telefono, motivo: req.body?.motivo, personalId: req.personal.id })))
 app.post('/oferta-posterior-exclusiones/:id/retirar', requireAuth, rolVentasPost, rutaVentasPost('retirar exclusion', req =>
   retirarExclusion({ id: req.params.id, personalId: req.personal.id })))
+
+// La burbuja del menú (cada minuto). Ruta aparte: bajo /ventas-posteriores/
+// la tomaría /:id.
+app.get('/ventas-posteriores-pendientes', requireAuth, rolVentasPost, rutaVentasPost('pendientes', async () =>
+  ({ status: 200, body: { ok: true, ...(await contarPendientes()) } })))
 
 // Las oportunidades. Todo cambio va por POST (el CORS no anuncia PATCH).
 app.get('/ventas-posteriores', requireAuth, rolVentasPost, rutaVentasPost('listar', async req =>
