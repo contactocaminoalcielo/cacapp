@@ -19,7 +19,7 @@ import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, 
 import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
-import { planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, volumenMesAliado, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
+import { recargoPrioridadDesamparado, planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, volumenMesAliado, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
@@ -588,6 +588,8 @@ export default function Kanban() {
     tipo_acompanamiento: 'PRESENCIAL', tecnico_id: '', valor_total: '', estado_pago: 'PENDIENTE', metodo_pago: '',
     // Proyecto de la Alcaldía (migr. 199): null = sin responder
     es_alcaldia: null,
+    // Prioridad del Desamparado (migr. 211): se SUMA al total al aceptar
+    prioridad: false, recargo_prioridad: '',
   })
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -979,6 +981,10 @@ export default function Kanban() {
       // Lo que respondió la vet en su enlace; si la solicitud no lo trae (vino
       // del enlace público), el coordinador lo responde antes de aceptar.
       es_alcaldia: typeof s.es_alcaldia === 'boolean' ? s.es_alcaldia : null,
+      // Lo que pidió la vet (enlace o agente). El monto se precarga según el día
+      // de hoy y queda editable: en festivo son $20.000 y eso no se detecta solo.
+      prioridad: s.prioridad === true,
+      recargo_prioridad: String(recargoPrioridadDesamparado()),
     })
 
     calcularPrecioPara(planId, s.mascota_peso_kg, s.especie_id).then(precio => {
@@ -1028,6 +1034,15 @@ export default function Kanban() {
       const convPreguntaAlcaldia = !!aliadoSolData?.convenio_alcaldia && planPorId(convForm.plan_id)?.codigo === 'DESAMPARADO'
       if (convPreguntaAlcaldia && convForm.es_alcaldia === null) {
         await showAlert('Indica si la mascota pertenece al proyecto de la Alcaldía.', { title: 'Datos incompletos' })
+        return
+      }
+
+      // Prioridad del Desamparado: marcada sin monto se guardaría en $0 y la
+      // recogida saldría prioritaria sin cobrarse — justo lo que pasaba antes.
+      const convConPrioridad = planPorId(convForm.plan_id)?.codigo === 'DESAMPARADO' && convForm.prioridad === true
+      const prioridadNum = convConPrioridad ? Math.max(0, parseFloat(convForm.recargo_prioridad) || 0) : 0
+      if (convConPrioridad && prioridadNum <= 0) {
+        await showAlert('La recogida está marcada con prioridad pero el recargo está en $0. Ingresa el valor o desmarca la prioridad.', { title: 'Falta el recargo de prioridad' })
         return
       }
 
@@ -1119,7 +1134,11 @@ export default function Kanban() {
         && comisionActual > 0
       // El transporte se SUMA al plan (no comisiona: la comisión es sobre el plan).
       const transporteNum = Math.max(0, parseFloat(convTransporte) || 0)
-      const valorTotal = Math.max(0, valorBruto + transporteNum - (descuentaComision ? comisionActual : 0))
+      // La prioridad del Desamparado también se SUMA (misma convención que
+      // Registro: va dentro de valor_total y explicada en las notas; no tiene
+      // columna de desglose, por eso `valor_plan` sigue siendo solo el plan).
+      const valorTotal = Math.max(0, valorBruto + transporteNum + prioridadNum - (descuentaComision ? comisionActual : 0))
+      const notaPrioridad = prioridadNum > 0 ? `Recogida prioritaria (primeras 24 h) +${fmt(prioridadNum)}` : ''
       const clienteCompleto = `${convForm.cliente_nombre} ${convForm.cliente_apellido || ''}`.trim()
       const direccionRecogida = esVeterinaria
         ? (aliadoActual?.direccion || convForm.direccion || null)
@@ -1137,11 +1156,13 @@ export default function Kanban() {
         ? (aliadoActual?.whatsapp || aliadoActual?.telefono || telefonoCliente)
         : telefonoCliente
       const notasRecogida = [
+        notaPrioridad,
         convForm.hora_aproximada ? `Hora aprox. recogida: ${convForm.hora_aproximada}` : '',
         convForm.notas_cliente || '',
       ].filter(Boolean).join('. ') || null
       const notasServicio = [
         selSolicitud.aliado_nombre_otro ? `Veterinaria indicada por cliente: ${selSolicitud.aliado_nombre_otro}` : '',
+        notaPrioridad,
         convForm.hora_aproximada ? `Hora aprox. recogida: ${convForm.hora_aproximada}` : '',
         // Qué tarifa se aplicó y en qué vehículo — igual que en Registro. Sin esto
         // el `valor_transporte` es un número suelto que nadie puede explicar
@@ -5316,6 +5337,41 @@ export default function Kanban() {
                     )}
                     {selSolicitud?.origen === 'ALIADO' && typeof selSolicitud?.es_alcaldia === 'boolean' && (
                       <p className="text-[10px] text-gray-500 mt-1.5">La veterinaria respondió «{selSolicitud.es_alcaldia ? 'Sí' : 'No'}» en su enlace.</p>
+                    )}
+                  </div>
+                )}
+                {/* Prioridad del Desamparado (migr. 211): se suma al total al aceptar */}
+                {planPorId(cf.plan_id)?.codigo === 'DESAMPARADO' && (
+                  <div className={`col-span-2 rounded-xl border-2 p-3.5 transition-all ${cf.prioridad ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="flex items-start gap-2.5 cursor-pointer flex-1 min-w-0">
+                        <input type="checkbox" className="mt-0.5 h-4 w-4 accent-orange-500"
+                          checked={!!cf.prioridad} onChange={e => set('prioridad', e.target.checked)} />
+                        <span>
+                          <span className="block text-[13px] font-bold text-gray-900 leading-tight">Recogida con prioridad</span>
+                          <span className="block text-[11px] text-gray-500 leading-snug mt-0.5">
+                            Primeras 24 h (sin prioridad: 24-48 h). $16.000 · $20.000 en domingo o festivo.
+                          </span>
+                        </span>
+                      </label>
+                      {cf.prioridad && (
+                        <input type="number" min="0"
+                          className="w-28 px-3 py-2 text-[13px] font-bold text-orange-700 bg-white border border-orange-300 rounded-lg outline-none focus:border-orange-500 text-right"
+                          value={cf.recargo_prioridad}
+                          onChange={e => set('recargo_prioridad', e.target.value)} />
+                      )}
+                    </div>
+                    {typeof selSolicitud?.prioridad === 'boolean' && (
+                      <p className="text-[10px] text-gray-500 mt-1.5">
+                        La veterinaria {selSolicitud.prioridad ? 'PIDIÓ prioridad' : 'no pidió prioridad'} en su solicitud.
+                      </p>
+                    )}
+                    {cf.prioridad && (parseFloat(cf.valor_total) || 0) > 0 && (
+                      <p className="text-[11px] text-orange-700 mt-1.5">
+                        Plan {fmt(parseFloat(cf.valor_total) || 0)} + prioridad {fmt(parseFloat(cf.recargo_prioridad) || 0)}
+                        {(parseFloat(convTransporte) || 0) > 0 ? ` + transporte ${fmt(parseFloat(convTransporte) || 0)}` : ''} ={' '}
+                        <b>{fmt((parseFloat(cf.valor_total) || 0) + (parseFloat(cf.recargo_prioridad) || 0) + (parseFloat(convTransporte) || 0))}</b>
+                      </p>
                     )}
                   </div>
                 )}

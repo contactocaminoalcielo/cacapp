@@ -159,6 +159,17 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
     if (preguntaAlcaldia && esAlcaldia === null)
       setTimeout(() => formRef.current?.querySelector('[data-alcaldia]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80)
   }, [preguntaAlcaldia])
+  // Prioridad del Desamparado (migr. 211): su recogida normal va de 24 a 48 h;
+  // pagando el recargo se recoge dentro de las primeras 24 h. Espejo de
+  // `precios.js` (RECARGO_PRIORIDAD_DESAMPARADO) — si allá cambia, aquí también.
+  const esDesamparado = planes.find(p => p.id === planId)?.codigo === 'DESAMPARADO'
+  const [prioridad, setPrioridad] = useState(false)
+  const RECARGO_PRIORIDAD = 16000
+  const RECARGO_PRIORIDAD_FESTIVO = 20000
+  useEffect(() => {
+    if (esDesamparado && !preguntaAlcaldia)
+      setTimeout(() => formRef.current?.querySelector('[data-prioridad]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80)
+  }, [esDesamparado])
   const [rec, setRec]   = useState({ tipo: 'veterinaria', ciudad: aliado?.ciudad || 'Bogotá', localidad: aliado?.localidad || '', barrio: aliado?.barrio || '', direccion: '', hora_aproximada: '', notas: '' })
   const [autorizo, setAutorizo] = useState(false)
   const [errAutorizo, setErrAutorizo] = useState(null)
@@ -240,6 +251,7 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
         },
         mascota: { nombre: masc.nombre, especie_id: masc.especie_id, peso_kg: masc.peso_kg, sexo: masc.sexo, raza: masc.raza },
         ...(preguntaAlcaldia ? { es_alcaldia: esAlcaldia } : {}),
+        ...(esDesamparado ? { prioridad } : {}),
         plan_id: planId,
         recogida: {
           tipo: rec.tipo,
@@ -409,6 +421,32 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
                 </button>
               )
             })}
+            {esDesamparado && (
+              <div data-prioridad className={`rounded-2xl border-2 p-4 transition-all ${prioridad ? 'border-orange-400 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-orange-500"
+                    checked={prioridad} onChange={e => setPrioridad(e.target.checked)} />
+                  <span className="flex-1 min-w-0">
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="text-[14px] font-bold text-gray-900 leading-tight">Recogida con prioridad</span>
+                      <span className="shrink-0 text-[14px] font-bold text-orange-600">+{fmt(RECARGO_PRIORIDAD)}</span>
+                    </span>
+                    <span className="block text-[12px] text-gray-600 leading-snug mt-1">
+                      Recogemos dentro de las primeras 24 horas. Sin prioridad, la recogida de este plan se programa entre 24 y 48 horas.
+                    </span>
+                    <span className="block text-[11px] text-gray-400 leading-snug mt-1">
+                      En domingo o festivo el recargo es de {fmt(RECARGO_PRIORIDAD_FESTIVO)}.
+                    </span>
+                  </span>
+                </label>
+                {prioridad && getPrecio(planId) != null && (
+                  <div className="mt-3 pt-3 border-t border-orange-200 flex items-center justify-between text-[13px]">
+                    <span className="text-gray-600">Plan {fmt(getPrecio(planId))} + prioridad {fmt(RECARGO_PRIORIDAD)}</span>
+                    <span className="font-bold text-gray-900">{fmt(getPrecio(planId) + RECARGO_PRIORIDAD)}</span>
+                  </div>
+                )}
+              </div>
+            )}
             {preguntaAlcaldia && (
               <div data-alcaldia className={`rounded-2xl border-2 p-4 transition-all ${esAlcaldia === null
                 ? 'border-amber-400 bg-amber-50 shadow-[0_0_0_4px_rgba(251,191,36,0.25)]'

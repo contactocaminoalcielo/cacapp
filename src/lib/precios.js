@@ -20,6 +20,19 @@ export function planComisiona(codigoPlan) {
 }
 
 /**
+ * Recargo de PRIORIDAD del Desamparado: su recogida normal va de 24 a 48 h; con
+ * prioridad se recoge dentro de las primeras 24 h. $16.000, o $20.000 si la
+ * recogida cae en domingo o festivo (regla de David, 2026-08-13). Aquí solo se
+ * detecta el domingo: el festivo lo ajusta el coordinador en el campo.
+ * Espejo en `SolicitudAliado.jsx` (lo que se le muestra a la veterinaria).
+ */
+export const RECARGO_PRIORIDAD_DESAMPARADO = 16000
+export const RECARGO_PRIORIDAD_DESAMPARADO_FESTIVO = 20000
+export function recargoPrioridadDesamparado(fecha = new Date()) {
+  return fecha.getDay() === 0 ? RECARGO_PRIORIDAD_DESAMPARADO_FESTIVO : RECARGO_PRIORIDAD_DESAMPARADO
+}
+
+/**
  * Qué especies pagan el rango FELINO (tarifa fija de mamífero pequeño desde
  * 1 kg) en vez de la tarifa por peso de perro. Vive en `especies.tarifa_peso`
  * (migración 079) y se edita desde Configuración → Catálogos.

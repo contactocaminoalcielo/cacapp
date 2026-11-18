@@ -99,14 +99,17 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
   // Proyecto de la Alcaldía (migr. 199): solo se pregunta a la vet con convenio
   // (hoy Animal City) y solo con el plan Desamparado (David, 22-oct); ahí la
   // respuesta es obligatoria. En cualquier otro caso se ignora.
+  const { rows: pl } = await pool.query(`SELECT codigo FROM public.planes WHERE id = $1`, [planId])
+  const esDesamparado = pl[0]?.codigo === 'DESAMPARADO'
   let esAlcaldia = null
-  if (conConvenio) {
-    const { rows: pl } = await pool.query(`SELECT codigo FROM public.planes WHERE id = $1`, [planId])
-    if (pl[0]?.codigo === 'DESAMPARADO') {
-      esAlcaldia = typeof payload.es_alcaldia === 'boolean' ? payload.es_alcaldia : null
-      if (esAlcaldia === null) faltan.push('si la mascota es del proyecto de la Alcaldía')
-    }
+  if (conConvenio && esDesamparado) {
+    esAlcaldia = typeof payload.es_alcaldia === 'boolean' ? payload.es_alcaldia : null
+    if (esAlcaldia === null) faltan.push('si la mascota es del proyecto de la Alcaldía')
   }
+  // Prioridad del Desamparado (migr. 211): recogida dentro de las primeras 24 h
+  // con recargo. Solo existe en ese plan; en los demás queda NULL. El monto lo
+  // fija el coordinador al aceptar la solicitud en el Kanban.
+  const prioridad = esDesamparado ? payload.prioridad === true : null
   if (faltan.length) return { status: 422, body: { ok: false, error: 'incompleto', faltan } }
 
   // Los datos son de un TERCERO: quien los entrega es la clínica, que declara
@@ -133,11 +136,11 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
         mascota_nombre, especie_id, mascota_peso_kg, mascota_sexo, mascota_raza,
         plan_id, tipo_recogida, aliado_id,
         ciudad, localidad, barrio, direccion,
-        hora_aproximada, notas_cliente, origen, es_alcaldia
+        hora_aproximada, notas_cliente, origen, es_alcaldia, prioridad
      ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
         $12,$13,$14,$15,$16,
-        $17,$18,$19,$20,$21,$22,$23,$24,$25,'ALIADO',$26
+        $17,$18,$19,$20,$21,$22,$23,$24,$25,'ALIADO',$26,$27
      ) RETURNING id`,
     [
       clienteNombre, txt(prop.apellido, 120), txt(prop.cedula, 30), whatsapp.slice(0, 25),
@@ -148,7 +151,7 @@ export async function crearSolicitudAliado({ token, payload = {}, contexto = {} 
       txt(rec.ciudad, 80), txt(rec.localidad, 80), txt(rec.barrio, 120),
       tipoRecogida === 'domicilio' ? direccionDom : null,
       txt(rec.hora_aproximada, 20), txt(rec.notas, 2000),
-      esAlcaldia,
+      esAlcaldia, prioridad,
     ]
   )
   log('[aliados/solicitud]', 'creada', rows[0].id, 'aliado', aliadoId)

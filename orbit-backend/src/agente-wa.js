@@ -992,9 +992,9 @@ async function registrarSolicitud({ entrada, agente, contacto, phoneNumberId = n
         ciudad, localidad, barrio, direccion, hora_aproximada,
         cliente_ciudad, cliente_barrio, cliente_direccion,
         notas_cliente, origen, estado, agente_id, aliado_id,
-        aliado_nombre_otro, tipo_recogida)
+        aliado_nombre_otro, tipo_recogida, prioridad)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-             'ALIADO','PENDIENTE',$19,$20,$21,$22)
+             'ALIADO','PENDIENTE',$19,$20,$21,$22,$23)
      RETURNING id`,
     [
       nombreCliente.slice(0, 120),
@@ -1040,6 +1040,9 @@ async function registrarSolicitud({ entrada, agente, contacto, phoneNumberId = n
       // identificada y el nombre suelto duplicaría la nota en el Kanban.
       !conv?.aliado_id && entrada.veterinaria ? String(entrada.veterinaria).slice(0, 160) : null,
       entrada.recogida_en === 'veterinaria' ? 'veterinaria' : 'domicilio',
+      // Migr. 211: además de la nota, la prioridad va en su columna para que el
+      // Kanban la traiga marcada y la SUME al aceptar (antes se quedaba en texto).
+      esDesamparado ? entrada.prioridad === true : null,
     ]
   )
   log(MOD, `solicitud ${rows[0].id} creada por el agente desde ${contacto}`
