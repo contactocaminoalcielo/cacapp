@@ -38,6 +38,8 @@ export const crm = {
   seguimientos: (rango = 'pendientes', mios = false, extras = {}) => orbitApi(`/crm/seguimientos${q({ rango, mios: mios ? 1 : null, ...extras })}`),
   crearSeguimiento: datos => orbitApi('/crm/seguimientos', { method: 'POST', body: datos }),
   cambiarSeguimiento: (id, datos) => orbitApi(`/crm/seguimientos/${id}`, { method: 'PUT', body: datos }),
+  /** Corrige la fecha de varias visitas sin cambiar su estado. cambios = [{ id, programado_para }] */
+  moverSeguimientos: cambios => orbitApi('/crm/seguimientos/mover', { method: 'POST', body: { cambios } }),
 
   tickets:      filtros => orbitApi(`/crm/tickets${q(filtros)}`),
   ticket:       id => orbitApi(`/crm/tickets/${id}`),

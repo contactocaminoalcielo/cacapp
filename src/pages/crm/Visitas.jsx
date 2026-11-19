@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ChevronLeft, ChevronRight, CheckCircle2, RotateCcw, XCircle,
-  CalendarPlus, ClipboardCheck, LayoutList, CalendarDays,
+  CalendarPlus, ClipboardCheck, LayoutList, CalendarDays, CalendarClock, CheckSquare, Square,
 } from 'lucide-react'
 import { crm, TIPOS_GESTION, fechaHora, relativo } from '@/lib/crmApi'
 import { hoyLocalISO } from '@/lib/utils'
@@ -10,6 +10,7 @@ import { Cabecera, Cargando, ErrorCaja, Vacio, ACENTO } from '@/components/crm/u
 import { RegistrarGestion, SeguimientoModal } from '@/components/crm/Modales'
 import { useCrm } from '@/components/crm/CrmContext'
 import NuevaVisitaModal from '@/components/crm/NuevaVisitaModal'
+import MoverVisitasModal from '@/components/crm/MoverVisitasModal'
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 const DIAS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb']
@@ -29,7 +30,7 @@ function enBogota(ts) {
 }
 
 // ── Vista tabla ───────────────────────────────────────────────────────────────
-function VistaTabla({ lista, onAccion }) {
+function VistaTabla({ lista, onAccion, onCambiarFecha }) {
   if (!lista) return <div className="p-8"><Cargando /></div>
   if (!lista.length) return <Vacio>Sin visitas en este período.</Vacio>
 
@@ -72,6 +73,11 @@ function VistaTabla({ lista, onAccion }) {
                 </td>
                 <td className="px-4 py-2.5 text-gray-500 text-[11.5px]">{s.responsable || '—'}</td>
                 <td className="px-4 py-2.5">
+                  {s.estado !== 'PENDIENTE' && (
+                    <button onClick={() => onCambiarFecha([s])} className="text-[11px] text-gray-400 whitespace-nowrap">
+                      <CalendarClock size={11} className="inline mr-0.5" />Cambiar fecha
+                    </button>
+                  )}
                   {s.estado === 'PENDIENTE' && (
                     <div className="flex gap-2">
                       <button onClick={() => onAccion(s, 'gestion')}
@@ -107,6 +113,10 @@ export default function Visitas() {
   // modal: 'nueva' | 'nueva-hoy' | 'gestion' | 'seguimiento'
   const [modal, setModal] = useState(null)
   const [sel, setSel] = useState(null)
+  // Selección para cambiar la fecha de varias visitas a la vez (p. ej. las del 3-nov que eran de octubre)
+  const [seleccionando, setSeleccionando] = useState(false)
+  const [marcadas, setMarcadas] = useState(() => new Set())
+  const [aMover, setAMover] = useState(null)   // visitas abiertas en el modal de fecha
 
   const primerDia = new Date(anio, mes, 1)
   const ultimoDia = new Date(anio, mes + 1, 0)
@@ -122,6 +132,7 @@ export default function Visitas() {
   }, [desde, hasta, tiposFiltro])
 
   useEffect(() => { cargar() }, [cargar])
+  useEffect(() => { setSeleccionando(false); setMarcadas(new Set()) }, [diaSeleccionado, lista])
 
   const porDia = useMemo(() => {
     if (!lista) return {}
@@ -149,6 +160,11 @@ export default function Visitas() {
     await crm.cambiarSeguimiento(s.id, { accion: a }).catch(e => setError(e.message))
     refrescarAlertas(); cargar()
   }
+
+  function marcar(id) {
+    setMarcadas(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  const todasMarcadas = diasDelDia.length > 0 && diasDelDia.every(s => marcadas.has(s.id))
 
   const inicio = primerDia.getDay()
   const totalDias = ultimoDia.getDate()
@@ -218,7 +234,7 @@ export default function Visitas() {
 
       {/* ── Vista tabla ─────────────────────────────────────── */}
       {vistaTabla ? (
-        <VistaTabla lista={lista} onAccion={accion} />
+        <VistaTabla lista={lista} onAccion={accion} onCambiarFecha={setAMover} />
       ) : (
         /* ── Vista calendario ─────────────────────────────── */
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -297,10 +313,34 @@ export default function Visitas() {
                     ? new Date(diaSeleccionado + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
                     : 'Selecciona un día'}
                 </h3>
-                <button onClick={() => setModal('nueva')} className="text-[12px] font-semibold" style={{ color: ACENTO }}>
-                  + Visita
-                </button>
+                <div className="flex items-center gap-3">
+                  {diasDelDia.length > 1 && (
+                    <button onClick={() => { setSeleccionando(v => !v); setMarcadas(new Set()) }}
+                      className="text-[12px] font-semibold text-gray-500 hover:text-gray-800">
+                      {seleccionando ? 'Listo' : 'Seleccionar'}
+                    </button>
+                  )}
+                  <button onClick={() => setModal('nueva')} className="text-[12px] font-semibold" style={{ color: ACENTO }}>
+                    + Visita
+                  </button>
+                </div>
               </div>
+
+              {seleccionando && (
+                <div className="flex items-center justify-between gap-2 mb-3 rounded-xl bg-teal-50 px-3 py-2">
+                  <button onClick={() => setMarcadas(todasMarcadas ? new Set() : new Set(diasDelDia.map(s => s.id)))}
+                    className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-teal-800">
+                    {todasMarcadas ? <CheckSquare size={14} /> : <Square size={14} />}
+                    {todasMarcadas ? 'Quitar todas' : `Todas (${diasDelDia.length})`}
+                  </button>
+                  <button disabled={!marcadas.size}
+                    onClick={() => setAMover(diasDelDia.filter(s => marcadas.has(s.id)))}
+                    className="inline-flex items-center gap-1 h-8 px-3 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40"
+                    style={{ background: ACENTO }}>
+                    <CalendarClock size={13} /> Cambiar fecha{marcadas.size ? ` (${marcadas.size})` : ''}
+                  </button>
+                </div>
+              )}
 
               {!lista ? <Cargando /> : !diasDelDia.length ? (
                 <Vacio>Sin visitas este día.</Vacio>
@@ -311,8 +351,16 @@ export default function Visitas() {
                     const ruta   = s.aliado_id ? `/crm/veterinarias/${s.aliado_id}` : s.prospecto_id ? `/crm/prospectos/${s.prospecto_id}` : null
                     const vencido = s.estado === 'PENDIENTE' && new Date(s.programado_para) < new Date()
                     return (
-                      <div key={s.id} className={`rounded-xl border p-2.5 ${vencido ? 'border-orange-200 bg-orange-50/30' : 'border-gray-100'}`}>
+                      <div key={s.id} onClick={seleccionando ? () => marcar(s.id) : undefined}
+                        className={`rounded-xl border p-2.5 ${seleccionando ? 'cursor-pointer' : ''} ${
+                          seleccionando && marcadas.has(s.id) ? 'border-teal-400 bg-teal-50/40'
+                          : vencido ? 'border-orange-200 bg-orange-50/30' : 'border-gray-100'}`}>
                         <div className="flex items-start gap-2">
+                          {seleccionando && (
+                            <span className="mt-0.5 flex-shrink-0 text-teal-700">
+                              {marcadas.has(s.id) ? <CheckSquare size={16} /> : <Square size={16} className="text-gray-300" />}
+                            </span>
+                          )}
                           <span className="text-[18px] leading-none mt-0.5 flex-shrink-0">{TIPOS_GESTION[s.tipo]?.emoji}</span>
                           <div className="flex-1 min-w-0">
                             {ruta
@@ -331,7 +379,14 @@ export default function Visitas() {
                             )}
                           </div>
                         </div>
-                        {s.estado === 'PENDIENTE' && (
+                        {!seleccionando && s.estado !== 'PENDIENTE' && (
+                          <div className="flex gap-2 mt-1.5 ml-7">
+                            <button onClick={() => setAMover([s])} className="inline-flex items-center gap-1 text-[11px] text-gray-500">
+                              <CalendarClock size={10} /> Cambiar fecha
+                            </button>
+                          </div>
+                        )}
+                        {!seleccionando && s.estado === 'PENDIENTE' && (
                           <div className="flex gap-2 mt-1.5 ml-7">
                             {destioDe(s) && (
                               <button onClick={() => accion(s, 'gestion')}
@@ -387,6 +442,13 @@ export default function Visitas() {
         destino={sel ? destioDe(sel) : null}
         seguimiento={sel}
         tipoInicial="VISITA"
+        onGuardado={() => { refrescarAlertas(); cargar() }}
+      />
+      <MoverVisitasModal
+        abierto={!!aMover}
+        onCerrar={() => setAMover(null)}
+        visitas={aMover || []}
+        diaOrigen={diaSeleccionado}
         onGuardado={() => { refrescarAlertas(); cargar() }}
       />
       <SeguimientoModal

@@ -1033,6 +1033,8 @@ export async function actualizarSeguimiento(id, d = {}, personalId) {
     await pool.query(`UPDATE public.crm_seguimientos SET estado = 'CANCELADO', completado_en = now(), completado_por = $2 WHERE id = $1`, [sid, personalId])
   } else if (d.accion === 'hecho') {
     await pool.query(`UPDATE public.crm_seguimientos SET estado = 'HECHO', completado_en = now(), completado_por = $2 WHERE id = $1`, [sid, personalId])
+  } else if (d.accion === 'cambiar_fecha') {
+    return moverFechasSeguimientos([{ id: sid, programado_para: d.programado_para }])
   } else if (d.accion === 'reprogramar') {
     const cuando = fecha(d.programado_para)
     if (!cuando) return { status: 422, body: { ok: false, error: 'Falta la nueva fecha' } }
@@ -1051,6 +1053,41 @@ export async function actualizarSeguimiento(id, d = {}, personalId) {
     await pool.query(`UPDATE public.crm_seguimientos SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals)
   }
   return { status: 200, body: { ok: true } }
+}
+
+/**
+ * Corregir la fecha de una o varias visitas SIN tocar su estado: una visita ya
+ * hecha sigue hecha (distinto de «reprogramar», que la reabre como pendiente).
+ * Existe porque las visitas de octubre se registraron el 3-nov (el formulario
+ * fijaba la fecha de hoy) y hay que repartirlas en los días reales.
+ * Si la visita se cerró con una gestión, la gestión se mueve con ella para que
+ * la ficha y el calendario digan lo mismo. Todo o nada.
+ */
+export async function moverFechasSeguimientos(cambios) {
+  if (!Array.isArray(cambios) || !cambios.length) return { status: 400, body: { ok: false, error: 'No hay visitas que mover' } }
+  if (cambios.length > 300) return { status: 422, body: { ok: false, error: 'Máximo 300 visitas a la vez' } }
+  const lista = cambios.map(c => ({ id: uuid(c?.id), cuando: fecha(c?.programado_para) }))
+  if (lista.some(c => !c.id || !c.cuando)) return { status: 422, body: { ok: false, error: 'Hay una visita sin fecha válida' } }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    let movidas = 0
+    for (const c of lista) {
+      const { rows: [s] } = await client.query(
+        `UPDATE public.crm_seguimientos SET programado_para = $2 WHERE id = $1 RETURNING actividad_id`, [c.id, c.cuando])
+      if (!s) continue
+      movidas++
+      if (s.actividad_id) {
+        await client.query(`UPDATE public.crm_actividades SET realizado_en = $2 WHERE id = $1`, [s.actividad_id, c.cuando])
+      }
+    }
+    await client.query('COMMIT')
+    return { status: 200, body: { ok: true, movidas } }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
 }
 
 /** Lo que alimenta la campana del CRM: lo vencido y lo de hoy. */
@@ -2360,6 +2397,7 @@ export function crearRouterCrm({ requireAuth, requireRol, errorInterno }) {
     desde: req.query.desde || null, hasta: req.query.hasta || null,
     tipos: req.query.tipos || null }) })))
   r.post('/seguimientos', responder('seguimiento', req => crearSeguimiento(req.body || {}, P(req).id)))
+  r.post('/seguimientos/mover', responder('seguimientos-mover', req => moverFechasSeguimientos(req.body?.cambios)))
   r.put('/seguimientos/:id', responder('seguimiento-cambiar', req => actualizarSeguimiento(req.params.id, req.body || {}, P(req).id)))
 
   r.get('/tickets', responder('tickets', async req => ({ ok: true, tickets: await listarTickets({

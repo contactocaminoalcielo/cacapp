@@ -201,6 +201,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
     if (!f.titulo?.trim()) { setError('Escribe qué se va a hacer en la visita'); return }
     if (modo === 'existente' && !f.aliado_id) { setError('Selecciona una veterinaria'); return }
     if (modo === 'nuevo' && !f.nombre?.trim()) { setError('Escribe el nombre del establecimiento'); return }
+    if (registrarHoy && f.fecha && new Date(f.fecha) > new Date()) { setError('Una visita ya realizada no puede quedar en el futuro'); return }
     if (pqrs && modo === 'existente' && !pqrs.asunto?.trim()) { setError('Escribe el asunto de la PQRS (o ciérrala)'); return }
     setGuardando(true); setError(null)
     try {
@@ -244,7 +245,7 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
   }
 
   return (
-    <Modal open={abierto} onClose={onCerrar} title={registrarHoy ? 'Registrar visita de hoy' : 'Programar visita presencial'} maxWidth="max-w-lg"
+    <Modal open={abierto} onClose={onCerrar} title={registrarHoy ? 'Registrar visita realizada' : 'Programar visita presencial'} maxWidth="max-w-lg"
       footer={<>
         <span className="text-[12px] text-red-600">{error}</span>
         <div className="flex gap-2">
@@ -306,8 +307,14 @@ export default function NuevaVisitaModal({ abierto, onCerrar, fechaInicial = nul
             placeholder="Ej: presentar plan grupal y tarifas 2027" />
         </Campo>
 
-        {/* Cuándo — solo cuando se programa, no cuando se registra en el acto */}
-        {!registrarHoy && (
+        {/* Cuándo. Al registrar una ya hecha también se pregunta: antes se fijaba la de hoy y las
+            visitas de octubre que se cargaron el 3-nov quedaron todas ese día. */}
+        {registrarHoy ? (
+          <Campo label="¿Cuándo fue la visita?" ayuda="Si la estás cargando después, pon el día en que realmente se hizo.">
+            <Input type="datetime-local" value={f.fecha || ''} max={aInputFechaHora(new Date())}
+              onChange={e => setF(x => ({ ...x, fecha: e.target.value }))} />
+          </Campo>
+        ) : (
           <Campo label="Cuándo">
             <SelectorFecha valor={f.fecha || ''} onCambio={v => setF(x => ({ ...x, fecha: v }))} />
           </Campo>
