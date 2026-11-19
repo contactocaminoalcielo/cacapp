@@ -39,6 +39,21 @@ UPDATE public.recordatorios r SET nombre_cliente = v.cliente
   ) AS v(interno, cliente)
  WHERE r.nombre = v.interno AND r.nombre_cliente IS NULL;
 
+-- Descripciones: ahora las lee la familia (portada del portal, catálogo
+-- público, ofertas). Estas siete estaban escritas para uso interno
+-- ("se toma en el ingreso al cuarto frío"). Textos aprobados por David 2026-11-19.
+UPDATE public.recordatorios r SET descripcion = v.texto
+  FROM (VALUES
+    ('Capsula de recuerdos',                'Una caja especial para guardar juntos todos sus recuerdos.'),
+    ('Huella y mechon',                     'Tomamos su huellita y guardamos un mechón de su pelo en un frasquito de vidrio.'),
+    ('Huella corazón',                      'Su huellita en madera, en forma de amuleto para llevarla siempre contigo.'),
+    ('Soporte lazos de amor',               'Un soporte decorativo para el frasquito con su mechón.'),
+    ('Dia de amor y milagrino',             'Un folleto con la información de nuestra fundación aliada.'),
+    ('Herramientas de superación de duelo', 'Audios, textos e imágenes para acompañarte en el duelo.'),
+    ('Evidencias de conservación',          'Una imagen que confirma que recibimos y cuidamos a tu mascotica en nuestras instalaciones.')
+  ) AS v(interno, texto)
+ WHERE r.nombre = v.interno;
+
 -- Verificación: deben salir las 14 filas.
 SELECT nombre, nombre_cliente FROM public.recordatorios WHERE nombre_cliente IS NOT NULL ORDER BY nombre;
 
