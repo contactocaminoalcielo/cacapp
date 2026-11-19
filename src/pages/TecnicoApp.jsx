@@ -5481,7 +5481,7 @@ async function contarComprobantesPorSubir(tecnicoId) {
 
 // Cargador inline de un comprobante — copia las mecánicas probadas de FotoEvidencia
 // (stash antes de subir, original sin comprimir, sin decodificar, reset de inputs).
-function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo = false, stashId = '' }) {
+function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo = false, stashId = '', onSubiendo = null }) {
   const [uploading, setUploading] = useState(false)
   const [err, setErr]             = useState('')
   const [okUrl, setOkUrl]         = useState('')
@@ -5513,6 +5513,7 @@ function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo =
     // Respaldar ANTES de subir (sobrevive a un reinicio del teléfono)
     if (!recuperado) await stashPut(stashKey, file)
     setUploading(true); setErr('')
+    onSubiendo?.(true)   // el recibo lo usa para no guardar a mitad de la subida
     try {
       // Original sin comprimir ni decodificar (igual que el comprobante de hoy)
       const path = `comprobantes/${servicioId}/${Date.now()}.${val.ext}`
@@ -5530,6 +5531,7 @@ function ComprobanteUploader({ servicioId, onSubido, actualUrl = '', reemplazo =
       setErr(String(e.message || e).slice(0, 120))
     } finally {
       setUploading(false)
+      onSubiendo?.(false)
       limpiar()
     }
   }
@@ -6433,7 +6435,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         setForm(f => ({ ...f, ...restaurar }))
       }
       if (draft.mediosPago) {
-        const medios = draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false }))
+        // Las marcas de subida en curso NO se heredan: tras un reinicio no hay
+        // ninguna subida corriendo (el cargador la reanuda desde el stash).
+        const medios = draft.mediosPago.map(m => ({ ...m, subiendoComprobante: false, cargandoCompro: false, cambiandoCompro: false }))
         // El monto prellenado del medio único también sale del servicio: si sigue
         // siendo el default de entonces, se re-prellena con el vigente (si no, el
         // técnico cobraría el valor del plan viejo). En drafts viejos sin
@@ -6796,7 +6800,30 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       // admin/coordinador abran el comprobante con `createSignedUrl(storage_path)`.
       // Se mantiene publicUrl en el jsonb por compatibilidad con los visores actuales.
       const { data: { publicUrl } } = db.storage.from('evidencias').getPublicUrl(data.path)
+      await anclarComprobante(idx, publicUrl, data.path, val.mime, file.size || null)
+      await stashDelete(stashKey)
+      setComproFlash({ tipo: 'ok', msg: '✅ Comprobante subido correctamente' })
+      setTimeout(() => setComproFlash(f => (f?.tipo === 'ok' ? null : f)), 5000)
+    } catch (e) {
+      updateMedio(idx, 'comproError', String(e.message || e).slice(0, 90))
+      setComproFlash({ tipo: 'err', msg: 'No se pudo subir el comprobante. Toca Reintentar.' })
+    } finally {
+      updateMedio(idx, 'subiendoComprobante', false)
+      setReanudando(false)
+      // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
+      // onChange (el input conserva su value) y el comprobante "no carga"
+      limpiarInputsComprobante(idx)
+    }
+  }
+
+  // Deja el comprobante YA SUBIDO en el medio de pago. Lo usan las dos vías:
+  // la subida vieja (`subirComprobante`, hoy solo reanudaciones) y el cargador
+  // liviano `ComprobanteUploader` que vive dentro del recibo desde el
+  // 19-nov-2026. Si el recibo todavía no existe basta con el estado: la RPC
+  // crea la fila de `recibo_comprobantes` desde `comprobanteUrl` al guardar.
+  async function anclarComprobante(idx, publicUrl, storagePath, mime, size) {
       updateMedio(idx, 'comprobanteUrl', publicUrl)
+      updateMedio(idx, 'comproError', '')
       // Persistir la URL en la fila del recibo DE INMEDIATO: si la PWA muere
       // después de subir, el comprobante ya quedó en DB (no solo en useState).
       // Usamos el REF (no el closure): si el recibo se guardó mientras la subida
@@ -6833,27 +6860,14 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
             medio_pago_id: medioPagoId,
             servicio_id:   servicioSel.id,
             bucket:        'evidencias',
-            storage_path:  data.path,
-            mime_type:     val.mime,
-            size_bytes:    file.size || null,
+            storage_path:  storagePath,
+            mime_type:     mime,
+            size_bytes:    size,
             estado:        'PENDIENTE_REVISION',
             uploaded_by:   tecnico?.id || null,
           })
         } catch (_) { /* tabla nueva opcional — no romper el flujo */ }
       }
-      await stashDelete(stashKey)
-      setComproFlash({ tipo: 'ok', msg: '✅ Comprobante subido correctamente' })
-      setTimeout(() => setComproFlash(f => (f?.tipo === 'ok' ? null : f)), 5000)
-    } catch (e) {
-      updateMedio(idx, 'comproError', String(e.message || e).slice(0, 90))
-      setComproFlash({ tipo: 'err', msg: 'No se pudo subir el comprobante. Toca Reintentar.' })
-    } finally {
-      updateMedio(idx, 'subiendoComprobante', false)
-      setReanudando(false)
-      // Sin esto, re-seleccionar el MISMO archivo tras un fallo no dispara
-      // onChange (el input conserva su value) y el comprobante "no carga"
-      limpiarInputsComprobante(idx)
-    }
   }
 
   // Reintentar la subida usando el archivo ya guardado en el teléfono (stash),
@@ -6980,14 +6994,21 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
           : `Hay ${mediosEnCero.length} medios de pago en $0 (${mediosEnCero.map(m => m.metodo).join(', ')}). Escribe sus montos o quítalos antes de guardar.`)
         return
       }
-      // ⚠️ El pago digital sin comprobante NO bloquea el guardado — y no debe.
-      // El comprobante solo se sube en la pestaña «Comprob.», que lista recibos
-      // YA guardados (el botón dentro del recibo se quitó en jun-2026 porque
-      // Android mataba la PWA). Bloquear aquí (eeb9994, 18-nov-2026) dejó a los
-      // técnicos en un círculo: sin recibo no hay dónde subir, sin comprobante
-      // no hay recibo. La obligación se cobra en el CUADRE: el recibo queda
-      // «comprobante pendiente», cuenta en `contarComprobantesPorSubir` y el
-      // técnico no puede confirmar su cuadre hasta subirlo.
+      // 🔒 Pago digital SIN comprobante no se guarda (David, 19-nov-2026).
+      // Solo es posible porque el comprobante se sube AQUÍ MISMO con el cargador
+      // liviano: el 18-nov se bloqueó mientras la única vía era la pestaña
+      // Comprob. (que lista recibos YA guardados) y los técnicos quedaron en un
+      // círculo sin salida (revertido en 326a27f). ⛔ Si algún día el cargador
+      // sale del recibo, este bloqueo tiene que salir con él.
+      // Sin señal o sin la foto del pago, la salida es «Pago pendiente › Ya
+      // pagaron, no pude subir el comprobante» (queda como tarea y traba el cuadre).
+      if (comprobantesPendientes.length > 0) {
+        const nombres = comprobantesPendientes.map(m => m.metodo).join(', ')
+        setErr(comprobantesPendientes.some(m => m.subiendoComprobante || m.cargandoCompro)
+          ? `El comprobante de ${nombres} todavía se está subiendo. Espera a que termine y vuelve a guardar.`
+          : `Falta el comprobante de ${nombres}. Súbelo en el recibo (Galería / PDF o Cámara). Si no tienes cómo, marca «Pago pendiente › Ya pagaron, no pude subir el comprobante».`)
+        return
+      }
     }
     // 🔒 «Pago pendiente» ya no es un interruptor mudo: exige el motivo.
     if (pagoPendiente && !esFacturacionMensual) {
@@ -7017,9 +7038,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
   async function ejecutarGuardado() {
     setConfirmarGuardado(false)
-    // El comprobante NO bloquea la creación del recibo: si falta, el recibo se
-    // guarda como «comprobante pendiente» y se sube desde la pestaña Comprob.
-    // (el cuadre no se confirma hasta subirlo).
+    // Desde el 19-nov-2026 `guardarRecibo` no deja llegar aquí con un pago
+    // digital sin comprobante; la lista queda vacía salvo en recibos viejos.
     const sinComprobante = comprobantesPendientes
     setGuardando(true); setErr('')
     try {
@@ -8453,7 +8473,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                     placeholder="Monto $"
                     className="flex-1 px-3 py-2 rounded-xl border text-[13px] font-bold outline-none"
                     style={{ borderColor: m.monto ? '#1A5CD8' : '#E5E7EB' }} />
-                  {mediosPago.length > 1 && (
+                  {/* Sin quitar medios con una subida en curso: la subida termina
+                      anclada por índice y caería en el medio equivocado. */}
+                  {mediosPago.length > 1 && !mediosPago.some(x => x.cargandoCompro || x.subiendoComprobante) && (
                     <button onClick={() => removeMedio(idx)}
                       className="p-2 rounded-xl text-red-400 hover:bg-red-50 flex-shrink-0">
                       <Trash2 size={14} />
@@ -8483,11 +8505,16 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
 
                     {/* Upload comprobante */}
                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                      Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#DC2626' }}>(obligatorio — súbelo apenas guardes)</span>}
+                      Comprobante de pago {!tieneComprobante && <span className="font-bold" style={{ color: '#DC2626' }}>(obligatorio para guardar)</span>}
                     </div>
-                    {/* Los inputs de archivo NO viven aquí: la subida se hace desde
-                        una pantalla liviana (setComproOverlay) para no morir por RAM. */}
-                    {tieneComprobante ? (
+                    {/* La subida va con `ComprobanteUploader`, el MISMO cargador liviano de
+                        la entrega del mensajero y de la pestaña Comprob. (stash en IndexedDB
+                        antes de subir, archivo original, sin <img>). Si Android reinicia la
+                        app, el borrador del recibo se restaura y la subida se reanuda sola.
+                        Volvió aquí el 19-nov-2026: con el comprobante obligatorio para
+                        guardar, mandarlo a Comprob. (que solo lista recibos guardados) era
+                        un círculo sin salida. */}
+                    {tieneComprobante && !m.cambiandoCompro ? (
                       /* Confirmación del comprobante como ENLACE (toca para ver), igual
                          que el PDF. NO se renderiza <img src={url}> con la imagen completa:
                          decodificar una captura/foto de varios MP a resolución completa
@@ -8510,7 +8537,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                           </div>
                         </a>
                         <button
-                          onClick={e => { e.stopPropagation(); e.preventDefault(); setComproOverlay(idx) }}
+                          onClick={e => { e.stopPropagation(); e.preventDefault(); updateMedio(idx, 'cambiandoCompro', true) }}
                           className="ml-auto text-[10px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
                           style={{ background: '#D1FAE5', color: '#065F46' }}>
                           Cambiar
@@ -8525,7 +8552,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                             {reanudando ? 'Reanudando la subida…' : 'Subiendo comprobante…'}
                           </p>
                           <p className="text-[11px] text-blue-600">
-                            Puedes seguir con el recibo — se guarda solo cuando termine.
+                            Puedes seguir llenando el recibo — para guardarlo debe terminar de subir.
                           </p>
                         </div>
                       </div>
@@ -8545,14 +8572,27 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         </button>
                       </div>
                     ) : (
-                      <div className="w-full px-3 py-3 rounded-xl flex items-center gap-2"
-                        style={{ background: '#FFF7ED', border: '1px solid #FED7AA' }}>
-                        <Receipt size={16} style={{ color: '#EA580C' }} className="flex-shrink-0" />
-                        <p className="text-[11px] font-semibold leading-snug" style={{ color: '#9A3412' }}>
-                          El comprobante ahora se sube en la pestaña <b>🧾 Comprob.</b> (abajo).
-                          Guardá el recibo y subilo desde ahí — esa pantalla no se reinicia.
-                        </p>
-                      </div>
+                      <>
+                        {/* key con el largo de la lista: si se quita un medio, los
+                            cargadores se rearman y ninguno muestra el de otro. */}
+                        <ComprobanteUploader
+                          key={`${idx}-${mediosPago.length}`}
+                          servicioId={servicioSel.id}
+                          stashId={`rec_${idx}`}
+                          onSubiendo={v => updateMedio(idx, 'cargandoCompro', v)}
+                          onSubido={async (publicUrl, path, val) => {
+                            await anclarComprobante(idx, publicUrl, path, val?.mime || null, val?.size || null)
+                            updateMedio(idx, 'cambiandoCompro', false)
+                          }}
+                        />
+                        {m.cambiandoCompro && !m.cargandoCompro && (
+                          <button type="button" onClick={() => updateMedio(idx, 'cambiandoCompro', false)}
+                            className="w-full mt-2 rounded-lg px-3 py-2 text-[11px] font-bold text-gray-500"
+                            style={{ background: '#F3F4F6' }}>
+                            Cancelar cambio — dejar el comprobante que ya estaba
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -8952,15 +8992,6 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
                         style={{ background: '#FFF7ED', color: '#9A3412' }}>
                         ⚠️ Estás cobrando <b>{fmt(sobrepagoDiff)} de más</b> sobre el valor del
                         recibo. Motivo que registraste: “{sobrepagoMotivo.trim()}”.
-                      </p>
-                    )}
-
-                    {comprobantesPendientes.length > 0 && (
-                      <p className="px-3 py-2 rounded-xl text-[11px] leading-snug"
-                        style={{ background: '#FEE2E2', color: '#991B1B' }}>
-                        🧾 Falta el comprobante de <b>{comprobantesPendientes.map(m => m.metodo).join(', ')}</b>.
-                        Apenas guardes, súbelo en la pestaña <b>Comprob.</b>: mientras falte,
-                        <b> no podrás confirmar tu cuadre</b>.
                       </p>
                     )}
 
