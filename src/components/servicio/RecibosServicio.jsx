@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { fmt, parseDate, parsearErrorDB } from '@/lib/utils'
 import { cargarComprobantesServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { useConfirm } from '@/contexts/ConfirmContext'
+import CobrosEntrega from './CobrosEntrega'
 import { FileText, Camera, ChevronUp, ChevronDown, Paperclip, AlertCircle, RotateCcw, X } from 'lucide-react'
 
 // ── Recibos guardados del servicio ────────────────────────────────────────────
@@ -212,6 +213,7 @@ export default function RecibosServicio({ servicioId, onCambio }) {
     <div className="bg-gray-50 rounded-xl p-3 space-y-1">
       <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><FileText size={10} /> Recibos</div>
       <div className="text-[11px] text-gray-400">Aún no se ha generado ningún recibo para este servicio.</div>
+      <CobrosEntrega servicioId={servicioId} onCambio={onCambio} />
     </div>
   )
 
@@ -350,6 +352,9 @@ export default function RecibosServicio({ servicioId, onCambio }) {
           {corrOk}
         </div>
       )}
+
+      {/* Lo que el mensajero cobró al entregar (corregible: migr. 213) */}
+      <CobrosEntrega servicioId={servicioId} onCambio={onCambio} />
 
       {/* PDFs en storage que no calzan con ningún recibo listado (números viejos) */}
       {(() => {

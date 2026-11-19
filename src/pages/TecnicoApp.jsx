@@ -1269,18 +1269,27 @@ function CardDisponible({ ent, tomando, onTomar }) {
 // decisión de la migración 083) y ese cobro se le contaba a mano a
 // coordinación. Acá lo resuelve sin salir de la entrega.
 //
-// Es a TODO o NADA: se cobra el saldo completo o se dice por qué no se cobró.
-// No hay abono parcial a propósito — el monto real se relee de la DB al
-// completar, no de este snapshot, porque entre que la tarjeta cargó y el
-// mensajero llegó a la puerta el valor pudo cambiar.
-const COBRO_VACIO = { decision: '', metodo: 'EFECTIVO', comprobante: null, motivo: '' }
+// El mensajero dice CUÁNTO recibió (reporte 19-nov). Antes era todo o nada y
+// registraba el saldo COMPLETO: cuando el plan estaba pendiente con la
+// veterinaria y en la puerta solo se cobraba el recordatorio adicional, el
+// servicio quedaba como pagado (Muñeca, HORUS, Leonidas). Si recibe menos del
+// saldo, dice quién paga el resto y eso queda pendiente en Cartera. El tope se
+// relee de la DB al completar: entre que la tarjeta cargó y el mensajero llegó
+// a la puerta el valor pudo cambiar. Las compras sin servicio siguen siendo
+// todo o nada (las cobra el backend y no tienen "plan" aparte).
+const COBRO_VACIO = { decision: '', metodo: 'EFECTIVO', comprobante: null, motivo: '', monto: '', nota: '' }
 
 // ¿El mensajero ya resolvió el tema plata? Sin esto la entrega no se completa.
-function cobroResuelto(saldo, cobro) {
+function cobroResuelto(saldo, cobro, conMonto = false) {
   if (!(saldo > 0)) return true
   if (cobro.decision === 'NO_COBRE') return cobro.motivo.trim().length >= 4
   if (cobro.decision !== 'COBRE') return false
   if (!cobro.metodo) return false
+  if (conMonto) {
+    const m = Number(cobro.monto)
+    if (!(m > 0) || m > saldo) return false
+    if (m < saldo && (cobro.nota || '').trim().length < 4) return false
+  }
   // Un pago digital sin soporte es el hueco que ya obligó a crear la pestaña
   // Comprobantes: acá se exige antes de cerrar, no después.
   if (METODOS_CON_COMPROBANTE.includes(cobro.metodo)) return !!cobro.comprobante?.path
@@ -1288,16 +1297,37 @@ function cobroResuelto(saldo, cobro) {
 }
 
 // Qué le falta al cobro, en palabras del mensajero. '' = nada.
-function faltaCobroTexto(saldo, cobro) {
-  if (cobroResuelto(saldo, cobro)) return ''
+function faltaCobroTexto(saldo, cobro, conMonto = false) {
+  if (cobroResuelto(saldo, cobro, conMonto)) return ''
   if (cobro.decision === 'NO_COBRE') return 'el motivo de por qué no te pagaron'
-  if (cobro.decision === 'COBRE')    return 'el comprobante del pago'
+  if (cobro.decision === 'COBRE') {
+    const m = Number(cobro.monto)
+    if (conMonto && !(m > 0))  return 'cuánto te pagaron'
+    if (conMonto && m > saldo) return `un valor que no pase de ${fmt(saldo)}`
+    if (conMonto && m < saldo && (cobro.nota || '').trim().length < 4) return 'quién paga el resto'
+    return 'el comprobante del pago'
+  }
   return 'decir si te pagaron el saldo'
 }
 
-function PanelCobroEntrega({ servicioId, entregaId, saldo, cobro, onChange }) {
+function PanelCobroEntrega({ servicioId, entregaId, saldo, adicionales = 0, conMonto = false, cobro, onChange }) {
   const set = patch => onChange({ ...cobro, ...patch })
   const exigeComprobante = METODOS_CON_COMPROBANTE.includes(cobro.metodo)
+  const montoNum   = Number(cobro.monto) || 0
+  const soloAdic   = adicionales > 0 && adicionales < saldo ? adicionales : 0
+  const parcial    = conMonto && montoNum > 0 && montoNum < saldo
+  const Chip = ({ valor, children }) => {
+    const activo = montoNum === valor
+    return (
+      <button type="button" onClick={() => set({ monto: String(valor) })}
+        className="py-2.5 px-2 rounded-xl text-[12px] font-bold border-2 transition-all active:scale-98 leading-tight"
+        style={activo
+          ? { background: '#B45309', color: '#fff', borderColor: '#B45309' }
+          : { background: '#fff', color: '#92400E', borderColor: '#FDE68A' }}>
+        {children}
+      </button>
+    )
+  }
 
   const OpcionBtn = ({ valor, children, activoBg, activoColor }) => {
     const activo = cobro.decision === valor
@@ -1332,6 +1362,40 @@ function PanelCobroEntrega({ servicioId, entregaId, saldo, cobro, onChange }) {
 
       {cobro.decision === 'COBRE' && (
         <div className="mt-3">
+          {conMonto && (
+            <div className="mb-3">
+              <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
+                ¿Cuánto te pagaron?
+              </div>
+              <div className={`grid gap-2 ${soloAdic ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                {soloAdic > 0 && <Chip valor={soloAdic}>Solo los recordatorios<br />{fmt(soloAdic)}</Chip>}
+                <Chip valor={saldo}>Todo el saldo<br />{fmt(saldo)}</Chip>
+              </div>
+              <input inputMode="numeric" value={cobro.monto}
+                onChange={e => set({ monto: e.target.value.replace(/[^\d]/g, '') })}
+                placeholder="u otro valor"
+                className="w-full mt-2 px-3 py-3 rounded-xl border-2 outline-none font-bold text-sm bg-white"
+                style={{ borderColor: montoNum > saldo ? '#DC2626' : montoNum > 0 ? '#16A34A' : '#FDE68A' }} />
+              {montoNum > saldo && (
+                <p className="text-[11px] mt-1 font-semibold text-red-600">No puede pasar del saldo: {fmt(saldo)}.</p>
+              )}
+              {parcial && (
+                <>
+                  <div className="text-[11px] font-bold uppercase tracking-wide mt-3 mb-1" style={{ color: '#92400E' }}>
+                    Quedan {fmt(saldo - montoNum)} · ¿quién los paga?
+                  </div>
+                  <textarea value={cobro.nota} rows={2}
+                    onChange={e => set({ nota: e.target.value })}
+                    placeholder="Ej: el plan lo paga la veterinaria / el cliente transfiere el viernes"
+                    className="w-full px-3 py-2.5 rounded-xl border-2 outline-none text-sm bg-white"
+                    style={{ borderColor: (cobro.nota || '').trim().length >= 4 ? '#16A34A' : '#FDE68A' }} />
+                  <p className="text-[11px] mt-1" style={{ color: '#A16207' }}>
+                    Ese valor sigue pendiente y coordinación lo ve en Cartera.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
           <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
             ¿Cómo te pagó?
           </div>
@@ -1404,7 +1468,10 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   }
   const badge = BADGE[ent.estado] || { bg: '#F3F4F6', color: '#374151', label: ent.estado }
 
-  const cobroOk        = cobroResuelto(saldo, cobro)
+  // En una compra sin servicio no hay plan aparte: se cobra todo o nada.
+  const conMonto       = !ent.__compra
+  const adicionales    = Number(ent.servicios?.valor_adicionales) || 0
+  const cobroOk        = cobroResuelto(saldo, cobro, conMonto)
   const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim()) && cobroOk
 
   async function aceptar() {
@@ -1577,6 +1644,8 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
               servicioId={ent.servicio_id || `compra-${ent.compra_id}`}
               entregaId={ent.id}
               saldo={saldo}
+              adicionales={adicionales}
+              conMonto={conMonto}
               cobro={cobro}
               onChange={setCobro}
             />
@@ -1604,7 +1673,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
               : `Falta: ${[
                   !fotoUrl && 'foto',
                   !firmaDataUrl && !nombreCliente.trim() && 'firma o nombre del cliente',
-                  faltaCobroTexto(saldo, cobro),
+                  faltaCobroTexto(saldo, cobro, conMonto),
                 ].filter(Boolean).join(' + ')}`}
           </button>
         </div>
@@ -1958,7 +2027,7 @@ export default function TecnicoApp() {
   const SELECT_ENTREGA = `
     *,
     servicios:servicio_id (
-      id, estado, valor_total, valor_pagado, estado_pago,
+      id, estado, valor_total, valor_pagado, estado_pago, valor_adicionales,
       mascotas:mascota_id (
         nombre, especie_id,
         especies ( nombre ),
@@ -2883,7 +2952,7 @@ export default function TecnicoApp() {
         // desde la migración 152 el cuadre se lo va a pedir; si no quedara
         // registrado, esa plata no se la reclamaría nadie. Se guarda el monto
         // que la app le mostró, que es el que le pidió al cliente.
-        const montoRecibido = Number(cobro.saldoMostrado) || 0
+        const montoRecibido = Number(cobro.monto) || Number(cobro.saldoMostrado) || 0
         if (montoRecibido > 0) {
           patch.cobro_monto          = montoRecibido
           patch.cobro_metodo         = cobro.metodo
@@ -2899,21 +2968,27 @@ export default function TecnicoApp() {
           valor_ajuste: null,
         }
       } else {
-        const nuevoPagado = pagado + saldoReal
+        // Lo que dijo que recibió, con tope en el saldo real (si mientras venía
+        // en camino se registró otro pago, no se infla valor_pagado).
+        const pedido      = Number(cobro.monto) > 0 ? Number(cobro.monto) : saldoReal
+        const cobrado     = Math.min(pedido, saldoReal)
+        const queda       = saldoReal - cobrado
+        const nuevoPagado = pagado + cobrado
         svcPago.valor_pagado = nuevoPagado
         svcPago.estado_pago  = nuevoPagado >= total ? 'COMPLETO' : 'PARCIAL'
         svcPago.metodo_pago  = cobro.metodo
-        patch.cobro_monto            = saldoReal
+        patch.cobro_monto            = cobrado
         patch.cobro_metodo           = cobro.metodo
         patch.cobro_comprobante_path = cobro.comprobante?.path || null
         patch.cobro_registrado_en    = now.toISOString()
         patch.cobro_registrado_por   = tecnico?.id || null
         novedadCobro = {
           tipo_novedad: 'PAGO_RECIBIDO',
-          descripcion:  `Cobrado en la entrega: ${fmt(saldoReal)} (${cobro.metodo})`
+          descripcion:  `Cobrado en la entrega: ${fmt(cobrado)} (${cobro.metodo})`
                       + `${cobro.comprobante ? ', comprobante adjunto' : ''}. `
-                      + `Recibido por ${[tecnico?.nombre, tecnico?.apellido].filter(Boolean).join(' ') || 'el mensajero'}.`,
-          valor_ajuste: saldoReal,
+                      + `Recibido por ${[tecnico?.nombre, tecnico?.apellido].filter(Boolean).join(' ') || 'el mensajero'}.`
+                      + (queda > 0 ? ` Queda pendiente ${fmt(queda)}${(cobro.nota || '').trim() ? `: ${cobro.nota.trim()}` : ''}.` : ''),
+          valor_ajuste: cobrado,
         }
       }
     } else if (cobro?.decision === 'NO_COBRE') {
@@ -2964,8 +3039,10 @@ export default function TecnicoApp() {
     // Notificar coordinadores
     const coords = await getCoordinadores()
     const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+    const quedaPend = svcPago.valor_pagado != null ? Math.max(0, (Number(ent.servicios?.valor_total) || 0) - svcPago.valor_pagado) : 0
     const notaPlata = patch.cobro_monto != null
       ? ` Cobró ${fmt(patch.cobro_monto)} en ${patch.cobro_metodo}.`
+        + (svcPago.estado_pago === 'PARCIAL' && quedaPend > 0 ? ` Queda pendiente ${fmt(quedaPend)}.` : '')
         + (svcPago.valor_pagado == null ? ' ⚠️ El servicio ya figuraba pagado — revisar doble cobro.' : '')
       : patch.cobro_no_realizado_motivo ? ` ⚠️ Sin cobrar: ${patch.cobro_no_realizado_motivo}` : ''
     await Promise.all(coords.map(c => crearNotificacion({

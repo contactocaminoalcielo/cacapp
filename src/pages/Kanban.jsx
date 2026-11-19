@@ -4625,7 +4625,16 @@ export default function Kanban() {
                 </div>
 
                 {/* ── Recibos guardados: cuál afecta Finanzas + comprobantes ── */}
-                <RecibosServicio servicioId={selected.servicio_id} onCambio={cargar} />
+                <RecibosServicio servicioId={selected.servicio_id} onCambio={res => {
+                  // La corrección del cobro en la entrega (migr. 213) devuelve el
+                  // pago nuevo: el modal abierto no se refresca solo con cargar().
+                  if (res?.valor_pagado != null && res?.estado_pago) {
+                    const upd = { valor_pagado: res.valor_pagado, estado_pago: res.estado_pago, saldo_pendiente: res.saldo }
+                    setSelected(prev => (prev ? { ...prev, ...upd } : prev))
+                    setEditEstadoPago(res.estado_pago)
+                  }
+                  cargar()
+                }} />
 
                 {/* Lo que el técnico dejó dicho sobre ESTA mascota. Va pegado a
                     los recibos porque es su lectura: al guardar el recibo se le
