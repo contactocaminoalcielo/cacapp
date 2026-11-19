@@ -36,6 +36,11 @@ export const CONFIG_DEFAULTS_IMAGENES = {
   // Planes que NO reciben el 2º ni el 3er contacto: no tienen nada obligatorio
   // que enviar, y el 3º dice "si no las recibimos, el proceso quedará cerrado".
   planes_sin_seguimiento: ['COMPETS_SIN_REC'],
+  // Portada del portal ("lo que incluye tu plan"). Standard y Premium se venden
+  // con "incluye además los 11 recordatorios del plan básico excluyendo el
+  // Memopet", pero en plan_recordatorios no están cargados: David (2026-11-19)
+  // pidió mostrarlos SOLO como información — no crea ítems ni pide fotos.
+  portada_incluye_basico: { planes: ['STANDARD', 'PREMIUM'], plan_base: 'BASICO', excluir: ['Memopet'] },
   recordatorio_cofre: 'Foto para el cofre',   // nombre del recordatorio de catálogo (migración 052)
   // Ventana en la que el JOB proactivamente pide imágenes (solo cuarto frío).
   estados_elegibles: ['EN_CUARTO_FRIO'],
@@ -237,7 +242,8 @@ export async function itemsPortal(client, servicioId, soloAdicional) {
   const { rows } = await client.query(
     `SELECT sr.id AS sr_id, sr.origen, sr.estado,
             sr.imagen_cliente_url, sr.imagenes_cliente_urls, sr.datos_cliente,
-            r.id AS rec_id, r.nombre, r.solo_nombre, r.requiere_imagen, r.max_fotos, r.campos_texto
+            r.id AS rec_id, r.nombre, r.solo_nombre, r.requiere_imagen, r.max_fotos, r.campos_texto,
+            r.categoria, r.foto_url, r.descripcion, ${NOMBRE_CLIENTE_SQL} AS nombre_cliente
      FROM public.servicio_recordatorios sr
      JOIN public.recordatorios r ON r.id = sr.recordatorio_id
      WHERE sr.servicio_id = $1
@@ -262,6 +268,75 @@ export async function itemsPortal(client, servicioId, soloAdicional) {
         id: row.rec_id, nombre: row.nombre, solo_nombre: row.solo_nombre,
         requiere_imagen: row.requiere_imagen, max_fotos: row.max_fotos,
         campos_texto: Array.isArray(row.campos_texto) ? row.campos_texto : [],
+        // Para mostrarle a la familia cómo luce (portada y cada paso)
+        categoria: row.categoria, foto_url: row.foto_url || null,
+        descripcion: row.descripcion || null, nombre_cliente: row.nombre_cliente || null,
       },
     }))
+}
+
+// Nombre con el que la familia conoce el recordatorio (el de las piezas de
+// cada plan: "Cristal con fotografía y dedicatoria", no "Portarretrato").
+// Se lee por to_jsonb para que el backend no falle si se despliega antes de la
+// migración 212 que crea la columna.
+const NOMBRE_CLIENTE_SQL = `NULLIF(trim(to_jsonb(r)->>'nombre_cliente'), '')`
+
+/**
+ * Portada del portal: TODO lo que incluye el servicio, pida o no algo a la
+ * familia. Antes el portal solo mostraba lo que pide fotos (≈ la mitad: la
+ * Huella 3D, las huellas que toma el técnico y casi todos los digitales nunca
+ * aparecían) y la familia no sabía qué incluía su plan.
+ *
+ * accion: SUBIR (el portal se lo va a pedir) · NADA (no tiene que subir nada:
+ * lo preparamos, lo toma el técnico o la planta). Ojo: `solo_nombre` NO quiere
+ * decir "lo hacemos nosotros" — también lo tienen el audio y la asesoría.
+ * informativo: viene del plan básico en Standard/Premium (`portada_incluye_basico`):
+ * no es un ítem del servicio y nunca pide nada.
+ */
+export async function incluyePortal(client, { servicioId, planCodigo }, soloAdicional, items, config = {}) {
+  const { rows } = await client.query(
+    `SELECT sr.id AS sr_id, sr.origen, r.id AS rec_id, r.nombre, ${NOMBRE_CLIENTE_SQL} AS nombre_cliente,
+            r.categoria, r.foto_url, r.descripcion
+       FROM public.servicio_recordatorios sr
+       JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+      WHERE sr.servicio_id = $1 AND COALESCE(sr.origen,'') <> 'REMOVIDO' AND sr.estado <> 'NA'
+      ORDER BY r.nombre`, [servicioId])
+
+  const piden = new Map((items || []).map(i => [i.sr_id, i.recordatorio]))
+  const porRec = new Map()
+  const ficha = (r, extra) => ({
+    id: r.rec_id, nombre: r.nombre_cliente || r.nombre, categoria: r.categoria || 'otro',
+    foto_url: r.foto_url || null, descripcion: r.descripcion || null, ...extra,
+  })
+
+  for (const r of rows) {
+    if (soloAdicional && r.origen !== 'ADICIONAL') continue
+    const pide = piden.get(r.sr_id)
+    const previo = porRec.get(r.rec_id)
+    if (previo && (previo.accion === 'SUBIR' || !pide)) continue   // mismo recordatorio dos veces: una ficha
+    porRec.set(r.rec_id, ficha(r, {
+      adicional: r.origen === 'ADICIONAL',
+      accion: pide ? 'SUBIR' : 'NADA',
+      fotos: pide && requiereImagen(pide) ? (parseInt(pide.max_fotos) || 0) : 0,
+      textos: pide ? (pide.campos_texto || []).map(c => c.label).filter(Boolean) : [],
+    }))
+  }
+
+  const base = config.portada_incluye_basico || {}
+  if (!soloAdicional && planCodigo && (base.planes || []).includes(planCodigo) && base.plan_base) {
+    const excluir = (base.excluir || []).map(x => String(x).trim().toLowerCase())
+    const { rows: extra } = await client.query(
+      `SELECT r.id AS rec_id, r.nombre, ${NOMBRE_CLIENTE_SQL} AS nombre_cliente,
+              r.categoria, r.foto_url, r.descripcion
+         FROM public.plan_recordatorios pr
+         JOIN public.planes p ON p.id = pr.plan_id
+         JOIN public.recordatorios r ON r.id = pr.recordatorio_id
+        WHERE p.codigo = $1 AND r.activo IS NOT FALSE
+        ORDER BY r.nombre`, [base.plan_base])
+    for (const r of extra) {
+      if (porRec.has(r.rec_id) || excluir.includes(String(r.nombre).trim().toLowerCase())) continue
+      porRec.set(r.rec_id, ficha(r, { adicional: false, informativo: true, accion: 'NADA', fotos: 0, textos: [] }))
+    }
+  }
+  return [...porRec.values()]
 }

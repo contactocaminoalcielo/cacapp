@@ -1248,12 +1248,13 @@ function TabRecordatorios() {
       recolecta_tecnico: !!item.recolecta_tecnico,
       activo: item.activo !== false,
       venta_publica: !!item.venta_publica, precio_publico: item.precio_publico ?? '', foto_url: item.foto_url || '',
+      nombre_cliente: item.nombre_cliente || '',
     } : {
       nombre: '', descripcion: '', categoria: '', requiere_imagen: true,
       solo_nombre: false, precio_base: 0, max_fotos: 1,
       campos_texto: [],
       maquina_id: '', tiempo_produccion_dias: 1, recolecta_tecnico: false, activo: true,
-      venta_publica: false, precio_publico: '', foto_url: '',
+      venta_publica: false, precio_publico: '', foto_url: '', nombre_cliente: '',
     })
   }
 
@@ -1270,7 +1271,7 @@ function TabRecordatorios() {
       // Vacío = el catálogo público cobra el precio base (migr. 200)
       precio_publico: String(form.precio_publico ?? '').trim() === '' ? null : Math.max(0, parseFloat(form.precio_publico) || 0),
       venta_publica: !!form.venta_publica,
-    }, ['categoria', 'maquina_id', 'foto_url'])
+    }, ['categoria', 'maquina_id', 'foto_url', 'nombre_cliente'])
     const { error } = selected?.id
       ? await db.from('recordatorios').update(body).eq('id', selected.id)
       : await db.from('recordatorios').insert(body)
@@ -1374,6 +1375,14 @@ function TabRecordatorios() {
                   0 = sin fotos · Ej: postales = 2, cuadro = 1, álbum = 4
                 </p>
               </div>
+            </div>
+            <div>
+              <label className={LABEL}>Nombre para la familia</label>
+              <Input value={form.nombre_cliente || ''} placeholder={form.nombre || 'Igual al nombre'}
+                onChange={e => setForm(p => ({ ...p, nombre_cliente: e.target.value }))} />
+              <p className="text-[11px] text-gray-400 mt-1">
+                Opcional. Así lo ve la familia en el portal de fotos (ej: Portarretrato → Cristal con fotografía y dedicatoria). Vacío = el nombre de arriba.
+              </p>
             </div>
             <div><label className={LABEL}>Descripción</label><Textarea value={form.descripcion || ''} onChange={e => setForm(p => ({ ...p, descripcion: e.target.value }))} rows={2} /></div>
             <div className="flex flex-wrap gap-5">

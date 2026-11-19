@@ -5,7 +5,7 @@ import { compressImage, sniffMime, extDeMime, MIMES_IMAGEN_OK } from '@/lib/imag
 import { portalDatos, portalRecibir, requiereImagen } from '@/lib/imagenes'
 import { LOCALIDADES_BOGOTA } from '@/components/ui/localidad-select'
 import { Ilustracion, PAPEL, PAPEL2, TINTA, APAGADO, HONDO, VERDE, BORDE } from '@/components/portal/Botanica'
-import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package } from 'lucide-react'
+import { Camera, Check, ChevronLeft, Loader2, Send, X, Plus, Gift, Package, Smartphone, Heart } from 'lucide-react'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 import { limpiarYRecargar } from '@/lib/versionApp'
@@ -101,6 +101,9 @@ export default function FotosCliente({ codigo: codigoProp }) {
   const [paso,        setPaso]       = useState(0)
   const [dir,         setDir]        = useState(1)
   const [declinados,  setDeclinados] = useState(() => new Set()) // ids de recordatorios "no deseo"
+  // Portada "lo que incluye tu plan": lo primero que ve la familia (reporte 19-nov)
+  const [incluye,     setIncluye]    = useState([])
+  const [vioPortada,  setVioPortada] = useState(false)
   // ── Ofertas del portal (las que manda el backend; hoy hasta 2) ──
   // Todo va indexado por id de oferta: el cliente responde cada anuncio por
   // separado y puede aceptar uno, los dos, o ninguno.
@@ -253,8 +256,12 @@ export default function FotosCliente({ codigo: codigoProp }) {
       // El backend devuelve cada ítem como { sr_id, recordatorio }; el portal usa
       // { id, recordatorios }. Normalizamos para que coincidan (si no, no aparece
       // la UI de carga y el envío iría con sr_id indefinido).
-      const it = (r.items || []).map(x => ({ ...x, id: x.sr_id, recordatorios: x.recordatorio }))
+      // El nombre que se muestra es el que la familia conoce (nombre_cliente del catálogo).
+      const it = (r.items || []).map(x => ({ ...x, id: x.sr_id,
+        recordatorios: { ...x.recordatorio, nombre: x.recordatorio?.nombre_cliente || x.recordatorio?.nombre } }))
       setItems(it)
+      setIncluye(Array.isArray(r.incluye) ? r.incluye : [])
+      setVioPortada(false)
       setDeclinados(new Set())
 
       // Ofertas (pueden no venir: backend viejo, o ninguna aplica a este plan).
@@ -439,6 +446,11 @@ export default function FotosCliente({ codigo: codigoProp }) {
       cta={{ label: 'Actualizar y volver a intentar', fn: () => { limpiarYRecargar() } }} />
   )
   if (fase === 'enviado') return <PantallaEnviado mascota={mascota} plazo={plazo} />
+
+  if (incluye.length > 0 && !vioPortada) return (
+    <PortadaPlan mascota={mascota} plan={servicio?.plan} incluye={incluye}
+      onEmpezar={() => { setVioPortada(true); window.scrollTo(0, 0) }} />
+  )
 
   // ── WIZARD ────────────────────────────────────────────────────────────────
   const pasosVisibles = totalPasos - 1
@@ -828,6 +840,105 @@ function CapturaRecordatorio({ rec, mascota, files, textosVals, onFilesChange, o
 }
 
 // ── PasoItem ─────────────────────────────────────────────────────────────────
+// ── PortadaPlan ──────────────────────────────────────────────────────────────
+// Lo primero que ve la familia: TODO lo que incluye su plan, cómo luce y qué
+// necesitamos de ella. Antes el portal iba directo al primer formulario y solo
+// mostraba lo que pide fotos (≈ la mitad del plan); las dudas eran constantes.
+const GRUPOS_PORTADA = [
+  { cat: 'fisico',    titulo: 'Recordatorios físicos',   sub: 'Te los entregamos en tu hogar.',  Icono: Package },
+  { cat: 'digital',   titulo: 'Recordatorios digitales', sub: 'Los recibirás de forma digital.', Icono: Smartphone },
+  { cat: 'ceremonia', titulo: 'Acompañamiento',          sub: null, Icono: Heart },
+  { cat: 'otro',      titulo: 'Otros',                   sub: null, Icono: Gift },
+]
+
+function quePedimos(x) {
+  const partes = []
+  if (x.fotos > 0) partes.push(x.fotos === 1 ? '1 foto' : `${x.fotos} fotos`)
+  for (const t of x.textos || []) partes.push(String(t).toLowerCase())
+  return partes.join(' · ')
+}
+
+function PortadaPlan({ mascota, plan, incluye, onEmpezar }) {
+  const conFotos = incluye.filter(x => x.accion === 'SUBIR').length
+  const grupoDe = x => (GRUPOS_PORTADA.some(o => o.cat === x.categoria) ? x.categoria : 'otro')
+  const grupos = GRUPOS_PORTADA.map(g => ({
+    ...g,
+    lista: incluye
+      .filter(x => grupoDe(x) === g.cat)
+      .sort((a, b) => (a.accion === 'SUBIR' ? 0 : 1) - (b.accion === 'SUBIR' ? 0 : 1)
+        || String(a.nombre).localeCompare(String(b.nombre), 'es')),
+  })).filter(g => g.lista.length)
+
+  return (
+    <div className="min-h-screen" style={{ background: BG }}>
+      <div className="max-w-lg mx-auto px-5 pt-8 pb-40">
+        <div className="mb-3"><Ilustracion nombre="helecho" vivo tam={40} /></div>
+        <p className="text-[13px] font-bold uppercase tracking-widest mb-2" style={{ color: APAGADO }}>
+          Para los recuerdos de {mascota}
+        </p>
+        <h1 className="font-serif italic text-[30px] leading-tight" style={{ color: HONDO }}>
+          Esto es lo que incluye tu plan{plan ? ` ${plan}` : ''}
+        </h1>
+        <p className="text-[15px] text-gray-600 leading-relaxed mt-3">
+          {conFotos > 0
+            ? `Antes de empezar, mira cada recordatorio y qué necesitamos de ti. ${conFotos === 1 ? 'Solo uno necesita' : `Solo ${conFotos} necesitan`} tus fotos; del resto nos encargamos nosotros.`
+            : `Mira cada recordatorio que preparamos para ${mascota}. No necesitas subir fotos: nos encargamos nosotros.`}
+        </p>
+
+        <div className="space-y-7 mt-7">
+          {grupos.map(g => (
+            <section key={g.cat}>
+              <h2 className="text-[16px] font-bold" style={{ color: HONDO }}>
+                {g.titulo} <span className="font-normal" style={{ color: APAGADO }}>· {g.lista.length}</span>
+              </h2>
+              {g.sub && <p className="text-[13px]" style={{ color: APAGADO }}>{g.sub}</p>}
+              <div className="space-y-2.5 mt-3">
+                {g.lista.map(x => (
+                  <div key={x.id} className="bg-white rounded-2xl border p-3 flex gap-3 items-start" style={{ borderColor: BORD }}>
+                    {x.foto_url
+                      ? <img src={x.foto_url} alt={x.nombre} loading="lazy" className="w-[72px] h-[72px] rounded-xl object-cover flex-shrink-0" />
+                      : <div className="w-[72px] h-[72px] rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: G_LITE }}>
+                          <g.Icono size={26} style={{ color: G }} />
+                        </div>}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[15px] font-bold text-gray-800 leading-snug">
+                        {x.nombre}
+                        {x.adicional && (
+                          <span className="ml-1.5 text-[11px] font-semibold align-middle px-1.5 py-0.5 rounded-full" style={{ background: G_LITE, color: G }}>
+                            Adicional
+                          </span>
+                        )}
+                      </p>
+                      {x.descripcion && <p className="text-[13px] text-gray-500 leading-snug mt-0.5 line-clamp-2">{x.descripcion}</p>}
+                      {x.accion === 'SUBIR'
+                        ? <p className="text-[12.5px] font-semibold mt-1.5" style={{ color: G }}>📷 Te pediremos: {quePedimos(x) || 'algunos datos'}</p>
+                        : <p className="text-[12.5px] mt-1.5" style={{ color: APAGADO }}>✓ No tienes que subir nada</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        <p className="text-[12px] text-center mt-6" style={{ color: APAGADO }}>
+          Las imágenes son de referencia: cada recordatorio se personaliza para {mascota}.
+        </p>
+      </div>
+
+      <div className="fixed bottom-0 inset-x-0 z-20 border-t" style={{ borderColor: BORDE, background: PAPEL }}>
+        <div className="max-w-lg mx-auto px-5 py-4">
+          <button onClick={onEmpezar}
+            className="w-full py-4 rounded-2xl font-bold text-[16px] text-white transition-all active:scale-[0.98]"
+            style={{ background: G }}>
+            {conFotos > 0 ? 'Empezar a subir las fotos →' : 'Continuar →'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosChange, declined, onToggleDeclined }) {
   const rec    = item.recordatorios
   const nombre = rec?.nombre || 'Recordatorio'
@@ -871,6 +982,18 @@ function PasoItem({ item, mascota, files, textosVals, onFilesChange, onTextosCha
           Para los recuerdos de {mascota}
         </p>
         <h2 className="font-serif italic text-[28px] leading-tight" style={{ color: HONDO }}>{nombre}</h2>
+        {(rec?.foto_url || rec?.descripcion) && (
+          <div className="mt-3 flex gap-3 items-start">
+            {rec.foto_url && (
+              <img src={rec.foto_url} alt={`Ejemplo de ${nombre}`} loading="lazy"
+                className="w-20 h-20 rounded-2xl object-cover flex-shrink-0 border" style={{ borderColor: BORD }} />
+            )}
+            <div className="min-w-0">
+              {rec.descripcion && <p className="text-[14px] text-gray-600 leading-snug">{rec.descripcion}</p>}
+              {rec.foto_url && <p className="text-[11.5px] mt-1" style={{ color: APAGADO }}>Imagen de referencia</p>}
+            </div>
+          </div>
+        )}
         <div className="mt-3">
           <CapturaRecordatorio
             rec={rec} mascota={mascota} files={files} textosVals={textosVals}

@@ -12,7 +12,7 @@
 // solicitud de adicional debe convertirse en compra sin validación humana."
 import { pool, log } from './db.js'
 import {
-  cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal,
+  cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal, incluyePortal,
   plantillaSolicitud, mensajeSolicitudCompetsSinRec, plazoEntrega, mensajeRecibido,
 } from './reglas-imagenes.js'
 import {
@@ -364,6 +364,14 @@ export async function datosPortal({ codigo }) {
 
     const items = (yaRecibido || fueraDeVentana) ? [] : await itemsPortal(client, s.id, soloAdicional)
 
+    // Portada "lo que incluye tu plan". Es informativa: si falla, el portal sigue
+    // sin ella (las fotos son lo principal).
+    let incluye = []
+    if (!yaRecibido && !fueraDeVentana) {
+      try { incluye = await incluyePortal(client, { servicioId: s.id, planCodigo: s.plan_codigo }, soloAdicional, items, config) }
+      catch (e) { log('[imagenes/portal] portada omitida:', e.message) }
+    }
+
     const tieneEntregaFisica = await hayEntregaFisica(client, s, config)
 
     // Anuncios que le corresponden a este servicio (los de mayor prioridad,
@@ -393,6 +401,7 @@ export async function datosPortal({ codigo }) {
       tiene_entrega_fisica: tieneEntregaFisica,
       servicio: { id: s.id, mascota: s.mascota, especie: s.especie, plan: s.plan, tipo_proceso: s.tipo_proceso, estado: s.estado },
       items,
+      incluye,
       ofertas,
       // Compat: las PWA en caché leen `oferta` (singular) y solo saben mostrar
       // una. Mientras siga viva alguna versión vieja, se les manda la primera
