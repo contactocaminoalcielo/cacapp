@@ -200,6 +200,21 @@ Ver [MODULES/VENTAS_POSTERIORES.md](../MODULES/VENTAS_POSTERIORES.md).
 - RLS: las cuatro tablas están **cerradas a `anon` y `authenticated`** (sin políticas). Solo las lee y escribe `orbit_backend`
 - Config: `config_operativa` módulo `OFERTA_POSTERIOR` (20 claves)
 
+### Aviso de tiempos al ingresar al cuarto frío — tabla `avisos_tiempos_ingreso` (migración 214)
+
+Ver [MODULES/AUTOMATIZACIONES.md](../MODULES/AUTOMATIZACIONES.md).
+
+- Una por servicio (`servicio_id` UNIQUE) · `estado` ∈ `ENVIANDO | ENVIADO | ERROR | EXCLUIDO` (CHECK)
+  · `plan_codigo`, `fecha_ingreso` (copia de `cuarto_frio.fecha_ingreso_real`) · `mensaje` = texto completo que recibió la familia
+  · `mensaje_id` (wamid) · `intentos` (el job reintenta un ERROR hasta 3)
+- Se crea YA en `ENVIANDO` (la fila es el candado): un ENVIANDO huérfano no se reintenta solo; se relanza desde /automatizaciones
+- RLS: `authenticated` lee y escribe (política `avisos_tiempos_auth_all`); `orbit_backend` con GRANT
+- Config: `config_operativa` módulo `AVISO_TIEMPOS` (10 claves: `activo`, `plantilla`, `arranque_desde`, `planes`,
+  `planes_certificado`, `planes_sin_recordatorios`, `dias_certificado`, `meses_compostaje`, `horas_max_atraso`, `max_envios_por_corrida`)
+- Índice nuevo `idx_cuarto_frio_ingreso_real` en `cuarto_frio (fecha_ingreso_real)`
+- La misma migración corrige catálogo: `planes.dias_entrega_prometidos` de ECO_GRUPAL 20 → 8 y
+  `recordatorios.tiempo_produccion_dias` de Memopet / Memopet Promocion 8 → 15
+
 ### Elección de planta — tablas `plantas`, `planta_elecciones`, `planta_adicionales` (migraciones 149/150)
 
 Ver [MODULES/PLANTAS.md](../MODULES/PLANTAS.md).

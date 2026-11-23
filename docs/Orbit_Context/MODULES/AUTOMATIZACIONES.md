@@ -12,6 +12,7 @@ contacto por contacto de cada uno con el acuse real de Meta y el botón de relan
 | `aviso_vet` | hora del técnico a la clínica aliada | `recogidas.aviso_vet_*` | `AVISO_VET_RECOGIDA.activo` |
 | `aviso_cliente` | hora a la familia por wa.me (lo manda una persona) | `recogidas.aviso_cliente_*` | — |
 | `plantas` | enlace para elegir planta al cumplirse el compostaje | `planta_elecciones` | `PLANTAS.activo` |
+| `aviso_tiempos` | tiempos del proceso (certificado, fotos, recordatorios) al ingresar al cuarto frío (migr. 214) | `avisos_tiempos_ingreso` | `AVISO_TIEMPOS.activo` |
 | `mitad_compostaje` | «va con normalidad» + invitación a visitar | `avisos_mitad_compostaje` | `MITAD_COMPOSTAJE.activo` |
 | `digitales` | enlaces de las piezas digitales | `digitales_envios` | `DIGITALES.envio_automatico_activo` |
 | `grupales` | certificado del proceso grupal | `reportes_grupales_envios` | — |
@@ -20,6 +21,18 @@ contacto por contacto de cada uno con el acuse real de Meta y el botón de relan
 `oferta_posterior` usa `arranqueAlEncender` (como condolencias): al encenderla, `arranque_desde` pasa
 a ser ese día. Su relanzamiento NO reenvía una oferta que Meta sí entregó. Detalle en
 [VENTAS_POSTERIORES.md](VENTAS_POSTERIORES.md).
+
+`aviso_tiempos` (REPORTE ORBIT 2026-11-20) también usa `arranqueAlEncender`. Lo dispara
+`cuarto_frio.fecha_ingreso_real` (NUNCA `fecha_ingreso`, que es la creación del servicio):
+el job `/jobs/aviso-tiempos` corre cada 10 min de 7:00 a 20:00 y toma los ingresos de las
+últimas `horas_max_atraso` (48). El texto por plan sale de
+`orbit-backend/src/aviso-tiempos-reglas.js` (pruebas en `tests/aviso-tiempos.test.mjs`):
+certificado a 3 días hábiles solo en eco-grupal, básico, standard, desamparado, Ángel y
+básico sin recordatorios; recordatorios «días del plan a +2» **desde que llegan las fotos**;
+el Memopet aparte con su `tiempo_produccion_dias` (15); compostaje individual «2 a 3
+meses». `POST /jobs/aviso-tiempos?dry=1` devuelve el mensaje que recibiría cada familia sin
+escribir ni enviar, aunque el flujo esté apagado. Plantilla `tiempos_ingreso_cuarto_frio`
+(`scripts/crear-plantilla-aviso-tiempos.mjs crear|estado`).
 
 Agregar un flujo = una fila en `FLUJOS` (conteos) y una en `FUENTES` (lista de contactos).
 

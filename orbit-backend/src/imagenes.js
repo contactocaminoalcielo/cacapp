@@ -15,6 +15,7 @@ import {
   cargarConfigImagenes, construirEnlace, mensajeSolicitud, requiereImagen, itemsPortal, incluyePortal,
   plantillaSolicitud, mensajeSolicitudCompetsSinRec, plazoEntrega, mensajeRecibido,
 } from './reglas-imagenes.js'
+import { notaMemopet } from './aviso-tiempos-reglas.js'
 import {
   ofertasParaServicio, ofertaCompleta, aplicarOfertaAceptada, registrarRechazoOferta,
   registrarVistasOfertas,
@@ -747,8 +748,22 @@ export async function recibirImagenesPortal({ codigo, payload = {}, contexto = {
     // fecha_limite_entrega) y hay algún recordatorio que hacer. Compostaje que
     // los recibe al final no tiene fecha todavía: decirle "8 a 10 días" sería falso.
     const hayRecordatorios = items.some(it => !declinados.has(String(it.sr_id))) || ofertaSrIds.length > 0
-    const plazo = svcFin?.fecha_limite_entrega && hayRecordatorios
+    let plazo = svcFin?.fecha_limite_entrega && hayRecordatorios
       ? plazoEntrega(s.dias_entrega_prometidos) : null
+    // El Memopet tarda más que el resto (15 días en el catálogo, David 23-nov):
+    // «8 a 10 (el Memopet, 15) días hábiles». Ya se hizo COMMIT: si esta
+    // consulta falla, el plazo sale sin la nota pero el portal NO falla.
+    if (plazo) {
+      try {
+        const { rows: [mp] } = await client.query(
+          `SELECT max(r.tiempo_produccion_dias) AS dias
+             FROM public.servicio_recordatorios sr
+             JOIN public.recordatorios r ON r.id = sr.recordatorio_id
+            WHERE sr.servicio_id = $1 AND r.nombre ILIKE 'memopet%'
+              AND sr.origen <> 'REMOVIDO' AND sr.estado NOT IN ('NA', 'ENTREGADO')`, [s.id])
+        plazo += notaMemopet(s.dias_entrega_prometidos, mp?.dias, false)
+      } catch (e) { log('[imagenes/recibir] nota del Memopet en el plazo:', e.message) }
+    }
     // Fuera de la transacción y sin esperar: el WhatsApp no puede demorar ni
     // tumbar la respuesta del portal; si falla queda en el log.
     if (plazo) avisarPlazoRecibido(s.id, plazo).catch(e =>

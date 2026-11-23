@@ -33,6 +33,7 @@ import { enviarAvisoMitad } from './mitad-compostaje.js'
 import { enviarEncuesta } from './encuesta-entrega.js'
 import { enviarCondolencia } from './condolencias.js'
 import { enviarOferta } from './oferta-posterior.js'
+import { enviarAvisoTiempos } from './aviso-tiempos.js'
 import { enviarAutomatico } from './digitales.js'
 import { enviarReporte } from './grupales.js'
 import { explicarErrorWa } from './errores-wa.js'
@@ -251,6 +252,25 @@ const FUENTES = {
       JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
       LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id
      WHERE k.fecha_programada <= public.fn_hoy_bogota() OR k.fecha_envio IS NOT NULL`,
+
+  // Aviso de tiempos al ingresar al cuarto frío (migr. 214). EXCLUIDO (sin
+  // WhatsApp, cancelado) se pinta como CANCELADO: no hay nada que relanzar.
+  aviso_tiempos: `
+    SELECT k.id, k.servicio_id,
+           COALESCE(k.fecha_envio, k.updated_at) AS fecha,
+           (CASE k.estado WHEN 'EXCLUIDO' THEN 'CANCELADO' ELSE k.estado END) AS estado,
+           COALESCE(k.error, k.motivo_exclusion) AS error, k.intentos::int AS intentos,
+           m.nombre AS mascota, ${PROPIETARIO} AS destinatario,
+           COALESCE(k.whatsapp_destino, c.whatsapp) AS destino,
+           k.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           (COALESCE(pl.nombre, k.plan_codigo, '')
+             || COALESCE(' · ingresó el ' || to_char(k.fecha_ingreso AT TIME ZONE 'America/Bogota', 'DD/MM HH24:MI'), '')) AS detalle,
+           jsonb_build_object('updated_at', k.updated_at) AS extra
+      FROM public.avisos_tiempos_ingreso k
+      JOIN public.servicios s     ON s.id = k.servicio_id
+      JOIN public.mascotas m      ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.planes pl  ON pl.id = s.plan_id
+      LEFT JOIN public.clientes c ON c.id_cliente = m.cliente_id`,
 
   // Una fila por INTENTO. `resuelto` = ese servicio ya tiene un envío bueno
   // (aunque este intento haya fallado), para no ofrecer relanzar lo ya entregado.
@@ -538,6 +558,18 @@ const RELANZAR = {
                       [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega', f.estado])
     }
     return desdeMotivo(await enviarOferta({ id: f.id, personalId: personal.id }))
+  },
+
+  async aviso_tiempos(f, personal) {
+    // ENVIANDO huérfano (se cayó a mitad) o ENVIADO que Meta no entregó → ERROR,
+    // y `enviarAvisoTiempos` lo retoma con el número vigente de la ficha.
+    if (f.estado === 'ENVIANDO' || (f.estado === 'ENVIADO' && f.acuse === 'failed')) {
+      await destrabar(`UPDATE public.avisos_tiempos_ingreso
+                          SET estado = 'ERROR', error = COALESCE(error, $2), updated_at = now()
+                        WHERE id = $1 AND estado = $3`,
+                      [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega', f.estado])
+    }
+    return desdeMotivo(await enviarAvisoTiempos({ servicioId: f.servicio_id, personalId: personal.id }))
   },
 
   async digitales(f, personal) {

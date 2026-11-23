@@ -45,6 +45,13 @@
 # Idempotente: UNIQUE (solicitud, canal, destino) impide repetir un paso.
 5-55/10 7-20 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/cadena-contacto-imagenes >> /var/log/orbit-backend-cron.log 2>&1
 
+# Aviso de tiempos al ingresar al cuarto frio (migr. 214) — cada 10 minutos de
+# dia, todos los dias: le cuenta a la familia los tiempos del certificado, las
+# fotos y los recordatorios apenas la mascota entra a la nevera. Lo que entra de
+# noche sale a las 7:00. Envia solo encendido y con plantilla. Idempotente:
+# UNIQUE(servicio_id) + la fila se reclama (ENVIANDO) antes de enviar.
+2-52/10 7-20 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/aviso-tiempos >> /var/log/orbit-backend-cron.log 2>&1
+
 # Digitales — revisa cada 10 minutos, solo en horario diurno. El job aplica un
 # corte de activacion y nunca toma los servicios historicos anteriores a este.
 # Maximo 5 por corrida y bloqueo global para impedir dos ejecuciones simultaneas.

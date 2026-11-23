@@ -24,6 +24,7 @@ import { datosPortalOpinion, guardarComentarioOpinion, marcarAtendido } from './
 import { jobCondolencias } from './jobs/condolencias.js'
 import { listarCondolencias, excluirCondolencia, reincluirCondolencia } from './condolencias.js'
 import { jobOfertaPosterior } from './jobs/oferta-posterior.js'
+import { jobAvisoTiempos } from './aviso-tiempos.js'
 import {
   listarOfertas, excluirOferta, reincluirOferta,
   listarExclusiones, crearExclusion, retirarExclusion,
@@ -1426,6 +1427,19 @@ app.post('/condolencias/:id/reincluir', requireAuth, requireRol('COORDINADOR', '
   } catch (e) {
     log('[condolencias] ERROR reincluir', e.message)
     res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Aviso de tiempos al ingresar al cuarto frío (migración 214) ─────────
+// Job cada 10 min, 7:00 a 20:00: envía solo encendido y con plantilla.
+// ?dry=1 → no escribe ni envía; devuelve el mensaje que recibiría cada familia
+// (corre aunque esté apagado: sirve para revisar los textos antes de encender).
+app.post('/jobs/aviso-tiempos', requireJob, async (req, res) => {
+  try {
+    res.json(await jobAvisoTiempos({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[aviso-tiempos/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
   }
 })
 

@@ -125,6 +125,24 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'aviso_tiempos',
+    nombre: 'Tiempos al ingresar al cuarto frío',
+    descripcion: 'Apenas la mascota entra al cuarto frío, la familia recibe los tiempos de su proceso: el certificado (3 días hábiles, solo en eco-grupal, básico, standard, desamparado y Ángel), que le llegará el enlace de las fotos, y cuánto tardan los recordatorios desde que las envía. En compostaje individual, los 2 a 3 meses del proceso.',
+    quien: 'A la familia',
+    cron: 'Cada 10 min, 7:00 a 20:00',
+    interruptor: { modulo: 'AVISO_TIEMPOS', clave: 'activo' },
+    // Al encender, `arranque_desde` = hoy: nada de los ingresos de antes.
+    arranqueAlEncender: true,
+    plantillaCfg: { modulo: 'AVISO_TIEMPOS', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.avisos_tiempos_ingreso',
+      fecha: 'fecha_envio',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      pendiente: "estado = 'ENVIANDO'",
+    },
+  },
+  {
     clave: 'mitad_compostaje',
     nombre: 'Mitad del compostaje + visita a la planta',
     descripcion: 'A la mitad del proceso de cada mascota: «va con normalidad» y la invitación a visitar el cubículo.',
