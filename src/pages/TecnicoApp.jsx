@@ -1503,7 +1503,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
     try {
       const { generarCertificadoEntrega } = await import('@/lib/certificadoEntrega')
       const { data: itemsData } = await db.from('servicio_recordatorios')
-        .select('id, estado, origen, precio_cobrado, recordatorios(nombre)')
+        .select('id, estado, origen, cantidad, precio_cobrado, recordatorios(nombre)')
         .eq('servicio_id', ent.servicio_id).neq('origen', 'REMOVIDO')
       const mensajero = { nombre: tecnico?.nombre || '', apellido: tecnico?.apellido || '' }
       await generarCertificadoEntrega({

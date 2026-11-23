@@ -63,7 +63,7 @@ export default function ResumenEntrega({ servicioId }) {
                   'mascotas:mascota_id ( nombre, especies ( nombre ), clientes:cliente_id ( nombre, apellido ) )')
           .eq('id', servicioId).single(),
         db.from('servicio_recordatorios')
-          .select('id, estado, origen, precio_cobrado, recordatorios ( nombre, categoria )')
+          .select('id, estado, origen, cantidad, precio_cobrado, recordatorios ( nombre, categoria )')
           .eq('servicio_id', servicioId).neq('origen', 'REMOVIDO'),
       ])
       await generarCertificadoEntrega({

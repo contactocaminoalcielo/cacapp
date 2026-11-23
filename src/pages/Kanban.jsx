@@ -2080,6 +2080,8 @@ export default function Kanban() {
         recordatorio_id: addRecId,
         origen:          'ADICIONAL',
         estado:          'PENDIENTE',
+        // Sin esto quedaba cantidad 1 aunque se cobraran N (caso Violeta: 5 llaveros).
+        cantidad:        qty,
         precio_cobrado:  subtotal,
       }).select('id').single()
       if (recErr) throw recErr
@@ -4815,14 +4817,14 @@ export default function Kanban() {
                       return (
                         <span key={r.id} className="text-[11px] px-2.5 py-1.5 rounded-full line-through opacity-50"
                           style={{ background: '#F3F4F6', color: '#9CA3AF' }} title="Cliente no desea este recordatorio">
-                          {r.recordatorios?.nombre || 'Ítem'} · No desea
+                          {r.recordatorios?.nombre || 'Ítem'}{(r.cantidad || 1) > 1 ? ` ×${r.cantidad}` : ''} · No desea
                         </span>
                       )
                     const puedeQuitar = (esAdmin || rol === 'COORDINADOR') && !['CANCELADO', 'ENTREGADO'].includes(selected.estado)
                     return (
                       <span key={r.id} className="inline-flex items-center gap-1">
                         <button className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-full cursor-pointer transition-all prod-pill-${r.estado}`} onClick={() => ciclarRecordatorio(r)}>
-                          {r.recordatorios?.nombre || 'Ítem'} · {r.estado.replace(/_/g, ' ')}
+                          {r.recordatorios?.nombre || 'Ítem'}{(r.cantidad || 1) > 1 ? ` ×${r.cantidad}` : ''} · {r.estado.replace(/_/g, ' ')}
                         </button>
                         {puedeQuitar && (
                           <button onClick={() => abrirQuitar(r)} title="Quitar este ítem (el cliente no lo tomó)"

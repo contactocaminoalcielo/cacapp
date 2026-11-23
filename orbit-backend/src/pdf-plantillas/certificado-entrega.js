@@ -82,7 +82,8 @@ export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, 
   // ── Ítems: lista compacta, sin cajas ─────────────────────────────────────
   const vivos = (items || []).filter(i => i.estado !== 'NA' && i.origen !== 'REMOVIDO')
   const esDigital = i => (i.recordatorios?.categoria || i.categoria) === 'digital'
-  const nombreDe  = i => i.recordatorios?.nombre || i.nombre || 'Ítem'
+  // Varias unidades del mismo ítem (p. ej. 5 llaveros) se ven en la lista y en el cobro.
+  const nombreDe  = i => `${i.recordatorios?.nombre || i.nombre || 'Ítem'}${(Number(i.cantidad) || 1) > 1 ? ` ×${i.cantidad}` : ''}`
   const fisicos   = vivos.filter(i => !esDigital(i))
   const digitales = vivos.filter(esDigital)
   const lista = (arr, clase = '') => `<ul class="items ${clase}">${arr.map(i =>

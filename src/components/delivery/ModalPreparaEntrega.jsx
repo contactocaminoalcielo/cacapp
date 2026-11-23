@@ -110,7 +110,7 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
         ).eq('id', servicioId).single(),
         db.from('entregas').select('*').eq('servicio_id', servicioId).maybeSingle(),
         db.from('servicio_recordatorios')
-          .select('id, estado, origen, precio_cobrado, recordatorios(nombre, categoria)')
+          .select('id, estado, origen, cantidad, precio_cobrado, recordatorios(nombre, categoria)')
           .eq('servicio_id', servicioId).neq('origen', 'REMOVIDO'),
         db.from('personal').select('id, nombre, apellido, rol_principal_id')
           .eq('activo', true).in('rol_principal_id', [2, 3]).order('nombre'),
@@ -578,7 +578,7 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                     <span key={i.id}
                       className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
                       style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #6EE7B7' }}>
-                      {i.recordatorios?.nombre || 'Ítem'}
+                      {i.recordatorios?.nombre || 'Ítem'}{(i.cantidad || 1) > 1 ? ` ×${i.cantidad}` : ''}
                     </span>
                   ))}
                 </div>

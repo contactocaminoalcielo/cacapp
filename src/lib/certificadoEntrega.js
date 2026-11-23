@@ -247,7 +247,7 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
       const colW = (CW - 4) / 2
       let col = 0, rowY = y, maxY = y
       lista.forEach(item => {
-        const nombre = item.recordatorios?.nombre || item.nombre || 'Ítem'
+        const nombre = `${item.recordatorios?.nombre || item.nombre || 'Ítem'}${(Number(item.cantidad) || 1) > 1 ? ` ×${item.cantidad}` : ''}`
         const nlines = pdf.splitTextToSize(nombre, colW - 4)
         const itemH  = Math.max(9, nlines.length * 4.2 + 2)
         // Al empezar una fila nueva se comprueba que quepa; si no, página nueva
@@ -333,7 +333,7 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
     ...(items || [])
       .filter(i => i.origen === 'ADICIONAL' && i.estado !== 'NA')
       .map(i => ({
-        nombre: i.recordatorios?.nombre || i.nombre || 'Adicional',
+        nombre: `${i.recordatorios?.nombre || i.nombre || 'Adicional'}${(Number(i.cantidad) || 1) > 1 ? ` ×${i.cantidad}` : ''}`,
         valor:  Number(i.precio_cobrado ?? i.subtotal) || 0,
       })),
     ...plantasExtra.map(p => ({

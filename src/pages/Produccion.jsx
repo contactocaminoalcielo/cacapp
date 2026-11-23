@@ -41,6 +41,10 @@ const ESTADOS_PROD = ['PENDIENTE', 'EN_PROCESO', 'LISTO']
 const esCompostajeAnticipado = svc =>
   svc?.planes?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL' && svc?.recordatorios_anticipados === true
 
+// «×5» cuando el ítem tiene varias unidades (servicio o compra): sin esto el tablero
+// mostraba «Llavero» aunque fueran 5 y producción fabricaba uno.
+const conCantidad = item => ((Number(item?.cantidad) || 1) > 1 ? ` ×${item.cantidad}` : '')
+
 function initials(p) {
   if (!p) return '?'
   return `${(p.nombre || '')[0] || ''}${(p.apellido || '')[0] || ''}`.toUpperCase()
@@ -85,7 +89,7 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
         : soloN
           ? <Zap size={10} style={{ color: '#059669' }} />
           : null}
-      <span>{rec?.nombre || item.nombre || 'Ítem'}{item.__compra && item.cantidad > 1 ? ` ×${item.cantidad}` : ''}</span>
+      <span>{rec?.nombre || item.nombre || 'Ítem'}{conCantidad(item)}</span>
       {asig && (
         <span style={{
           background: 'rgba(0,0,0,0.12)', borderRadius: '50%',
@@ -182,7 +186,7 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
   const col = ESTADO_COLOR[estado] || ESTADO_COLOR.PENDIENTE
 
   return (
-    <Modal open onClose={onClose} title={rec?.nombre || 'Ítem'}>
+    <Modal open onClose={onClose} title={`${rec?.nombre || 'Ítem'}${conCantidad(item)}`}>
       <div className="space-y-4">
 
         {/* Indicadores */}
@@ -630,7 +634,7 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                         <div className="flex items-center gap-2">
                           <span className="text-base">{petEmoji(mascota?.especies?.nombre)}</span>
                           <div className="flex-1 min-w-0">
-                            <div className="text-[12px] font-bold text-ink truncate">{item.recordatorios?.nombre}</div>
+                            <div className="text-[12px] font-bold text-ink truncate">{item.recordatorios?.nombre}{conCantidad(item)}</div>
                             <div className="text-[11px] text-ink3 truncate flex items-center gap-1">{mascota?.nombre} <MarcaCompra compra={item.__compra} chica /></div>
                           </div>
                           {asig && (
@@ -674,7 +678,7 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                     style={item.__compra
                       ? { border: `1px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
                       : { border: '1px solid rgba(30,80,40,0.08)' }}>
-                    <div className="text-[12px] font-bold text-ink">{item.recordatorios?.nombre}</div>
+                    <div className="text-[12px] font-bold text-ink">{item.recordatorios?.nombre}{conCantidad(item)}</div>
                     <div className="text-[11px] text-ink3 flex items-center gap-1">{mascota?.nombre} <MarcaCompra compra={item.__compra} chica /></div>
                   </button>
                 )
@@ -803,7 +807,7 @@ function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPer
                       ? <span className="inline-flex items-center gap-1.5"><MarcaCompra compra={r.__compra} /><span className="text-[11px]" style={{ color: COMPRA_COLOR.texto }}>sin servicio</span></span>
                       : (r.servicios?.planes?.nombre || '—')}
                   </Td>
-                  <Td className="whitespace-nowrap font-semibold">{rec?.nombre || 'Ítem'}</Td>
+                  <Td className="whitespace-nowrap font-semibold">{rec?.nombre || 'Ítem'}{conCantidad(r)}</Td>
                   <Td>
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
                       style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}` }}>
