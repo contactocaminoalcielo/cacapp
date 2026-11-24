@@ -30,8 +30,16 @@ const TIPOS = ['ANUAL', 'VITALICIO']
 const METODOS = [['EFECTIVO', 'Efectivo'], ['TRANSFERENCIA', 'Transferencia'], ['TARJETA', 'Tarjeta'], ['OTRO', 'Otro']]
 const SEXOS = ['Macho', 'Hembra']
 const TAMANOS = ['Mini', 'Pequeño', 'Mediano', 'Grande', 'Gigante']
-// El PDF queda adjunto al contrato y el adjunto tiene tope de 8 MB (subirComprobanteAfiliacion).
-const MAX_MB = 8
+// Dos topes distintos (REPORTE ORBIT 23-nov: "la IA no lee el documento"):
+//   · leer: lo que acepta el backend (MAX_BYTES en afiliaciones-ia.js). Un escaneo de
+//     varias páginas pesa 10-20 MB y antes se rechazaba aquí mismo con el tope del
+//     adjunto, sin llegar nunca a la IA.
+//   · adjuntar: el tope del adjunto (subirComprobanteAfiliacion). Si el PDF lo supera,
+//     el contrato se crea igual y el original se adjunta después, más liviano.
+const MAX_LEER_MB = 20
+const MAX_ADJUNTO_MB = 8
+const mb = bytes => (bytes / 1048576).toFixed(1).replace('.', ',')
+const adjuntable = file => file.size <= MAX_ADJUNTO_MB * 1024 * 1024
 
 const norm = v => String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase()
 const esFecha = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && !isNaN(parseDate(v))
@@ -193,7 +201,7 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
       const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
       const item = { id: crypto.randomUUID(), file, url: URL.createObjectURL(file), estado: 'LEYENDO', dudas: [], incluir: false }
       if (!esPdf) Object.assign(item, { estado: 'ERROR_LECTURA', error: 'No es un PDF' })
-      else if (file.size > MAX_MB * 1024 * 1024) Object.assign(item, { estado: 'ERROR_LECTURA', error: `Supera ${MAX_MB} MB` })
+      else if (file.size > MAX_LEER_MB * 1024 * 1024) Object.assign(item, { estado: 'ERROR_LECTURA', error: `Pesa ${mb(file.size)} MB y el tope es ${MAX_LEER_MB} MB. Divídelo o comprímelo` })
       nuevos.push(item)
     }
     setItems(xs => [...xs, ...nuevos])
@@ -262,7 +270,12 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
     if (eCub) throw eCub
     if (cubiertas?.length) throw new Error('Ya tienen afiliación viva: ' + cubiertas.map(x => x.mascotas?.nombre).join(', '))
 
-    const notas = [`Contrato de la base antigua cargado desde PDF (${it.file.name}).`, f.observaciones.trim()].filter(Boolean).join(' ')
+    const conAdjunto = adjuntable(it.file)
+    const notas = [
+      `Contrato de la base antigua cargado desde PDF (${it.file.name}).`,
+      conAdjunto ? '' : `El PDF original (${mb(it.file.size)} MB) no quedó adjunto: supera ${MAX_ADJUNTO_MB} MB.`,
+      f.observaciones.trim(),
+    ].filter(Boolean).join(' ')
     const { data: afil, error: eAf } = await db.from('afiliaciones').insert({
       tipo: f.tipo, nivel: f.nivel, cliente_id: cliente.id_cliente, estado: 'VIGENTE',
       notas, creado_por: personalData?.id || null,
@@ -274,7 +287,7 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
         mascotaIds.map(id => ({ afiliacion_id: afil.id, mascota_id: id, estado: 'VIGENTE' })))
       if (r1.error) throw r1.error
 
-      const original = await subirComprobanteAfiliacion(afil.id, it.file)
+      const original = conAdjunto ? await subirComprobanteAfiliacion(afil.id, it.file) : null
       const valor = parseFloat(f.valor)
       const base = {
         afiliacion_id: afil.id, valor, valor_lista: valor, metodo_pago: f.metodo,
@@ -284,7 +297,7 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
         ...base, numero: 0, numero_contrato: numero0,
         fecha_inicio: f.fecha, fecha_vencimiento: f.tipo === 'ANUAL' ? plan.vence0 : null,
         fecha_pago: f.fecha,
-        comprobantes: [{ ...original, tipo: 'CONTRATO_ORIGINAL', nombre: it.file.name }],
+        comprobantes: original ? [{ ...original, tipo: 'CONTRATO_ORIGINAL', nombre: it.file.name }] : [],
       })
       if (r2.error) throw r2.error
       if (plan.actual) {
@@ -343,7 +356,7 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
           onDrop={e => { e.preventDefault(); agregarArchivos(e.dataTransfer.files) }}>
           <FileUp size={22} className="mx-auto mb-2 text-[#1A5CD8]" />
           <span className="block text-[13px] font-bold text-gray-800">Seleccionar o arrastrar contratos en PDF</span>
-          <span className="block text-[11px] text-gray-500 mt-1">Uno o varios a la vez · un contrato por archivo · hasta {MAX_MB} MB c/u</span>
+          <span className="block text-[11px] text-gray-500 mt-1">Uno o varios a la vez · un contrato por archivo · hasta {MAX_LEER_MB} MB c/u</span>
           <input type="file" multiple accept="application/pdf,.pdf" className="sr-only"
             onChange={e => { agregarArchivos(e.target.files); e.target.value = '' }} />
         </label>
@@ -351,7 +364,8 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
         <div className="rounded-xl bg-blue-50 px-4 py-3 text-[11px] text-blue-900">
           La IA lee cada contrato y llena los datos; <strong>revísalos contra el PDF antes de crear</strong>.
           Se conserva la <strong>fecha de afiliación</strong> del papel (antigüedad) y tú confirmas <strong>hasta cuándo está vigente hoy</strong>:
-          si ya pasó el primer año, entra como renovado y sin cláusula 5×/3×. El PDF queda adjunto al contrato.
+          si ya pasó el primer año, entra como renovado y sin cláusula 5×/3×. El PDF queda adjunto al contrato
+          (si pesa más de {MAX_ADJUNTO_MB} MB se lee igual, pero lo adjuntas después en una versión más liviana con «+ Comprobante»).
         </div>
 
         {items.map(it => (
@@ -394,7 +408,7 @@ function TarjetaContrato({ it, onForm, onIncluir, onReintentar, onQuitar, onRevi
       {cab}
       <div className="flex items-center gap-2 px-4 py-3 text-[12px] text-red-700">
         <AlertTriangle size={14} /> No se pudo leer: {it.error}
-        {it.error !== 'No es un PDF' && !/Supera/.test(it.error) && (
+        {it.error !== 'No es un PDF' && !/el tope es/.test(it.error) && (
           <button type="button" onClick={onReintentar} className="ml-2 inline-flex items-center gap-1 font-semibold text-[#1A5CD8] hover:underline"><RotateCw size={12} /> Reintentar</button>
         )}
       </div>
@@ -423,6 +437,13 @@ function TarjetaContrato({ it, onForm, onIncluir, onReintentar, onQuitar, onRevi
         {it.dudas?.length > 0 && (
           <div className="flex items-start gap-2 rounded-lg bg-[#FFF3DC] px-3 py-2 text-[11px] text-[#9A5500]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0" /> <span><b>La IA tuvo dudas:</b> {it.dudas.join(' · ')}</span>
+          </div>
+        )}
+        {!adjuntable(it.file) && it.estado !== 'CREADO' && (
+          <div className="flex items-start gap-2 rounded-lg bg-[#FFF3DC] px-3 py-2 text-[11px] text-[#9A5500]">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <span>Este PDF pesa <b>{mb(it.file.size)} MB</b>: la IA lo leyó, pero el contrato se crea <b>sin el PDF adjunto</b> (máx. {MAX_ADJUNTO_MB} MB).
+              Después, en la ficha, adjúntalo comprimido con «+ Comprobante».</span>
           </div>
         )}
 
