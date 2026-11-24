@@ -3620,9 +3620,6 @@ function RecogidaList({ recogidas, tecnico, neverasList = NEVERAS_DEFAULT, onIni
 
 // ─── MIS CUADRES (técnico ve sus pagos de cuadres CERRADOS) ────────────
 function MisCuadresTab({ tecnico, onIrComprobantes }) {
-  // 🔒 Candado (18-nov-2026): con comprobantes por subir no se confirma el
-  // cuadre. Es solo del front: la RPC `confirmar_cuadre_por_tecnico` no lo sabe.
-  const [porSubir, setPorSubir] = useState(0)
   // 'bitacora' | 'cuadres' — el aviso de cuadre pendiente abre directo en Cuadres
   // (deja la vista en localStorage antes de cambiar de pestaña; se lee y se limpia)
   const [vista, setVista] = useState(() => {
@@ -3645,13 +3642,18 @@ function MisCuadresTab({ tecnico, onIrComprobantes }) {
           </button>
         ))}
       </div>
-      {vista === 'bitacora' ? <BitacoraTab tecnico={tecnico} /> : <CuadresList tecnico={tecnico} />}
+      {vista === 'bitacora' ? <BitacoraTab tecnico={tecnico} /> : <CuadresList tecnico={tecnico} onIrComprobantes={onIrComprobantes} />}
     </div>
   )
 }
 
 // ─── MIS CUADRES (cerrados + borradores en revisión con confirmación) ───────
-function CuadresList({ tecnico }) {
+function CuadresList({ tecnico, onIrComprobantes }) {
+  // 🔒 Candado (18-nov-2026): con comprobantes por subir no se confirma el
+  // cuadre. Es solo del front: la RPC `confirmar_cuadre_por_tecnico` no lo sabe.
+  // 🩸 Vivía en MisCuadresTab y se usaba AQUÍ: ReferenceError al abrir un
+  // borrador sin confirmar → la app del técnico se caía (corregido 24-nov).
+  const [porSubir, setPorSubir] = useState(0)
   const [cuadres, setCuadres]   = useState([])
   const [loading, setLoading]   = useState(true)
   const [expandido, setExpandido] = useState(null)
