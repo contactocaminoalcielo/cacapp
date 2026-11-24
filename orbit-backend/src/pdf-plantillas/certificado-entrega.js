@@ -71,7 +71,7 @@ function numeroCertificado(svc) {
   return `CAC-${aa}${mm}-${String(svc?.id || '').slice(0, 6).toUpperCase()}`
 }
 
-export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, plantas }) {
+export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, plantas, cobro = null }) {
   const mascota = svc?.mascotas || svc?.mascota || {}
   const cliente = mascota?.clientes || mascota?.cliente || {}
   const clienteNombre = `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim()
@@ -92,7 +92,16 @@ export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, 
   // ── Adicionales por cobrar en la puerta (nunca el plan) ───────────────────
   const extras = plantas?.extras || []
   const saldoServicio = Math.max(0, (Number(svc?.valor_total) || 0) - (Number(svc?.valor_pagado) || 0))
-  const lineasCobro = [
+  // Si el frontend manda `cobro` (lo que debe el PROPIETARIO, concepto por concepto,
+  // src/lib/pagoAdicionalesCalculo.js) se usa ese: el saldo de la veterinaria ya no
+  // hace ver como pendiente un adicional pagado (REPORTE ORBIT 23-nov). Sin `cobro`
+  // (frontend viejo), la regla de siempre.
+  const cobroOk = Array.isArray(cobro?.lineas)
+  const lineasCobro = cobroOk
+    ? cobro.lineas
+        .map(l => ({ nombre: String(l?.nombre || 'Adicional').slice(0, 120), valor: Math.max(0, Number(l?.valor) || 0) }))
+        .filter(l => l.valor > 0)
+    : [
     ...vivos.filter(i => i.origen === 'ADICIONAL').map(i => ({
       nombre: nombreDe(i), valor: Number(i.precio_cobrado ?? i.subtotal) || 0,
     })),
@@ -104,7 +113,9 @@ export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, 
       ? [{ nombre: 'Restos cálcicos', valor: Number(plantas.eleccion.restos_calcicos_valor) || 0 }] : []),
   ].filter(l => l.valor > 0)
   const totalAdicionales = lineasCobro.reduce((s, l) => s + l.valor, 0)
-  const saldo = Math.min(totalAdicionales, saldoServicio)
+  // Nunca más que el saldo real del servicio, venga de donde venga el detalle (si el
+  // frontend no mandó el valor del servicio, el detalle por concepto ya viene topado).
+  const saldo = cobroOk && svc?.valor_total == null ? totalAdicionales : Math.min(totalAdicionales, saldoServicio)
 
   const especie = plantas?.eleccion?.planta_nombre || plantas?.eleccion?.planta || null
   const telefonos = [entrega?.contacto_telefono, entrega?.telefono_adicional].filter(Boolean).join('  ·  ')
@@ -226,12 +237,12 @@ ${entrega?.notas ? `<div class="bloque nota">Notas: ${esc(entrega.notas)}</div>`
  * Punto de entrada de la ruta: arma los datos que faltan, imprime y devuelve
  * el PDF con el nombre de archivo sugerido.
  */
-export async function certificadoEntregaPdf({ svc, entrega, mensajero, items, firma }) {
+export async function certificadoEntregaPdf({ svc, entrega, mensajero, items, firma, cobro = null }) {
   const [plantas, firmaImg] = await Promise.all([
     cargarPlantas(svc?.id),
     resolverFirma(firma || entrega?.foto_firma_url),
   ])
-  const { html, numero } = htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma: firmaImg, plantas })
+  const { html, numero } = htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma: firmaImg, plantas, cobro })
   const pdf = await renderPdf({ html, formato: 'A4' })
   const mascota = (svc?.mascotas || svc?.mascota)?.nombre || 'servicio'
   const archivo = `Certificado_Entrega_${String(mascota).replace(/[^\w.-]+/g, '_')}_${numero}.pdf`

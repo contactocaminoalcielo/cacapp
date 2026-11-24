@@ -1789,9 +1789,9 @@ app.post('/automatizaciones/:clave/envios/:id/relanzar', requireAuth, requireRol
 // genera el mensajero en la puerta, el coordinador desde el tablero y la ficha.
 app.post('/pdf/certificado-entrega', requireAuth, requireRol('TECNICO', 'MENSAJERO', 'PRODUCTOR', 'COORDINADOR', 'ADMIN'), async (req, res) => {
   try {
-    const { svc, entrega, mensajero, items, firma } = req.body || {}
+    const { svc, entrega, mensajero, items, firma, cobro } = req.body || {}
     if (!svc?.id) return res.status(400).json({ ok: false, error: 'Falta el servicio' })
-    const { pdf, archivo } = await certificadoEntregaPdf({ svc, entrega, mensajero, items, firma })
+    const { pdf, archivo } = await certificadoEntregaPdf({ svc, entrega, mensajero, items, firma, cobro })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="${archivo}"`)
     res.setHeader('X-Archivo', archivo)

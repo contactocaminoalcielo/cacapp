@@ -6,6 +6,8 @@ import { crearNotificacion } from '@/lib/notificaciones'
 import { generarCertificadoEntrega } from '@/lib/certificadoEntrega'
 import { X, Truck, MapPin, User, Calendar, MessageCircle, Download, Check, AlertCircle } from 'lucide-react'
 import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
+import { PagoTag, PanelPagoAdicional, ResumenSaldoServicio } from '@/components/produccion/PagoAdicional'
+import { cargarPagoServicio } from '@/lib/pagoAdicionales'
 
 // Las entregas preparadas antes del 23-nov traen copiadas las indicaciones de la recogida
 // (migr. 216 limpia las abiertas). Si lo guardado es exactamente eso, no es de la entrega.
@@ -28,6 +30,9 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
   const [entrega,    setEntrega]    = useState(null)
   const [items,      setItems]      = useState([])
   const [mensajeros, setMensajeros] = useState([])
+  // Estado de pago de cada adicional y a quién le corresponde el saldo (REPORTE
+  // ORBIT 23-nov): el saldo de la veterinaria no se le cobra al propietario.
+  const [pago,       setPago]       = useState(null)
 
   // Formulario
   const [tipoEntrega,      setTipoEntrega]      = useState('DOMICILIO')
@@ -45,6 +50,11 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
   const [mensajeroId,      setMensajeroId]      = useState('')
 
   useEffect(() => { cargar() }, [servicioId])
+
+  async function recargarPago() {
+    try { setPago(await cargarPagoServicio(servicioId)) }
+    catch (e) { console.error('Estado de pago:', e.message); setPago(null) }
+  }
 
   // Nombre de quien la tiene (la tomó del pool o se la asignaron)
   const tomadaPor = (() => {
@@ -165,6 +175,7 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
       }
 
       setSvc(svcData)
+      recargarPago()   // informativo: si falla, el modal sigue con el saldo general
       setEntrega(entData)
       setItems(itmsData || [])
       setMensajeros(persData || [])
@@ -257,7 +268,8 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
             cliente:   cliente ? `${cliente.nombre} ${cliente.apellido}` : null,
             direccion: direccionEntrega,
             ciudad,
-            saldo:     Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0)),
+            // Lo que se le cobra al PROPIETARIO, no el saldo de la veterinaria.
+            saldo:     pago ? pago.pendientePropietario : Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0)),
             notas,
           },
         })
@@ -394,9 +406,17 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                   <div className="text-[10px] font-bold text-gray-400 uppercase">Plan</div>
                   <div className="font-semibold text-gray-800">{svc.planes?.nombre || '—'}</div>
                 </div>
-                {saldo > 0 && (
+                {saldo > 0 && pago && (
                   <div>
-                    <div className="text-[10px] font-bold text-gray-400 uppercase">Saldo a cobrar</div>
+                    <div className="text-[10px] font-bold text-gray-400 uppercase">Cobrar al propietario</div>
+                    <div className={`font-bold text-[14px] ${pago.pendientePropietario > 0 ? 'text-red-600' : 'text-green-700'}`}>
+                      {pago.pendientePropietario > 0 ? fmt(pago.pendientePropietario) : 'Nada — está al día'}
+                    </div>
+                  </div>
+                )}
+                {saldo > 0 && !pago && (
+                  <div>
+                    <div className="text-[10px] font-bold text-gray-400 uppercase">Saldo del servicio</div>
                     <div className="font-bold text-red-600 text-[14px]">{fmt(saldo)}</div>
                   </div>
                 )}
@@ -407,6 +427,9 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                 )}
               </div>
             )}
+
+            {/* Quién debe qué: el saldo de la veterinaria no es del propietario */}
+            {pago?.saldoVeterinaria > 0 && <ResumenSaldoServicio pago={pago} />}
 
             {/* Datos que dejó el cliente en el portal de fotos (prefill ya aplicado) */}
             {svc?.datos_entrega_cliente && (
@@ -586,10 +609,30 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
                 <div className="flex flex-wrap gap-1.5">
                   {items.filter(i => i.estado !== 'NA' && i.origen !== 'REMOVIDO').map(i => (
                     <span key={i.id}
-                      className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
+                      className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full"
                       style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #6EE7B7' }}>
                       {i.recordatorios?.nombre || 'Ítem'}{(i.cantidad || 1) > 1 ? ` ×${i.cantidad}` : ''}
+                      {i.origen === 'ADICIONAL' && <PagoTag concepto={pago?.porItem?.[i.id]} />}
                     </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Pago de cada adicional: aquí coordinación dice si el propietario ya lo
+                pagó en la veterinaria, para que el mensajero no se lo cobre otra vez. */}
+            {pago && items.some(i => i.origen === 'ADICIONAL' && pago.porItem?.[i.id]?.precio > 0) && (
+              <div>
+                <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">
+                  Pago de los adicionales
+                </div>
+                <div className="space-y-2">
+                  {items.filter(i => i.origen === 'ADICIONAL' && pago.porItem?.[i.id]?.precio > 0).map(i => (
+                    <div key={i.id}>
+                      <div className="text-[12px] font-bold text-gray-800 mb-1">{pago.porItem[i.id].nombre}</div>
+                      <PanelPagoAdicional servicioId={servicioId} item={i} pago={pago}
+                        personalId={yo?.id || null} onCambio={recargarPago} />
+                    </div>
                   ))}
                 </div>
               </div>

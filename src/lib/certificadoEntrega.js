@@ -85,12 +85,34 @@ function descargarBlob(blob, nombre) {
  * cae al generador local de jsPDF para que el mensajero nunca se quede sin
  * certificado.
  */
+// Lo que el PROPIETARIO debe pagar al recibir, concepto por concepto (REPORTE ORBIT
+// 23-nov). Antes la carta cobraba «todos los adicionales, topados al saldo»: si la
+// veterinaria debía el plan, un adicional YA pagado salía como TOTAL A COBRAR. Ahora
+// sale del mismo cálculo que el tablero y la app del mensajero. null = no se pudo
+// calcular (sin red): la carta cae a la regla vieja, que nunca cobra más del saldo.
+async function cobroPropietario(servicioId) {
+  if (!servicioId) return null
+  try {
+    const { cargarPagoServicio } = await import('@/lib/pagoAdicionales')
+    const pago = await cargarPagoServicio(servicioId)
+    if (!pago) return null
+    const lineas = pago.conceptos
+      .filter(c => c.pendiente > 0)
+      .map(c => ({ nombre: c.estado === 'PARCIAL' ? `${c.nombre} (saldo)` : c.nombre, valor: c.pendiente }))
+    return { lineas, total: lineas.reduce((s, l) => s + l.valor, 0), saldoVeterinaria: pago.saldoVeterinaria }
+  } catch (e) {
+    console.warn('[certificado] estado de pago no disponible:', e.message)
+    return null
+  }
+}
+
 export async function generarCertificadoEntrega({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
+  const cobro = await cobroPropietario(svc?.id)
   try {
     const { orbitApiBlob } = await import('@/lib/orbitApi')
     const blob = await orbitApiBlob('/pdf/certificado-entrega', {
       method: 'POST',
-      body: { svc, entrega, mensajero, items, firma: firmaDataUrl || entrega?.foto_firma_url || null },
+      body: { svc, entrega, mensajero, items, cobro, firma: firmaDataUrl || entrega?.foto_firma_url || null },
     })
     const mascotaNombre = (svc?.mascotas || svc?.mascota)?.nombre || 'servicio'
     descargarBlob(blob, `Certificado_Entrega_${mascotaNombre}_${numeroCertificado(svc)}.pdf`)
@@ -98,11 +120,11 @@ export async function generarCertificadoEntrega({ svc, entrega, mensajero, items
   } catch (e) {
     console.warn('[certificado] el backend no pudo generarlo, se usa el local:', e.message)
   }
-  await generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl })
+  await generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl, cobro })
 }
 
 // Generador local (jsPDF), el de siempre: queda como respaldo del de marca.
-export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl = null }) {
+export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, items, firmaDataUrl = null, cobro = null }) {
   const firmaImg = await resolverFirma(firmaDataUrl || entrega?.foto_firma_url)
   const { eleccion: plantaEleccion, extras: plantasExtra } = await cargarPlantas(svc?.id)
   const { default: jsPDF } = await import('jspdf')
@@ -329,7 +351,7 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
   // entraban en este bloque —solo se miraba `servicio_recordatorios`—, así que
   // una planta comprada engordaba el saldo y el mensajero no sabía cobrarla.
   const saldoServicio = Math.max(0, (svc?.valor_total || 0) - (svc?.valor_pagado || 0))
-  const lineasCobro = [
+  const lineasCobro = cobro ? cobro.lineas : [
     ...(items || [])
       .filter(i => i.origen === 'ADICIONAL' && i.estado !== 'NA')
       .map(i => ({
@@ -344,7 +366,8 @@ export async function generarCertificadoEntregaLocal({ svc, entrega, mensajero, 
       ? [{ nombre: 'Restos cálcicos', valor: Number(plantaEleccion.restos_calcicos_valor) || 0 }] : []),
   ].filter(l => l.valor > 0)
   const totalAdicionales = lineasCobro.reduce((s, l) => s + l.valor, 0)
-  const saldo = Math.min(totalAdicionales, saldoServicio)
+  // Con el cálculo por concepto cada línea ya es lo que falta: no hay tope que aplicar.
+  const saldo = cobro ? cobro.total : Math.min(totalAdicionales, saldoServicio)
 
   if (saldo > 0) {
     // Se topa al saldo real del servicio: nunca se cobra más de lo que se debe.

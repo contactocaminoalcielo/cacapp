@@ -23,6 +23,9 @@ import { registrarIngresoCuartoFrio } from '@/lib/cuartoFrio'
 import { orbitApi } from '@/lib/orbitApi'
 import { completarEntregaCompra } from '@/lib/comprasRecordatorios'
 import { EMPRESA } from '@/lib/reciboPdf'
+import { cargarPagoServicios, cargarPagoServicio } from '@/lib/pagoAdicionales'
+import { PagoTag } from '@/components/produccion/PagoAdicional'
+import { calcularEstadoPago, insertarNovedadPago } from '@/lib/servicios'
 
 const POLL = 30_000
 // Contadores de pestañas y pool de entregas: se refrescan tras una acción del
@@ -1213,11 +1216,13 @@ function MarcaCompraEntrega({ ent }) {
 // ─── CARD ENTREGA DISPONIBLE (pool) ─────────────────────────────────────
 // Lo justo para decidir si me sirve: qué mascota, para dónde, cuándo y si hay
 // plata por cobrar. El detalle completo aparece cuando ya es mía.
-function CardDisponible({ ent, tomando, onTomar }) {
+function CardDisponible({ ent, pago, tomando, onTomar }) {
   const mascota = ent.servicios?.mascotas
   const cliente = mascota?.clientes
   const emoji   = petEmoji(mascota?.especies?.nombre)
-  const saldo   = Math.max(0, (ent.servicios?.valor_total || 0) - (ent.servicios?.valor_pagado || 0))
+  // Lo que se le cobra al PROPIETARIO; el saldo de la veterinaria no (REPORTE 23-nov).
+  const saldo   = !ent.__compra && pago ? pago.pendientePropietario
+    : Math.max(0, (ent.servicios?.valor_total || 0) - (ent.servicios?.valor_pagado || 0))
   const zona    = [ent.barrio, ent.localidad, ent.ciudad].filter(Boolean).join(' · ')
 
   return (
@@ -1442,8 +1447,259 @@ function PanelCobroEntrega({ servicioId, entregaId, saldo, adicionales = 0, conM
   )
 }
 
+// ─── QUÉ SE ENTREGA Y QUÉ SE COBRA (servicios) ──────────────────────────
+// REPORTE ORBIT 23-nov (Reporte de entrega del mensajero, urgencia ALTA): en un
+// servicio referido por una veterinaria el saldo mezcla lo que debe el
+// propietario con lo que la veterinaria le debe a Camino, y el mensajero no
+// sabía qué recordatorio estaba entregando ni a qué correspondía la plata.
+// Ahora: (1) marca qué adicionales entrega de verdad; (2) cobra concepto por
+// concepto lo que le falta al PROPIETARIO; (3) el saldo de la veterinaria se ve
+// aparte y nunca se le cobra al propietario. El estado de pago de cada concepto
+// sale de lib/pagoAdicionalesCalculo.js (el mismo que ven Producción y la carta).
+
+// Adicionales que se pueden marcar como entregados en esta visita.
+function adicionalesEntregables(pago) {
+  return (pago?.conceptos || []).filter(c => c.tipo === 'ADICIONAL' && c.estadoItem !== 'ENTREGADO')
+}
+
+// Lo que el propietario puede pagar en la puerta, un renglón por concepto.
+// Suma exactamente `pago.pendientePropietario`.
+function conceptosCobrables(pago) {
+  const lista = (pago?.conceptos || []).filter(c => c.pendiente > 0).map(c => ({
+    key: c.key, itemId: c.itemId, tipo: c.tipo, monto: c.pendiente, dudoso: !!c.dudoso,
+    nombre: c.estado === 'PARCIAL' ? `${c.nombre} (saldo)` : c.nombre,
+  }))
+  if (pago?.planLoPaga === 'PROPIETARIO' && pago.saldoPlan > 0)
+    lista.push({ key: 'plan', itemId: null, tipo: 'PLAN', monto: pago.saldoPlan, nombre: 'Saldo del servicio (plan)' })
+  return lista
+}
+
+function cobroConceptosResuelto(cobrables, cobro) {
+  if (!cobrables.length) return true
+  if (cobro.decision === 'NO_COBRE') return cobro.motivo.trim().length >= 4
+  if (cobro.decision !== 'COBRE') return false
+  const sel = cobro.conceptos || []
+  if (!sel.length || !cobro.metodo) return false
+  if (sel.length < cobrables.length && (cobro.nota || '').trim().length < 4) return false
+  if (METODOS_CON_COMPROBANTE.includes(cobro.metodo)) return !!cobro.comprobante?.path
+  return true
+}
+
+function faltaCobroConceptosTexto(cobrables, cobro) {
+  if (cobroConceptosResuelto(cobrables, cobro)) return ''
+  if (cobro.decision === 'NO_COBRE') return 'el motivo de por qué no te pagaron'
+  if (cobro.decision === 'COBRE') {
+    if (!(cobro.conceptos || []).length) return 'qué te pagaron'
+    if ((cobro.conceptos || []).length < cobrables.length && (cobro.nota || '').trim().length < 4) return 'quién paga el resto'
+    return 'el comprobante del pago'
+  }
+  return 'decir si te pagaron'
+}
+
+function PanelQueEntregas({ pago, entregar, onChange }) {
+  const lista = adicionalesEntregables(pago)
+  if (!lista.length) return null
+  const toggle = id => {
+    const s = new Set(entregar)
+    s.has(id) ? s.delete(id) : s.add(id)
+    onChange(s)
+  }
+  return (
+    <div className="rounded-2xl p-3.5" style={{ background: '#F5F3FF', border: '1px solid #DDD6FE' }}>
+      <div className="text-[11px] font-bold uppercase tracking-wide mb-1 flex items-center gap-1.5" style={{ color: '#5B21B6' }}>
+        <Package size={12} /> Adicionales que entregas hoy
+      </div>
+      <p className="text-[11px] mb-2.5" style={{ color: '#6D28D9' }}>
+        Marca solo lo que de verdad le estás entregando. Lo que no marques sigue pendiente de entrega.
+        Los recordatorios del plan van con la entrega.
+      </p>
+      <div className="space-y-1.5">
+        {lista.map(c => {
+          const digital = c.categoria === 'digital'
+          const enProd  = c.estadoItem !== 'LISTO'
+          const sel     = entregar.has(c.itemId)
+          return (
+            <button key={c.itemId} type="button" onClick={() => !digital && toggle(c.itemId)} disabled={digital}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 text-left transition-all active:scale-98"
+              style={{ background: '#fff', borderColor: sel ? '#7C3AED' : '#E5E7EB', opacity: digital ? 0.75 : 1 }}>
+              <span className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-white text-[12px] font-black"
+                style={{ background: sel ? '#7C3AED' : '#fff', border: `2px solid ${sel ? '#7C3AED' : '#D1D5DB'}` }}>
+                {sel ? '✓' : ''}
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-[13px] font-bold text-gray-900 truncate">{c.nombre}</span>
+                <span className="block text-[11px] text-gray-500">
+                  {digital ? '📩 Se envía digital, no se entrega en físico'
+                    : enProd ? '⚠️ Producción aún no lo marca listo' : 'Listo para entregar'}
+                </span>
+              </span>
+              <PagoTag concepto={c} />
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function PanelCobroConceptos({ servicioId, entregaId, pago, cobro, onChange }) {
+  const cobrables = conceptosCobrables(pago)
+  const set = patch => onChange({ ...cobro, ...patch })
+  const total = cobrables.reduce((s, c) => s + c.monto, 0)
+  const sel = new Set(cobro.conceptos || [])
+  const montoSel = cobrables.filter(c => sel.has(c.key)).reduce((s, c) => s + c.monto, 0)
+  const faltan = cobrables.filter(c => !sel.has(c.key))
+  const exigeComprobante = METODOS_CON_COMPROBANTE.includes(cobro.metodo)
+  const vet = pago?.aliadoNombre || 'la veterinaria'
+
+  const OpcionBtn = ({ valor, children, activoBg }) => {
+    const activo = cobro.decision === valor
+    return (
+      <button type="button"
+        onClick={() => set(activo ? { decision: '' }
+          // Los dudosos («confirmar») no van marcados: pudieron pagarse ya.
+          : { decision: valor, ...(valor === 'COBRE' && !cobro.conceptos ? { conceptos: cobrables.filter(c => !c.dudoso).map(c => c.key) } : {}) })}
+        className="py-3 rounded-xl text-[13px] font-bold border-2 transition-all active:scale-98"
+        style={activo
+          ? { background: activoBg, color: '#fff', borderColor: activoBg }
+          : { background: '#fff', color: '#6B7280', borderColor: '#E5E7EB' }}>
+        {children}
+      </button>
+    )
+  }
+  const toggle = key => {
+    const s = new Set(cobro.conceptos || [])
+    s.has(key) ? s.delete(key) : s.add(key)
+    set({ conceptos: [...s] })
+  }
+
+  const infoVet = pago?.saldoVeterinaria > 0 && (
+    <div className="rounded-xl px-3 py-2 text-[11px]" style={{ background: '#F0FDFA', border: '1px solid #99F6E4', color: '#115E59' }}>
+      <b>{vet}</b> tiene un saldo de <b>{fmt(pago.saldoVeterinaria)}</b> con Camino al Cielo.
+      Eso lo cobra coordinación a la veterinaria: <b>no se le cobra al propietario.</b>
+    </div>
+  )
+
+  if (!cobrables.length) return infoVet ? <div>{infoVet}</div> : null
+
+  return (
+    <div className="rounded-2xl p-3.5 space-y-3" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] font-bold uppercase tracking-wide flex items-center gap-1.5" style={{ color: '#92400E' }}>
+            <Wallet size={12} /> Por cobrar al propietario
+          </span>
+          <span className="font-extrabold text-[17px]" style={{ color: '#B45309' }}>{fmt(total)}</span>
+        </div>
+        <div className="space-y-0.5">
+          {cobrables.map(c => (
+            <div key={c.key} className="flex justify-between text-[12px]" style={{ color: '#78350F' }}>
+              <span className="truncate pr-2">{c.nombre}{c.dudoso ? ' ⚠️' : ''}</span><span className="font-bold">{fmt(c.monto)}</span>
+            </div>
+          ))}
+        </div>
+        {cobrables.some(c => c.dudoso) && (
+          <p className="text-[11px] mt-1.5 font-semibold" style={{ color: '#B45309' }}>
+            ⚠️ Puede que el propietario ya haya pagado lo marcado con ⚠️. Pregúntale antes de cobrarlo; si dice que ya pagó, no lo marques.
+          </p>
+        )}
+      </div>
+      {infoVet}
+      <p className="text-[11px]" style={{ color: '#A16207' }}>
+        Cóbralo antes de entregar. Si el propietario no paga, dilo acá y entrega igual.
+      </p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <OpcionBtn valor="COBRE"    activoBg="#16A34A">💵 Recibí dinero</OpcionBtn>
+        <OpcionBtn valor="NO_COBRE" activoBg="#6B7280">No me pagaron</OpcionBtn>
+      </div>
+
+      {cobro.decision === 'COBRE' && (
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
+            ¿Qué te pagó?
+          </div>
+          <div className="space-y-1.5">
+            {cobrables.map(c => {
+              const activo = sel.has(c.key)
+              return (
+                <button key={c.key} type="button" onClick={() => toggle(c.key)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 text-left transition-all active:scale-98"
+                  style={{ background: '#fff', borderColor: activo ? '#16A34A' : '#FDE68A' }}>
+                  <span className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-white text-[12px] font-black"
+                    style={{ background: activo ? '#16A34A' : '#fff', border: `2px solid ${activo ? '#16A34A' : '#D1D5DB'}` }}>
+                    {activo ? '✓' : ''}
+                  </span>
+                  <span className="flex-1 text-[13px] font-bold text-gray-900">{c.nombre}</span>
+                  <span className="text-[13px] font-extrabold" style={{ color: '#B45309' }}>{fmt(c.monto)}</span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="flex items-center justify-between mt-2 px-1 text-[13px] font-extrabold" style={{ color: '#166534' }}>
+            <span>Recibes</span><span>{fmt(montoSel)}</span>
+          </div>
+
+          {montoSel > 0 && faltan.length > 0 && (
+            <>
+              <div className="text-[11px] font-bold uppercase tracking-wide mt-3 mb-1" style={{ color: '#92400E' }}>
+                Quedan {fmt(total - montoSel)} · ¿quién los paga?
+              </div>
+              <textarea value={cobro.nota} rows={2}
+                onChange={e => set({ nota: e.target.value })}
+                placeholder="Ej: el cliente transfiere el viernes"
+                className="w-full px-3 py-2.5 rounded-xl border-2 outline-none text-sm bg-white"
+                style={{ borderColor: (cobro.nota || '').trim().length >= 4 ? '#16A34A' : '#FDE68A' }} />
+              <p className="text-[11px] mt-1" style={{ color: '#A16207' }}>Ese valor sigue pendiente y coordinación lo ve en Cartera.</p>
+            </>
+          )}
+
+          <div className="text-[11px] font-bold uppercase tracking-wide mt-3 mb-1.5" style={{ color: '#92400E' }}>
+            ¿Cómo te pagó?
+          </div>
+          <select value={cobro.metodo} onChange={e => set({ metodo: e.target.value })}
+            className="w-full px-3 py-3 rounded-xl border-2 outline-none font-bold text-sm bg-white"
+            style={{ borderColor: '#FDE68A' }}>
+            {METODOS_PAGO.map(mp => <option key={mp} value={mp}>{mp}</option>)}
+          </select>
+
+          <div className="text-[11px] font-bold uppercase tracking-wide mt-3 mb-0.5" style={{ color: '#92400E' }}>
+            Comprobante {exigeComprobante ? '(obligatorio)' : '(opcional)'}
+          </div>
+          <p className="text-[11px]" style={{ color: '#A16207' }}>
+            {exigeComprobante
+              ? 'Sube la foto de la transferencia: sin ella no se puede cerrar la entrega.'
+              : 'Si tienes un soporte del efectivo, súbelo. No es obligatorio.'}
+          </p>
+          <ComprobanteUploader
+            servicioId={servicioId}
+            stashId={`entrega_${entregaId}`}
+            onSubido={(publicUrl, path, val) => set({ comprobante: { url: publicUrl, path, mime: val?.mime || null } })}
+          />
+        </div>
+      )}
+
+      {cobro.decision === 'NO_COBRE' && (
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: '#92400E' }}>
+            ¿Por qué no se cobró?
+          </div>
+          <textarea value={cobro.motivo} rows={2}
+            onChange={e => set({ motivo: e.target.value })}
+            placeholder="Ej: el cliente dice que transfiere hoy en la noche"
+            className="w-full px-3 py-2.5 rounded-xl border-2 outline-none text-sm bg-white"
+            style={{ borderColor: cobro.motivo.trim().length >= 4 ? '#16A34A' : '#FDE68A' }} />
+          <p className="text-[11px] mt-1" style={{ color: '#A16207' }}>
+            Queda registrado en el servicio y coordinación lo ve. Lo pendiente sigue pendiente.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── CARD ENTREGA ───────────────────────────────────────────────────────
-function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
+function CardEntrega({ ent, tecnico, pago, onAceptar, onCompletar, onSoltar }) {
   const [contactoModal,  setContactoModal]  = useState(null)
   const [actErr,         setActErr]         = useState('')
   const [aceptando,      setAceptando]      = useState(false)
@@ -1454,6 +1710,9 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   const [nombreCliente,  setNombreCliente]  = useState('')
   const [genCert,        setGenCert]        = useState(false)
   const [cobro,          setCobro]          = useState(COBRO_VACIO)
+  // Adicionales que el mensajero marca como entregados (ids). null = aún no se
+  // cargó el estado de pago; al llegar se marcan los que producción dejó LISTO.
+  const [entregar,       setEntregar]       = useState(null)
 
   const mascota = ent.servicios?.mascotas
   const especie = mascota?.especies?.nombre || ''
@@ -1471,8 +1730,19 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
   // En una compra sin servicio no hay plan aparte: se cobra todo o nada.
   const conMonto       = !ent.__compra
   const adicionales    = Number(ent.servicios?.valor_adicionales) || 0
-  const cobroOk        = cobroResuelto(saldo, cobro, conMonto)
-  const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim()) && cobroOk
+  // Servicio con su estado de pago cargado: se entrega y se cobra por concepto.
+  // Sin él (no cargó, compra sin servicio) sigue el panel de siempre por saldo.
+  const porConceptos   = !ent.__compra && !!pago
+  const cobrables      = porConceptos ? conceptosCobrables(pago) : []
+  const aCobrar        = porConceptos ? pago.pendientePropietario : saldo
+  const cobroOk        = porConceptos ? cobroConceptosResuelto(cobrables, cobro) : cobroResuelto(saldo, cobro, conMonto)
+  const puedeCompletar = !!fotoUrl && (!!firmaDataUrl || !!nombreCliente.trim()) && cobroOk && (!porConceptos || !!entregar)
+
+  useEffect(() => {
+    if (!porConceptos || entregar) return
+    setEntregar(new Set(adicionalesEntregables(pago)
+      .filter(c => c.estadoItem === 'LISTO' && c.categoria !== 'digital').map(c => c.itemId)))
+  }, [porConceptos, pago, entregar])
 
   async function aceptar() {
     setAceptando(true); setActErr('')
@@ -1486,7 +1756,21 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
     // `saldoMostrado` = lo que la pantalla le pidió cobrar. Solo se usa si al
     // guardar el saldo ya está en cero: es el único registro de cuánta plata
     // recibió de verdad.
-    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente, cobro: { ...cobro, saldoMostrado: saldo } }) }
+    // Por concepto: qué entregó (y qué no) y cuánto dijo que recibió. Se manda el
+    // estado que tenía cada ítem al abrir la tarjeta para devolver a LISTO lo que
+    // el trigger de la migr. 195 marque entregado sin que él lo haya entregado.
+    const extra = porConceptos ? (() => {
+      const lista = adicionalesEntregables(pago).filter(c => c.categoria !== 'digital')
+      const fila  = c => ({ id: c.itemId, nombre: c.nombre, estadoPrevio: c.estadoItem })
+      const sel   = new Set(cobro.conceptos || [])
+      return {
+        modo:          'CONCEPTOS',
+        montoMostrado: cobrables.filter(c => sel.has(c.key)).reduce((s, c) => s + c.monto, 0),
+        entregados:    lista.filter(c => entregar?.has(c.itemId)).map(fila),
+        noEntregados:  lista.filter(c => !entregar?.has(c.itemId)).map(fila),
+      }
+    })() : {}
+    try { await onCompletar(ent, { fotoUrl, firmaDataUrl, nombreCliente, cobro: { ...cobro, saldoMostrado: saldo, ...extra } }) }
     catch (e) { setActErr(e.message || 'Error al completar') }
     finally { setCompletando(false) }
   }
@@ -1577,11 +1861,17 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
 
       {/* Aviso de plata antes de salir: en EN_CAMINO no va porque el panel de
           cobro ya muestra el monto y qué hacer con él. */}
-      {saldo > 0 && ent.estado !== 'EN_CAMINO' && (
+      {aCobrar > 0 && ent.estado !== 'EN_CAMINO' && (
         <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold mb-3"
           style={{ background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
           <Wallet size={13} className="flex-shrink-0" />
-          Hay que cobrar {fmt(saldo)} en la entrega
+          Hay que cobrarle {fmt(aCobrar)} al propietario en la entrega
+        </div>
+      )}
+      {porConceptos && pago.saldoVeterinaria > 0 && ent.estado !== 'EN_CAMINO' && (
+        <div className="rounded-xl px-3 py-2 text-[11px] mb-3"
+          style={{ background: '#F0FDFA', color: '#115E59', border: '1px solid #99F6E4' }}>
+          {pago.aliadoNombre || 'La veterinaria'} debe {fmt(pago.saldoVeterinaria)} a Camino al Cielo: <b>no se le cobra al propietario.</b>
         </div>
       )}
 
@@ -1638,8 +1928,22 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
             sublabel="Evidencia de que el cliente recibió los recordatorios"
           />
 
-          {/* Cobro del saldo — solo si el servicio debe plata */}
-          {saldo > 0 && (
+          {/* Qué adicionales se entregan y qué paga el propietario, por concepto */}
+          {porConceptos && entregar && (
+            <PanelQueEntregas pago={pago} entregar={entregar} onChange={setEntregar} />
+          )}
+          {porConceptos && (
+            <PanelCobroConceptos
+              servicioId={ent.servicio_id}
+              entregaId={ent.id}
+              pago={pago}
+              cobro={cobro}
+              onChange={setCobro}
+            />
+          )}
+
+          {/* Cobro del saldo — solo si el servicio debe plata (compras, o sin estado de pago) */}
+          {!porConceptos && saldo > 0 && (
             <PanelCobroEntrega
               servicioId={ent.servicio_id || `compra-${ent.compra_id}`}
               entregaId={ent.id}
@@ -1673,7 +1977,7 @@ function CardEntrega({ ent, tecnico, onAceptar, onCompletar, onSoltar }) {
               : `Falta: ${[
                   !fotoUrl && 'foto',
                   !firmaDataUrl && !nombreCliente.trim() && 'firma o nombre del cliente',
-                  faltaCobroTexto(saldo, cobro, conMonto),
+                  porConceptos ? faltaCobroConceptosTexto(cobrables, cobro) : faltaCobroTexto(saldo, cobro, conMonto),
                 ].filter(Boolean).join(' + ')}`}
           </button>
         </div>
@@ -1927,6 +2231,21 @@ export default function TecnicoApp() {
   // Pool: entregas publicadas sin dueño, que cualquiera puede tomar
   const [disponibles, setDisponibles] = useState([])
   const [tomando, setTomando]     = useState(null)   // id de la entrega que se está tomando
+  // Estado de pago por concepto de los servicios de Entregas (mías + pool): qué
+  // debe el propietario y qué la veterinaria (REPORTE ORBIT 23-nov). Va por
+  // debajo, después de pintar, y solo cuando cambia la lista; si falla, las
+  // tarjetas siguen con el saldo de siempre. Al completar se relee de la DB.
+  const [pagosEntregas, setPagosEntregas] = useState({})
+  const idsPagoEntregas = [...entregas, ...disponibles]
+    .filter(e => !e.__compra && e.servicio_id).map(e => e.servicio_id).sort().join(',')
+  useEffect(() => {
+    if (!idsPagoEntregas) { setPagosEntregas({}); return }
+    let vivo = true
+    cargarPagoServicios(idsPagoEntregas.split(','))
+      .then(m => { if (vivo) setPagosEntregas(m) })
+      .catch(e => console.error('[entregas] estado de pago:', e.message))
+    return () => { vivo = false }
+  }, [idsPagoEntregas])
   // Filtro de fechas de las colas activas (vacío = todo; no oculta trabajo por defecto)
   const [recDesde, setRecDesde]   = useState('')
   const [recHasta, setRecHasta]   = useState('')
@@ -2872,6 +3191,172 @@ export default function TecnicoApp() {
     await cargar()
   }
 
+  // Entrega de un servicio con lo que se entregó y lo que se cobró, concepto por
+  // concepto. Mismas reglas que el cobro por saldo (migr. 151/152/213): todo se
+  // RELEE de la DB, el servicio se escribe primero y en un solo update (estado +
+  // plata), la plata nunca pasa del saldo real y, si el mensajero recibió dinero
+  // por algo que ya figuraba pagado, igual se le anota (él tiene el efectivo) con
+  // aviso de posible doble cobro. Lo nuevo:
+  //   · cada pago queda atado a SU adicional (PAGO_RECIBIDO con
+  //     servicio_recordatorio_id, migr. 174): Finanzas, Producción y la carta lo
+  //     ven pagado y no lo vuelven a cobrar;
+  //   · el saldo de la veterinaria no se toca ni se le cobra al propietario;
+  //   · lo que NO entregó sigue pendiente de entrega.
+  async function completarEntregaPorConceptos(ent, patch, cobro, nombreCliente, now) {
+    const svcPago   = { estado: 'ENTREGADO' }
+    const novedades = []
+    const quien     = [tecnico?.nombre, tecnico?.apellido].filter(Boolean).join(' ') || 'el mensajero'
+    let resumenPlata = ''
+
+    if (cobro.decision === 'COBRE') {
+      const [{ data: sv, error: svErr }, pagoNow] = await Promise.all([
+        db.from('servicios').select('valor_total, valor_pagado').eq('id', ent.servicio_id).maybeSingle(),
+        cargarPagoServicio(ent.servicio_id),
+      ])
+      if (svErr) throw new Error('No se pudo leer el saldo del servicio: ' + svErr.message)
+      if (!pagoNow) throw new Error('No se pudo leer el estado de pago del servicio')
+      const total     = Number(sv?.valor_total  || 0)
+      const pagado    = Number(sv?.valor_pagado || 0)
+      const saldoReal = Math.max(0, total - pagado)
+      const vigentes  = Object.fromEntries(conceptosCobrables(pagoNow).map(c => [c.key, c]))
+      // Lo que eligió, con el valor que REALMENTE le falta hoy a cada concepto,
+      // y entre todos nunca más que el saldo real del servicio.
+      let resto = saldoReal
+      const lineas = (cobro.conceptos || []).map(k => vigentes[k]).filter(Boolean)
+        .map(c => { const m = Math.min(c.monto, resto); resto -= m; return { ...c, monto: m } })
+        .filter(c => c.monto > 0)
+      const cobrado       = lineas.reduce((s, c) => s + c.monto, 0)
+      const montoRecibido = Math.max(cobrado, Number(cobro.montoMostrado) || 0)
+
+      if (montoRecibido > 0) {
+        patch.cobro_monto            = montoRecibido
+        patch.cobro_metodo           = cobro.metodo
+        patch.cobro_comprobante_path = cobro.comprobante?.path || null
+        patch.cobro_registrado_en    = now.toISOString()
+        patch.cobro_registrado_por   = tecnico?.id || null
+      }
+      if (cobrado > 0) {
+        const nuevoPagado = pagado + cobrado
+        svcPago.valor_pagado = nuevoPagado
+        svcPago.estado_pago  = calcularEstadoPago(total, nuevoPagado)
+        svcPago.metodo_pago  = cobro.metodo
+        const quedaProp = Math.max(0, pagoNow.pendientePropietario - cobrado)
+        lineas.forEach((c, i) => novedades.push({
+          tipo_novedad:             'PAGO_RECIBIDO',
+          servicio_recordatorio_id: c.itemId || null,
+          concepto_pago:            c.nombre,
+          valor_ajuste:             c.monto,
+          descripcion: `Cobrado en la entrega: ${c.nombre} ${fmt(c.monto)} (${cobro.metodo})`
+            + `${i === 0 && cobro.comprobante ? ', comprobante adjunto' : ''}. Recibido por ${quien}.`
+            + (i === lineas.length - 1 && quedaProp > 0
+              ? ` Queda pendiente del propietario ${fmt(quedaProp)}${(cobro.nota || '').trim() ? `: ${cobro.nota.trim()}` : ''}.` : ''),
+        }))
+        resumenPlata = ` Cobró ${fmt(cobrado)} en ${cobro.metodo} (${lineas.map(c => c.nombre).join(', ')}).`
+          + (quedaProp > 0 ? ` Queda pendiente del propietario ${fmt(quedaProp)}.` : '')
+      }
+      if (montoRecibido > cobrado) {
+        // Recibió plata por algo que ya figuraba pagado (lo pagaron por otro lado
+        // mientras venía en camino, o es un reintento). No se suma al servicio
+        // para no duplicarlo; el dinero queda a su cargo en el cuadre.
+        novedades.push({
+          tipo_novedad: 'NOTA',
+          descripcion:  `⚠️ ${quien} recibió ${fmt(montoRecibido)} en la entrega (${cobro.metodo}), pero solo ${fmt(cobrado)} seguía pendiente. `
+                      + 'La diferencia no se sumó al pago del servicio para no duplicarlo y quedó a cargo del mensajero en su cuadre. '
+                      + 'Revisar si el propietario pagó dos veces.',
+        })
+        resumenPlata += ` ⚠️ Recibió ${fmt(montoRecibido - cobrado)} de más sobre lo pendiente — revisar doble cobro.`
+      }
+    } else if (cobro.decision === 'NO_COBRE') {
+      patch.cobro_no_realizado_motivo = cobro.motivo.trim().slice(0, 500)
+      novedades.push({ tipo_novedad: 'NOTA', descripcion: `Entregado SIN cobrar lo pendiente del propietario. Motivo: ${cobro.motivo.trim()}` })
+      resumenPlata = ` ⚠️ Sin cobrar: ${patch.cobro_no_realizado_motivo}`
+    }
+
+    // Estado REAL de los adicionales justo antes de entregar (no el de la tarjeta:
+    // producción pudo marcar uno LISTO mientras él venía en camino).
+    const noEnt = cobro.noEntregados || []
+    const idsAdic = [...noEnt, ...(cobro.entregados || [])].map(i => i.id)
+    const estadoHoy = {}
+    if (idsAdic.length) {
+      const { data: actuales } = await db.from('servicio_recordatorios').select('id, estado').in('id', idsAdic)
+      for (const a of actuales || []) estadoHoy[a.id] = a.estado
+    }
+    const previo = i => estadoHoy[i.id] || i.estadoPrevio
+
+    // El servicio PRIMERO y en un solo update (estado + plata).
+    const { error: svcErr } = await db.from('servicios').update(svcPago).eq('id', ent.servicio_id)
+    if (svcErr) throw new Error('No se pudo registrar el pago: ' + svcErr.message)
+
+    // El pago atado a cada adicional va JUSTO después de la plata y antes de cerrar
+    // la entrega: si se perdiera, el adicional volvería a verse por cobrar. Si falla
+    // dos veces no se tumba la entrega (reintentarla sumaría la plata otra vez):
+    // se avisa a coordinación para atarlo a mano en Finanzas.
+    const pagosSinAtar = []
+    for (const n of novedades.filter(x => x.tipo_novedad === 'PAGO_RECIBIDO')) {
+      const fila = { servicio_id: ent.servicio_id, registrado_por: tecnico?.id || null, ...n }
+      let res = await insertarNovedadPago(fila).catch(e => ({ error: e }))
+      if (res?.error) res = await insertarNovedadPago(fila).catch(e => ({ error: e }))
+      if (res?.error) pagosSinAtar.push(n.concepto_pago)
+    }
+    if (pagosSinAtar.length) resumenPlata += ` ⚠️ No se pudo atar el pago a: ${pagosSinAtar.join(', ')} — atarlo en Finanzas.`
+
+    const { error } = await db.from('entregas').update(patch).eq('id', ent.id)
+    if (error) throw new Error(error.message)
+
+    // ── Lo que de verdad se entregó ──
+    // El trigger de la migr. 195 pasa a ENTREGADO todo lo LISTO del servicio al
+    // entregarlo: lo que él NO marcó vuelve a LISTO (sigue pendiente de entrega,
+    // Producción lo muestra), y lo que entregó sin que producción lo marcara
+    // listo queda ENTREGADO. Best-effort: el servicio y la plata ya quedaron.
+    const volverListo = noEnt.filter(i => previo(i) === 'LISTO').map(i => i.id)
+    const adelantar   = (cobro.entregados || []).filter(i => !['LISTO', 'ENTREGADO'].includes(previo(i))).map(i => i.id)
+    try {
+      if (volverListo.length)
+        await db.from('servicio_recordatorios').update({ estado: 'LISTO' }).in('id', volverListo).eq('estado', 'ENTREGADO')
+      if (adelantar.length)
+        await db.from('servicio_recordatorios').update({ estado: 'ENTREGADO' }).in('id', adelantar)
+    } catch (e) { console.error('[entrega] estado de los adicionales:', e.message) }
+    if (noEnt.length) novedades.push({
+      tipo_novedad: 'NOTA',
+      descripcion:  `No se entregó en esta visita: ${noEnt.map(i => i.nombre).join(', ')}. Sigue pendiente de entrega.`,
+    })
+    if ((cobro.entregados || []).length) novedades.push({
+      tipo_novedad: 'NOTA',
+      descripcion:  `Adicionales entregados por ${quien}: ${cobro.entregados.map(i => i.nombre).join(', ')}.`,
+    })
+
+    // Soporte del pago en la fuente formal (la que lee Finanzas). Best-effort.
+    if (cobro.comprobante?.path && patch.cobro_monto != null) {
+      try {
+        await db.from('recibo_comprobantes').insert({
+          servicio_id:  ent.servicio_id,
+          bucket:       'evidencias',
+          storage_path: cobro.comprobante.path,
+          mime_type:    cobro.comprobante.mime || null,
+          estado:       'PENDIENTE_REVISION',
+          uploaded_by:  tecnico?.id || null,
+        })
+      } catch (_) { /* el comprobante sigue en storage y en entregas.cobro_comprobante_path */ }
+    }
+    for (const n of novedades.filter(x => x.tipo_novedad !== 'PAGO_RECIBIDO')) {
+      try {
+        await insertarNovedadPago({ servicio_id: ent.servicio_id, registrado_por: tecnico?.id || null, valor_ajuste: null, ...n })
+      } catch (_) { /* la traza del cobro ya quedó en entregas y en el servicio */ }
+    }
+
+    const coords  = await getCoordinadores()
+    const mascota = ent.servicios?.mascotas?.nombre || 'mascota'
+    const faltan  = noEnt.length ? ` No entregó: ${noEnt.map(i => i.nombre).join(', ')}.` : ''
+    await Promise.all(coords.map(c => crearNotificacion({
+      para_personal_id: c.id,
+      de_personal_id:   tecnico?.id,
+      tipo:             'ENTREGA_COMPLETADA',
+      titulo:           'Entrega completada',
+      mensaje:          `${mascota} entregada a ${nombreCliente || ent.contacto_nombre || 'el cliente'}.${resumenPlata}${faltan}`,
+      servicio_id:      ent.servicio_id,
+    })))
+  }
+
   async function completarEntrega(ent, { fotoUrl, firmaDataUrl, nombreCliente, cobro = COBRO_VACIO }) {
     const now = new Date()
     const patch = {
@@ -2925,6 +3410,13 @@ export default function TecnicoApp() {
         servicio_id:      null,
         datos:            { compra_id: ent.compra_id },
       })))
+      await cargar()
+      return
+    }
+
+    // ── Servicio con detalle por concepto (REPORTE ORBIT 23-nov) ─────────
+    if (cobro?.modo === 'CONCEPTOS') {
+      await completarEntregaPorConceptos(ent, patch, cobro, nombreCliente, now)
       await cargar()
       return
     }
@@ -3368,7 +3860,7 @@ export default function TecnicoApp() {
                       ? 'Abajo están las disponibles: toma la que puedas hacer.'
                       : 'Cuando haya entregas listas, aparecerán aquí para tomarlas.'} />
               : entregasFiltradas.map(e => (
-                <CardEntrega key={e.id} ent={e} tecnico={tecnico}
+                <CardEntrega key={e.id} ent={e} tecnico={tecnico} pago={pagosEntregas[e.servicio_id]}
                   onAceptar={aceptarEntrega} onCompletar={completarEntrega} onSoltar={soltarEntrega} />
               ))}
 
@@ -3382,7 +3874,7 @@ export default function TecnicoApp() {
                 </div>
                 {disponiblesFiltradas.length === 0 && <p className="text-sm text-gray-500 px-3 pb-3">No hay entregas disponibles que coincidan con la búsqueda o las fechas.</p>}
                 {disponiblesFiltradas.map(e => (
-                  <CardDisponible key={e.id} ent={e}
+                  <CardDisponible key={e.id} ent={e} pago={pagosEntregas[e.servicio_id]}
                     tomando={tomando === e.id} onTomar={tomarEntrega} />
                 ))}
               </div>

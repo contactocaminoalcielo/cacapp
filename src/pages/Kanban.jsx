@@ -771,6 +771,9 @@ export default function Kanban() {
   const [addRecQty,    setAddRecQty]    = useState(1)
   const [addingRec,    setAddingRec]    = useState(false)
   const [addRecPagado,      setAddRecPagado]      = useState(false)
+  // «Lo pagó en la veterinaria» (migr. 217): a Camino no le llegó plata, pero el
+  // propietario ya pagó; no se le cobra en la entrega (REPORTE ORBIT 23-nov).
+  const [addRecPagoVet,     setAddRecPagoVet]     = useState(false)
   const [addRecMetodo,      setAddRecMetodo]      = useState('TRANSFERENCIA')
   const [addRecComprobantes, setAddRecComprobantes] = useState([])   // File[]: un cobro puede llegar partido
   // ── Quitar ítem / ajuste por adicional no tomado ──────────────────────────
@@ -1715,7 +1718,7 @@ export default function Kanban() {
     setEditNotas(s.notas || ''); setEditComisionAliado('')
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
     setAddRecId(''); setAddRecQty(1)
-    setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
+    setAddRecPagado(false); setAddRecPagoVet(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
     setAsignaAliadoId(''); setAsignaComision(''); setAsignaComisionPct(0)
     setCancelInfo(null); setModalCancelar(false); setMotivoCancelar(''); setObsCancelar('')
     setCancelRestos(null)
@@ -2055,6 +2058,7 @@ export default function Kanban() {
     const qty      = Math.max(1, parseInt(addRecQty) || 1)
     const subtotal = (rec.precio_base || 0) * qty
     const pagado   = addRecPagado && subtotal > 0
+    const pagoVet  = !pagado && addRecPagoVet && subtotal > 0 && !!selected.aliado_origen
 
     setAddingRec(true)
     try {
@@ -2075,7 +2079,7 @@ export default function Kanban() {
 
       // Insertar ítem adicional (guardamos el precio cobrado para que sea
       // removible después con el monto correcto prellenado)
-      const { data: recNuevo, error: recErr } = await db.from('servicio_recordatorios').insert({
+      const filaItem = {
         servicio_id:     selected.servicio_id,
         recordatorio_id: addRecId,
         origen:          'ADICIONAL',
@@ -2083,7 +2087,21 @@ export default function Kanban() {
         // Sin esto quedaba cantidad 1 aunque se cobraran N (caso Violeta: 5 llaveros).
         cantidad:        qty,
         precio_cobrado:  subtotal,
-      }).select('id').single()
+        ...(pagoVet ? {
+          pago_en_veterinaria:     true,
+          pago_en_veterinaria_en:  new Date().toISOString(),
+          pago_en_veterinaria_por: personalData?.id || null,
+        } : {}),
+      }
+      let { data: recNuevo, error: recErr } = await db.from('servicio_recordatorios').insert(filaItem).select('id').single()
+      // Sin la migración 217 la columna no existe: el adicional se agrega igual y
+      // la marca queda escrita en la novedad (y se avisa al final).
+      let sinMarcaVet = false
+      if (recErr && pagoVet && ['PGRST204', '42703'].includes(recErr.code)) {
+        const { pago_en_veterinaria, pago_en_veterinaria_en, pago_en_veterinaria_por, ...sinVet } = filaItem
+        ;({ data: recNuevo, error: recErr } = await db.from('servicio_recordatorios').insert(sinVet).select('id').single())
+        sinMarcaVet = true
+      }
       if (recErr) throw recErr
 
       // Actualizar valor_total + desglose de adicionales del servicio.
@@ -2134,7 +2152,9 @@ export default function Kanban() {
         descripcion:    `Adicional agregado: ${rec.nombre}${qty > 1 ? ` × ${qty}` : ''} — ${fmt(subtotal)}. ` +
                         (pagado
                           ? `Pagado (${addRecMetodo})${comprobantes.length ? (comprobantes.length > 1 ? `, ${comprobantes.length} comprobantes adjuntos` : ', comprobante adjunto') : ''}.`
-                          : 'Pendiente de cobro en entrega.'),
+                          : pagoVet
+                            ? `El propietario lo pagó en la veterinaria (${selected.aliado_origen}): no se le cobra en la entrega; queda en el saldo de la veterinaria.`
+                            : 'Pendiente de cobro en entrega.'),
         valor_ajuste:   subtotal,
         registrado_por: personalData?.id || null,
         ...trazaValor(selected.valor_total || 0, nuevoTotal, 'ADICIONAL'),
@@ -2159,7 +2179,9 @@ export default function Kanban() {
       setSelected(prev => ({ ...prev, ...upd }))
       setEditEstadoPago(nuevoEstadoPago)
       setAddRecId(''); setAddRecQty(1)
-      setAddRecPagado(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
+      setAddRecPagado(false); setAddRecPagoVet(false); setAddRecMetodo('TRANSFERENCIA'); setAddRecComprobantes([])
+      if (sinMarcaVet)
+        await showAlert('El adicional quedó agregado, pero la marca «pagado en la veterinaria» no se pudo guardar porque falta aplicar la migración 217. Quedó escrita en la novedad.', { title: 'Falta la migración 217', variant: 'warning' })
       if (avisoComprobante)
         await showAlert('El adicional y el pago quedaron registrados, pero ' + (comprobantes.length > 1 ? 'los comprobantes no se pudieron guardar: ' : 'el comprobante no se pudo guardar: ') + avisoComprobante + '\n\nVuelve a adjuntarlo desde la ficha del servicio.', { title: 'Comprobante no guardado', variant: 'warning' })
     } catch (err) {
@@ -4848,7 +4870,7 @@ export default function Kanban() {
                 <div className="flex gap-2">
                   <Select
                     value={addRecId}
-                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1); setAddRecPagado(false); setAddRecComprobantes([]) }}
+                    onChange={e => { setAddRecId(e.target.value); setAddRecQty(1); setAddRecPagado(false); setAddRecPagoVet(false); setAddRecComprobantes([]) }}
                     className="flex-1 text-[12px]"
                   >
                     <option value="">Seleccionar ítem…</option>
@@ -4879,11 +4901,25 @@ export default function Kanban() {
                             <input
                               type="checkbox"
                               checked={addRecPagado}
-                              onChange={e => { setAddRecPagado(e.target.checked); if (!e.target.checked) setAddRecComprobantes([]) }}
+                              onChange={e => { setAddRecPagado(e.target.checked); if (e.target.checked) setAddRecPagoVet(false); else setAddRecComprobantes([]) }}
                               className="accent-[#D97706]"
                             />
                             El cliente ya pagó este adicional
                           </label>
+                          {selected?.aliado_origen && (
+                            <label className="flex items-start gap-2 text-[11px] font-semibold text-teal-800 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={addRecPagoVet}
+                                onChange={e => { setAddRecPagoVet(e.target.checked); if (e.target.checked) { setAddRecPagado(false); setAddRecComprobantes([]) } }}
+                                className="accent-[#0D9488] mt-0.5"
+                              />
+                              <span>
+                                El propietario lo pagó en la veterinaria ({selected.aliado_origen})
+                                <span className="block font-normal text-teal-700">No se le cobra en la entrega: queda en el saldo de la veterinaria con Camino.</span>
+                              </span>
+                            </label>
+                          )}
                           {/* El cobro puede llegar partido (dos transferencias,
                               dos pantallazos): los adjuntos se acumulan y el
                               recuadro se queda para agregar más. Cada uno entra
@@ -4928,7 +4964,7 @@ export default function Kanban() {
                       <div className="flex items-center justify-between">
                         <p className="text-[11px] text-amber-700">
                           {sub > 0
-                            ? `+${fmt(sub)} — ${addRecPagado ? `pagado (${addRecMetodo})` : 'pendiente de cobro en entrega'}`
+                            ? `+${fmt(sub)} — ${addRecPagado ? `pagado (${addRecMetodo})` : addRecPagoVet && selected?.aliado_origen ? 'pagado en la veterinaria' : 'pendiente de cobro en entrega'}`
                             : 'Sin costo adicional'}
                         </p>
                         <button

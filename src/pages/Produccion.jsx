@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
@@ -22,6 +22,8 @@ import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
 import CenizariosRestos from '@/components/produccion/CenizariosRestos'
+import { PagoTag, PanelPagoAdicional, ResumenSaldoServicio } from '@/components/produccion/PagoAdicional'
+import { cargarPagoServicios } from '@/lib/pagoAdicionales'
 
 const ESTADO_LABEL  = { PENDIENTE: 'Pendiente', EN_PROCESO: 'En proceso', LISTO: 'Listo', NA: 'N/A', ENTREGADO: 'Entregado' }
 const ESTADO_COLOR  = {
@@ -45,6 +47,13 @@ const esCompostajeAnticipado = svc =>
 // mostraba «Llavero» aunque fueran 5 y producción fabricaba uno.
 const conCantidad = item => ((Number(item?.cantidad) || 1) > 1 ? ` ×${item.cantidad}` : '')
 
+// Estado de pago de los servicios del tablero (servicio_id → calcularPagoServicio).
+// Contexto y no props: lo leen las pills de las cuatro vistas y el modal del ítem.
+// REPORTE ORBIT 23-nov: Diseño no veía si el adicional ya estaba pagado.
+const PagoCtx = createContext({ pagos: {}, recargarPagos: async () => {} })
+const conceptoPago = (pagos, item) =>
+  item?.origen === 'ADICIONAL' && !item.__compra ? pagos?.[item.servicio_id]?.porItem?.[item.id] || null : null
+
 function initials(p) {
   if (!p) return '?'
   return `${(p.nombre || '')[0] || ''}${(p.apellido || '')[0] || ''}`.toUpperCase()
@@ -52,6 +61,8 @@ function initials(p) {
 
 // ── PILL DE ÍTEM ──────────────────────────────────────────────────────────────
 function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
+  const { pagos } = useContext(PagoCtx)
+  const cPago = conceptoPago(pagos, item)
   const col   = ESTADO_COLOR[item.estado] || ESTADO_COLOR.PENDIENTE
   const rec   = item.recordatorios
   const soloN = rec?.solo_nombre
@@ -90,6 +101,7 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
           ? <Zap size={10} style={{ color: '#059669' }} />
           : null}
       <span>{rec?.nombre || item.nombre || 'Ítem'}{conCantidad(item)}</span>
+      <PagoTag concepto={cPago} />
       {asig && (
         <span style={{
           background: 'rgba(0,0,0,0.12)', borderRadius: '50%',
@@ -107,6 +119,9 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
 // ── MODAL GESTIÓN ÍTEM ────────────────────────────────────────────────────────
 function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
   const { alert: showAlert } = useConfirm()
+  const { personalData } = useAuth()
+  const { pagos, recargarPagos } = useContext(PagoCtx)
+  const pagoSvc = item.origen === 'ADICIONAL' ? pagos?.[item.servicio_id] : null
   const rec = item.recordatorios
   const soloN = rec?.solo_nombre
   const reqImg = rec?.requiere_imagen && !soloN
@@ -146,7 +161,7 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
       notas:      notas    || null,
       fecha_inicio_prod: estado !== 'PENDIENTE' && !item.fecha_inicio_prod
         ? today() : item.fecha_inicio_prod,
-      fecha_fin_prod: estado === 'LISTO'
+      fecha_fin_prod: estado === 'LISTO' || estado === 'ENTREGADO'
         ? (item.fecha_fin_prod || today()) : null,
     }
     const { error } = await db.from('servicio_recordatorios').update(patch).eq('id', item.id)
@@ -211,6 +226,15 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
           )}
         </div>
 
+        {/* Pago del adicional: el propietario ¿ya lo pagó? (y a quién) */}
+        {pagoSvc?.porItem?.[item.id] && (
+          <div className="space-y-2">
+            <PanelPagoAdicional servicioId={item.servicio_id} item={item} pago={pagoSvc}
+              personalId={personalData?.id || null} onCambio={recargarPagos} />
+            <ResumenSaldoServicio pago={pagoSvc} />
+          </div>
+        )}
+
         {/* Fotos del cliente + reemplazo por una de mejor calidad */}
         {reqImg && fotos_ok && (
           <div className="rounded-xl border border-gray-200 p-3">
@@ -226,7 +250,9 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
         <div>
           <label className="block text-xs font-bold text-ink2 mb-2 uppercase tracking-wide">Estado</label>
           <div className="flex gap-1.5 flex-wrap">
-            {ESTADOS_PROD.map(e => {
+            {/* Un adicional que el mensajero NO entregó queda LISTO con el servicio ya
+                ENTREGADO (REPORTE 23-nov): cuando por fin se entrega, se cierra aquí. */}
+            {[...ESTADOS_PROD, ...(item.servicios?.estado === 'ENTREGADO' ? ['ENTREGADO'] : [])].map(e => {
               const c = ESTADO_COLOR[e]
               const sel = estado === e
               return (
@@ -343,6 +369,7 @@ function EstadoEntrega({ ent }) {
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
 function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega, onAbrirCompra, puedeProgramar = false }) {
+  const { pagos } = useContext(PagoCtx)
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     // Va ANTES del atajo de los LISTO: si no, un servicio listo que no es
@@ -535,6 +562,21 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                   style={{ background: '#FEF3C7', color: '#92400E' }}>
                   <Lock size={9} /> {bloqueados} bloqueadas
+                </span>
+              )}
+              {/* Quién debe qué: el saldo de la veterinaria no es del propietario. */}
+              {!compra && pagos[sId]?.pendientePropietario > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  title="Lo que le falta pagar al propietario (adicionales y, si no viene de una veterinaria, el plan)"
+                  style={{ background: '#FEF3C7', color: '#92400E' }}>
+                  💲 Propietario debe {fmt(pagos[sId].pendientePropietario)}
+                </span>
+              )}
+              {!compra && pagos[sId]?.saldoVeterinaria > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  title="Lo debe la veterinaria a Camino al Cielo. No se le cobra al propietario."
+                  style={{ background: '#CCFBF1', color: '#115E59' }}>
+                  Saldo vet {fmt(pagos[sId].saldoVeterinaria)}
                 </span>
               )}
             </div>
@@ -748,6 +790,7 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
 
 // ── VISTA TABLA ───────────────────────────────────────────────────────────────
 function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem }) {
+  const { pagos } = useContext(PagoCtx)
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (soloAnticipados && !esCompostajeAnticipado(r.servicios)) return false
@@ -807,7 +850,9 @@ function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPer
                       ? <span className="inline-flex items-center gap-1.5"><MarcaCompra compra={r.__compra} /><span className="text-[11px]" style={{ color: COMPRA_COLOR.texto }}>sin servicio</span></span>
                       : (r.servicios?.planes?.nombre || '—')}
                   </Td>
-                  <Td className="whitespace-nowrap font-semibold">{rec?.nombre || 'Ítem'}{conCantidad(r)}</Td>
+                  <Td className="whitespace-nowrap font-semibold">
+                    <span className="inline-flex items-center gap-1.5">{rec?.nombre || 'Ítem'}{conCantidad(r)} <PagoTag concepto={conceptoPago(pagos, r)} /></span>
+                  </Td>
                   <Td>
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
                       style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}` }}>
@@ -1027,6 +1072,8 @@ export default function Produccion() {
   const [compras,       setCompras]       = useState([])
   const [etapas,        setEtapas]        = useState({})   // servicio_id → etapa de contacto
   const [entregas,      setEntregas]      = useState({})   // servicio_id → entrega (pool / asignada)
+  const [pagos,         setPagos]         = useState({})   // servicio_id → estado de pago de sus adicionales
+  const idsConPagoRef                     = useRef([])
   const [personal,      setPersonal]      = useState([])
   const [maquinas,      setMaquinas]      = useState([])
   const [loading,       setLoading]       = useState(true)
@@ -1106,6 +1153,10 @@ export default function Produccion() {
         db.from('maquinas_produccion').select('*').eq('activo', true).order('nombre'),
       ])
       setRecordatorios(recs || [])
+      // Estado de pago: solo de los servicios que tienen adicionales en el tablero
+      // (los del plan se pagan con el plan). Informativo: si falla, el tablero sigue.
+      idsConPagoRef.current = [...new Set((recs || []).filter(r => r.origen === 'ADICIONAL').map(r => r.servicio_id))]
+      recargarPagos()
       setPersonal(per || [])
       setMaquinas(maq || [])
       // Compras sin servicio: si fallan, el tablero de servicios sigue igual.
@@ -1137,6 +1188,11 @@ export default function Produccion() {
       primeraCarga.current = false
       setLoading(false)
     }
+  }
+
+  async function recargarPagos() {
+    try { setPagos(await cargarPagoServicios(idsConPagoRef.current)) }
+    catch (e) { console.error('Estado de pago de adicionales:', e.message) }
   }
 
   async function cargarCompras() {
@@ -1250,6 +1306,7 @@ export default function Produccion() {
   )
 
   return (
+    <PagoCtx.Provider value={{ pagos, recargarPagos }}>
     <div>
       <Topbar actions={
         <button className="text-ink3 hover:text-primary-dark p-1.5 rounded-lg hover:bg-surface2"
@@ -1419,5 +1476,6 @@ export default function Produccion() {
         />
       )}
     </div>
+    </PagoCtx.Provider>
   )
 }
