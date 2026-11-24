@@ -6033,7 +6033,14 @@ async function contarComprobantesPorSubir(tecnicoId) {
   )
   return candidatos.filter(r => {
     if (cuadrados.has(r.servicio_id)) return false
-    if (faltaDigital(r)) return (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0)
+    // 🩸 24-nov: el comprobante subido DESPUÉS y colgado del recibo (desde la ficha
+    // o por coordinación) no llena `comprobanteUrl` del jsonb → seguía "por subir" y
+    // trancaba el cuadre (LUCKY y Jack de Jorge Castillo). Una fila propia por cada
+    // medio digital basta. Mismo criterio que `pruebaPropia` en ComprobanteTab.
+    if (faltaDigital(r)) {
+      if ((porRec[r.id] || 0) >= digitales(r).length) return false
+      return (porSvc[r.servicio_id] || 0) <= (porRec[r.id] || 0)
+    }
     const s = r.servicios || {}
     const pagado = s.estado_pago === 'COMPLETO'
       || (Number(s.valor_total) > 0 && Number(s.valor_pagado || 0) >= Number(s.valor_total))
@@ -6404,7 +6411,11 @@ function ComprobanteTab({ tecnico, onCount }) {
         // PAGADO   → el servicio ya quedó saldado; el pendiente se cobró.
         // CUADRADO → el servicio ya entró en un cuadre CERRADO con él.
         // SIN_DIGITAL → se cobró en efectivo (o no se cobró): no se le exige.
-        const pruebaPropia = soloAdjunto ? nComps > 0 : (pendientes.length === 0 && (!!yaUrl || nComps > 0))
+        // Una fila propia por cada medio digital también cuenta aunque el jsonb no
+        // tenga `comprobanteUrl` (subido después desde la ficha) — ver contarComprobantesPorSubir.
+        const pruebaPropia = soloAdjunto ? nComps > 0
+          : pendientes.length === 0 ? (!!yaUrl || nComps > 0)
+          : nComps >= digital.length
         const pruebaAjena  = (compsPorServicio[r.servicio_id] || 0) > nComps
         const yaPagado     = svc?.estado_pago === 'COMPLETO'
           || (Number(svc?.valor_total) > 0 && Number(svc?.valor_pagado || 0) >= Number(svc?.valor_total))
