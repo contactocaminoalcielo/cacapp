@@ -5975,6 +5975,28 @@ const METODOS_PAGO = ['EFECTIVO', 'TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJET
 // Métodos que requieren comprobante/referencia
 const METODOS_CON_COMPROBANTE = ['TRANSFERENCIA', 'NEQUI', 'DAVIPLATA', 'TARJETA']
 
+// Qué servicios dejaron de pedirle comprobante al técnico por lo que dice SU cuadre.
+// - `cerrados`: ya entraron en un cuadre CERRADO con él (la plata ya se cuadró).
+// - `sinDigital`: coordinación corrigió el medio en el cuadre (aunque siga en
+//   BORRADOR) y no dejó ningún pago digital: era efectivo, o no se recibió nada
+//   porque la veterinaria aún debe. 🩸 24-nov: el recibo seguía diciendo
+//   NEQUI/TRANSFERENCIA y le trancaba el cuadre a Jorge Castillo (Bruno y Lucas),
+//   aunque Iván ya lo había corregido en el cuadre el 22-oct.
+// Fuente común de `contarComprobantesPorSubir` y ComprobanteTab: si divergen, el
+// número del aviso manda a una pestaña que dice otra cosa.
+const SEL_ITEMS_CUADRE_COMPRO = 'servicio_id, medios_pago, medios_editado_en, cuadre:cuadre_id(estado, tecnico_id)'
+function resueltosPorCuadre(items, tecnicoId) {
+  const cerrados = new Set(), sinDigital = new Set()
+  for (const ci of items || []) {
+    if (ci.cuadre?.tecnico_id !== tecnicoId) continue
+    if (ci.cuadre?.estado === 'CERRADO') cerrados.add(ci.servicio_id)
+    const medios = Array.isArray(ci.medios_pago) ? ci.medios_pago : []
+    if (ci.medios_editado_en && !medios.some(m =>
+      METODOS_CON_COMPROBANTE.includes(m.metodo) && parseFloat(m.monto) > 0)) sinDigital.add(ci.servicio_id)
+  }
+  return { cerrados, sinDigital }
+}
+
 // ── Motivos de «Pago pendiente» (18-nov-2026) ───────────────────────────────
 // Antes era un interruptor sin explicación: 1 de cada 5 recibos se cerraba así
 // y coordinación tenía que averiguar por qué. Se guarda en
@@ -6020,19 +6042,16 @@ async function contarComprobantesPorSubir(tecnicoId) {
   const [comps, items] = await Promise.all([
     dbIn('recibo_comprobantes', 'recibo_id, servicio_id', 'servicio_id', idsSvc,
       q => q.is('eliminado_en', null).neq('estado', 'RECHAZADO')),
-    dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', idsSvc),
+    dbIn('cuadre_items', SEL_ITEMS_CUADRE_COMPRO, 'servicio_id', idsSvc),
   ])
   for (const c of comps) {
     if (c.servicio_id) porSvc[c.servicio_id] = (porSvc[c.servicio_id] || 0) + 1
     if (c.recibo_id)   porRec[c.recibo_id]   = (porRec[c.recibo_id]   || 0) + 1
   }
-  const cuadrados = new Set(
-    items
-      .filter(ci => ci.cuadre?.estado === 'CERRADO' && ci.cuadre?.tecnico_id === tecnicoId)
-      .map(ci => ci.servicio_id)
-  )
+  const { cerrados: cuadrados, sinDigital } = resueltosPorCuadre(items, tecnicoId)
   return candidatos.filter(r => {
     if (cuadrados.has(r.servicio_id)) return false
+    if (faltaDigital(r) && sinDigital.has(r.servicio_id)) return false
     // 🩸 24-nov: el comprobante subido DESPUÉS y colgado del recibo (desde la ficha
     // o por coordinación) no llena `comprobanteUrl` del jsonb → seguía "por subir" y
     // trancaba el cuadre (LUCKY y Jack de Jorge Castillo). Una fila propia por cada
@@ -6199,6 +6218,7 @@ const MOTIVO_RESUELTO = {
   OFICINA:  { texto: 'Lo subió la oficina', color: '#1D4ED8', bg: '#DBEAFE' },
   PAGADO:   { texto: 'Ya lo pagaron',     color: '#0F766E', bg: '#CCFBF1' },
   CUADRADO: { texto: 'Ya cuadrado',       color: '#6D28D9', bg: '#EDE9FE' },
+  CORREGIDO: { texto: 'Corregido por coordinación', color: '#B45309', bg: '#FEF3C7' },
   SIN_DIGITAL: { texto: 'No se exige',    color: '#4B5563', bg: '#F3F4F6' },
 }
 
@@ -6378,11 +6398,8 @@ function ComprobanteTab({ tecnico, onCount }) {
       // cuadró con él y dejó de ser tarea suya. Mismo criterio que el candado
       // de la bitácora en "Mis pagos" (`lockedSet`): exige que el cuadre sea
       // SUYO, no de otro técnico que también tocó el servicio.
-      const cuadrados = new Set(
-        (await dbIn('cuadre_items', 'servicio_id, cuadre:cuadre_id(estado, tecnico_id)', 'servicio_id', ids))
-          .filter(r => r.cuadre?.estado === 'CERRADO' && r.cuadre?.tecnico_id === tecnico.id)
-          .map(r => r.servicio_id)
-      )
+      const { cerrados: cuadrados, sinDigital: corregidoEnCuadre } = resueltosPorCuadre(
+        await dbIn('cuadre_items', SEL_ITEMS_CUADRE_COMPRO, 'servicio_id', ids), tecnico.id)
 
       const lista = []
       for (const r of recibos) {
@@ -6423,6 +6440,7 @@ function ComprobanteTab({ tecnico, onCount }) {
           : pruebaAjena                        ? 'OFICINA'
           : (pagoPend && yaPagado)             ? 'PAGADO'
           : cuadrados.has(r.servicio_id)       ? 'CUADRADO'
+          : (digital.length > 0 && corregidoEnCuadre.has(r.servicio_id)) ? 'CORREGIDO'
           : sinDigital                         ? 'SIN_DIGITAL'
           : null
         const conMonto = medios.filter(m => parseFloat(m.monto) > 0)
