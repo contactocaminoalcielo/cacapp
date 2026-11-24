@@ -16,7 +16,7 @@ import { agruparRefresco } from '@/lib/realtime'
 import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
-import { petEmoji, parsearErrorDB, today, parseDate, fmt } from '@/lib/utils'
+import { petEmoji, parsearErrorDB, today, parseDate, fmt, esCompets, estimadoCompets, COMPETS_MESES } from '@/lib/utils'
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
@@ -430,6 +430,13 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         // salida del cubículo, no las imágenes (migración 155).
         const esperaSalidaCubiculo = plan?.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
           && servicio?.recordatorios_anticipados !== true
+        // Compets: la entrega principal es la del proceso (2-3 meses desde el
+        // ingreso). La fecha límite de abajo es OTRA cosa: los recordatorios
+        // anticipados, o la entrega final una vez salió del cubículo.
+        const compets = !items[0]?.__compra && esCompets(plan?.tipo_proceso)
+        const procCompets = compets ? estimadoCompets(servicio?.fecha_ingreso) : null
+        const etiquetaLimite = !compets ? 'Entrega máx'
+          : esperaSalidaCubiculo ? 'Entrega final máx' : 'Recordatorios máx'
         const diasAlLimite = limite ? Math.round((limite - parseDate(today())) / 86400000) : null
         const fechaFotos  = fotos_ok ? fmtCorta(parseDate(servicio.fecha_imagenes_recibidas)) : null
         const listosCnt = items.filter(i => ['LISTO', 'ENTREGADO'].includes(i.estado)).length
@@ -493,6 +500,20 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
 
             {/* Indicadores fotos + fecha límite de entrega */}
             <div className="flex flex-wrap gap-1.5 mb-2.5">
+              {procCompets && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  title={[
+                    `Ingreso del servicio: ${parseDate(servicio.fecha_ingreso)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`,
+                    `El proceso Compets dura ${COMPETS_MESES.desde} a ${COMPETS_MESES.hasta} meses; la planta se entrega al terminar.`,
+                    'Es la referencia de entrega del servicio. Las fotos NO cambian esta fecha.',
+                    esperaSalidaCubiculo
+                      ? 'Recordatorios: se producen y entregan al final, con la planta.'
+                      : 'Recordatorios anticipados: tienen su propio plazo (chip «Recordatorios máx»).',
+                  ].join('\n')}
+                  style={{ background: '#DCFCE7', color: '#166534' }}>
+                  🌱 Proceso est. {fmtCorta(procCompets.desde)} – {fmtCorta(procCompets.hasta)}
+                </span>
+              )}
               {limite && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                   title={(esperaSalidaCubiculo
@@ -505,6 +526,9 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                         'No cuentan fines de semana ni festivos.',
                       ]
                     : [
+                        compets
+                          ? 'Plazo de los RECORDATORIOS ANTICIPADOS que pidió la familia — no es la entrega del proceso Compets (la planta).'
+                          : null,
                         servicio?.fecha_imagenes_recibidas
                           ? `Imágenes recibidas: ${parseDate(servicio.fecha_imagenes_recibidas)?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`
                           : null,
@@ -512,7 +536,9 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                           ? `+ ${plan.dias_entrega_prometidos} días hábiles del plan ${plan.nombre}`
                           : null,
                         `= entrega máxima ${limite?.toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}`,
-                        'No cuentan fines de semana ni festivos. La fecha de ingreso no entra en el cálculo.',
+                        compets
+                          ? 'No cuentan fines de semana ni festivos.'
+                          : 'No cuentan fines de semana ni festivos. La fecha de ingreso no entra en el cálculo.',
                       ]).filter(Boolean).join('\n')}
                   style={diasAlLimite < 0
                     ? { background: '#FEE2E2', color: '#B91C1C' }
@@ -521,15 +547,19 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                       : { background: '#E0E7FF', color: '#3730A3' }}>
                   <Clock size={9} />
                   {diasAlLimite < 0
-                    ? `Venció ${fmtCorta(limite)}`
+                    ? `${compets ? `${etiquetaLimite.replace(' máx', '')}: venció` : 'Venció'} ${fmtCorta(limite)}`
                     : diasAlLimite === 0
-                      ? 'Entrega máx HOY'
-                      : `Entrega máx ${fmtCorta(limite)}`}
+                      ? `${etiquetaLimite} HOY`
+                      : `${etiquetaLimite} ${fmtCorta(limite)}`}
                 </span>
               )}
               {fotos_ok
                 ? <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                    title={'Día en que la familia subió las fotos por el portal.\nDesde aquí corren los días hábiles de la entrega, no desde el ingreso.'}
+                    title={compets
+                      ? (esperaSalidaCubiculo
+                          ? 'Día en que la familia subió las fotos por el portal.\nEn Compets las fotos NO definen la entrega: los recordatorios salen con la planta, al terminar el proceso.'
+                          : 'Día en que la familia subió las fotos por el portal.\nDe aquí corren solo los días hábiles de los recordatorios anticipados, no la entrega del proceso.')
+                      : 'Día en que la familia subió las fotos por el portal.\nDesde aquí corren los días hábiles de la entrega, no desde el ingreso.'}
                     style={{ background: '#D1FAE5', color: '#065F46' }}>
                     <CheckCircle2 size={9} /> Fotos {fechaFotos || 'OK'}
                   </span>
@@ -1139,7 +1169,7 @@ export default function Produccion() {
             recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
-            servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+            servicios!inner ( id, fecha_ingreso, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                         recordatorios_anticipados,
                         mascotas ( nombre, especie_id, especies ( nombre ) ),
                         planes ( nombre, codigo, tipo_proceso, dias_entrega_prometidos ),
@@ -1236,7 +1266,7 @@ export default function Produccion() {
         recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
                         recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
-        servicios!inner ( id, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
+        servicios!inner ( id, fecha_ingreso, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
                     recordatorios_anticipados,
                     mascotas ( nombre, especie_id, especies ( nombre ) ),
                     planes ( nombre, codigo, tipo_proceso, dias_entrega_prometidos ) )

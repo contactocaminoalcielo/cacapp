@@ -10,7 +10,7 @@ import { filtrarPorBusqueda } from '@/lib/busqueda'
 import { db, dbTodo } from '@/lib/supabase'
 import { cargarItemsKanban } from '@/lib/lecturasOperativas'
 import { serviciosListosDesdeItems, ESTADOS_AUTOCORREGIBLES } from '@/lib/kanbanEstado'
-import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet, acompFijo } from '@/lib/utils'
+import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet, acompFijo, esCompets, estimadoCompets, COMPETS_MESES } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
@@ -372,6 +372,16 @@ function explicaLimite(s, diasPlan) {
       ? `+ ${diasPlan} días hábiles del plan ${s.plan}`
       : `+ los días hábiles prometidos del plan ${s.plan}`)
     l.push(`= entrega máxima ${largo(s.fecha_limite_entrega)}`)
+    l.push('No cuentan fines de semana ni festivos.')
+    return l.join('\n')
+  }
+  // Compets con recordatorios anticipados: esta fecha es SOLO la de esos
+  // recordatorios. La entrega del proceso es 2-3 meses desde el ingreso.
+  if (esCompostajeAnticipado(s)) {
+    l.push('Plazo de los RECORDATORIOS ANTICIPADOS, no de la entrega del proceso Compets')
+    l.push(`(la planta: ${COMPETS_MESES.desde} a ${COMPETS_MESES.hasta} meses desde el ingreso).`)
+    l.push(`+ ${diasPlan ?? 'los'} días hábiles desde las fotos o desde que el propietario los pidió`)
+    l.push(`= recordatorios máx ${largo(s.fecha_limite_entrega)}`)
     l.push('No cuentan fines de semana ni festivos.')
     return l.join('\n')
   }
@@ -757,6 +767,7 @@ export default function Kanban() {
   const [editPlanId,      setEditPlanId]      = useState('')
   const [nuevoPrecio,     setNuevoPrecio]     = useState('')
   const [cambiandoPlan,   setCambiandoPlan]   = useState(false)
+  const [cambiandoAnticipados, setCambiandoAnticipados] = useState(false)
   const [mascotaParaPlan, setMascotaParaPlan] = useState(null) // { peso_kg, especie_id }
   // ── Alertas técnico declina ───────────────────────────────────────────────
   const [alertasDeclinas, setAlertasDeclinas] = useState([])
@@ -2455,6 +2466,48 @@ export default function Kanban() {
     } catch (_) { /* silencioso */ }
   }
 
+  // Compets: el propietario pide (por WhatsApp, llamada…) uno o varios recordatorios
+  // físicos ANTES de que termine el proceso. Antes solo se podía marcar desde el
+  // portal de fotos. Al marcarlo, la migración 219 abre un plazo propio para esos
+  // recordatorios (desde hoy + días del plan); al desmarcarlo vuelve a esperar
+  // la salida del cubículo. La entrega del proceso (2-3 meses) no cambia.
+  async function cambiarAnticipados(valor) {
+    if (!selected || cambiandoAnticipados) return
+    const ok = await confirm(valor
+      ? 'El propietario pidió recordatorios físicos antes de que termine el proceso Compets.\n\nSe abre un plazo propio para los recordatorios desde hoy (días hábiles del plan). La entrega de la planta sigue en 2 a 3 meses desde el ingreso.'
+      : 'Los recordatorios vuelven a entregarse al final, con la planta.\n\nSu plazo se calculará cuando la mascota salga del cubículo.',
+      { title: valor ? 'Recordatorios anticipados' : 'Recordatorios al final' })
+    if (!ok) return
+    setCambiandoAnticipados(true)
+    try {
+      const { data, error } = await db.from('servicios')
+        .update({ recordatorios_anticipados: valor })
+        .eq('id', selected.servicio_id)
+        .select('recordatorios_anticipados, fecha_limite_entrega')
+        .single()
+      if (error) throw error
+      const { data: nov } = await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    valor
+          ? 'Recordatorios ANTICIPADOS: el propietario pidió recordatorios físicos antes de terminar el proceso Compets.'
+            + (data.fecha_limite_entrega ? ` Plazo de los recordatorios: ${parseDate(data.fecha_limite_entrega)?.toLocaleDateString('es-CO')}.` : '')
+          : 'Recordatorios AL FINAL: se entregan con la planta, al terminar el proceso Compets.',
+        registrado_por: personalData?.id || null,
+      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+      if (nov?.[0]) setNovedades(prev => [...prev, nov[0]])
+      // dias_para_vencer lo calcula v_kanban y llega con la próxima recarga;
+      // aquí solo se refleja lo que ya devolvió la base.
+      const upd = { recordatorios_anticipados: data.recordatorios_anticipados, fecha_limite_entrega: data.fecha_limite_entrega }
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
+      setSelected(prev => (prev ? { ...prev, ...upd } : prev))
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'No se pudo cambiar' })
+    } finally {
+      setCambiandoAnticipados(false)
+    }
+  }
+
   async function agregarComentario() {
     if (!nuevoComentario.trim() || !selected) return
     setGuardandoComentario(true)
@@ -3733,6 +3786,7 @@ export default function Kanban() {
                                 <div className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 ${al === 'vencido' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
                                   title={explicaLimite(s, diasDelPlan(s))}>
                                   <AlertTriangle size={9} />
+                                  {esCompostajeAnticipado(s) && 'Recordatorios: '}
                                   {s.dias_para_vencer < 0 ? `Vencido ${Math.abs(s.dias_para_vencer)}d` : s.dias_para_vencer === 0 ? 'Vence hoy' : `${s.dias_para_vencer}d`}
                                   {s.fecha_limite_entrega && ` · límite ${fmtDiaMes(s.fecha_limite_entrega)}`}
                                 </div>
@@ -4002,7 +4056,7 @@ export default function Kanban() {
               )}
               <span className="text-[11px] text-gray-400">Ingreso: <strong className="text-gray-700">{detalle?.created_at ? fmtDateTime(detalle.created_at) : (selected.fecha_ingreso ? parseDate(selected.fecha_ingreso)?.toLocaleDateString('es-CO') : '—')}</strong></span>
               {selected.fecha_limite_entrega && (
-                <span className="text-[11px] text-gray-400" title={explicaLimite(selected, diasDelPlan(selected))}>Límite: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
+                <span className="text-[11px] text-gray-400" title={explicaLimite(selected, diasDelPlan(selected))}>{esCompostajeAnticipado(selected) ? 'Límite recordatorios' : 'Límite'}: <strong className="text-gray-700">{parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}</strong></span>
               )}
               {selected.dias_para_vencer != null && (
                 entregaCerrada(selected) ? (
@@ -4718,20 +4772,59 @@ export default function Kanban() {
             )}
 
             {/* ── Opción anticipados compostaje ── */}
-            {selected.tipo_proceso?.startsWith('COMPOSTAJE') && selected.recordatorios_anticipados !== null && selected.recordatorios_anticipados !== undefined && (
-              <div className="rounded-xl border-2 px-3 py-2.5 flex items-center gap-2"
-                style={{ borderColor: selected.recordatorios_anticipados ? '#86EFAC' : '#FDE68A', background: selected.recordatorios_anticipados ? '#F0FFF4' : '#FFFBEB' }}>
-                <span className="text-base">{selected.recordatorios_anticipados ? '⚡' : '⏳'}</span>
-                <div>
-                  <div className="text-[11px] font-bold" style={{ color: selected.recordatorios_anticipados ? '#15803D' : '#92400E' }}>
-                    {selected.recordatorios_anticipados ? 'Cliente quiere recordatorios ANTICIPADOS' : 'Cliente prefiere ESPERAR al proceso completo'}
-                  </div>
-                  <div className="text-[10px]" style={{ color: selected.recordatorios_anticipados ? '#166534' : '#78350F' }}>
-                    {selected.recordatorios_anticipados ? 'Producir mientras el compostaje avanza.' : 'No producir hasta terminar el compostaje (~2 meses).'}
+            {/* Compets: dos fechas distintas (REPORTE ORBIT 24-nov). La del proceso
+                cuenta desde el ingreso; la de los recordatorios solo existe si los
+                pidió anticipados. NULL = no contestó = «al final». */}
+            {esCompets(selected.tipo_proceso) && (() => {
+              const antic = selected.recordatorios_anticipados === true
+              const est = estimadoCompets(selected.fecha_ingreso)
+              const corta = d => d?.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' })
+              const puede = (esAdmin || rol === 'COORDINADOR') && !['ENTREGADO', 'CANCELADO'].includes(selected.estado)
+              return (
+                <div className="rounded-xl border-2 px-3 py-2.5 space-y-2"
+                  style={{ borderColor: antic ? '#86EFAC' : '#FDE68A', background: antic ? '#F0FFF4' : '#FFFBEB' }}>
+                  {est && (
+                    <div className="flex items-start gap-2"
+                      title="Referencia de entrega del servicio Compets. Cuenta desde el ingreso; las fotos no la cambian.">
+                      <span className="text-base">🌱</span>
+                      <div>
+                        <div className="text-[11px] font-bold text-green-800">
+                          Proceso Compets: entrega estimada {corta(est.desde)} – {corta(est.hasta)}
+                        </div>
+                        <div className="text-[10px] text-green-900/80">
+                          {COMPETS_MESES.desde} a {COMPETS_MESES.hasta} meses desde el ingreso ({parseDate(selected.fecha_ingreso)?.toLocaleDateString('es-CO')}). La planta se entrega al terminar el proceso.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-start gap-2">
+                    <span className="text-base">{antic ? '⚡' : '⏳'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-bold" style={{ color: antic ? '#15803D' : '#92400E' }}>
+                        {antic ? 'Recordatorios ANTICIPADOS (pedidos antes de terminar el proceso)'
+                          : selected.recordatorios_anticipados === false ? 'Recordatorios al final, con la planta'
+                          : 'Recordatorios al final (la familia no pidió anticipados)'}
+                      </div>
+                      <div className="text-[10px]" style={{ color: antic ? '#166534' : '#78350F' }}>
+                        {antic
+                          ? (selected.fecha_limite_entrega
+                              ? `Plazo propio de los recordatorios: ${parseDate(selected.fecha_limite_entrega)?.toLocaleDateString('es-CO')}.`
+                              : 'Su plazo arranca cuando lleguen las fotos.')
+                          : 'No producir hasta terminar el compostaje. Su plazo se abre al salir del cubículo.'}
+                      </div>
+                    </div>
+                    {puede && (
+                      <button type="button" disabled={cambiandoAnticipados}
+                        onClick={() => cambiarAnticipados(!antic)}
+                        className="text-[10px] font-bold px-2 py-1 rounded-lg border bg-white hover:bg-gray-50 disabled:opacity-50 flex-shrink-0"
+                        style={{ borderColor: antic ? '#86EFAC' : '#FDE68A', color: antic ? '#166534' : '#92400E' }}>
+                        {cambiandoAnticipados ? 'Guardando…' : antic ? 'Pasar a «al final»' : 'Pidió anticipados'}
+                      </button>
+                    )}
                   </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* ── Planta del compostaje y restos cálcicos (migración 176) ── */}
             {detalle?.planta?.servicio_id === selected.servicio_id

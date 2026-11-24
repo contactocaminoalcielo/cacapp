@@ -1493,6 +1493,7 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
   const cliente = clientes[0]
   const { rows: servicios } = await pool.query(
     `SELECT m.nombre AS mascota, e.nombre AS especie, p.nombre AS plan,
+            p.tipo_proceso, s.recordatorios_anticipados,
             s.estado, s.fecha_ingreso::text, s.fecha_limite_entrega::text,
             s.fecha_entrega_real::text, s.fecha_imagenes_recibidas::text,
             s.codigo_fotos,
@@ -1551,7 +1552,23 @@ async function contextoDeLaFamilia(contacto, phoneNumberId = null) {
       `plan: ${s.plan || 'sin plan registrado'}`,
       `estado verificado: ${ESTADOS_SERVICIO_FAMILIA[s.estado] || String(s.estado || '').toLowerCase().replace(/_/g, ' ')}`,
       s.fecha_ingreso ? `ingreso: ${s.fecha_ingreso}` : null,
-      s.fecha_limite_entrega ? `fecha límite registrada: ${s.fecha_limite_entrega}` : null,
+      // Compets (compostaje individual): la entrega del servicio es la planta, 2 a 3
+      // meses desde el ingreso. La fecha límite es SOLO de los recordatorios físicos
+      // (anticipados, o los del final tras salir del proceso). Sin esta aclaración el
+      // agente le decía a la familia que su Compets se entregaba en 8-10 días hábiles.
+      // REPORTE ORBIT 24-nov.
+      s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+        ? 'proceso de compostaje (Compets): dura aproximadamente 2 a 3 meses desde el ingreso; '
+          + 'la planta se entrega al terminar el proceso. NO le digas que el servicio se entrega en '
+          + 'días hábiles'
+        : null,
+      s.fecha_limite_entrega
+        ? (s.tipo_proceso === 'COMPOSTAJE_INDIVIDUAL'
+            ? (s.recordatorios_anticipados === true
+                ? `fecha límite de los recordatorios anticipados (no de la planta): ${s.fecha_limite_entrega}`
+                : `fecha límite de la entrega final (ya terminó el compostaje): ${s.fecha_limite_entrega}`)
+            : `fecha límite registrada: ${s.fecha_limite_entrega}`)
+        : null,
       s.fecha_entrega_real ? `entrega registrada: ${s.fecha_entrega_real}` : null,
       s.fecha_imagenes_recibidas
         ? `imágenes recibidas: sí (${s.fecha_imagenes_recibidas}) — NO se las vuelvas a pedir`

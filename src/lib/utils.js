@@ -134,6 +134,30 @@ export function parsearErrorDB(error) {
 // new Date('2026-06-02') = medianoche UTC → June 1 en Colombia. Esta función lo corrige.
 export const parseDate = d => d ? new Date(d.includes('T') ? d : d + 'T12:00:00') : null
 
+// ── Compets (compostaje individual): la entrega PRINCIPAL es la de la planta ──
+// REPORTE ORBIT 24-nov: el tablero mostraba en algunos Compets «Entrega máx» a
+// 8-10 días de las fotos (era el plazo de los recordatorios anticipados) y en
+// otros nada (los que esperan la salida del cubículo tienen la fecha en NULL).
+// Equipo y familias leían que un Compets se entrega en 8-10 días hábiles, cuando
+// el proceso dura 2 a 3 meses. La referencia del proceso cuenta desde el INGRESO
+// del servicio; las fotos no la tocan. `fecha_limite_entrega` sigue siendo el
+// plazo de los recordatorios físicos (anticipados) o de la entrega final tras la
+// salida del cubículo — ver migraciones 155 y 219.
+export const COMPETS_MESES = { desde: 2, hasta: 3 }
+export const esCompets = tipoProceso => tipoProceso === 'COMPOSTAJE_INDIVIDUAL'
+const _sumarMeses = (d, n) => {
+  const r = new Date(d.getFullYear(), d.getMonth() + n, d.getDate(), 12)
+  // 30-nov + 3 meses = 30-feb → JS lo corre a marzo; se queda en el último día del mes.
+  if (r.getDate() !== d.getDate()) r.setDate(0)
+  return r
+}
+/** { desde, hasta } (Date) = ingreso + 2 y + 3 meses, o null sin fecha de ingreso. */
+export function estimadoCompets(fechaIngreso) {
+  const base = parseDate(fechaIngreso ? String(fechaIngreso).slice(0, 10) : null)
+  if (!base || isNaN(base)) return null
+  return { desde: _sumarMeses(base, COMPETS_MESES.desde), hasta: _sumarMeses(base, COMPETS_MESES.hasta) }
+}
+
 // Formatea timestamp completo: "02 jun 2026 · 14:32"
 export const fmtDateTime = ts => {
   if (!ts) return '—'
