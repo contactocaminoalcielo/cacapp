@@ -7,6 +7,13 @@ import { generarCertificadoEntrega } from '@/lib/certificadoEntrega'
 import { X, Truck, MapPin, User, Calendar, MessageCircle, Download, Check, AlertCircle } from 'lucide-react'
 import { esAliadoVip, VipBadge } from '@/components/servicio/VipAliado'
 
+// Las entregas preparadas antes del 23-nov traen copiadas las indicaciones de la recogida
+// (migr. 216 limpia las abiertas). Si lo guardado es exactamente eso, no es de la entrega.
+function sinCopiaDeRecogida(ind, svcData) {
+  const t = (ind || '').trim()
+  return t && t === (svcData?.indicaciones_recogida || '').trim() ? '' : (ind || '')
+}
+
 export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado }) {
   const { personalData: yo } = useAuth()
   const [loading,    setLoading]    = useState(true)
@@ -61,7 +68,10 @@ export default function ModalPreparaEntrega({ servicioId, onClose, onGuardado })
       setCiudad           (entData?.ciudad             || cli?.ciudad    || svcData?.ciudad_recogida || '')
       setBarrio           (entData?.barrio             || dc.barrio || svcData?.barrio_recogida || '')
       setLocalidad        (entData?.localidad          || dc.localidad || '')
-      setIndicaciones     (entData?.indicaciones       || svcData?.indicaciones_recogida || '')
+      // NUNCA desde `indicaciones_recogida`: son las instrucciones internas de la toma del
+      // servicio (hora de recogida, "recoger en la clínica"...) y terminaban impresas en la
+      // carta de entrega (REPORTE ORBIT 23-nov). Una copia vieja de ellas también se ignora.
+      setIndicaciones     (sinCopiaDeRecogida(entData?.indicaciones, svcData))
       setContactoNombre   (entData?.contacto_nombre    || dc.recibe || (cli ? `${cli.nombre || ''} ${cli.apellido || ''}`.trim() : ''))
       setContactoTelefono (entData?.contacto_telefono  || dc.telefono || cli?.whatsapp || cli?.telefono || '')
       setTelefonoAdicional(entData?.telefono_adicional || dc.telefono_adicional || '')
