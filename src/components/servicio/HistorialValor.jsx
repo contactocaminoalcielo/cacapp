@@ -9,6 +9,13 @@ const ICONO = {
   ITEM_QUITADO: '➖',
   COMISION:     '🏥',
   CORRECCION:   '✏️',
+  PRIORIDAD:    '⚡',
+}
+
+// Motivos nuevos que todavía no están en MOTIVO_VALOR_LABEL (lib/servicios.js).
+// PRIORIDAD = recargo de recogida prioritaria del Desamparado (migr. 222).
+const ETIQUETA_EXTRA = {
+  PRIORIDAD: 'Recogida con prioridad',
 }
 
 const signo = d => (d > 0 ? '+' : '−')
@@ -123,7 +130,7 @@ export default function HistorialValor({ servicioId, valorTotal, className = '' 
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-[11px] text-gray-600">
                 {ICONO[p.motivo_valor] || '•'}{' '}
-                {MOTIVO_VALOR_LABEL[p.motivo_valor] || 'Cambio de valor'}
+                {MOTIVO_VALOR_LABEL[p.motivo_valor] || ETIQUETA_EXTRA[p.motivo_valor] || 'Cambio de valor'}
               </span>
               <span className="text-[11px] font-semibold tabular-nums whitespace-nowrap"
                 style={{ color: desp > antes ? '#B45309' : '#15803D' }}>

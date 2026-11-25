@@ -948,6 +948,8 @@ export default function Registro() {
         valor_adicionales:           valorAdicionales,
         valor_transporte:            recargoCiudad,
         recargo_nocturno:            recargoNocturnoNum,
+        // Desglose de la prioridad del Desamparado (migr. 222): ya va en valor_total.
+        recargo_prioridad:           recargoPrioridad,
         // Cuánto del total ES eutanasia (migración 159). Sin este dato nadie
         // podía saber si el valor estaba dentro del total, y el técnico terminaba
         // cobrando otra vez lo que el doctor ya había cobrado.

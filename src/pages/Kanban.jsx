@@ -440,6 +440,16 @@ function EvidenciasColapsable({ fotos }) {
   )
 }
 
+// La línea de la prioridad en las notas del servicio. Registro escribe
+// «Recogida prioritaria (<16h) +$ 16.000» y el Kanban «(primeras 24 h)»: se
+// reconocen las dos para no dejar una vieja junto a la nueva al cambiarla.
+const RE_NOTA_PRIORIDAD = /Recogida prioritaria \([^)]*\) \+\$[\s ]*[\d.,]+\.?\s*/g
+function notasConPrioridad(notas, monto) {
+  const sin = String(notas || '').replace(RE_NOTA_PRIORIDAD, '').trim()
+  const linea = monto > 0 ? `Recogida prioritaria (primeras 24 h) +${fmt(monto)}.` : ''
+  return [linea, sin].filter(Boolean).join(' ') || null
+}
+
 export default function Kanban() {
   const { alert: showAlert, confirm } = useConfirm()
   const { personalData } = useAuth()
@@ -767,6 +777,11 @@ export default function Kanban() {
 
   // ── Cambio de plan ────────────────────────────────────────────────────────
   const [editPlanId,      setEditPlanId]      = useState('')
+  // Prioridad del Desamparado (migr. 222): al cambiar a ese plan desde la ficha
+  // y, para uno que ya lo es, el bloque «Recogida con prioridad».
+  const [editPrioridad,   setEditPrioridad]   = useState({ on: false, monto: '' })
+  const [prioForm,        setPrioForm]        = useState(null)   // { monto } mientras se edita
+  const [guardandoPrio,   setGuardandoPrio]   = useState(false)
   const [nuevoPrecio,     setNuevoPrecio]     = useState('')
   const [cambiandoPlan,   setCambiandoPlan]   = useState(false)
   const [cambiandoAnticipados, setCambiandoAnticipados] = useState(false)
@@ -1223,6 +1238,8 @@ export default function Kanban() {
         // reconocimiento del viaje (el cuadre lo saca de esta columna).
         valor_plan:            valorBruto,
         valor_adicionales:     0,
+        // Desglose de la prioridad (migr. 222): ya va sumada en valor_total.
+        recargo_prioridad:     prioridadNum,
         valor_transporte:      transporteNum,
         recargo_nocturno:      0,
         es_alcaldia:           convPreguntaAlcaldia && convForm.es_alcaldia === true,
@@ -1727,6 +1744,7 @@ export default function Kanban() {
 
   async function abrirModal(s) {
     setSelected(s); setMensajeroId(''); setDetalle(null); setAliadoHorario(null)
+    setPrioForm(null); setEditPrioridad({ on: false, monto: '' })
     setEditTecnicoId(s.tecnico_id || ''); setEditEstadoPago(s.estado_pago || '')
     setEditNotas(s.notas || ''); setEditComisionAliado('')
     setEditPlanId(''); setNuevoPrecio(''); setMascotaParaPlan(null)
@@ -1748,7 +1766,7 @@ export default function Kanban() {
 
     const [{ data: svcFull }, { data: rec }, { data: recs }, { data: novs }, { data: cf }, { data: cts }, { data: tenjoItems }] = await Promise.all([
       db.from('servicios')
-        .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, es_alcaldia, ${COLS_CONSISTENCIA_COMISION}`)
+        .select(`punto_recogida, direccion_recogida, ciudad_recogida, barrio_recogida, indicaciones_recogida, mensajero_id, metodo_pago, fecha_limite_cambio_plan, aliado_origen_id, plan_id, mascota_id, created_at, es_alcaldia, recargo_prioridad, ${COLS_CONSISTENCIA_COMISION}`)
         .eq('id', s.servicio_id).maybeSingle(),
       db.from('recogidas')
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
@@ -1925,11 +1943,21 @@ export default function Kanban() {
       return
     }
 
+    const aDesamparado = planPorId(editPlanId)?.codigo === 'DESAMPARADO'
+    const prioMonto = aDesamparado && editPrioridad.on ? Math.round(parseFloat(editPrioridad.monto) || 0) : 0
+    if (aDesamparado && editPrioridad.on && !(prioMonto > 0)) {
+      await showAlert('La recogida está marcada con prioridad pero el recargo está en $0. Ingresa el valor o desmarca la prioridad.', { title: 'Falta el recargo de prioridad' })
+      return
+    }
+    const prioAntesPlan = Number(detalle?.recargo_prioridad ?? 0)
+
     const fuera = detalle?.fecha_limite_cambio_plan && parseDate(detalle.fecha_limite_cambio_plan) < new Date()
     const msg = [
       fuera ? `⚠️ Este servicio está fuera del plazo de cambio de plan (${parseDate(detalle.fecha_limite_cambio_plan)?.toLocaleDateString('es-CO')}).` : null,
       `Plan: "${planAnterior}" → "${planNuevo}"`,
       precioFinal ? `Nuevo valor del plan: ${fmt(precioFinal)} (la comisión del aliado se recalcula con el plan nuevo)` : null,
+      prioMonto > 0 ? `Recogida con prioridad: +${fmt(prioMonto)} (se suma al total)` : null,
+      prioAntesPlan > 0 && prioMonto === 0 ? `Se quita la prioridad que tenía (−${fmt(prioAntesPlan)})` : null,
       'Se actualizarán los ítems de producción del servicio.',
     ].filter(Boolean).join('\n\n')
 
@@ -1949,7 +1977,7 @@ export default function Kanban() {
         // de comisión: sin ellos se cuenta a sí mismo y le entra la escala del
         // tramo siguiente (ver volumenMesAliado).
         const { data: sv } = await db.from('servicios')
-          .select('id, fecha_ingreso, created_at, comision_descontada, comision_aliado, aliado_origen_id, valor_total, valor_adicionales, valor_transporte, recargo_nocturno, descuento_adicional, valor_pagado')
+          .select('id, fecha_ingreso, created_at, comision_descontada, comision_aliado, aliado_origen_id, valor_total, valor_adicionales, valor_transporte, recargo_nocturno, recargo_prioridad, descuento_adicional, valor_pagado, notas')
           .eq('id', selected.servicio_id).maybeSingle()
         svActual = sv
         const descontada = sv?.comision_descontada === true
@@ -1962,8 +1990,20 @@ export default function Kanban() {
         // conserva adicionales + transporte + recargos − descuento; NETO
         // (− comisión) si se descuenta en el recibo (clínica aliada), BRUTO si no
         // (domicilio). El recibo reconstruye el bruto = valor_total + comisión.
+        // Prioridad (migr. 222): solo existe en el Desamparado. Al pasar A ese
+        // plan se suma la que se marque aquí; al salir de él se quita. Antes
+        // este recálculo la borraba en silencio (no tenía columna).
+        const prioAntes = Number(sv?.recargo_prioridad ?? 0)
+        const prioNueva = planPorId(editPlanId)?.codigo === 'DESAMPARADO'
+          ? (editPrioridad.on ? Math.max(0, Math.round(parseFloat(editPrioridad.monto) || 0)) : 0)
+          : 0
         const extras = (sv?.valor_adicionales ?? 0) + (sv?.valor_transporte ?? 0)
                      + (sv?.recargo_nocturno ?? 0) - (sv?.descuento_adicional ?? 0)
+                     + prioNueva
+        if (prioNueva !== prioAntes) {
+          updates.recargo_prioridad = prioNueva
+          updates.notas = notasConPrioridad(sv?.notas, prioNueva)
+        }
         updates.valor_plan  = Math.round(precioFinal)
         updates.valor_total = Math.round(precioFinal + extras - (descontada ? comisionVigente : 0))
         if (comisionNueva != null) updates.comision_aliado = comisionNueva
@@ -2023,6 +2063,8 @@ export default function Kanban() {
         tipo_novedad:   'NOTA',
         descripcion:    `Plan cambiado: ${planAnterior} → ${planNuevo}` +
                         (precioFinal ? ` · Nuevo valor: ${fmt(precioFinal)}` : '') +
+                        (prioMonto > 0 ? ` · Recogida con prioridad +${fmt(prioMonto)}` : '') +
+                        (prioAntesPlan > 0 && prioMonto === 0 ? ` · Se quitó la prioridad (−${fmt(prioAntesPlan)})` : '') +
                         (saldoTrasCambio > 0 ? ` · Queda un saldo pendiente de ${fmt(saldoTrasCambio)}` : '') +
                         (saldoTrasCambio < 0 ? ` · El cliente pagó ${fmt(-saldoTrasCambio)} de más` : '') +
                         '. Cambio realizado por coordinador.',
@@ -2055,12 +2097,71 @@ export default function Kanban() {
       setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
       setSelected(prev => ({ ...prev, ...upd }))
       setDetalle(prev => ({ ...prev, plan_id: editPlanId,
+        ...(updates.recargo_prioridad != null ? { recargo_prioridad: updates.recargo_prioridad } : {}),
         ...(updates.comision_aliado != null ? { comision_aliado: updates.comision_aliado } : {}) }))
       setNuevoPrecio('')
+      setEditPrioridad({ on: false, monto: '' })
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al cambiar plan' })
     } finally {
       setCambiandoPlan(false)
+    }
+  }
+
+  // Recogida con prioridad de un Desamparado YA creado (reporte del 25-nov).
+  // Mueve valor_total por la DIFERENCIA con la que tenía (así se puede agregar,
+  // cambiar el monto o quitarla sin cobrarla dos veces), deja la línea en las
+  // notas y la traza del valor en la novedad. `monto` 0 = quitarla.
+  async function guardarPrioridad(monto) {
+    if (!selected || guardandoPrio) return
+    const nuevo = Math.max(0, Math.round(parseFloat(monto) || 0))
+    setGuardandoPrio(true)
+    try {
+      const { data: sv, error: e1 } = await db.from('servicios')
+        .select('valor_total, valor_pagado, recargo_prioridad, notas')
+        .eq('id', selected.servicio_id).maybeSingle()
+      if (e1) throw e1
+      const antes = Number(sv?.recargo_prioridad ?? 0)
+      if (nuevo === antes) { setPrioForm(null); return }
+      const totalAntes = Number(sv?.valor_total ?? 0)
+      const totalNuevo = Math.max(0, Math.round(totalAntes + nuevo - antes))
+      const ok = await confirm(
+        (nuevo > 0
+          ? `Recogida con prioridad (primeras 24 h): ${antes > 0 ? `${fmt(antes)} → ` : '+'}${fmt(nuevo)}.`
+          : `Se quita la recogida con prioridad (−${fmt(antes)}).`) +
+        `\n\nTotal del servicio: ${fmt(totalAntes)} → ${fmt(totalNuevo)}`,
+        { title: nuevo > 0 ? 'Recogida con prioridad' : 'Quitar prioridad', confirmLabel: 'Sí, guardar' })
+      if (!ok) return
+      const updates = {
+        recargo_prioridad: nuevo,
+        valor_total:       totalNuevo,
+        estado_pago:       calcularEstadoPago(totalNuevo, sv?.valor_pagado),
+        notas:             notasConPrioridad(sv?.notas, nuevo),
+      }
+      const { error: e2 } = await db.from('servicios').update(updates).eq('id', selected.servicio_id)
+      if (e2) throw e2
+      const saldo = Math.round(totalNuevo - (sv?.valor_pagado || 0))
+      const { data: nov } = await db.from('novedades_servicio').insert({
+        servicio_id:    selected.servicio_id,
+        tipo_novedad:   'NOTA',
+        descripcion:    (nuevo > 0
+          ? `Recogida con prioridad (primeras 24 h): ${antes > 0 ? `${fmt(antes)} → ` : '+'}${fmt(nuevo)}`
+          : `Se quitó la recogida con prioridad (−${fmt(antes)})`) +
+          (saldo > 0 ? ` · Queda un saldo pendiente de ${fmt(saldo)}` : '') +
+          (saldo < 0 ? ` · El cliente pagó ${fmt(-saldo)} de más` : '') + '.',
+        registrado_por: personalData?.id || null,
+        ...trazaValor(totalAntes, totalNuevo, 'PRIORIDAD'),
+      }).select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
+      if (nov?.[0]) setNovedades(prev => [...prev, nov[0]])
+      const upd = { valor_total: totalNuevo, estado_pago: updates.estado_pago, saldo_pendiente: saldo }
+      setServicios(prev => prev.map(s => s.servicio_id === selected.servicio_id ? { ...s, ...upd } : s))
+      setSelected(prev => ({ ...prev, ...upd }))
+      setDetalle(prev => prev ? { ...prev, recargo_prioridad: nuevo } : prev)
+      setPrioForm(null)
+    } catch (err) {
+      await showAlert(parsearErrorDB(err), { title: 'No se pudo guardar la prioridad' })
+    } finally {
+      setGuardandoPrio(false)
     }
   }
 
@@ -4473,6 +4574,64 @@ export default function Kanban() {
                   )}
                 </div>
 
+                {/* ── Recogida con prioridad del Desamparado (migr. 222) ──
+                    Reporte del 25-nov: al asignar un Desamparado no había dónde
+                    marcar la prioridad ni sumar su valor fuera de Registro. */}
+                {(esAdmin || rol === 'COORDINADOR') && !['CANCELADO','ENTREGADO'].includes(selected.estado) && detalle
+                  && planPorId(detalle.plan_id)?.codigo === 'DESAMPARADO' && (() => {
+                  const actual = Number(detalle.recargo_prioridad ?? 0)
+                  return (
+                    <div className={`rounded-xl p-3 space-y-2 border-[1.5px] ${actual > 0 ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-orange-700">⚡ Recogida con prioridad</div>
+                          <div className="text-[11px] text-gray-600 mt-0.5">
+                            {actual > 0
+                              ? <>Lleva prioridad: <b className="text-gray-900">+{fmt(actual)}</b> (ya sumado al total)</>
+                              : 'Sin prioridad: se recoge en 24-48 h.'}
+                          </div>
+                        </div>
+                        {!prioForm && (
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button onClick={() => setPrioForm({ monto: String(actual > 0 ? actual : recargoPrioridadDesamparado()) })}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-white bg-orange-500 hover:bg-orange-600">
+                              {actual > 0 ? 'Cambiar' : 'Agregar prioridad'}
+                            </button>
+                            {actual > 0 && (
+                              <button onClick={() => guardarPrioridad(0)} disabled={guardandoPrio}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-gray-600 hover:bg-gray-100 disabled:opacity-50">
+                                Quitar
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {prioForm && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] text-gray-500">Primeras 24 h. $16.000 · $20.000 en domingo o festivo (el festivo no se detecta solo: corrígelo aquí).</p>
+                          <div className="flex items-center gap-2">
+                            <input type="number" min="0" autoFocus value={prioForm.monto}
+                              onChange={e => setPrioForm({ monto: e.target.value })}
+                              className="w-28 px-2 py-1.5 rounded-lg border text-[12px] outline-none" style={{ borderColor: '#FDBA74' }} />
+                            <button onClick={() => guardarPrioridad(prioForm.monto)}
+                              disabled={guardandoPrio || !(parseFloat(prioForm.monto) > 0)}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50">
+                              {guardandoPrio ? 'Guardando…' : 'Guardar'}
+                            </button>
+                            <button onClick={() => setPrioForm(null)}
+                              className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-gray-500 hover:bg-gray-100">
+                              Cancelar
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-gray-600">
+                            Total: {fmt(selected.valor_total)} → <b>{fmt(Math.max(0, (Number(selected.valor_total) || 0) + (parseFloat(prioForm.monto) || 0) - actual))}</b>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
                 {/* ── Cambiar plan (solo COORDINADOR / ADMIN) ── */}
                 {(esAdmin || rol === 'COORDINADOR') && !['CANCELADO','ENTREGADO'].includes(selected.estado) && detalle && (
                   <div className="rounded-xl p-3 space-y-2" style={{ background: '#F0FFF4', border: '1.5px solid #86EFAC' }}>
@@ -4492,6 +4651,7 @@ export default function Kanban() {
                         const pid = e.target.value
                         setEditPlanId(pid)
                         setNuevoPrecio('')
+                        setEditPrioridad({ on: false, monto: String(recargoPrioridadDesamparado()) })
                         if (pid && pid !== detalle?.plan_id) {
                           const precio = await calcularPrecioPlan(pid)
                           if (precio) setNuevoPrecio(String(precio))
@@ -4523,6 +4683,34 @@ export default function Kanban() {
                             </p>
                           )}
                         </div>
+                        {/* Asignar Desamparado: la prioridad se marca AQUÍ mismo
+                            (reporte del 25-nov). Se suma al total, no al plan. */}
+                        {planPorId(editPlanId)?.codigo === 'DESAMPARADO' && (
+                          <div className={`rounded-lg border p-2 ${editPrioridad.on ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'}`}>
+                            <label className="flex items-start gap-2 cursor-pointer">
+                              <input type="checkbox" className="mt-0.5 accent-orange-500"
+                                checked={editPrioridad.on}
+                                onChange={e => setEditPrioridad(p => ({ ...p, on: e.target.checked }))} />
+                              <span>
+                                <span className="block text-[11.5px] font-bold text-gray-900">Recogida con prioridad</span>
+                                <span className="block text-[10px] text-gray-500">Primeras 24 h (sin prioridad: 24-48 h). $16.000 · $20.000 en domingo o festivo.</span>
+                              </span>
+                            </label>
+                            {editPrioridad.on && (
+                              <div className="mt-1.5 flex items-center gap-2">
+                                <span className="text-[10px] text-gray-500">Recargo</span>
+                                <input type="number" min="0" value={editPrioridad.monto}
+                                  onChange={e => setEditPrioridad(p => ({ ...p, monto: e.target.value }))}
+                                  className="w-28 px-2 py-1 rounded-lg border text-[12px] outline-none" style={{ borderColor: '#FDBA74' }} />
+                                {(parseFloat(nuevoPrecio) || 0) > 0 && (
+                                  <span className="text-[10px] text-gray-600">
+                                    Plan {fmt(parseFloat(nuevoPrecio) || 0)} + prioridad {fmt(parseFloat(editPrioridad.monto) || 0)}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <button
                           onClick={cambiarPlan}
                           disabled={cambiandoPlan || !(parseFloat(nuevoPrecio) > 0)}
