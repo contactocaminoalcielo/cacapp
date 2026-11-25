@@ -1,4 +1,4 @@
-import { db } from '@/lib/supabase'
+import { db, dbTodo } from '@/lib/supabase'
 import { hoyLocalISO, parseDate, fmt } from '@/lib/utils'
 
 // Afiliaciones pre-exequiales — reglas cerradas con David 2026-07-16:
@@ -251,6 +251,65 @@ export function mensajeCuotaWa({ afiliacion, contrato, estado }) {
     `*${fmt(p.monto)}*, ${vencida ? 'que venció el' : 'con fecha'} ${p.fecha}.\n\n` +
     `Saldo pendiente del plan: ${fmt(estado.saldo)}.\n` +
     `Cuando realices el pago, por favor envíanos el comprobante por aquí. ¡Gracias! 🐾`
+}
+
+// ── Constancia de recordatorios de pago (migr. 225) ─────────────────────────
+// Los botones de recordar abren wa.me y no dejaban rastro: el coordinador no
+// sabía si a ese cliente ya se le había recordado. Cada clic queda en
+// `afiliacion_recordatorios_pago` y la pantalla muestra ✓ «Recordado …».
+
+/**
+ * Todos los recordatorios, del más reciente al más viejo. Va en una consulta
+ * APARTE de la lista de contratos a propósito: si la migración 225 no está
+ * aplicada (o falla la red) devuelve [] y Pre-exequiales carga igual, solo sin
+ * la marca — embebida en el select, la página entera se caería (lección 183).
+ */
+export async function cargarRecordatoriosPago() {
+  try {
+    // dbTodo: el historial crece con cada clic; con .select() solo se cortaría
+    // en silencio a las 1000 filas (ver la nota de dbTodo).
+    return await dbTodo(() => db.from('afiliacion_recordatorios_pago')
+      .select('id, afiliacion_id, contrato_id, tipo, cuota_numero, monto, enviado_por_nombre, enviado_en')
+      .order('enviado_en', { ascending: false })
+      .order('id', { ascending: false }))
+  } catch (e) {
+    console.warn('[preexequiales] sin historial de recordatorios:', e.message)
+    return []
+  }
+}
+
+/**
+ * Deja constancia de un recordatorio. Devuelve la fila creada (para pintar la
+ * marca sin recargar) o null si no se pudo guardar: el WhatsApp ya se abrió,
+ * así que no se interrumpe al coordinador por esto.
+ */
+export async function registrarRecordatorioPago({ afiliacionId, contratoId, tipo, cuotaNumero = null, monto = null, personal = null }) {
+  if (!afiliacionId || !contratoId) return null
+  const fila = {
+    afiliacion_id: afiliacionId,
+    contrato_id:   contratoId,
+    tipo,
+    cuota_numero:  tipo === 'CUOTA' ? cuotaNumero : null,
+    monto:         tipo === 'CUOTA' ? monto : null,
+    enviado_por:        personal?.id || null,
+    enviado_por_nombre: personal?.nombre || null,
+  }
+  const { data, error } = await db.from('afiliacion_recordatorios_pago').insert(fila).select().single()
+  if (error) { console.warn('[preexequiales] recordatorio sin constancia:', error.message); return null }
+  return data
+}
+
+/**
+ * Los recordatorios que siguen VIGENTES para lo que hoy está pendiente, del más
+ * reciente al más viejo. Una cuota cuenta solo para ESA cuota (al abonarla pasa
+ * a la siguiente y la marca se va); una renovación, para ese contrato (al
+ * renovar nace otro).
+ */
+export function recordatoriosVigentes(lista, { contratoId, tipo, cuotaNumero = null }) {
+  if (!contratoId || !lista?.length) return []
+  return lista.filter(r =>
+    r.contrato_id === contratoId && r.tipo === tipo &&
+    (tipo !== 'CUOTA' || Number(r.cuota_numero) === Number(cuotaNumero)))
 }
 
 // Comprobante de pago de un contrato → bucket compartido `evidencias`.

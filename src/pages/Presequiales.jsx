@@ -19,6 +19,7 @@ import {
   mejorDescuento, aplicarDescuento, valorListaContrato, MOTIVOS_DESCUENTO,
   MOTIVOS_CANCELACION, MOTIVOS_CANCELACION_MANUALES, resumenPagosAfiliacion,
   pagadoContrato, estadoCuotas, mensajeCuotaWa,
+  cargarRecordatoriosPago, registrarRecordatorioPago, recordatoriosVigentes,
 } from '@/lib/afiliaciones'
 import { orbitApi } from '@/lib/orbitApi'
 import ImportarContratosPdf from '@/components/preexequiales/ImportarContratosPdf'
@@ -284,6 +285,8 @@ export default function Presequiales() {
   const [error, setError]       = useState(null)
   const [filtro, setFiltro]     = useState('VIGENTES')
   const [busqueda, setBusqueda] = useState('')
+  // Recordatorios de pago ya enviados (migr. 225), del más reciente al más viejo.
+  const [recordatorios, setRecordatorios] = useState([])
 
   // false | true (botón «Nueva afiliación») | { inicial } (solicitud de la oferta posterior)
   const [modalNueva, setModalNueva]   = useState(() => {
@@ -311,7 +314,7 @@ export default function Presequiales() {
   async function cargar() {
     try {
       setLoading(true)
-      const [cfg, { data: d, error: e1 }, { data: pls }, { data: esp }] = await Promise.all([
+      const [cfg, { data: d, error: e1 }, { data: pls }, { data: esp }, recs] = await Promise.all([
         cargarConfigAfiliaciones(),
         db.from('afiliaciones')
           .select(`*,
@@ -322,10 +325,13 @@ export default function Presequiales() {
           .order('created_at', { ascending: false }),
         db.from('planes').select('id,codigo,nombre').eq('activo', true),
         db.from('especies').select('id,nombre').order('nombre'),
+        // Nunca lanza: sin la migración 225 devuelve [] y la página carga igual.
+        cargarRecordatoriosPago(),
       ])
       if (e1) throw e1
       setConfig(cfg)
       setData(d || [])
+      setRecordatorios(recs)
       setPlanes(pls || [])
       setEspecies(esp || [])
       setError(null)
@@ -334,6 +340,17 @@ export default function Presequiales() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Se llama desde el onClick del enlace wa.me (sin preventDefault: el WhatsApp
+  // se abre igual) y pinta la marca en cuanto la fila queda guardada.
+  async function anotarRecordatorio({ afiliacion, contrato, tipo, estado = null }) {
+    const fila = await registrarRecordatorioPago({
+      afiliacionId: afiliacion?.id, contratoId: contrato?.id, tipo,
+      cuotaNumero: estado?.proxima?.numero ?? null, monto: estado?.proxima?.monto ?? null,
+      personal: personalData,
+    })
+    if (fila) setRecordatorios(prev => [fila, ...prev])
   }
 
   // La ficha abierta se refresca desde la lista recargada
@@ -516,17 +533,25 @@ export default function Presequiales() {
                     <Td onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-end">
                         {cp && c?.whatsapp && (filtro === 'CUOTAS' || cp.proxima.dias <= DIAS_AVISO_CUOTA) && (
-                          <a href={waLink(c.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: ct, estado: cp }))} target="_blank" rel="noopener noreferrer"
-                            title={`Recordarle por WhatsApp la cuota ${cp.proxima.numero} (${fmt(cp.proxima.monto)})`}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-danger bg-danger-light hover:opacity-80">
-                            <Wallet size={11} /> Cobrar cuota
-                          </a>
+                          <div className="flex flex-col items-end gap-0.5">
+                            <a href={waLink(c.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: ct, estado: cp }))} target="_blank" rel="noopener noreferrer"
+                              onClick={() => anotarRecordatorio({ afiliacion: a, contrato: ct, tipo: 'CUOTA', estado: cp })}
+                              title={`Recordarle por WhatsApp la cuota ${cp.proxima.numero} (${fmt(cp.proxima.monto)})`}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-danger bg-danger-light hover:opacity-80">
+                              <Wallet size={11} /> Cobrar cuota
+                            </a>
+                            <MarcaRecordado lista={recordatoriosVigentes(recordatorios, { contratoId: ct?.id, tipo: 'CUOTA', cuotaNumero: cp.proxima.numero })} />
+                          </div>
                         )}
                         {porVencer(a) && c?.whatsapp && ['VIGENTE','VENCIDA'].includes(f.estado) && (
-                          <a href={waLink(c.whatsapp, mensajeRenovacion(a, ct, config))} target="_blank" rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
-                            <MessageCircle size={11} /> Recordar
-                          </a>
+                          <div className="flex flex-col items-end gap-0.5">
+                            <a href={waLink(c.whatsapp, mensajeRenovacion(a, ct, config))} target="_blank" rel="noopener noreferrer"
+                              onClick={() => anotarRecordatorio({ afiliacion: a, contrato: ct, tipo: 'RENOVACION' })}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
+                              <MessageCircle size={11} /> Recordar
+                            </a>
+                            <MarcaRecordado lista={recordatoriosVigentes(recordatorios, { contratoId: ct?.id, tipo: 'RENOVACION' })} />
+                          </div>
                         )}
                         {['VIGENTE','VENCIDA'].includes(f.estado) && (
                           <Button size="sm" variant="gold" onClick={() => setModalActivar({ afiliacion: a, am })}>
@@ -591,6 +616,7 @@ export default function Presequiales() {
 
       {ficha && (
         <ModalFicha afiliacion={ficha} config={config} especies={especies}
+          recordatorios={recordatorios} onRecordar={anotarRecordatorio}
           onClose={() => setFicha(null)}
           onEliminar={puedeEliminar ? () => setModalEliminar(ficha) : null}
           onRenovar={() => setModalRenovar({ afiliacion: ficha })}
@@ -698,6 +724,29 @@ export default function Presequiales() {
           onSaved={async () => { setModalEliminar(null); setFicha(null); await cargar() }} />
       )}
     </div>
+  )
+}
+
+// ✓ debajo del botón de recordar (migr. 225): el último envío vigente para lo
+// que hoy está pendiente, quién lo abrió y cuántas veces van. `lista` llega ya
+// filtrada por recordatoriosVigentes y ordenada del más reciente al más viejo.
+const fechaHoraCorta = iso => new Date(iso).toLocaleString('es-CO', {
+  day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+})
+function MarcaRecordado({ lista }) {
+  if (!lista?.length) return null
+  const ultimo = lista[0]
+  const detalle = lista
+    .map(r => `${fechaHoraCorta(r.enviado_en)}${r.enviado_por_nombre ? ` · ${r.enviado_por_nombre}` : ''}`)
+    .join('\n')
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#1D8A55] whitespace-nowrap"
+      title={`Recordatorios abiertos por WhatsApp:\n${detalle}`}>
+      <CheckCircle2 size={11} />
+      Recordado {fechaHoraCorta(ultimo.enviado_en)}
+      {ultimo.enviado_por_nombre && <span className="font-normal text-ink3">· {ultimo.enviado_por_nombre.split(' ')[0]}</span>}
+      {lista.length > 1 && <span className="font-normal text-ink3">({lista.length} veces)</span>}
+    </span>
   )
 }
 
@@ -1683,7 +1732,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 }
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
-function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged, onEliminar = null }) {
+function ModalFicha({ afiliacion: a, config, especies, recordatorios = [], onRecordar = null, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged, onEliminar = null }) {
   const { alert: showAlert, confirm } = useConfirm()
   const { personalData } = useAuth()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
@@ -2324,10 +2373,14 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   </div>
                   <div className="flex items-center gap-1.5">
                     {est.proxima && a.clientes?.whatsapp && (
-                      <a href={waLink(a.clientes.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: c, estado: est }))} target="_blank" rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
-                        <MessageCircle size={11} /> Recordar cuota
-                      </a>
+                      <div className="flex flex-col items-end gap-0.5">
+                        <a href={waLink(a.clientes.whatsapp, mensajeCuotaWa({ afiliacion: a, contrato: c, estado: est }))} target="_blank" rel="noopener noreferrer"
+                          onClick={() => onRecordar?.({ afiliacion: a, contrato: c, tipo: 'CUOTA', estado: est })}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-primary-dark bg-green-light hover:opacity-80">
+                          <MessageCircle size={11} /> Recordar cuota
+                        </a>
+                        <MarcaRecordado lista={recordatoriosVigentes(recordatorios, { contratoId: c.id, tipo: 'CUOTA', cuotaNumero: est.proxima.numero })} />
+                      </div>
                     )}
                     {est.proxima && (
                       <Button size="sm" onClick={() => abrirFormPago(c, 'ABONO')}><Wallet size={11} /> Registrar abono</Button>
