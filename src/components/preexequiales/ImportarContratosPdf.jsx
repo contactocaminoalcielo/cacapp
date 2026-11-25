@@ -179,7 +179,34 @@ export default function ImportarContratosPdf({ config, especies, personalData, o
         : { data: null },
       form.numero ? validarNumeroContrato(form.numero).then(() => false, () => true) : false,
     ])
-    set(id, { clienteExiste: cl.data || null, numeroRepetido: num })
+    // ¿Este titular YA tiene contrato con alguna de estas mascotas? (reporte del
+    // 25-nov). El número repetido no alcanza: los papeles viejos traen números
+    // que no siguen la regla, así que el mismo contrato puede volver a entrar
+    // con otro número. Se compara por titular (cédula) + nombre de la mascota,
+    // sin tildes ni mayúsculas («Sasha» = «SASHA»), en CUALQUIER estado.
+    let previos = []
+    if (cl.data) {
+      const nombres = new Set(form.mascotas.map(m => norm(m.nombre)).filter(Boolean))
+      const { data: afs } = await db.from('afiliaciones')
+        .select('id, tipo, nivel, estado, afiliacion_contratos(numero, numero_contrato, fecha_inicio), afiliacion_mascotas(mascotas(nombre))')
+        .eq('cliente_id', cl.data.id_cliente)
+      previos = (afs || []).map(a => {
+        const coinciden = (a.afiliacion_mascotas || []).map(am => am.mascotas?.nombre).filter(n => nombres.has(norm(n)))
+        const c0 = [...(a.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)[0]
+        return coinciden.length ? {
+          id: a.id, estado: a.estado, tipo: a.tipo, nivel: a.nivel, mascotas: coinciden,
+          numero: c0?.numero_contrato, fecha: c0?.fecha_inicio,
+          // Misma fecha de afiliación = casi seguro es ESTE mismo papel otra vez.
+          mismoContrato: !!form.fecha && c0?.fecha_inicio === form.fecha,
+        } : null
+      }).filter(Boolean)
+    }
+    const repetido = previos.some(p => p.mismoContrato)
+    set(id, x => ({
+      clienteExiste: cl.data || null, numeroRepetido: num, previos,
+      // El que parece ya subido entra DESMARCADO: crearlo es un acto consciente.
+      incluir: repetido || num ? false : x.incluir,
+    }))
   }
 
   async function leer(item) {
@@ -524,6 +551,27 @@ function TarjetaContrato({ it, onForm, onIncluir, onReintentar, onQuitar, onRevi
             {f.tipo === 'ANUAL' && f.vigenteHasta < hoy && (
               <div className="text-[#9A5500] font-semibold">⚠ "Vigente hasta" ya pasó: entrará vencido (o cancelado si pasó la gracia).</div>
             )}
+          </div>
+        )}
+
+        {it.previos?.length > 0 && (
+          <div className={`rounded-lg border px-3 py-2 text-[11px] space-y-0.5 ${it.previos.some(p => p.mismoContrato) ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-[#9A5500]'}`}>
+            <div className="font-bold flex items-center gap-1"><AlertTriangle size={12} />
+              {it.previos.some(p => p.mismoContrato)
+                ? '¿Este contrato ya está en Orbit? Se dejó sin marcar para que no se duplique.'
+                : 'Este titular ya tiene contrato con esta mascota:'}
+            </div>
+            {it.previos.map(p => (
+              <div key={p.id}>
+                · <span className="font-mono font-bold">{p.numero || 's/n'}</span> — {p.mascotas.join(', ')} · {p.nivel} {p.tipo === 'VITALICIO' ? 'vitalicio' : 'anual'} · desde {p.fecha || '—'} · <b>{p.estado}</b>
+                {p.mismoContrato && <b> · misma fecha de afiliación</b>}
+              </div>
+            ))}
+            <div className="text-ink3">
+              {it.previos.some(p => p.mismoContrato)
+                ? 'Si de verdad es otro contrato, márcalo para crearlo.'
+                : 'Si es la renovación de ese mismo contrato, renuévalo desde su ficha en vez de crear uno nuevo.'}
+            </div>
           </div>
         )}
 

@@ -302,6 +302,9 @@ export default function Presequiales() {
   const [modalActivar, setModalActivar] = useState(null) // { afiliacion, am }
   const [modalReactivar, setModalReactivar] = useState(null)
   const [modalCancelar, setModalCancelar] = useState(null) // { afiliacion, amRetirar? }
+  // Eliminar un contrato duplicado o cargado por error (migr. 223): solo coordinación.
+  const [modalEliminar, setModalEliminar] = useState(null) // afiliacion
+  const puedeEliminar = ['COORDINADOR', 'ADMIN'].includes(personalData?.rol)
 
   useEffect(() => { cargar() }, [])
 
@@ -563,6 +566,7 @@ export default function Presequiales() {
           el modal toma sus valores de arranque una sola vez, al montarse. */}
       {modalNueva && (modalNueva === true || !loading) && (
         <ModalNuevaAfiliacion config={config} especies={especies} personalData={personalData}
+          existentes={data}
           inicial={modalNueva === true ? null : modalNueva.inicial}
           onClose={() => setModalNueva(false)}
           onSaved={async (creada) => {
@@ -588,6 +592,7 @@ export default function Presequiales() {
       {ficha && (
         <ModalFicha afiliacion={ficha} config={config} especies={especies}
           onClose={() => setFicha(null)}
+          onEliminar={puedeEliminar ? () => setModalEliminar(ficha) : null}
           onRenovar={() => setModalRenovar({ afiliacion: ficha })}
           onReactivar={() => setModalReactivar({ afiliacion: ficha })}
           onActivar={am => setModalActivar({ afiliacion: ficha, am })}
@@ -685,6 +690,12 @@ export default function Presequiales() {
           personalData={personalData}
           onClose={() => setModalCancelar(null)}
           onSaved={async () => { setModalCancelar(null); await cargar() }} />
+      )}
+
+      {modalEliminar && (
+        <ModalEliminar afiliacion={modalEliminar} todas={data}
+          onClose={() => setModalEliminar(null)}
+          onSaved={async () => { setModalEliminar(null); setFicha(null); await cargar() }} />
       )}
     </div>
   )
@@ -1079,8 +1090,8 @@ const MASCOTA_VACIA = () => ({ key: crypto.randomUUID(), nombre: '', especie_id:
 // descuento de la oferta): todo sigue siendo editable y el contrato se crea
 // igual que siempre, con una persona pulsando «Afiliar». Sin `inicial` el modal
 // se comporta exactamente como antes.
-function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved, inicial = null }) {
-  const { alert: showAlert } = useConfirm()
+function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved, inicial = null, existentes = [] }) {
+  const { alert: showAlert, confirm } = useConfirm()
   const [saving, setSaving] = useState(false)
 
   // cliente
@@ -1178,6 +1189,42 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 
   const nuevasValidas = nuevas.filter(m => m.nombre.trim())
   const nMascotas = seleccionadas.length + nuevasValidas.length
+
+  // ── ¿Ya está en Orbit? (reporte del 25-nov: contratos duplicados) ──────────
+  // 1) Cliente nuevo con una cédula que ya existe: sería un titular duplicado.
+  const [cedulaExiste, setCedulaExiste] = useState(null)
+  useEffect(() => {
+    const ced = String(formCliente.cedula_nit || '').replace(/\D/g, '')
+    if (!clienteNuevo || cliente || ced.length < 5) { setCedulaExiste(null); return }
+    const t = setTimeout(async () => {
+      const { data } = await db.from('clientes')
+        .select('id_cliente,nombre,apellido,cedula_nit,whatsapp').eq('cedula_nit', ced).limit(1)
+      setCedulaExiste(data?.[0] || null)
+    }, 400)
+    return () => clearTimeout(t)
+  }, [formCliente.cedula_nit, clienteNuevo, cliente])
+
+  // 2) El titular ya tiene contrato con alguna de estas mascotas (mismo registro
+  //    o mismo nombre sin tildes/mayúsculas: «Sasha» = «SASHA»), en cualquier estado.
+  const coincidencias = useMemo(() => {
+    if (!cliente) return []
+    const ids = new Set(seleccionadas)
+    const nombres = new Set([
+      ...mascotasCliente.filter(m => ids.has(m.id_mascota)).map(m => normalizarImportacion(m.nombre)),
+      ...nuevasValidas.map(m => normalizarImportacion(m.nombre)),
+    ])
+    return existentes
+      .filter(a => a.cliente_id === cliente.id_cliente)
+      .map(a => {
+        const ms = (a.afiliacion_mascotas || [])
+          .filter(am => ids.has(am.mascotas?.id_mascota) || nombres.has(normalizarImportacion(am.mascotas?.nombre)))
+          .map(am => am.mascotas?.nombre)
+        const c0 = [...(a.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)[0]
+        return ms.length ? { a, mascotas: ms, numero: c0?.numero_contrato, fecha: c0?.fecha_inicio } : null
+      })
+      .filter(Boolean)
+  }, [cliente, seleccionadas, mascotasCliente, nuevasValidas, existentes])
+  const coincidenciaViva = coincidencias.some(x => ['VIGENTE', 'VENCIDA'].includes(x.a.estado))
   // apellido: clientes.apellido es NOT NULL y su inicial va en el nº de contrato
   const clienteListo = cliente || (clienteNuevo && formCliente.nombre.trim() && formCliente.apellido.trim() && formCliente.whatsapp.trim() && formCliente.cedula_nit.trim())
   // `valor` es el precio de LISTA por mascota; el descuento se resta encima.
@@ -1204,6 +1251,24 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
   }) : null
 
   async function guardar() {
+    if (clienteNuevo && !cliente && cedulaExiste) {
+      await showAlert(
+        `Ya existe un cliente con la cédula ${cedulaExiste.cedula_nit}: ${cedulaExiste.nombre} ${cedulaExiste.apellido}. ` +
+        'Usa ese cliente (botón «Usar ese cliente») en vez de crear otro.',
+        { title: 'El titular ya está en Orbit' })
+      return
+    }
+    if (coincidencias.length) {
+      const lista = coincidencias.map(x => `• ${x.numero || 's/n'} — ${x.mascotas.join(', ')} (${x.a.estado}, desde ${x.fecha || '—'})`).join('\n')
+      const ok = await confirm(
+        `Este titular ya tiene contrato con esta mascota:\n${lista}\n\n` +
+        (coincidenciaViva
+          ? 'Ese contrato sigue vivo: si es el mismo, NO crees otro (para el año siguiente usa «Renovar» en su ficha).'
+          : 'Si es el mismo contrato que vuelve, usa «Reactivar» en su ficha en vez de crear uno nuevo.') +
+        '\n\n¿Crear de todas formas un contrato NUEVO?',
+        { title: '¿Contrato duplicado?', confirmLabel: 'Sí, es otro contrato', variant: 'warning' })
+      if (!ok) return
+    }
     setSaving(true)
     try {
       // Antes de crear nada: un número a mano repetido no debe dejar cliente/mascotas a medias
@@ -1327,6 +1392,29 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
         <Button onClick={guardar} disabled={!puedeGuardar}>{saving ? 'Guardando...' : `Afiliar ${nMascotas || ''} mascota${nMascotas === 1 ? '' : 's'}`.trim()}</Button>
       </>}>
       <div className="space-y-5">
+        {/* ¿Ya está en Orbit? Se avisa ANTES de llegar a guardar. */}
+        {cedulaExiste && clienteNuevo && !cliente && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[12px] text-[#9A5500] flex items-center justify-between gap-3">
+            <span><AlertTriangle size={13} className="inline -mt-0.5 mr-1" />
+              Ya existe un cliente con la cédula <b>{cedulaExiste.cedula_nit}</b>: <b>{cedulaExiste.nombre} {cedulaExiste.apellido}</b>.</span>
+            <Button size="sm" variant="secondary" onClick={() => elegirCliente(cedulaExiste)}>Usar ese cliente</Button>
+          </div>
+        )}
+        {coincidencias.length > 0 && (
+          <div className={`rounded-xl border px-3.5 py-2.5 text-[12px] ${coincidenciaViva ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-[#9A5500]'}`}>
+            <div className="font-bold mb-0.5"><AlertTriangle size={13} className="inline -mt-0.5 mr-1" />
+              {coincidenciaViva ? 'Esta mascota ya tiene un contrato vivo con este titular' : 'Este titular ya tuvo contrato con esta mascota'}
+            </div>
+            {coincidencias.map(x => (
+              <div key={x.a.id}>· <span className="font-mono font-bold">{x.numero || 's/n'}</span> — {x.mascotas.join(', ')} · {x.a.nivel} · desde {x.fecha || '—'} · <b>{x.a.estado}</b></div>
+            ))}
+            <div className="text-ink3 mt-0.5">
+              {coincidenciaViva
+                ? 'Si es el mismo contrato, no lo crees de nuevo. Para el año siguiente usa «Renovar» en su ficha.'
+                : 'Si vuelve el mismo cliente, «Reactivar» en la ficha del contrato cancelado conserva su historia.'}
+            </div>
+          </div>
+        )}
         {/* Cliente */}
         <section>
           <div className="flex items-center justify-between mb-2">
@@ -1595,7 +1683,7 @@ function ModalNuevaAfiliacion({ config, especies, personalData, onClose, onSaved
 }
 
 // ─── Ficha: mascotas cubiertas, cadena de contratos, comprobantes, PDF ───────
-function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged }) {
+function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onReactivar, onActivar, onCancelar, onRetirar, onVolverACubrir, onChanged, onEliminar = null }) {
   const { alert: showAlert, confirm } = useConfirm()
   const { personalData } = useAuth()
   const [subiendo, setSubiendo] = useState(null)   // id del contrato al que se le sube comprobante
@@ -1937,6 +2025,13 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
         )}
         {a.estado === 'CANCELADA' && vivas.length > 0 && (
           <Button variant="secondary" onClick={onReactivar}><RotateCcw size={13} /> Reactivar</Button>
+        )}
+        {/* Duplicado o cargado por error (migr. 223). Uno que ya pagó un
+            servicio no se elimina: se cancela (la DB también lo bloquea). */}
+        {onEliminar && !mascotas.some(am => am.estado === 'ACTIVADA' || am.servicio_activado_id) && (
+          <Button variant="ghost" className={`text-ink3 hover:text-danger ${['VIGENTE','VENCIDA'].includes(a.estado) ? '' : 'mr-auto'}`}
+            title="Eliminar este contrato si está duplicado o se cargó por error"
+            onClick={onEliminar}><Trash2 size={13} /> Eliminar</Button>
         )}
       </>}>
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -2333,6 +2428,106 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
       </div>
 
       {a.notas && <p className="text-[12px] text-ink3 mt-4 whitespace-pre-line"><span className="font-bold">Notas:</span> {a.notas}</p>}
+    </Modal>
+  )
+}
+
+// ─── Eliminar un contrato duplicado (migración 223) ──────────────────────────
+// Reporte del 25-nov. Cancelar no sirve para un duplicado: el cancelado sigue
+// en la lista y en lo recaudado. Eliminar sí lo quita, pero es irreversible
+// desde la pantalla, así que: solo coordinación, motivo obligatorio, nunca uno
+// ya activado, y la DB guarda la foto completa en `afiliaciones_eliminadas`.
+// Se muestran los OTROS contratos del titular con las mismas mascotas para
+// que se elimine el que sobra y no el bueno.
+const MOTIVOS_ELIMINAR = {
+  DUPLICADO: 'Contrato duplicado',
+  ERROR:     'Cargado por error',
+  OTRO:      'Otro',
+}
+
+function ModalEliminar({ afiliacion: a, todas = [], onClose, onSaved }) {
+  const { alert: showAlert } = useConfirm()
+  const [motivo, setMotivo]   = useState('DUPLICADO')
+  const [detalle, setDetalle] = useState('')
+  const [saving, setSaving]   = useState(false)
+  const contratos = [...(a.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)
+  const mascotas = mascotasDe(a)
+  const pagos = resumenPagosAfiliacion(a)
+  const nombres = new Set(mascotas.map(am => normalizarImportacion(am.mascotas?.nombre)))
+  const gemelos = todas
+    .filter(o => o.id !== a.id && o.cliente_id === a.cliente_id)
+    .map(o => ({
+      o,
+      ms: mascotasDe(o).map(am => am.mascotas?.nombre).filter(n => nombres.has(normalizarImportacion(n))),
+      c0: [...(o.afiliacion_contratos || [])].sort((x, y) => x.numero - y.numero)[0],
+    }))
+    .filter(x => x.ms.length)
+  const faltaDetalle = motivo === 'OTRO' && detalle.trim().length < 5
+
+  async function eliminar() {
+    setSaving(true)
+    try {
+      const texto = `${MOTIVOS_ELIMINAR[motivo]}${detalle.trim() ? ` — ${detalle.trim()}` : ''}`
+      const { error } = await db.rpc('eliminar_afiliacion', { p_afiliacion_id: a.id, p_motivo: texto })
+      if (error) {
+        if (error.code === 'PGRST202') throw new Error('Falta aplicar la migración 223 en la base de datos.')
+        throw error
+      }
+      await onSaved()
+    } catch (e) {
+      await showAlert(e.message, { title: 'No se pudo eliminar el contrato', variant: 'danger' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} maxWidth="max-w-lg" title="Eliminar contrato"
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Volver</Button>
+        <Button variant="danger" onClick={eliminar} disabled={saving || faltaDetalle}>
+          {saving ? 'Eliminando...' : 'Eliminar definitivamente'}
+        </Button>
+      </>}>
+      <div className="space-y-4">
+        <div className="rounded-xl px-3.5 py-3 text-[12px] bg-danger-light border border-danger/30 text-ink2">
+          Se elimina <b>{contratos.length === 1 ? 'el contrato' : `los ${contratos.length} contratos`}</b>{' '}
+          <b className="font-mono">{contratos.map(c => c.numero_contrato).join(', ')}</b> de{' '}
+          <b>{a.clientes?.nombre} {a.clientes?.apellido}</b>, con {mascotas.length === 1 ? 'su mascota' : `sus ${mascotas.length} mascotas`}{' '}
+          ({mascotas.map(am => am.mascotas?.nombre).filter(Boolean).join(', ')})
+          {pagos.total > 0 ? <> y <b>{fmt(pagos.total)}</b> registrados como pagados</> : null}.
+          {' '}Deja de aparecer en la lista y en lo recaudado. Orbit guarda una copia por si hay que recuperarlo.
+          {' '}<b>Si el cliente simplemente se retiró, usa «Cancelar afiliación»</b>, no esto.
+        </div>
+
+        {gemelos.length > 0 ? (
+          <div className="rounded-xl px-3.5 py-3 text-[12px] bg-surface2">
+            <div className="font-bold text-ink mb-1">Otros contratos de este titular con la misma mascota</div>
+            {gemelos.map(({ o, ms, c0 }) => (
+              <div key={o.id} className="text-ink2">
+                · <span className="font-mono font-bold">{c0?.numero_contrato || 's/n'}</span> — {ms.join(', ')} · {o.nivel} · desde {c0?.fecha_inicio || '—'} · <b>{o.estado}</b>
+              </div>
+            ))}
+            <div className="text-ink3 mt-1">Revisa que estés eliminando el que sobra y no el bueno.</div>
+          </div>
+        ) : (
+          <div className="rounded-xl px-3.5 py-2.5 text-[12px] bg-amber-50 border border-amber-200 text-[#9A5500]">
+            No hay otro contrato de este titular con estas mascotas. ¿Seguro que es un duplicado?
+          </div>
+        )}
+
+        <div>
+          <label className={LABEL}>Motivo *</label>
+          <Select value={motivo} onChange={e => setMotivo(e.target.value)}>
+            {Object.entries(MOTIVOS_ELIMINAR).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </Select>
+        </div>
+        <div>
+          <label className={LABEL}>Detalle {motivo === 'OTRO' ? '*' : '(opcional)'}</label>
+          <Textarea rows={2} value={detalle} onChange={e => setDetalle(e.target.value)}
+            placeholder={motivo === 'DUPLICADO' ? 'Ej: es el mismo de DIC1025AC8-PL0, se subió dos veces' : 'Cuéntanos qué pasó'} />
+        </div>
+      </div>
     </Modal>
   )
 }
