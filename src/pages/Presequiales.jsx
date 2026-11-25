@@ -1653,18 +1653,54 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
       ? { contratoId: c.id, modo, monto: String(Math.round(est?.proxima?.monto || 0)), fecha: today(), metodo: 'EFECTIVO', file: null }
       // Diferir un contrato ya cargado como de contado: lo que se registró
       // como pago pasa a ser el primer abono, con su método y su fecha.
-      : { contratoId: c.id, modo, cuotas: 4, monto: '', fecha: c.fecha_pago || c.fecha_inicio, metodo: c.metodo_pago || 'EFECTIVO', file: null })
+      // 🩸 El monto arranca CON la cuota sugerida y es un valor normal del
+      // campo. Antes era '' y el campo pintaba la sugerencia encima: al
+      // borrarlo para escribir otro valor volvía a aparecer solo, y el 4-nov el
+      // de Mercedes Romero (OCT0526MR14-BRVIT) quedó con el plan completo como
+      // «ya abonó» → saldo $2 y ningún abono real cabía.
+      : { contratoId: c.id, modo, cuotas: 4, monto: String(Math.round(totalContrato(c, mascotas.length) / 4)),
+          fecha: c.fecha_pago || c.fecha_inicio, metodo: c.metodo_pago || 'EFECTIVO', file: null })
+  }
+
+  // Cómo queda el contrato si se guarda este abono: lo que ve el coordinador
+  // ANTES de confirmar, con la misma cuenta que la ficha (estadoCuotas).
+  function previaPago(c, f) {
+    const monto = parseFloat(f?.monto) || 0
+    const base = f?.modo === 'DIFERIR'
+      ? { ...c, cuotas: f.cuotas, afiliacion_pagos: [] }
+      : c
+    const actuales = base.afiliacion_pagos || []
+    return estadoCuotas({ ...base, afiliacion_pagos: [...actuales, { monto }] }, mascotas.length)
   }
 
   async function guardarPago(c) {
     const f = formPago
     const total = totalContrato(c, mascotas.length)
-    const monto = f.modo === 'DIFERIR' && f.monto === '' ? Math.round(total / f.cuotas) : parseFloat(f.monto)
+    const monto = parseFloat(f.monto)
     const tope = f.modo === 'ABONO' ? estadoCuotas(c, mascotas.length)?.saldo || 0 : total
     if (!(monto > 0)) { await showAlert('Digita el valor abonado.', { title: 'Falta el valor' }); return }
     if (monto > tope + 0.5) {
       await showAlert(`El abono (${fmt(monto)}) supera ${f.modo === 'ABONO' ? 'el saldo' : 'el total del plan'} (${fmt(tope)}).`, { title: 'Valor fuera de rango' })
       return
+    }
+    if (f.modo === 'DIFERIR') {
+      const previa = previaPago(c, f)
+      // Pagó el plan entero (o le faltan centavos): no está en cuotas.
+      if (previa.saldo < previa.valorCuota / 2) {
+        await showAlert(
+          `Con ${fmt(monto)} abonados el plan de ${fmt(total)} queda prácticamente pagado (saldo ${fmt(previa.saldo)}). ` +
+          'Si el cliente ya pagó todo, no hace falta diferirlo. Si no, escribe solo lo que ha pagado hasta hoy.',
+          { title: 'Ese valor es el plan completo' })
+        return
+      }
+      // Abonó más de una cuota: puede ser, pero que lo confirme mirando el saldo.
+      if (previa.cubiertas > 1) {
+        const ok = await confirm(
+          `${fmt(monto)} cubre ${previa.cubiertas} de ${previa.cuotas} cuotas y deja un saldo de ${fmt(previa.saldo)}. ` +
+          '¿Es lo que el cliente ha pagado hasta hoy?',
+          { title: 'Revisa el abono', confirmLabel: 'Sí, es correcto' })
+        if (!ok) return
+      }
     }
     setGuardandoPago(true)
     try {
@@ -2246,13 +2282,16 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   {fp.modo === 'DIFERIR' && (
                     <div><label className={LABEL}>Cuotas</label>
                       <Select className="w-24" value={fp.cuotas}
-                        onChange={e => setFormPago(p => ({ ...p, cuotas: parseInt(e.target.value), monto: '' }))}>
+                        onChange={e => {
+                          const n = parseInt(e.target.value)
+                          setFormPago(p => ({ ...p, cuotas: n, monto: String(Math.round(totalContrato(c, mascotas.length) / n)) }))
+                        }}>
                         {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}</option>)}
                       </Select></div>
                   )}
                   <div><label className={LABEL}>{fp.modo === 'DIFERIR' ? 'Ya abonó' : 'Valor del abono'}</label>
                     <Input type="number" min="0" className="w-28" autoFocus
-                      value={fp.modo === 'DIFERIR' && fp.monto === '' ? String(Math.round(totalContrato(c, mascotas.length) / fp.cuotas)) : fp.monto}
+                      value={fp.monto}
                       onChange={e => setFormPago(p => ({ ...p, monto: e.target.value }))} /></div>
                   <div><label className={LABEL}>Fecha</label>
                     <Input type="date" className="w-36" value={fp.fecha}
@@ -2271,6 +2310,17 @@ function ModalFicha({ afiliacion: a, config, especies, onClose, onRenovar, onRea
                   </Button>
                   <Button size="sm" variant="ghost" type="button" onClick={() => setFormPago(null)}>Cancelar</Button>
                 </div>
+                {/* Lo que va a quedar, a la vista antes de guardar: con esto el
+                    «ya abonó» = plan completo del 4-nov se habría visto ($2). */}
+                {parseFloat(fp.monto) > 0 && (() => {
+                  const pv = previaPago(c, fp)
+                  return pv && (
+                    <p className="text-[11px] text-ink2 mt-1.5">
+                      Quedaría: abonado <b>{fmt(pv.pagado)}</b> de {fmt(pv.total)} · saldo <b className={pv.saldo > 0.5 ? 'text-danger' : 'text-primary-dark'}>{fmt(pv.saldo)}</b>
+                      {pv.saldo > 0.5 && <span className="text-ink3"> · cubre {pv.cubiertas} de {pv.cuotas} cuotas</span>}
+                    </p>
+                  )
+                })()}
                 {fp.modo === 'DIFERIR' && (c.comprobantes || []).length > 0 && (
                   <p className="text-[10px] text-ink3 mt-1.5">El comprobante que ya tiene el contrato se queda donde está.</p>
                 )}
