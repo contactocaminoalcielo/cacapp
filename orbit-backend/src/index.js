@@ -62,7 +62,7 @@ import { verificarWebhook, recibirWebhook, listarEventos } from './whatsapp-clou
 import {
   listarConversaciones, hilo, marcarLeido, enviarTexto, enviarSobre,
   listarEtiquetas, etiquetar, desetiquetar, cambiarAgente, bloquearConversacion,
-  listarEsperas, cerrarEspera,
+  listarEsperas, cerrarEspera, nombrarContacto,
 } from './whatsapp-cloud.js'
 import { leerMedia, enviarArchivo } from './whatsapp-media.js'
 import { listarInteractivos, enviarInteractivo, guardarInteractivo, borrarInteractivo } from './whatsapp-interactivos.js'
@@ -567,6 +567,19 @@ app.post('/whatsapp/conversaciones/:contacto/bloqueo', requireAuth, rolBandeja, 
     })
     res.status(r.status).json(r.body)
   } catch (e) { errorInterno(res, 'wa-bandeja/bloqueo', e) }
+})
+
+// Nombre del contacto, puesto a mano desde la bandeja (migración 221). Es de
+// ATENDER: quien puede abrirle chat a un número nuevo puede decir quién es.
+// `bandejaAtender` le fija la línea a COMERCIAL/PRODUCTOR y les rebota otra.
+app.post('/whatsapp/conversaciones/:contacto/nombre', requireAuth, bandejaAtender, async (req, res) => {
+  try {
+    const r = await nombrarContacto({
+      contacto: req.params.contacto, linea: req.body?.linea || null,
+      nombre: req.body?.nombre, personalId: req.personal.id,
+    })
+    res.status(r.status).json(r.body)
+  } catch (e) { errorInterno(res, 'wa-bandeja/nombre', e) }
 })
 
 // ── Banco de pruebas de voz ──

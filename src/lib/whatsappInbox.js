@@ -60,6 +60,36 @@ export function marcarLeido(contacto, linea = null) {
   })
 }
 
+/**
+ * Ponerle nombre a un contacto (migración 221). La fila la crea el primer
+ * mensaje, así que con un número nuevo se llama DESPUÉS de enviar la plantilla:
+ * antes da 404. Nombre vacío lo quita.
+ */
+export function nombrarContacto(contacto, nombre, linea) {
+  return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/nombre`, {
+    method: 'POST', body: { nombre, linea },
+  })
+}
+
+/**
+ * Lo que se teclea al iniciar un chat → el número como lo guarda Meta.
+ * `300 123 4567` y `+57 300…` dan `573001234567`; un extranjero se escribe con
+ * su indicativo. Un fijo colombiano (10 dígitos sin 3) se rechaza antes de
+ * enviar: casi nunca tiene WhatsApp y el error de Meta llegaría tarde y críptico.
+ */
+export function normalizarNumeroWa(valor) {
+  const d = String(valor || '').replace(/\D/g, '').replace(/^00/, '')
+  if (!d) return { error: 'Escribe el número de WhatsApp' }
+  if (d.length === 10) {
+    return d.startsWith('3')
+      ? { numero: '57' + d }
+      : { error: 'Un celular colombiano empieza por 3. Si es de otro país, escríbelo con su indicativo.' }
+  }
+  if (d.startsWith('57') && d.length !== 12) return { error: 'Con +57 el número debe tener 10 dígitos después del indicativo' }
+  if (d.length < 11 || d.length > 15) return { error: 'Número incompleto: revisa los dígitos' }
+  return { numero: d }
+}
+
 export function enviarMensaje(contacto, texto, linea = null) {
   return orbitApi(`/whatsapp/conversaciones/${encodeURIComponent(contacto)}/enviar`, {
     method: 'POST',

@@ -673,10 +673,12 @@ async function prospectoDesdeWhatsapp(contacto, phoneNumberId) {
     [num, phoneNumberId])
   if (part) return
   const { rows: [c] } = await pool.query(
-    `SELECT nombre_perfil FROM public.whatsapp_contactos WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2) LIMIT 1`,
+    // El nombre que puso coordinación (migr. 221) manda sobre el perfil de WhatsApp.
+    `SELECT COALESCE(NULLIF(btrim(nombre_manual), ''), nombre_perfil) AS nombre
+       FROM public.whatsapp_contactos WHERE contacto = $1 AND ($2::text IS NULL OR phone_number_id = $2) LIMIT 1`,
     [num, phoneNumberId])
   const r = await crearProspecto({
-    nombre: c?.nombre_perfil || `WhatsApp ${num.slice(-10)}`, whatsapp: num,
+    nombre: c?.nombre || `WhatsApp ${num.slice(-10)}`, whatsapp: num,
     fuente_detalle: 'Pidió el enlace de afiliación por WhatsApp',
   }, null, { fuente: 'WHATSAPP' })
   if (r.status === 201) log(MOD, `${num} entró al CRM como prospecto`)

@@ -611,6 +611,41 @@ export async function marcarLeido({ contacto, linea = null }) {
   return { status: 200, body: { ok: true } }
 }
 
+/**
+ * Le pone (o quita) el nombre a un contacto desde la bandeja (migración 221).
+ *
+ * Es para quien todavía no está en Orbit: un propietario al que coordinación le
+ * escribe primero. NO va en `nombre_perfil` porque el webhook lo pisa con el
+ * perfil de WhatsApp en cuanto la persona responde.
+ *
+ * La línea es OBLIGATORIA, no se deduce: el nombre es de la conversación
+ * (línea, número), y si el número habla por dos líneas, adivinar es justo el
+ * fallo de la migración 109. Y la fila tiene que existir: la crea el primer
+ * mensaje (trigger `fn_wa_touch_contacto`), así que se nombra DESPUÉS de enviar.
+ * Nombre vacío = quitarlo.
+ */
+export async function nombrarContacto({ contacto, linea, nombre, personalId = null }) {
+  const num = soloDigitos(contacto)
+  if (!num) return { status: 400, body: { ok: false, error: 'Contacto inválido' } }
+  if (!linea) return { status: 400, body: { ok: false, error: 'Falta la línea de la conversación' } }
+
+  const limpio = String(nombre ?? '').replace(/\s+/g, ' ').trim()
+  if (limpio.length > 120) return { status: 400, body: { ok: false, error: 'El nombre no puede pasar de 120 caracteres' } }
+
+  const { rows } = await pool.query(
+    `UPDATE public.whatsapp_contactos
+        SET nombre_manual = $3, nombre_manual_por = $4, nombre_manual_en = now()
+      WHERE contacto = $1 AND phone_number_id = $2
+      RETURNING nombre_manual`,
+    [num, String(linea), limpio || null, personalId]
+  )
+  if (!rows.length) {
+    return { status: 404, body: { ok: false, error: 'Esa conversación todavía no existe: se crea al enviar el primer mensaje' } }
+  }
+  log(MOD, `contacto ${num} (línea ${linea}) nombrado: ${limpio || '(sin nombre)'}`)
+  return { status: 200, body: { ok: true, nombre: rows[0].nombre_manual } }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Envío
 // ─────────────────────────────────────────────────────────────────────────────

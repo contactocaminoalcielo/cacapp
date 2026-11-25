@@ -24,14 +24,15 @@ import {
   formatearNumero, haceCuanto, horaMensaje, etiquetaDia, restanteVentana, ESTADO_ENVIO,
   sePuedeGrabar, formatoGrabacion, duracionAudio,
   bajarAdjunto, nombreAdjunto, esImagen, enviarArchivo, prepararArchivo, claseArchivo, TOPES_ARCHIVO,
-  identidadLinea, claveConversacion,
+  identidadLinea, claveConversacion, nombrarContacto, normalizarNumeroWa,
 } from '@/lib/whatsappInbox'
+import { Modal } from '@/components/ui/dialog'
 import { listarAgentes } from '@/lib/agenteApi'
 import EnviarPlantilla from '@/components/whatsapp/EnviarPlantilla'
 import {
   Search, Send, ArrowLeft, MessageCircle, Building2, User, AlertTriangle,
   Loader2, RefreshCw, Inbox, Tag, X, Plus, Download, Paperclip, Mic, Video, FileText,
-  Bot, BotOff, Ban, Square, Trash2, ChevronDown, Check, LayoutTemplate,
+  Bot, BotOff, Ban, Square, Trash2, ChevronDown, Check, LayoutTemplate, MessageSquarePlus,
 } from 'lucide-react'
 
 /** Cada cuánto se relee la bandeja. La tabla no está en Realtime (es del backend). */
@@ -66,6 +67,11 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
   const [vista, setVista]         = useState(null)
   // El selector de plantillas: el único modo de escribir fuera de las 24 h.
   const [plantillaAbierta, setPlantillaAbierta] = useState(false)
+  // Iniciar un chat con un número que todavía no tiene conversación.
+  // `chatNuevo` guarda el nombre tecleado hasta que exista la fila: la crea el
+  // primer mensaje (la plantilla), así que el nombre se guarda DESPUÉS de enviar.
+  const [nuevoChatAbierto, setNuevoChatAbierto] = useState(false)
+  const [chatNuevo, setChatNuevo] = useState(null)   // { contacto, linea, nombre }
 
   // ── Líneas ──
   // Una conversación es (línea, número): la misma clínica puede hablar por dos
@@ -126,10 +132,22 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
       const r = await abrirHilo(contacto, lineaRef.current)
       // Si el usuario cambió de conversación mientras la petición viajaba, esta
       // respuesta ya no sirve — pintarla metería el hilo equivocado.
-      if (activoRef.current !== contacto) return
+      if (activoRef.current !== contacto) return null
       setHilo(r)
+      return r
     } catch (e) {
+      // Un número sin conversación en esta línea (chat nuevo, o el que abre la
+      // ficha del CRM) no es un error: es un hilo vacío al que se le escribe
+      // con una plantilla. Antes el 404 tapaba la lista con "Conversación no
+      // encontrada".
+      if (e.status === 404) {
+        if (activoRef.current !== contacto) return null
+        const vacio = { ok: true, contacto: null, mensajes: [] }
+        setHilo(vacio)
+        return vacio
+      }
       if (!silencioso) setErrorCarga(e.message)
+      return null
     } finally {
       if (!silencioso) setCargandoHilo(false)
     }
@@ -201,13 +219,58 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
     // cambiar de hilo mandaría el mensaje al contacto que no es.
     setPlantillaAbierta(false)
     pegadoAbajo.current = true
-    await cargarHilo(contacto)
+    const h = await cargarHilo(contacto)
+    // Sin conversación todavía no hay nada que marcar como leído (daría 404).
+    if (h?.contacto) {
+      try {
+        await marcarLeido(contacto, lineaRef.current)
+        setConvs(cs => cs.map(c =>
+          c.contacto === contacto && (!linea || c.phone_number_id === linea)
+            ? { ...c, sin_leer: 0 } : c))
+      } catch { /* el badge se corrige solo en el siguiente refresco */ }
+    }
+    return h
+  }
+
+  // ── Iniciar un chat nuevo ──────────────────────────────────────────────────
+  // Siempre por la línea que se está mirando: cada línea es su propia bandeja y
+  // el chat tiene que quedar en la que el coordinador tiene delante.
+  //
+  // Meta NO deja escribir texto libre a quien no ha escrito en las últimas
+  // 24 h, y un número nuevo nunca lo ha hecho: el primer mensaje es SIEMPRE una
+  // plantilla aprobada. Por eso, si la ventana está cerrada, el selector de
+  // plantillas se abre solo. Si el número ya tenía conversación aquí, se abre
+  // esa (y si la ventana sigue abierta, se le escribe normal).
+  async function iniciarChat({ contacto, nombre }) {
+    const linea = filtroLinea
+    setNuevoChatAbierto(false)
+    setChatNuevo(nombre ? { contacto, linea, nombre } : null)
+    const h = await abrir(contacto, linea)
+    if (activoRef.current !== contacto) return
+    // Con conversación ya existente el nombre se guarda de una vez; con una
+    // nueva queda pendiente hasta que salga la plantilla.
+    if (nombre && h?.contacto) {
+      try {
+        await nombrarContacto(contacto, nombre, linea)
+        setChatNuevo(null)
+        cargarHilo(contacto, { silencioso: true })
+        cargarLista({ silencioso: true })
+      } catch { /* queda pendiente: se reintenta al enviar la plantilla */ }
+    }
+    if (!h?.contacto?.ventana_abierta) setPlantillaAbierta(true)
+  }
+
+  // El nombre pendiente de un chat nuevo, en cuanto la plantilla creó la fila.
+  // Si falla, el chat ya existe igual: solo se queda con el nombre de WhatsApp.
+  async function guardarNombrePendiente() {
+    const p = chatNuevo
+    if (!p || p.contacto !== activoRef.current || p.linea !== lineaRef.current) return
     try {
-      await marcarLeido(contacto, lineaRef.current)
-      setConvs(cs => cs.map(c =>
-        c.contacto === contacto && (!linea || c.phone_number_id === linea)
-          ? { ...c, sin_leer: 0 } : c))
-    } catch { /* el badge se corrige solo en el siguiente refresco */ }
+      await nombrarContacto(p.contacto, p.nombre, p.linea)
+      setChatNuevo(null)
+    } catch (e) {
+      setErrorEnvio(`La plantilla salió, pero no se pudo guardar el nombre: ${e.message}`)
+    }
   }
 
   // ── Enviar ─────────────────────────────────────────────────────────────────
@@ -302,6 +365,7 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
     setVista(null)
     setErrorEnvio(null)
     setPlantillaAbierta(false)
+    setChatNuevo(null)
   }
 
   // Sin leer por LÍNEA, sobre `todas`. Se cuentan CONVERSACIONES, no mensajes:
@@ -340,6 +404,10 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
   const conv = hilo?.contacto
     || convs.find(c => c.contacto === activo
          && (!lineaActiva || c.phone_number_id === lineaActiva))
+    // Chat nuevo, todavía sin fila: la cabecera muestra el nombre tecleado en
+    // vez de solo el número mientras se elige la plantilla.
+    || (chatNuevo && chatNuevo.contacto === activo && chatNuevo.linea === lineaActiva
+          ? { nombre: chatNuevo.nombre } : null)
     || null
   const ventanaAbierta = conv?.ventana_abierta
   const restante = restanteVentana(conv?.ventana_hasta)
@@ -371,6 +439,19 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
                         title="Actualizar">
                   <RefreshCw size={14} />
                 </button>
+                {/* Escribirle a alguien que todavía no tiene conversación. Va
+                    por la línea elegida a la izquierda. */}
+                {filtroLinea && (
+                  <button onClick={() => setNuevoChatAbierto(true)}
+                          aria-label="Iniciar un chat nuevo"
+                          title="Iniciar un chat con un número nuevo"
+                          className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-[12px] font-semibold text-white
+                                     bg-[#1A5CD8] hover:bg-[#1549b0] cursor-pointer flex-shrink-0
+                                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A5CD8]/40">
+                    <MessageSquarePlus size={14} />
+                    <span className="hidden sm:inline">Nuevo</span>
+                  </button>
+                )}
               </div>
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -489,12 +570,25 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
           linea={lineaActiva}
           nombreLinea={identidadLinea(lineaActiva, nombreLinea).nombre}
           onCerrar={() => setPlantillaAbierta(false)}
-          onEnviada={() => {
+          onEnviada={async () => {
             setPlantillaAbierta(false)
             pegadoAbajo.current = true
+            // Primero el nombre (la plantilla acaba de crear la fila) y después
+            // el refresco, para que la lista ya lo traiga.
+            await guardarNombrePendiente()
             cargarHilo(activo, { silencioso: true })
             cargarLista({ silencioso: true })
           }}
+        />
+      )}
+
+      {nuevoChatAbierto && (
+        <NuevoChat
+          linea={filtroLinea}
+          nombreLinea={identidadLinea(filtroLinea, nombreLinea).nombre}
+          existentes={convs}
+          onCerrar={() => setNuevoChatAbierto(false)}
+          onContinuar={iniciarChat}
         />
       )}
     </div>
@@ -502,6 +596,90 @@ export default function Whatsapp({ embebido = false, lineaFija = null, abrirCont
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Iniciar un chat con un número que todavía no tiene conversación (reporte del
+ * 25-nov: "limita el contacto con propietarios que aún no tienen conversación
+ * en Orbit").
+ *
+ * Solo pide lo que hace falta: el número y, si se sabe, el nombre. La línea no
+ * se elige aquí: es la de la bandeja abierta, y se dice ANTES de seguir, porque
+ * es lo único que distingue escribirle desde veterinarias o desde familias.
+ * El paso siguiente es la plantilla (Meta no deja abrir con texto libre).
+ */
+function NuevoChat({ linea, nombreLinea, existentes = [], onCerrar, onContinuar }) {
+  const [numero, setNumero] = useState('')
+  const [nombre, setNombre] = useState('')
+  const [tocado, setTocado] = useState(false)
+
+  const { numero: normal, error } = normalizarNumeroWa(numero)
+  // Si ya hay conversación con ese número EN ESTA LÍNEA, se avisa: el botón
+  // abre esa en vez de crear otra.
+  const ya = normal
+    ? existentes.find(c => c.phone_number_id === linea && String(c.contacto).slice(-10) === normal.slice(-10))
+    : null
+
+  function seguir(e) {
+    e?.preventDefault()
+    setTocado(true)
+    if (!normal) return
+    onContinuar({ contacto: ya?.contacto || normal, nombre: nombre.replace(/\s+/g, ' ').trim() })
+  }
+
+  return (
+    <Modal open onClose={onCerrar} title="Nuevo chat de WhatsApp" maxWidth="max-w-md">
+      <form onSubmit={seguir} className="space-y-3">
+        <div>
+          <label htmlFor="nc-numero" className="block text-[12px] font-semibold text-gray-700 mb-1">Número de WhatsApp</label>
+          <Input id="nc-numero" autoFocus inputMode="tel" autoComplete="off"
+                 placeholder="300 123 4567" value={numero}
+                 onChange={e => setNumero(e.target.value)} onBlur={() => numero && setTocado(true)} />
+          {tocado && error ? (
+            <p className="text-[11.5px] text-red-600 mt-1">{error}</p>
+          ) : (
+            <p className="text-[11px] text-gray-500 mt-1">Celular colombiano sin el +57. Si es de otro país, con su indicativo.</p>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="nc-nombre" className="block text-[12px] font-semibold text-gray-700 mb-1">
+            Nombre <span className="font-normal text-gray-400">(opcional)</span>
+          </label>
+          <Input id="nc-nombre" autoComplete="off" maxLength={120}
+                 placeholder="Ej: María Gómez — propietaria de Lucas" value={nombre}
+                 onChange={e => setNombre(e.target.value)} />
+          <p className="text-[11px] text-gray-500 mt-1">
+            Así aparecerá en la bandeja. Si el número ya es de un cliente o una veterinaria de Orbit, se muestra ese.
+          </p>
+        </div>
+
+        {ya && (
+          <div className="flex gap-2 items-start rounded-xl bg-blue-50 border border-blue-100 px-3 py-2">
+            <MessageCircle size={14} className="text-[#1A5CD8] flex-shrink-0 mt-0.5" />
+            <p className="text-[11.5px] text-blue-900">
+              Ya hay una conversación con este número{ya.nombre ? ` (${ya.nombre})` : ''}. Se abrirá esa.
+            </p>
+          </div>
+        )}
+
+        <div className="flex gap-2 items-start rounded-xl bg-amber-50 border border-amber-100 px-3 py-2">
+          <LayoutTemplate size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <p className="text-[11.5px] text-amber-900 leading-relaxed">
+            Sale por <b>{nombreLinea || 'esta línea'}</b>. WhatsApp exige que el primer mensaje sea una
+            <b> plantilla aprobada</b>: al continuar eliges cuál. Cuando la persona responda, ya se le escribe normal.
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button type="submit" disabled={tocado && !normal}>
+            {ya ? 'Abrir conversación' : 'Continuar'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
 
 /**
  * Las listas de trabajo. Sin esto la bandeja es una pila plana: con el agente
