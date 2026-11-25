@@ -22,6 +22,7 @@ import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
 import CenizariosRestos from '@/components/produccion/CenizariosRestos'
+import { cargarRestosCalcicos, PanelRestosCalcicos } from '@/components/produccion/FiltroRestosCalcicos'
 import { PagoTag, PanelPagoAdicional, ResumenSaldoServicio } from '@/components/produccion/PagoAdicional'
 import { cargarPagoServicios } from '@/lib/pagoAdicionales'
 
@@ -382,13 +383,15 @@ function EstadoEntrega({ ent }) {
 }
 
 // ── VISTA POR SERVICIO ────────────────────────────────────────────────────────
-function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem, onPrepararEntrega, onAbrirCompra, puedeProgramar = false }) {
+function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entregas = {}, filtroEstado, filtroPersona, filtroRec, soloAnticipados, soloServicios = null, onClickItem, onPrepararEntrega, onAbrirCompra, puedeProgramar = false }) {
   const { pagos } = useContext(PagoCtx)
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     // Va ANTES del atajo de los LISTO: si no, un servicio listo que no es
     // anticipado se colaría por ese `return true` y el filtro mentiría.
     if (soloAnticipados && !esCompostajeAnticipado(r.servicios)) return false
+    // Filtro de restos cálcicos: también antes del atajo de los LISTO.
+    if (soloServicios && !soloServicios.has(String(r.servicio_id))) return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
     if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
     // Servicios en LISTO siempre visibles en cualquier filtro (botón de entrega).
@@ -833,11 +836,12 @@ function VistaPorPersona({ recordatorios, personal, maquinas, onClickItem }) {
 }
 
 // ── VISTA TABLA ───────────────────────────────────────────────────────────────
-function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, soloAnticipados, onClickItem }) {
+function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPersona, filtroRec, soloAnticipados, soloServicios = null, onClickItem }) {
   const { pagos } = useContext(PagoCtx)
   const filtrados = recordatorios.filter(r => {
     if (r.estado === 'NA') return false
     if (soloAnticipados && !esCompostajeAnticipado(r.servicios)) return false
+    if (soloServicios && !soloServicios.has(String(r.servicio_id))) return false
     if (filtroPersona && r.asignado_a !== filtroPersona) return false
     if (filtroRec && String(r.recordatorio_id) !== String(filtroRec)) return false
     if (filtroEstado === 'pendientes') return r.estado === 'PENDIENTE'
@@ -1131,6 +1135,10 @@ export default function Produccion() {
   // Solo los compostajes que la familia pidió ANTICIPADOS: lo que hay que
   // producir ya, con la mascota todavía en el cubículo (migración 155).
   const [soloAnticipados, setSoloAnticipados] = useState(false)
+  // Solo los Compets con restos cálcicos contratados (REPORTE ORBIT 2026-11-25).
+  // `restos` = filas de /produccion/restos-calcicos; null = aún sin cargar.
+  const [soloRestos,    setSoloRestos]    = useState(false)
+  const [restos,        setRestos]        = useState(null)
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
   const [logRows,       setLogRows]       = useState([])   // bitácora (solo admin)
@@ -1205,6 +1213,8 @@ export default function Produccion() {
       setMaquinas(maq || [])
       // Compras sin servicio: si fallan, el tablero de servicios sigue igual.
       cargarCompras()
+      // Restos cálcicos para el filtro: informativo, nunca lanza.
+      cargarRestosCalcicos().then(setRestos)
       // Estado de la entrega de los servicios ya LISTO: si está publicada al pool,
       // si alguien la tomó y quién. Es el control de entregas del coordinador.
       cargarEntregas((recs || [])
@@ -1321,6 +1331,11 @@ export default function Produccion() {
   ]
   const vistaConFiltros = vista === 'servicio' || vista === 'tabla'
 
+  // Filtro de restos cálcicos: qué servicios entran y cuáles tienen tarjeta.
+  const idsRestos = new Set((restos || []).map(f => String(f.servicio_id)))
+  const idsEnTablero = new Set(recordatorios.filter(r => r.estado !== 'NA').map(r => String(r.servicio_id)))
+  const soloServicios = soloRestos ? idsRestos : null
+
   // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
   const recOpciones = [...new Map(
     tablero
@@ -1422,6 +1437,22 @@ export default function Produccion() {
                 <Zap size={13} />
                 Anticipados
               </button>
+
+              {/* Compets con recuperación y devolución de restos cálcicos
+                  (REPORTE ORBIT 2026-11-25): filtra y lista TODAS, incluso las
+                  que no tienen tarjeta (Compets sin recordatorios). */}
+              <button
+                onClick={() => setSoloRestos(v => !v)}
+                title={soloRestos
+                  ? 'Mostrando solo los Compets con restos cálcicos — clic para ver todos'
+                  : 'Mostrar solo los Compets que contrataron la recuperación y devolución de los restos cálcicos'}
+                className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloRestos ? 'text-white border-transparent shadow-sm' : 'text-ink2 bg-white hover:bg-surface2'}`}
+                style={soloRestos ? { background: '#B45309', borderColor: 'transparent' } : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                Restos cálcicos
+                {restos?.length > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${soloRestos ? 'bg-white/25' : 'bg-[#FEF3C7] text-[#92400E]'}`}>{restos.length}</span>
+                )}
+              </button>
             </>
           )}
 
@@ -1450,6 +1481,10 @@ export default function Produccion() {
           </div>
         )}
 
+        {vistaConFiltros && soloRestos && (
+          <PanelRestosCalcicos filas={restos} idsEnTablero={idsEnTablero} />
+        )}
+
         {/* Contenido según vista. Las compras sin servicio (migr. 168) van
             dentro, en morado; su clic abre su propio modal (escribe por backend). */}
         {vista === 'servicio' && (
@@ -1457,7 +1492,7 @@ export default function Produccion() {
             recordatorios={tablero} personal={personal} maquinas={maquinas} etapas={etapas}
             entregas={entregas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
-            soloAnticipados={soloAnticipados}
+            soloAnticipados={soloAnticipados} soloServicios={soloServicios}
             onClickItem={setModalItem}
             onPrepararEntrega={id => setModalEntrega(id)}
             onAbrirCompra={abrirCompra}
@@ -1468,7 +1503,7 @@ export default function Produccion() {
           <VistaTabla
             recordatorios={tablero} personal={personal} maquinas={maquinas}
             filtroEstado={filtroEstado} filtroPersona={filtroPersona} filtroRec={filtroRec}
-            soloAnticipados={soloAnticipados}
+            soloAnticipados={soloAnticipados} soloServicios={soloServicios}
             onClickItem={setModalItem}
           />
         )}
