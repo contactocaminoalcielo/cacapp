@@ -127,6 +127,8 @@ COMMENT ON FUNCTION public.agregar_imagen_recordatorio(uuid, text, text)
   IS 'Agrega una foto (nueva o reutilizada del mismo servicio) a un recordatorio que aún no completa sus fotos, y deja constancia en produccion_imagen_log con url_anterior NULL. Atómica: no hay foto agregada sin log. Migr. 220.';
 
 REVOKE ALL ON FUNCTION public.agregar_imagen_recordatorio(uuid, text, text) FROM PUBLIC;
+-- Supabase concede EXECUTE a anon por default privileges: FROM PUBLIC no lo quita.
+REVOKE ALL ON FUNCTION public.agregar_imagen_recordatorio(uuid, text, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.agregar_imagen_recordatorio(uuid, text, text) TO authenticated;
 
 COMMIT;
