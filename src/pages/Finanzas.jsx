@@ -16,6 +16,7 @@ import {
   HelpCircle, Sparkles, Pencil, ArrowLeftRight, Trash2, Columns3, ArrowUpDown,
   Search, Filter,
 } from 'lucide-react'
+import { filtrarPorBusqueda } from '@/lib/busqueda'
 import { abrirPdfReciboServicio, subirComprobantePago } from '@/lib/comprobantes'
 import { abrirReciboPDFServicio } from '@/lib/reciboPdf'
 import { recategorizacionesPorServicio, esRecatSoloComision, conceptosPagoServicio, insertarNovedadPago } from '@/lib/servicios'
@@ -229,6 +230,9 @@ export default function Finanzas() {
   // ── State comisiones ────────────────────────────────────────────────────────
   const [liquidandoAliado,  setLiquidandoAliado]  = useState(null)  // null | aliado_id
   const [expandedAliados,   setExpandedAliados]   = useState(new Set())
+  // Buscador de veterinarias (REPORTE ORBIT 2026-11-25): por nombre, sin tildes
+  // y en cualquier orden de palabras (lib/busqueda).
+  const [busquedaAliado,    setBusquedaAliado]    = useState('')
 
   // ── State cuadre con técnicos ───────────────────────────────────────────────
   const [tecnicos,        setTecnicos]        = useState([])
@@ -428,14 +432,17 @@ export default function Finanzas() {
     if (!force && (comisionesServicios !== null || comisionesLoading)) return
     setComisionesLoading(true)
     try {
-      const { data, error } = await db.from('servicios')
+      // dbTodo: con .select() suelto PostgREST corta a las 1000 filas SIN avisar
+      // y los servicios más viejos de una veterinaria desaparecían de su
+      // grupo (y de su total pendiente). `id` desempata el orden de las páginas.
+      const data = await dbTodo(() => db.from('servicios')
         .select(SERVICIO_SELECT)
         .not('estado', 'eq', 'CANCELADO')
         .gte('fecha_ingreso', FECHA_CORTE)
         .eq('canal_entrada', 'ALIADO')
         .gt('comision_aliado', 0)
         .order('fecha_ingreso', { ascending: false })
-      if (error) throw error
+        .order('id', { ascending: false }))
       const { enriched } = await enriquecerServicios(data || [])
       setComisionesServicios(enriched)
       // Los pagos de esas comisiones, en el mismo viaje (dbIn parte la lista:
@@ -1792,6 +1799,11 @@ export default function Finanzas() {
     return Object.values(mapa)
   }, [comisionesServicios])
 
+  const comisionesFiltradas = useMemo(
+    () => filtrarPorBusqueda(comisionesPorAliado, busquedaAliado, g => g.aliado?.nombre || ''),
+    [comisionesPorAliado, busquedaAliado]
+  )
+
   // ── Toggle comision_descontada individual (optimistic) ─────────────────────
   async function toggleComisionDescontada(svcId, nuevoValor) {
     const patchLocal = valor => {
@@ -2433,8 +2445,37 @@ export default function Finanzas() {
                       <p className="text-[14px] font-semibold text-gray-700">No hay comisiones de aliados registradas</p>
                       <p className="text-[12px] text-gray-400 mt-1">Las comisiones aparecen cuando los servicios tienen canal ALIADO.</p>
                     </div>
-                  ) : (
-                    comisionesPorAliado.map(({ aliado, servicios: svcAliado }) => {
+                  ) : (<>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="relative flex-1 min-w-[220px] max-w-md">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <input
+                          type="search"
+                          value={busquedaAliado}
+                          onChange={e => setBusquedaAliado(e.target.value)}
+                          placeholder="Buscar veterinaria…"
+                          aria-label="Buscar veterinaria"
+                          className="w-full pl-9 pr-8 py-2 text-[13px] bg-white border border-gray-200 rounded-xl outline-none focus:border-[#3D5A27] focus:ring-2 focus:ring-[#3D5A27]/10 transition-all placeholder:text-gray-400"
+                        />
+                        {busquedaAliado && (
+                          <button onClick={() => setBusquedaAliado('')} aria-label="Limpiar búsqueda"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100">
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-[12px] text-gray-400">
+                        {busquedaAliado
+                          ? `${comisionesFiltradas.length} de ${comisionesPorAliado.length} veterinarias`
+                          : `${comisionesPorAliado.length} veterinarias`}
+                      </span>
+                    </div>
+                    {comisionesFiltradas.length === 0 && (
+                      <div className="py-10 text-center text-[13px] text-gray-500">
+                        Ninguna veterinaria con comisiones coincide con «{busquedaAliado}».
+                      </div>
+                    )}
+                    {comisionesFiltradas.map(({ aliado, servicios: svcAliado }) => {
                       const totalGenerado  = svcAliado.reduce((a, s) => a + (s.comision_aliado || 0), 0)
                       const totalDescontado = svcAliado.filter(s => s.comision_descontada).reduce((a, s) => a + (s.comision_aliado || 0), 0)
                       // Lo que se le PAGÓ aparte (cruzado en un recibo del técnico
@@ -2577,8 +2618,8 @@ export default function Finanzas() {
                           )}
                         </div>
                       )
-                    })
-                  )}
+                    })}
+                  </>)}
                 </div>
               )}
 
