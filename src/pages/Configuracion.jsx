@@ -12,6 +12,7 @@ import { db, callEdgeFunction } from '@/lib/supabase'
 import { fmt, parsearErrorDB, waLink } from '@/lib/utils'
 import { orbitApi } from '@/lib/orbitApi'
 import { invalidarTarifasEspecie } from '@/lib/precios'
+import { RANGO_GRAMOS } from '@/lib/rangosPeso'
 import { contarServiciosVip, cumpleVip, VIP_MIN_POR_MES } from '@/lib/vipAliados'
 import { Plus, Search, Send, CheckCircle, AlertCircle, RefreshCw, Users, Building2, KeyRound, ClipboardList, Layers, Star, DollarSign, Tag, Trash2, Pencil, X, Package, MessageCircle, Smartphone, Truck, CalendarDays, Stethoscope, Copy, Heart, Flame, Leaf } from 'lucide-react'
 import TabPlantas from '@/components/configuracion/TabPlantas'
@@ -2296,16 +2297,8 @@ const RANGOS = ['PETIT','FELINO','1-10KG','11-20KG','21-35KG','36-60KG']
 // Límites en gramos por rango — deben coincidir con la búsqueda por peso de
 // Registro/Kanban (.lte peso_min_gr / .gte peso_max_gr). FELINO se busca por
 // nombre, no por peso (peso_max_gr null).
-// Regla de decimales (David 2026-06-12): el peso pertenece a su rango hasta
-// ALCANZAR el mínimo del siguiente — 10.4 kg es 1-10KG, no 11-20KG.
-const RANGO_GRAMOS = {
-  'PETIT':   { peso_min_gr: 0,     peso_max_gr: 999 },
-  'FELINO':  { peso_min_gr: 1000,  peso_max_gr: null },
-  '1-10KG':  { peso_min_gr: 1000,  peso_max_gr: 10999 },
-  '11-20KG': { peso_min_gr: 11000, peso_max_gr: 20999 },
-  '21-35KG': { peso_min_gr: 21000, peso_max_gr: 35999 },
-  '36-60KG': { peso_min_gr: 36000, peso_max_gr: 60999 },
-}
+// Los límites viven en lib/rangosPeso (cada banda cubre 1 kg por encima de su
+// nombre, migración 224): una fila nueva nace con los mismos que las existentes.
 const LABEL_CF = 'text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
 
 function TabPreciosPlanes() {

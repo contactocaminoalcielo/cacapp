@@ -757,6 +757,11 @@ async function consultarTarifas({ entrada = {} }) {
     return { ok: false, falta: ['peso_kg'], mensaje: 'Pregunta el peso aproximado en kilogramos.' }
   }
 
+  // La última banda («36-60 kg») cubre hasta 61,999 kg (migración 224: cada
+  // banda cubre 1 kg por encima de su nombre). Espejo de src/lib/rangosPeso.js.
+  // La búsqueda se topa en 60 kg a propósito: cae dentro de la última banda con
+  // los límites viejos y con los nuevos, así el orden de despliegue no importa.
+  const TOPE_ULTIMA_BANDA_KG = 61
   const gramos = Math.round(Math.min(peso, 60) * 1000)
   const rango = gramos < 1000
     ? 'PETIT'
@@ -779,10 +784,12 @@ async function consultarTarifas({ entrada = {} }) {
     return { ok: false, mensaje: 'El catálogo no devolvió una tarifa para esos datos. Escálalo al equipo sin inventar un valor.' }
   }
 
-  // Catálogo confirmado: por encima de 60 kg se usa la franja 36–60 y se
-  // suman $10.000 por cada kilo adicional. Un peso fraccionario se redondea
-  // hacia arriba para no subcotizar; el resultado lo marcamos como cálculo.
-  const kilosAdicionales = peso > 60 ? Math.ceil(peso - 60) : 0
+  // Catálogo confirmado: por encima de la franja 36–60 (que cubre hasta 61,999
+  // kg) se suman $10.000 por cada kilo adicional, contado como la banda: por
+  // kilo entero alcanzado (62,0–62,999 = 1 kilo). Antes contaba desde 60,0 con
+  // Math.ceil y le cobraba un kilo extra a un perro de 60,5 kg que el catálogo
+  // ya ubicaba en 36-60. El resultado lo marcamos como cálculo.
+  const kilosAdicionales = Math.max(0, Math.floor(peso) - TOPE_ULTIMA_BANDA_KG)
   const recargo = kilosAdicionales * 10000
   return {
     ok: true,

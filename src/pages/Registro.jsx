@@ -16,6 +16,7 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { db } from '@/lib/supabase'
 import { fmt, today, needsAcomp, acompFijo, petEmoji, initials } from '@/lib/utils'
 import { planComisiona, volumenMesAliado } from '@/lib/precios'
+import { precioAngelRespaldo } from '@/lib/rangosPeso'
 import { FECHA_CORTE } from '@/lib/constants'
 import { ALIADOS_COLUMNAS } from '@/lib/aliados'
 import {
@@ -558,12 +559,7 @@ export default function Registro() {
       // Plan Ángel
       const angelP = planByCode['ANGEL']
       if (angelP && map[angelP.id] === undefined) {
-        if (pesoG < 1000)        map[angelP.id] = 69000
-        else if (usaFelino)      map[angelP.id] = 79000  // Gato o Conejo
-        else if (pesoG < 11000)  map[angelP.id] = 89000   // decimales: 10.4 sigue en 1-10
-        else if (pesoG < 21000)  map[angelP.id] = 119000
-        else if (pesoG < 36000)  map[angelP.id] = 139000
-        else                     map[angelP.id] = 189000
+        map[angelP.id] = precioAngelRespaldo(peso, usaFelino)   // bandas: lib/rangosPeso
       }
 
       // Básico sin recordatorios = Básico × 80 %

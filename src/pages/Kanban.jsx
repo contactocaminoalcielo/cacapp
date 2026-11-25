@@ -20,6 +20,7 @@ import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
 import { esAliadoVip, VipStar, VipBadge, VIP_ORO } from '@/components/servicio/VipAliado'
 import { recargoPrioridadDesamparado, planComisiona, aplicarRecalculoPorPeso, comisionInconsistente, volumenMesAliado, COLS_CONSISTENCIA_COMISION } from '@/lib/precios'
+import { precioAngelRespaldo } from '@/lib/rangosPeso'
 import { subirComprobantePago } from '@/lib/comprobantes'
 import { orbitApi } from '@/lib/orbitApi'
 import { agruparRefresco } from '@/lib/realtime'
@@ -925,14 +926,7 @@ export default function Kanban() {
     const planByCode = {}
     planesKanban.forEach(p => { planByCode[p.codigo] = p })
 
-    if (planActual?.codigo === 'ANGEL') {
-      if (pesoG < 1000) return 69000
-      if (usaFelino) return 79000
-      if (pesoG < 11000) return 89000   // decimales: 10.4 sigue en 1-10
-      if (pesoG < 21000) return 119000
-      if (pesoG < 36000) return 139000
-      return 189000
-    }
+    if (planActual?.codigo === 'ANGEL') return precioAngelRespaldo(pesoKg, usaFelino)
 
     if (planActual?.codigo === 'BASICO_SIN_REC' && planByCode.BASICO) {
       const base = await calcularPrecioPara(planByCode.BASICO.id, pesoKg, especieId)

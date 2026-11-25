@@ -1,6 +1,7 @@
 import { db } from '@/lib/supabase'
 import { fmt } from '@/lib/utils'
 import { calcularEstadoPago, trazaValor } from '@/lib/servicios'
+import { precioAngelRespaldo } from '@/lib/rangosPeso'
 
 /**
  * Planes que NUNCA generan comisión de aliado.
@@ -222,14 +223,7 @@ export async function calcularPrecioPara(planes, planId, pesoKgRaw, especieIdRaw
   planes.forEach(p => { planByCode[p.codigo] = p })
   const planActual = planPorId(planId)
 
-  if (planActual?.codigo === 'ANGEL') {
-    if (pesoG < 1000)  return 69000
-    if (usaFelino)     return 79000
-    if (pesoG < 11000) return 89000
-    if (pesoG < 21000) return 119000
-    if (pesoG < 36000) return 139000
-    return 189000
-  }
+  if (planActual?.codigo === 'ANGEL') return precioAngelRespaldo(pesoKg, usaFelino)
 
   if (planActual?.codigo === 'BASICO_SIN_REC' && planByCode.BASICO) {
     const base = await calcularPrecioPara(planes, planByCode.BASICO.id, pesoKg, especieId)

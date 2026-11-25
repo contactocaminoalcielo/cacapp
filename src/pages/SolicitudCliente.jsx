@@ -5,6 +5,7 @@ import { registrarAutorizacion } from '@/lib/autorizaciones'
 import { fmt, today, petEmoji } from '@/lib/utils'
 import { CheckCircle, ChevronRight, ChevronLeft, MapPin, Building2, Clock, AlertCircle, X, ChevronDown, ChevronUp, Package, Smartphone, Leaf, ExternalLink, Truck } from 'lucide-react'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
+import { rangoPorPeso } from '@/lib/rangosPeso'
 
 // ── Anti-spam ───────────────────────────────────────────────────────────────
 const RATE_LIMIT_KEY = 'cac_solicitud_ts'
@@ -62,16 +63,10 @@ function limpiarBorrador() {
 }
 
 // ── Rango de peso ────────────────────────────────────────────────────────────
+// Las bandas viven en lib/rangosPeso (espejo de planes_precios): cada una cubre
+// 1 kg por encima de su nombre — 11,8 kg sigue siendo 1-10KG (migración 224).
 function getRango(pesoKg, especieId) {
-  if (!pesoKg || pesoKg <= 0) return null
-  if (pesoKg < 1) return 'PETIT'
-  if (especieId === 2 || especieId === 3) return 'FELINO'  // Gato (2) o Conejo (3)
-  // Regla de decimales (David 2026-06-12): el peso pertenece a su rango hasta
-  // ALCANZAR el mínimo del siguiente — 10.4 kg es 1-10KG, solo desde 11.0 es 11-20KG
-  if (pesoKg < 11) return '1-10KG'
-  if (pesoKg < 21) return '11-20KG'
-  if (pesoKg < 36) return '21-35KG'
-  return '36-60KG'
+  return rangoPorPeso(pesoKg, especieId === 2 || especieId === 3)  // Gato (2) o Conejo (3)
 }
 
 // ── Validaciones ─────────────────────────────────────────────────────────────

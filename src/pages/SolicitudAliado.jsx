@@ -6,6 +6,7 @@ import { LocalidadSelect } from '@/components/ui/localidad-select'
 import { CheckCircle, ChevronRight, ChevronLeft, MapPin, Building2, Clock, AlertCircle, X, Stethoscope } from 'lucide-react'
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
+import { rangoPorPeso } from '@/lib/rangosPeso'
 
 // ── Anti doble-envío en el mismo navegador ───────────────────────────────────
 const RATE_KEY = 'cac_aliado_ts'
@@ -15,15 +16,9 @@ const LABEL = 'block text-[12px] font-semibold text-gray-600 mb-1'
 const INPUT = 'w-full px-3.5 py-3 text-[14px] font-medium text-gray-900 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#3D5A27] focus:ring-2 focus:ring-[#3D5A27]/10 transition-all placeholder:text-gray-400'
 const SEXOS = [{ v: 'Macho', e: '♂' }, { v: 'Hembra', e: '♀' }]
 
-// ── Rango de peso (misma regla que /solicitud y Registro) ─────────────────────
+// ── Rango de peso (misma regla que /solicitud y Registro: lib/rangosPeso) ─────
 function getRango(pesoKg, especieId) {
-  if (!pesoKg || pesoKg <= 0) return null
-  if (pesoKg < 1) return 'PETIT'
-  if (especieId === 2 || especieId === 3) return 'FELINO'   // Gato (2) o Conejo (3)
-  if (pesoKg < 11) return '1-10KG'
-  if (pesoKg < 21) return '11-20KG'
-  if (pesoKg < 36) return '21-35KG'
-  return '36-60KG'
+  return rangoPorPeso(pesoKg, especieId === 2 || especieId === 3)   // Gato (2) o Conejo (3)
 }
 
 function validarTelefono(v, requerido = false) {
