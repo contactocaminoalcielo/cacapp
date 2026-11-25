@@ -7,6 +7,7 @@ import { CheckCircle, ChevronRight, ChevronLeft, MapPin, Building2, Clock, Alert
 import CasillaDatos from '@/components/CasillaDatos'
 import { VERSION as POLITICA_VERSION } from '@/lib/privacidad'
 import { rangoPorPeso } from '@/lib/rangosPeso'
+import { recargoPrioridadDesamparado, RECARGO_PRIORIDAD_DESAMPARADO_FESTIVO } from '@/lib/precios'
 
 // ── Anti doble-envío en el mismo navegador ───────────────────────────────────
 const RATE_KEY = 'cac_aliado_ts'
@@ -155,12 +156,14 @@ function FlujoServicio({ token, aliado, especies, planes, precios, submitting, s
       setTimeout(() => formRef.current?.querySelector('[data-alcaldia]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80)
   }, [preguntaAlcaldia])
   // Prioridad del Desamparado (migr. 211): su recogida normal va de 24 a 48 h;
-  // pagando el recargo se recoge dentro de las primeras 24 h. Espejo de
-  // `precios.js` (RECARGO_PRIORIDAD_DESAMPARADO) — si allá cambia, aquí también.
+  // pagando el recargo se recoge dentro de las primeras 24 h. Sale de la MISMA
+  // función con la que el Kanban precarga el recargo al aceptar: antes aquí era
+  // un 16.000 fijo y un domingo la vet veía un total y se le cobraban 20.000.
+  // El festivo no se detecta (tampoco en el Kanban): lo avisa la nota de abajo.
   const esDesamparado = planes.find(p => p.id === planId)?.codigo === 'DESAMPARADO'
   const [prioridad, setPrioridad] = useState(false)
-  const RECARGO_PRIORIDAD = 16000
-  const RECARGO_PRIORIDAD_FESTIVO = 20000
+  const RECARGO_PRIORIDAD = recargoPrioridadDesamparado()
+  const RECARGO_PRIORIDAD_FESTIVO = RECARGO_PRIORIDAD_DESAMPARADO_FESTIVO
   useEffect(() => {
     if (esDesamparado && !preguntaAlcaldia)
       setTimeout(() => formRef.current?.querySelector('[data-prioridad]')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80)

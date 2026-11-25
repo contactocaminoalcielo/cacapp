@@ -331,6 +331,8 @@ export default function FichaServicio({ servicioId, onClose }) {
               {(svc?.valor_adicionales || 0) > 0 && <Dato label="· Adicionales">{fmt(svc.valor_adicionales)}</Dato>}
               {(svc?.valor_transporte || 0) > 0 && <Dato label="· Transporte">{fmt(svc.valor_transporte)}</Dato>}
               {(svc?.recargo_nocturno || 0) > 0 && <Dato label="· Recargo nocturno/dominical">{fmt(svc.recargo_nocturno)}</Dato>}
+              {/* Prioridad del Desamparado (migr. 222): ya va sumada en el valor total */}
+              {(Number(svc?.recargo_prioridad) || 0) > 0 && <Dato label="· Recogida con prioridad">{fmt(svc.recargo_prioridad)}</Dato>}
               {(svc?.descuento_adicional || 0) > 0 && <Dato label="· Descuento">- {fmt(svc.descuento_adicional)}</Dato>}
               {(svc?.comision_aliado || 0) > 0 && (
                 <Dato label="Comisión aliado">

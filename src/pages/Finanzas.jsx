@@ -4253,6 +4253,9 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
     transporte:  svc?.valor_transporte != null ? n(svc.valor_transporte)
                : item.transporte_reconocido != null ? n(item.transporte_reconocido) : 0,
     recargoNoct: n(svc?.recargo_nocturno),
+    // Prioridad del Desamparado (migr. 222): va DENTRO de valor_total y desde la
+    // 222 también en su columna, así que entra al desglose como una pieza más.
+    prioridad:   n(svc?.recargo_prioridad),
     descuento:   n(svc?.descuento_adicional),
     descMotivo:  svc?.descuento_adicional_motivo || '',
     comision:    comisionVal,
@@ -4279,11 +4282,11 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   // (El fallback anterior era `bruto − adic − transporte` y OLVIDABA sumar el
   //  descuento, colapsando todo en el plan: CANDELA 169.000 salía 160.000.)
   cob.plan = cob.planSnapshot != null ? cob.planSnapshot
-           : Math.max(0, grossVal + cob.descuento - cob.adic - cob.transporte - cob.recargoNoct)
+           : Math.max(0, grossVal + cob.descuento - cob.adic - cob.transporte - cob.recargoNoct - cob.prioridad)
   // Reconciliación: el desglose debe reconstruir el bruto registrado. Si no cuadra,
   // hay un dato mal capturado (p.ej. transporte guardado como descuento) → se avisa
   // en vez de esconderlo detrás de un total que sale por otro lado.
-  cob.brutoDesglose = cob.plan + cob.adic + cob.transporte + cob.recargoNoct - cob.descuento
+  cob.brutoDesglose = cob.plan + cob.adic + cob.transporte + cob.recargoNoct + cob.prioridad - cob.descuento
   cob.descuadre = Math.round(cob.brutoDesglose) - Math.round(grossVal)
   cob.cuadra    = Math.abs(cob.descuadre) <= 1
   // El desglose SOLO es verificable cuando todas sus piezas están en columnas: se
@@ -4291,7 +4294,10 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
   // desamparado (recargo de prioridad sin columna) y el plan DERIVADO (se forzó a
   // cuadrar, así que su ✓ no probaría nada). En esos casos no se muestra el ✓/⚠.
   cob.eutanasia    = svc?.eutanasia_id != null
-  cob.desamparado  = /desampar/i.test(svc?.planes?.nombre || item.plan_nombre || '')
+  // Con `recargo_prioridad` > 0 (migr. 222) el desamparado SÍ se puede verificar:
+  // todas sus piezas están en columnas. En 0 sigue sin poder: los ~40 anteriores
+  // a la 222 llevan la prioridad en el total con la columna en 0.
+  cob.desamparado  = /desampar/i.test(svc?.planes?.nombre || item.plan_nombre || '') && !(cob.prioridad > 0)
   // Servicios anteriores al 23-jun-2026 (migración 010) no capturaban el desglose
   // congelado → su reconciliación no es fiable. Se tratan como HISTÓRICO: no se
   // marca ⚠, se acepta como está (decisión de David).
@@ -4389,6 +4395,7 @@ function MascotaDetalleModal({ item, explicacion = null, onClose }) {
                 )}
                 <Dato label={`Transporte${cob.ciudad ? ` · ${cob.ciudad}` : ''}`}>{fmt(cob.transporte)}</Dato>
                 {cob.recargoNoct > 0 && <Dato label="Recargo nocturno">{fmt(cob.recargoNoct)}</Dato>}
+                {cob.prioridad > 0 && <Dato label="Recogida con prioridad">{fmt(cob.prioridad)}</Dato>}
                 <Dato label="Descuento">{cob.descuento > 0 ? `- ${fmt(cob.descuento)}` : fmt(0)}</Dato>
                 {cob.descMotivo && (
                   <div className="pl-3 py-0.5 text-[11px] text-orange-600 border-b" style={{ borderColor: 'rgba(30,80,40,0.06)' }}>· Motivo: {cob.descMotivo}</div>

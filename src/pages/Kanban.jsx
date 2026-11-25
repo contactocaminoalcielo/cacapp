@@ -3684,7 +3684,17 @@ export default function Kanban() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 font-medium mb-2 truncate">{planNombre}</div>
+                                <div className="flex items-center gap-1.5 mb-2 min-w-0">
+                                  <span className="text-[11px] text-gray-500 font-medium truncate">{planNombre}</span>
+                                  {/* La vet pidió prioridad (Desamparado, migr. 211): recogida en
+                                      24 h. Visible ANTES de abrir: el recargo se suma al aceptar. */}
+                                  {s.prioridad === true && (
+                                    <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-orange-100 text-orange-700"
+                                      title="La veterinaria pidió recogida con prioridad (primeras 24 h). El recargo se suma al aceptar.">
+                                      ⚡ Prioridad 24 h
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
                                     style={{ background: s.tipo_recogida === 'veterinaria' ? '#EFF5FF' : '#F0F7EB', color: s.tipo_recogida === 'veterinaria' ? '#1A5CD8' : '#3D5A27' }}>
