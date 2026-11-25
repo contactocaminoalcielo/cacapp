@@ -39,3 +39,8 @@ Controlar los procesos físicos asociados al servicio.
   (próximas a vencer arriba; sin límite al final del grupo); el resto por recencia.
 - `autoCorregirEstados` sincroniza `servicios.estado` con los ítems (excluye ítems
   `recolecta_tecnico` del disparador EN_PRODUCCION para no saltarse el cuarto frío).
+- **Filtro «Restos cálcicos» (2026-11-25)**: botón junto a «Anticipados» (vistas Por servicio y
+  Tabla). Filtra las tarjetas a los Compets con `planta_elecciones.restos_calcicos = true` y
+  muestra un panel con TODAS (misma fuente que la tarjeta de cenizarios,
+  `GET /produccion/restos-calcicos`), marcando las que no tienen tarjeta porque no llevan
+  recordatorios (Compets sin recordatorios). `src/components/produccion/FiltroRestosCalcicos.jsx`.

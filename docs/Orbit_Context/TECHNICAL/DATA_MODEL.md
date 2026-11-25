@@ -272,6 +272,24 @@ Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
   `VENCIMIENTO`; al salir de `CANCELADA` (Reactivar) limpia los cuatro campos
 - Las 92 canceladas antes del 14-oct-2026 tienen motivo NULL («sin motivo registrado»)
 
+### Afiliaciones pre-exequiales — recordatorios de pago enviados (migración 225)
+- Tabla `afiliacion_recordatorios_pago`: `id` uuid · `afiliacion_id` → `afiliaciones(id)` ·
+  `contrato_id` → `afiliacion_contratos(id)` (ambos ON DELETE CASCADE) · `tipo` ∈ `CUOTA|RENOVACION` ·
+  `cuota_numero` int (obligatorio y > 0 solo en CUOTA; NULL en RENOVACION, CHECK
+  `afil_rec_pago_cuota_numero`) · `monto` numeric(12,2) (lo que decía el mensaje) ·
+  `canal` (`WA_ME`) · `enviado_por` → `personal(id)` · `enviado_por_nombre` · `enviado_en`
+- Una fila por clic en «Cobrar cuota» / «Recordar cuota» / «Recordar». La marca ✓ de la pantalla
+  vale mientras siga pendiente lo mismo: la misma cuota del mismo contrato, o la renovación del
+  mismo contrato. «Enviado» = se abrió el wa.me, no hay acuse.
+- RLS `auth_full` (authenticated); anon sin acceso; `orbit_backend` solo SELECT. La pantalla la lee
+  en consulta APARTE (`cargarRecordatoriosPago`, nunca lanza).
+
+### Bandas de peso — `planes_precios.peso_min_gr / peso_max_gr` (migración 224)
+- Cada banda cubre 1 kg por encima de su nombre: `1-10KG` 1000–11999 · `11-20KG` 12000–21999 ·
+  `21-35KG` 22000–36999 · `36-60KG` 37000–61999. `PETIT` 0–999 y `FELINO` (techo NULL) sin cambio.
+- Espejo en código: `src/lib/rangosPeso.js` (`RANGO_GRAMOS`, `rangoPorPeso`, `precioAngelRespaldo`)
+  para los portales, Configuración y el respaldo de Ángel. Cambiar los dos juntos.
+
 ### Entrega — tabla `entregas` (cobro en la puerta: migración 151)
 - Estados: `PENDIENTE | DISPONIBLE | ASIGNADA | EN_CAMINO | ENTREGADA | FALLIDA | REPROGRAMADA`.
   ⚠️ `PENDIENTE` es un cascarón del trigger `fn_post_crear_servicio`, **no** "lista para entregar"
