@@ -171,14 +171,14 @@ export const MAX_MB_REEMPLAZO = 25
  * Esto corre en el escritorio de Producción, no en el Android del cliente, así
  * que el riesgo de OOM del portal no aplica: nunca se decodifica la imagen.
  */
-export async function subirImagenReemplazo(servicioId, srId, file) {
+export async function subirImagenReemplazo(servicioId, srId, file, prefijo = 'mejora') {
   const mime = await sniffMime(file)
   if (!MIMES_IMAGEN_OK.includes(mime))
     throw new Error('Ese archivo no es una foto válida. Usa JPG, PNG, WEBP o HEIC.')
   if (file.size > MAX_MB_REEMPLAZO * 1024 * 1024)
     throw new Error(`La imagen supera ${MAX_MB_REEMPLAZO} MB. Usa una un poco más liviana.`)
 
-  const path = `${servicioId}/${srId}/mejora-${crypto.randomUUID()}.${extDeMime(mime)}`
+  const path = `${servicioId}/${srId}/${prefijo}-${crypto.randomUUID()}.${extDeMime(mime)}`
   const { error } = await db.storage.from('fotos-clientes')
     .upload(path, file, { upsert: false, contentType: mime })
   if (error) {
@@ -202,6 +202,57 @@ export async function reemplazarImagen({ srId, posicion, urlNueva, motivo }) {
   })
   if (error) throw new Error(error.message || 'No se pudo reemplazar la imagen')
   return data
+}
+
+// ─── Foto para un recordatorio que no la tiene (migración 220) ───────────────
+// Caso: la familia ya subió sus fotos, el portal se cerró y DESPUÉS compró un
+// adicional. Diseño le pone la foto desde Orbit: una nueva o una que la familia
+// ya mandó para otro recordatorio del mismo servicio.
+
+/**
+ * Cuántas fotos admite un ítem del servicio: max_fotos × cantidad, o 0 si el
+ * catálogo dice que no lleva foto. Mismo tope que aplica la DB.
+ * `sr.recordatorios` debe traer requiere_imagen, solo_nombre y max_fotos.
+ */
+export function topeFotos(sr) {
+  const rec = sr?.recordatorios
+  if (!requiereImagen(rec)) return 0
+  return rec.max_fotos * Math.max(1, Number(sr?.cantidad) || 1)
+}
+
+/** Agrega `urlNueva` al final de las fotos del ítem y deja constancia. */
+export async function agregarImagen({ srId, urlNueva, motivo }) {
+  const { data, error } = await db.rpc('agregar_imagen_recordatorio', {
+    p_sr_id:     srId,
+    p_url_nueva: urlNueva,
+    p_motivo:    motivo || null,
+  })
+  if (error) {
+    if (error.code === 'PGRST202')
+      throw new Error('Falta aplicar la migración 220 en la base de datos.')
+    throw new Error(error.message || 'No se pudo agregar la imagen')
+  }
+  return data
+}
+
+/**
+ * Todas las fotos que ya tiene el servicio, sin repetir, con el nombre del ítem
+ * donde están: de aquí Diseño elige en vez de pedirle la foto otra vez a la familia.
+ */
+export async function fotosDelServicio(servicioId) {
+  const { data, error } = await db.from('servicio_recordatorios')
+    .select('id, origen, imagen_cliente_url, imagenes_cliente_urls, recordatorios(nombre)')
+    .eq('servicio_id', servicioId)
+    .neq('origen', 'REMOVIDO')
+  if (error) throw new Error(error.message)
+  const vistas = new Map()
+  for (const sr of data || []) {
+    const urls = sr.imagenes_cliente_urls?.length ? sr.imagenes_cliente_urls
+               : sr.imagen_cliente_url ? [sr.imagen_cliente_url] : []
+    for (const url of urls)
+      if (!vistas.has(url)) vistas.set(url, { url, nombre: sr.recordatorios?.nombre || 'Foto', srId: sr.id })
+  }
+  return [...vistas.values()]
 }
 
 /** Historial de reemplazos de un servicio (el más reciente primero). */

@@ -12,7 +12,7 @@ import { cargarItemsKanban } from '@/lib/lecturasOperativas'
 import { serviciosListosDesdeItems, ESTADOS_AUTOCORREGIBLES } from '@/lib/kanbanEstado'
 import { petEmoji, fmt, parsearErrorDB, today, parseDate, fmtDateTime, waLink, calcularEstadoVet, acompFijo, esCompets, estimadoCompets, COMPETS_MESES } from '@/lib/utils'
 import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
-import { etapaContacto } from '@/lib/imagenes'
+import { etapaContacto, topeFotos } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor, insertarNovedadPago } from '@/lib/servicios'
@@ -30,7 +30,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, History, PawPrint, Zap, Star, CheckCircle2,
+  ImageUp, ImagePlus, History, PawPrint, Zap, Star, CheckCircle2,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import BitacoraTecnico from '@/components/servicio/BitacoraTecnico'
@@ -38,7 +38,7 @@ import PqrServicio, { metaTipoPqr } from '@/components/servicio/PqrServicio'
 import ResumenEntrega from '@/components/servicio/ResumenEntrega'
 import LineaTiempoServicio from '@/components/servicio/LineaTiempoServicio'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
-import { ModalReemplazarFoto, ModalHistorialFotos } from '@/components/imagenes/FotosDelCliente'
+import { ModalReemplazarFoto, ModalHistorialFotos, ModalAgregarFoto } from '@/components/imagenes/FotosDelCliente'
 import { LocalidadSelect } from '@/components/ui/localidad-select'
 
 // ── Descarga directa de imágenes ──────────────────────────────────────────────
@@ -693,6 +693,8 @@ export default function Kanban() {
   // Reemplazo de una foto del cliente por una de mejor calidad (migración 058)
   const [reemplazoFoto, setReemplazoFoto] = useState(null)
   const [histFotos, setHistFotos]         = useState(false)
+  // Foto para un ítem que no la tiene, con el portal ya cerrado (migración 220)
+  const [agregarFoto, setAgregarFoto]     = useState(null)
   const [saving, setSaving]               = useState(false)
   const [guardando, setGuardando]         = useState(false)
   const [mensajeros, setMensajeros]       = useState([])
@@ -1300,7 +1302,7 @@ export default function Kanban() {
           return [p.id, ini ? `${pila} ${ini}.` : pila]
         })))
       })
-    db.from('recordatorios').select('id,nombre,precio_base,categoria')
+    db.from('recordatorios').select('id,nombre,precio_base,categoria,requiere_imagen,solo_nombre,max_fotos')
       .eq('activo', true).order('nombre')
       // Eutanasia se gestiona en su propio módulo (/eutanasias), NO como adicional
       .then(({ data }) => setRecListOpts((data || []).filter(r => !/eutanas/i.test(r.nombre || ''))))
@@ -1752,7 +1754,7 @@ export default function Kanban() {
         .select('contacto_nombre, contacto_telefono, estado, tecnico_id, foto_recogida_url')
         .eq('servicio_id', s.servicio_id).maybeSingle(),
       db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre, precio_base)')
+        .select('*, recordatorios(nombre, precio_base, requiere_imagen, solo_nombre, max_fotos)')
         .eq('servicio_id', s.servicio_id).neq('origen', 'REMOVIDO'),
       db.from('novedades_servicio')
         .select('id, tipo_novedad, descripcion, valor_ajuste, created_at, personal:registrado_por(nombre, apellido)')
@@ -2032,7 +2034,7 @@ export default function Kanban() {
 
       // Recargar recordatorios frescos
       const { data: recsNuevos } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre, precio_base)')
+        .select('*, recordatorios(nombre, precio_base, requiere_imagen, solo_nombre, max_fotos)')
         .eq('servicio_id', selected.servicio_id)
         .neq('origen', 'REMOVIDO')
       setRecordatorios(recsNuevos || [])
@@ -2173,7 +2175,7 @@ export default function Kanban() {
 
       // Recargar ítems
       const { data: recsNuevos } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre, precio_base)')
+        .select('*, recordatorios(nombre, precio_base, requiere_imagen, solo_nombre, max_fotos)')
         .eq('servicio_id', selected.servicio_id)
         .neq('origen', 'REMOVIDO')
       setRecordatorios(recsNuevos || [])
@@ -2195,6 +2197,13 @@ export default function Kanban() {
         await showAlert('El adicional quedó agregado, pero la marca «pagado en la veterinaria» no se pudo guardar porque falta aplicar la migración 217. Quedó escrita en la novedad.', { title: 'Falta la migración 217', variant: 'warning' })
       if (avisoComprobante)
         await showAlert('El adicional y el pago quedaron registrados, pero ' + (comprobantes.length > 1 ? 'los comprobantes no se pudieron guardar: ' : 'el comprobante no se pudo guardar: ') + avisoComprobante + '\n\nVuelve a adjuntarlo desde la ficha del servicio.', { title: 'Comprobante no guardado', variant: 'warning' })
+
+      // El portal de la familia ya se cerró: si el ítem lleva foto, nadie se la va
+      // a pedir. Se ofrece cargarla ya (se puede cerrar y hacerlo después desde
+      // «Imágenes del cliente»). Migración 220.
+      const tope = topeFotos({ recordatorios: rec, cantidad: qty })
+      if (tope > 0 && selected.fecha_imagenes_recibidas && puedeVerImagenes && recNuevo?.id)
+        setAgregarFoto({ srId: recNuevo.id, servicioId: selected.servicio_id, nombre: rec.nombre, actuales: [], tope })
     } catch (err) {
       await showAlert(parsearErrorDB(err), { title: 'Error al agregar adicional' })
     } finally {
@@ -2302,7 +2311,7 @@ export default function Kanban() {
 
       // Recargar ítems (los REMOVIDO quedan filtrados)
       const { data: recsNuevos } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre, precio_base)')
+        .select('*, recordatorios(nombre, precio_base, requiere_imagen, solo_nombre, max_fotos)')
         .eq('servicio_id', selected.servicio_id)
         .neq('origen', 'REMOVIDO')
       setRecordatorios(recsNuevos || [])
@@ -2330,7 +2339,7 @@ export default function Kanban() {
     // releen para que el modal abierto no los siga mostrando en LISTO.
     if (nuevoEstado === 'ENTREGADO' && selected?.servicio_id === servicioId) {
       const { data: recs } = await db.from('servicio_recordatorios')
-        .select('*, recordatorios(nombre, precio_base)')
+        .select('*, recordatorios(nombre, precio_base, requiere_imagen, solo_nombre, max_fotos)')
         .eq('servicio_id', servicioId).neq('origen', 'REMOVIDO')
       if (recs) setRecordatorios(recs)
     }
@@ -2882,6 +2891,31 @@ export default function Kanban() {
       return { ...r, imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] }
     }))
   }
+
+  // Foto agregada desde Orbit (migración 220): la DB devuelve la lista completa.
+  function handleFotosAgregadas(srId, urls) {
+    if (!urls?.length) return
+    setRecordatorios(prev => prev.map(r => r.id === srId
+      ? { ...r, imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] } : r))
+  }
+
+  // Ítems que deberían llevar foto y no la completan, con el portal YA cerrado
+  // (antes de cerrarse, la foto la sube la familia en el portal). Sin foto
+  // alguna → cualquier ítem; con alguna pero incompleto → solo los adicionales,
+  // para no llenar el modal de avisos por fotos que la familia decidió no enviar.
+  const fotosPorCargar = !selected?.fecha_imagenes_recibidas ? [] : recordatorios
+    .filter(r => r.origen !== 'REMOVIDO' && r.estado !== 'NA' && r.estado !== 'ENTREGADO')
+    .map(r => {
+      const urls = r.imagenes_cliente_urls?.length ? r.imagenes_cliente_urls
+                 : r.imagen_cliente_url ? [r.imagen_cliente_url] : []
+      return { sr: r, urls, tope: topeFotos(r) }
+    })
+    .filter(x => x.tope > x.urls.length && (x.urls.length === 0 || x.sr.origen === 'ADICIONAL'))
+
+  const abrirAgregarFoto = ({ sr, urls, tope }) => setAgregarFoto({
+    srId: sr.id, servicioId: selected.servicio_id, nombre: sr.recordatorios?.nombre,
+    actuales: urls, tope,
+  })
 
   async function descargarTodasImagenes() {
     if (descargandoTodas || !imagenesDelCliente.length) return
@@ -4197,7 +4231,7 @@ export default function Kanban() {
             )}
 
             {/* ── Galería de imágenes del cliente (productor y admin) ── */}
-            {puedeVerImagenes && imagenesDelCliente.length > 0 && (
+            {puedeVerImagenes && (imagenesDelCliente.length > 0 || fotosPorCargar.length > 0) && (
               <div className="rounded-xl border-2 p-3 space-y-2.5" style={{ borderColor: '#E9D5FF', background: '#FAF5FF' }}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: '#7C3AED' }}>
@@ -4269,6 +4303,29 @@ export default function Kanban() {
                     </div>
                   ))}
                 </div>
+                {/* Ítems sin su foto con el portal ya cerrado (adicional comprado después) */}
+                {fotosPorCargar.length > 0 && (
+                  <div className="rounded-lg p-2.5 space-y-1.5" style={{ background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                    <div className="text-[10.5px] font-bold" style={{ color: '#92400E' }}>
+                      El portal de la familia ya se cerró — {fotosPorCargar.length === 1 ? 'este ítem necesita' : 'estos ítems necesitan'} su foto aquí:
+                    </div>
+                    {fotosPorCargar.map(x => (
+                      <div key={x.sr.id} className="flex items-center justify-between gap-2">
+                        <span className="text-[11.5px] font-semibold text-gray-700 min-w-0 truncate">
+                          {x.sr.recordatorios?.nombre || 'Ítem'}{(x.sr.cantidad || 1) > 1 ? ` ×${x.sr.cantidad}` : ''}
+                          <span className="font-normal text-gray-500">
+                            {' · '}{x.urls.length ? `${x.urls.length} de ${x.tope} fotos` : 'sin foto'}
+                          </span>
+                        </span>
+                        <button onClick={() => abrirAgregarFoto(x)}
+                          className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2.5 py-1 rounded-lg text-white flex-shrink-0"
+                          style={{ background: '#7C3AED' }}>
+                          <ImagePlus size={11} /> {x.urls.length ? 'Agregar foto' : 'Cargar foto'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -4986,8 +5043,15 @@ export default function Kanban() {
                   const r = recListOpts.find(x => x.id === addRecId)
                   if (!r) return null
                   const sub = (r.precio_base || 0) * addRecQty
+                  const topeR = topeFotos({ recordatorios: r, cantidad: addRecQty })
                   return (
                     <div className="space-y-2">
+                      {topeR > 0 && selected.fecha_imagenes_recibidas && (
+                        <p className="text-[11px] flex items-start gap-1.5" style={{ color: '#6D28D9' }}>
+                          <ImagePlus size={12} className="mt-0.5 flex-shrink-0" />
+                          <span>Lleva {topeR === 1 ? 'una foto' : `hasta ${topeR} fotos`}. El portal de la familia ya se cerró: al agregarlo podrás cargarla aquí mismo.</span>
+                        </p>
+                      )}
                       {sub > 0 && (
                         <>
                           <label className="flex items-center gap-2 text-[11px] font-semibold text-amber-800 cursor-pointer select-none">
@@ -5299,6 +5363,13 @@ export default function Kanban() {
       )}
       {histFotos && selected && (
         <ModalHistorialFotos servicioId={selected.servicio_id} onClose={() => setHistFotos(false)} />
+      )}
+      {agregarFoto && (
+        <ModalAgregarFoto
+          ctx={agregarFoto}
+          onClose={() => setAgregarFoto(null)}
+          onHecho={urls => handleFotosAgregadas(agregarFoto.srId, urls)}
+        />
       )}
 
       {/* ── Modal revisión / conversión de solicitud ─────────────────────── */}

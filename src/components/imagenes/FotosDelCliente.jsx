@@ -12,9 +12,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import {
   subirImagenReemplazo, reemplazarImagen, historialImagenes, MAX_MB_REEMPLAZO,
+  agregarImagen, fotosDelServicio, topeFotos,
 } from '@/lib/imagenes'
 import { fmtDateTime } from '@/lib/utils'
-import { ImageUp, History, Loader2, AlertTriangle, ArrowRight } from 'lucide-react'
+import { ImageUp, ImagePlus, History, Loader2, AlertTriangle, ArrowRight, Check, X } from 'lucide-react'
 
 /** URLs de un recordatorio, normalizadas: el array manda; la singular es respaldo. */
 export function urlsDeRecordatorio(sr) {
@@ -125,6 +126,196 @@ export function ModalReemplazarFoto({ ctx, onClose, onHecho }) {
   )
 }
 
+// ── Foto para un ítem que no la tiene (migración 220) ───────────────────────
+// La familia ya subió sus fotos, el portal se cerró y después compró un
+// adicional: Diseño le pone la foto aquí. Dos fuentes, combinables:
+//   · una foto que la familia YA mandó para otro ítem del servicio (no se sube
+//     de nuevo: se reutiliza la misma URL, el archivo nunca se borra);
+//   · una foto nueva (la que mandó por WhatsApp), sin comprimir.
+// Cada foto entra por la función de DB: queda en el historial con quién y cuándo.
+//
+// ctx = { srId, servicioId, nombre, actuales: string[], tope }
+export function ModalAgregarFoto({ ctx, onClose, onHecho }) {
+  const { alert: showAlert } = useConfirm()
+  const [existentes, setExistentes] = useState(null)   // null = cargando
+  const [elegidas,   setElegidas]   = useState([])     // urls reutilizadas
+  const [files,      setFiles]      = useState([])     // fotos nuevas
+  const [previos,    setPrevios]    = useState([])
+  const [motivo,     setMotivo]     = useState('')
+  const [busy,       setBusy]       = useState(false)
+  const inputRef = useRef(null)
+
+  const actuales = ctx.actuales || []
+  const cupo     = Math.max(0, (ctx.tope || 1) - actuales.length)
+  const total    = elegidas.length + files.length
+  const lleno    = total >= cupo
+
+  useEffect(() => {
+    let vivo = true
+    fotosDelServicio(ctx.servicioId)
+      .then(fs => { if (vivo) setExistentes(fs.filter(f => !actuales.includes(f.url))) })
+      .catch(() => { if (vivo) setExistentes([]) })
+    return () => { vivo = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.servicioId, ctx.srId])
+
+  // Vistas previas de las fotos nuevas; se liberan al cambiar o cerrar.
+  useEffect(() => {
+    const urls = files.map(f => URL.createObjectURL(f))
+    setPrevios(urls)
+    return () => urls.forEach(u => URL.revokeObjectURL(u))
+  }, [files])
+
+  function alternar(url) {
+    setElegidas(prev => prev.includes(url) ? prev.filter(u => u !== url)
+                      : (total < cupo ? [...prev, url] : prev))
+  }
+
+  function elegirArchivos(e) {
+    const nuevos = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!nuevos.length) return
+    setFiles(prev => [...prev, ...nuevos].slice(0, Math.max(0, cupo - elegidas.length)))
+  }
+
+  async function confirmar() {
+    if (!total || busy) return
+    setBusy(true)
+    let urls = null
+    let hechas = 0
+    try {
+      for (const url of elegidas) {
+        urls = (await agregarImagen({ srId: ctx.srId, urlNueva: url, motivo }))?.urls || urls
+        hechas++
+      }
+      for (const f of files) {
+        const url = await subirImagenReemplazo(ctx.servicioId, ctx.srId, f, 'diseno')
+        urls = (await agregarImagen({ srId: ctx.srId, urlNueva: url, motivo }))?.urls || urls
+        hechas++
+      }
+      onHecho(urls)
+      onClose()
+    } catch (e) {
+      // Las que alcanzaron a entrar ya quedaron guardadas: se reflejan igual.
+      if (urls) onHecho(urls)
+      await showAlert(
+        (hechas ? `Se agregaron ${hechas} de ${total}. ` : '') + e.message,
+        { title: 'No se pudo agregar la foto' })
+      if (hechas) onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => {} : onClose} title={`Foto para «${(ctx.nombre || 'el recordatorio').trim()}»`}>
+      <div className="space-y-4">
+        <div className="rounded-xl p-3 border text-[12px]"
+          style={{ background: '#F5F3FF', borderColor: '#DDD6FE', color: '#5B21B6' }}>
+          {cupo > 0
+            ? <>Este ítem lleva <b>{ctx.tope} foto{ctx.tope > 1 ? 's' : ''}</b>
+                {actuales.length > 0 && <> y ya tiene {actuales.length}</>}. Puedes usar una que la
+                familia ya mandó o subir la que llegó por WhatsApp. Queda registrado con tu nombre.</>
+            : <>Este ítem ya tiene todas sus fotos. Para cambiar una, usa «Cambiar» sobre la foto.</>}
+        </div>
+
+        {/* 1. Reutilizar una foto del mismo servicio */}
+        {cupo > 0 && (
+          <div>
+            <div className="text-xs font-bold text-ink2 mb-1.5 uppercase tracking-wide">
+              Fotos que ya mandó la familia
+            </div>
+            {existentes === null
+              ? <div className="flex items-center gap-2 text-gray-400 text-[12px] py-3">
+                  <Loader2 size={14} className="animate-spin" /> Cargando…
+                </div>
+              : existentes.length === 0
+                ? <p className="text-[12px] text-gray-400">Este servicio no tiene otras fotos.</p>
+                : <div className="grid grid-cols-4 gap-2">
+                    {existentes.map(f => {
+                      const sel = elegidas.includes(f.url)
+                      const bloqueada = !sel && lleno
+                      return (
+                        <button key={f.url} type="button" onClick={() => alternar(f.url)} disabled={busy || bloqueada}
+                          title={f.nombre}
+                          className="relative rounded-lg overflow-hidden bg-gray-50 border-2 transition-all disabled:opacity-40"
+                          style={{ aspectRatio: '1/1', borderColor: sel ? '#7C3AED' : 'transparent' }}>
+                          <img src={f.url} alt={f.nombre} className="w-full h-full object-cover" />
+                          {sel && (
+                            <span className="absolute top-1 right-1 w-5 h-5 rounded-full grid place-items-center text-white"
+                              style={{ background: '#7C3AED' }}>
+                              <Check size={12} />
+                            </span>
+                          )}
+                          <span className="absolute bottom-0 inset-x-0 px-1 py-0.5 text-[8px] font-semibold text-white truncate text-left"
+                            style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.6))' }}>
+                            {f.nombre}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>}
+          </div>
+        )}
+
+        {/* 2. Subir una foto nueva */}
+        {cupo > 0 && (
+          <div>
+            <div className="text-xs font-bold text-ink2 mb-1.5 uppercase tracking-wide">O subir una nueva</div>
+            {files.length > 0 && (
+              <div className="grid grid-cols-4 gap-2 mb-2">
+                {files.map((f, i) => (
+                  <div key={`${f.name}-${i}`} className="relative rounded-lg overflow-hidden border-2"
+                    style={{ aspectRatio: '1/1', borderColor: '#1A5CD8' }} title={f.name}>
+                    {previos[i] && <img src={previos[i]} alt={f.name} className="w-full h-full object-cover" />}
+                    <button type="button" disabled={busy}
+                      onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full grid place-items-center bg-white/90 hover:bg-white shadow"
+                      title="Quitar">
+                      <X size={11} className="text-gray-700" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={elegirArchivos} />
+            <Button variant="secondary" className="w-full" disabled={busy || lleno}
+              onClick={() => inputRef.current?.click()}>
+              <ImagePlus size={14} className="mr-1.5" />
+              {files.length ? 'Agregar otra foto' : 'Elegir foto del computador'}
+            </Button>
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              Se sube tal cual, sin comprimir. Máximo {MAX_MB_REEMPLAZO} MB por foto.
+            </p>
+          </div>
+        )}
+
+        {cupo > 0 && (
+          <div>
+            <label className="block text-xs font-bold text-ink2 mb-1.5 uppercase tracking-wide">
+              Nota <span className="font-medium normal-case text-gray-400">(opcional)</span>
+            </label>
+            <Textarea rows={2} value={motivo} onChange={e => setMotivo(e.target.value)}
+              placeholder="Ej: la familia compró el portarretrato después y mandó la foto por WhatsApp." />
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-end items-center pt-1">
+          {cupo > 0 && (
+            <span className="text-[11px] text-ink2 mr-auto">{total} de {cupo} elegida{cupo > 1 ? 's' : ''}</span>
+          )}
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancelar</Button>
+          {cupo > 0 && (
+            <Button onClick={confirmar} disabled={!total || busy}>
+              {busy ? <><Loader2 size={14} className="mr-1.5 animate-spin" /> Guardando…</> : 'Guardar foto'}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ── Historial de reemplazos ──────────────────────────────────────────────────
 export function ModalHistorialFotos({ servicioId, onClose }) {
   const [filas,   setFilas]   = useState(null)
@@ -135,7 +326,7 @@ export function ModalHistorialFotos({ servicioId, onClose }) {
   }, [servicioId])
 
   return (
-    <Modal open onClose={onClose} title="Historial de fotos cambiadas">
+    <Modal open onClose={onClose} title="Historial de fotos cambiadas o agregadas">
       {error && <div className="text-danger text-sm">{error}</div>}
       {!filas && !error && (
         <div className="flex items-center gap-2 text-gray-400 text-sm py-6 justify-center">
@@ -144,7 +335,7 @@ export function ModalHistorialFotos({ servicioId, onClose }) {
       )}
       {filas?.length === 0 && (
         <p className="text-sm text-ink2 py-6 text-center">
-          Ninguna foto de este servicio se ha cambiado.
+          Ninguna foto de este servicio se ha cambiado ni agregado desde Orbit.
         </p>
       )}
       <div className="space-y-3">
@@ -163,7 +354,7 @@ export function ModalHistorialFotos({ servicioId, onClose }) {
                     <img src={f.url_anterior} alt="Original"
                       className="w-full h-24 object-cover rounded-lg border border-gray-200" />
                   </a>
-                : <div className="flex-1 text-[11px] text-gray-400">(estaba vacía)</div>}
+                : <div className="flex-1 text-[11px] text-gray-400">(no tenía foto)</div>}
               <ArrowRight size={14} className="text-gray-300 shrink-0" />
               <a href={f.url_nueva} target="_blank" rel="noreferrer" className="flex-1 min-w-0">
                 <span className="block text-[10px] font-bold uppercase text-ink2 mb-1">Quedó</span>
@@ -172,7 +363,7 @@ export function ModalHistorialFotos({ servicioId, onClose }) {
               </a>
             </div>
             <p className="text-[11px] text-ink2 mt-2">
-              Cambiada por <b>{f.cambiado_por_nombre || 'usuario desconocido'}</b>
+              {f.url_anterior ? 'Cambiada' : 'Agregada'} por <b>{f.cambiado_por_nombre || 'usuario desconocido'}</b>
               {f.motivo && <> — «{f.motivo}»</>}
             </p>
           </div>
@@ -187,13 +378,18 @@ export function ModalHistorialFotos({ servicioId, onClose }) {
  * @param {string}   servicioId
  * @param {boolean}  puedeCambiar   false → solo lectura
  * @param {function} onCambiada     (srId, posicion, url) → refrescar al padre
+ * @param {function} onAgregadas    (srId, urls) → refrescar al padre tras agregar (migr. 220)
  */
-export default function FotosDelCliente({ recordatorios, servicioId, puedeCambiar = true, onCambiada }) {
+export default function FotosDelCliente({ recordatorios, servicioId, puedeCambiar = true, onCambiada, onAgregadas }) {
   const [ctx,  setCtx]  = useState(null)   // reemplazo en curso
+  const [add,  setAdd]  = useState(null)   // foto agregada en curso
   const [hist, setHist] = useState(false)
 
+  // Un ítem que lleva foto y no completa su cupo también se muestra, para poder
+  // ponérsela (el adicional comprado después de cerrar el portal).
   const conFotos = (recordatorios || [])
-    .filter(sr => sr.origen !== 'REMOVIDO' && urlsDeRecordatorio(sr).length)
+    .filter(sr => sr.origen !== 'REMOVIDO' && sr.estado !== 'NA')
+    .filter(sr => urlsDeRecordatorio(sr).length || (puedeCambiar && onAgregadas && topeFotos(sr) > 0))
 
   if (!conFotos.length) {
     return <p className="text-[12px] text-ink2">El cliente todavía no ha enviado fotos.</p>
@@ -211,9 +407,14 @@ export default function FotosDelCliente({ recordatorios, servicioId, puedeCambia
 
       {conFotos.map(sr => {
         const urls = urlsDeRecordatorio(sr)
+        const tope = topeFotos(sr)
+        const puedeAgregar = puedeCambiar && onAgregadas && tope > urls.length
         return (
           <div key={sr.id}>
-            <p className="text-[11px] font-semibold text-ink2 mb-1.5">{sr.recordatorios?.nombre || 'Recordatorio'}</p>
+            <p className="text-[11px] font-semibold text-ink2 mb-1.5">
+              {sr.recordatorios?.nombre || 'Recordatorio'}
+              {!urls.length && <span className="ml-1.5 font-bold" style={{ color: '#B45309' }}>· sin foto</span>}
+            </p>
             <div className="flex flex-wrap gap-2">
               {urls.map((url, i) => (
                 <figure key={`${url}-${i}`} className="relative group">
@@ -233,6 +434,19 @@ export default function FotosDelCliente({ recordatorios, servicioId, puedeCambia
                   )}
                 </figure>
               ))}
+              {puedeAgregar && (
+                <button type="button"
+                  onClick={() => setAdd({
+                    srId: sr.id, servicioId, nombre: sr.recordatorios?.nombre,
+                    actuales: urls, tope,
+                  })}
+                  title="Ponerle foto a este ítem"
+                  className="w-24 h-24 rounded-lg border-2 border-dashed flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition-colors hover:bg-purple-50"
+                  style={{ borderColor: '#C4B5FD', color: '#7C3AED' }}>
+                  <ImagePlus size={18} />
+                  {urls.length ? 'Agregar' : 'Cargar foto'}
+                </button>
+              )}
             </div>
           </div>
         )
@@ -241,6 +455,10 @@ export default function FotosDelCliente({ recordatorios, servicioId, puedeCambia
       {ctx && (
         <ModalReemplazarFoto ctx={ctx} onClose={() => setCtx(null)}
           onHecho={(posicion, url) => onCambiada?.(ctx.srId, posicion, url)} />
+      )}
+      {add && (
+        <ModalAgregarFoto ctx={add} onClose={() => setAdd(null)}
+          onHecho={urls => onAgregadas?.(add.srId, urls)} />
       )}
       {hist && <ModalHistorialFotos servicioId={servicioId} onClose={() => setHist(false)} />}
     </div>

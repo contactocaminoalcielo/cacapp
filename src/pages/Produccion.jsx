@@ -17,7 +17,7 @@ import { useLecturaSerial } from '@/lib/useLecturaSerial'
 import { FECHA_CORTE } from '@/lib/constants'
 import { cargarEtapasContacto } from '@/lib/imagenes'
 import { petEmoji, parsearErrorDB, today, parseDate, fmt, esCompets, estimadoCompets, COMPETS_MESES } from '@/lib/utils'
-import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle } from 'lucide-react'
+import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle, ImageOff } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
@@ -70,13 +70,17 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
   // En una compra sin servicio las fotos van por línea, no por tarjeta.
   const fotosOk = item.__compra ? !!item.servicios?.fecha_imagenes_recibidas : fotos_ok
   const bloqueado = reqImg && !fotosOk && item.estado === 'PENDIENTE'
+  // El portal ya se cerró pero ESTE ítem no tiene foto (típico: adicional
+  // comprado después). La tarjeta lo daba por listo para producir sin foto.
+  const sinFoto = !item.__compra && reqImg && fotosOk && (rec?.max_fotos || 0) > 0 &&
+    !item.imagenes_cliente_urls?.length && !item.imagen_cliente_url && item.estado !== 'LISTO'
   const asig  = personal.find(p => p.id === item.asignado_a)
   const maq   = maquinas.find(m => m.id === item.maquina_id) || maquinas.find(m => m.id === rec?.maquina_id)
 
   return (
     <button
       onClick={() => onClick(item)}
-      title={`${item.__compra ? `Compra CR-${item.__compra.numero} (sin servicio funerario) · ` : ''}${bloqueado ? 'Esperando fotos del cliente' : 'Click para gestionar'}`}
+      title={`${item.__compra ? `Compra CR-${item.__compra.numero} (sin servicio funerario) · ` : ''}${bloqueado ? 'Esperando fotos del cliente' : sinFoto ? 'Este ítem no tiene foto: ábrelo para cargarla' : 'Click para gestionar'}`}
       style={{
         background: bloqueado ? '#F9FAFB' : col.bg,
         color: bloqueado ? '#9CA3AF' : col.text,
@@ -101,6 +105,7 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
           ? <Zap size={10} style={{ color: '#059669' }} />
           : null}
       <span>{rec?.nombre || item.nombre || 'Ítem'}{conCantidad(item)}</span>
+      {sinFoto && <ImageOff size={10} style={{ color: '#B45309' }} />}
       <PagoTag concepto={cPago} />
       {asig && (
         <span style={{
@@ -147,6 +152,14 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
                : fotos.imagen_cliente_url ? [fotos.imagen_cliente_url] : []
     const urls = [...base]
     urls[posicion - 1] = url
+    const next = { imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] }
+    setFotos(next)
+    onSaved({ ...item, ...next })
+  }
+
+  // Foto agregada desde Orbit (migr. 220): la DB devuelve la lista completa.
+  function handleFotosAgregadas(_srId, urls) {
+    if (!urls?.length) return
     const next = { imagenes_cliente_urls: urls, imagen_cliente_url: urls[0] }
     setFotos(next)
     onSaved({ ...item, ...next })
@@ -242,6 +255,7 @@ function ModalItem({ item, personal, maquinas, fotos_ok, onClose, onSaved }) {
               recordatorios={[{ ...item, ...fotos }]}
               servicioId={item.servicio_id}
               onCambiada={handleFotoCambiada}
+              onAgregadas={handleFotosAgregadas}
             />
           </div>
         )}
@@ -1166,7 +1180,7 @@ export default function Produccion() {
         db.from('servicio_recordatorios')
           .select(`
             *,
-            recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
+            recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre, max_fotos,
                             recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                             maquinas_produccion ( id, nombre ) ),
             servicios!inner ( id, fecha_ingreso, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
@@ -1263,7 +1277,7 @@ export default function Produccion() {
     const { data: recsNuevos } = await db.from('servicio_recordatorios')
       .select(`
         *,
-        recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre,
+        recordatorios ( id, nombre, categoria, requiere_imagen, solo_nombre, max_fotos,
                         recolecta_tecnico, tiempo_produccion_dias, maquina_id,
                         maquinas_produccion ( id, nombre ) ),
         servicios!inner ( id, fecha_ingreso, fecha_imagenes_recibidas, fecha_limite_entrega, fecha_listo, estado,
