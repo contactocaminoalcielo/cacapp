@@ -7504,7 +7504,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Arma el texto de las novedades con el formato del front (fmt, etc.) para
   // que la RPC los inserte. Centralizado para reusarlo en RPC y respaldo legacy.
   function construirNovedades(sinComprobante) {
-    const detallePagos = mediosPago.map(m => {
+    const detallePagos = mediosPago.filter(medioSeGuarda).map(m => {
       let txt = `${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
       if (m.referencia) txt += ` (Ref: ${m.referencia})`
       if (m.comprobanteUrl) txt += ` ✅comprobante`
@@ -7566,6 +7566,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   // Medios con monto en $0 (o vacío) mientras SÍ se está cobrando: casi siempre
   // es una fila que el técnico agregó y no llenó, y guardarla ensucia el cuadre.
   const mediosEnCero  = mediosPago.filter(m => !(parseFloat(m.monto) > 0))
+  // Un medio en $0 no es un cobro y no se guarda (migr. 224: antes quedaba
+  // «EFECTIVO $0» en recibos de servicios ya pagados). Con comprobante adjunto
+  // sí: es evidencia de un pago y coordinación tiene que verla.
+  function medioSeGuarda(m) {
+    return (parseFloat(m.monto) || 0) > 0 || !!m.comprobanteUrl
+  }
   const mediosCobrados = mediosPago.filter(m => parseFloat(m.monto) > 0)
   // Dos filas con el mismo método: no se bloquea (a veces es legítimo: dos
   // transferencias), pero se le avisa en la confirmación porque el error típico
@@ -7579,8 +7585,17 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
   function guardarRecibo() {
     const cobraAhora = !esFacturacionMensual && !pagoPendiente
     // Para FACTURACION_MENSUAL vet o pago pendiente: no se requiere cobro inmediato
-    if (cobraAhora && totalMedios <= 0 && saldoPendiente > 0) {
-      setErr('Registra al menos un medio de pago con monto.')
+    // No se cobró nada y el servicio debe plata → eso es un PAGO PENDIENTE, no
+    // un recibo «pagado» en $0 (David, 25-nov-2026). Se prende el interruptor
+    // y se pide el motivo. La RPC hace lo mismo para las PWA viejas (migr. 224).
+    // Con saldo $0 (ya pagado o de valor $0) se guarda sin medios.
+    if (cobraAhora && totalMedios <= 0 && saldoPendienteDoc > 0) {
+      if (mediosPago.some(m => m.comprobanteUrl)) {
+        setErr('Subiste un comprobante pero el monto está en $0. Escribe cuánto pagaron antes de guardar.')
+        return
+      }
+      setPagoPendiente(true)
+      setErr('No registraste ningún cobro, así que el recibo queda como «Pago pendiente». Elige el motivo y vuelve a guardar.')
       return
     }
     if (cobraAhora) {
@@ -7647,9 +7662,12 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       // Facturación mensual: no viaja NINGÚN medio de pago (el aliado paga por
       // factura). La RPC lo vuelve a forzar server-side, pero no lo mandamos
       // siquiera para que el recibo no guarde plata que nadie recogió.
-      const medios = (pagoPendiente || esFacturacionMensual)
+      // Un medio en $0 no es un cobro: no viaja (migr. 224). `enviados` guarda
+      // la posición original para anclar el medioPagoId de la respuesta.
+      const enviados = (pagoPendiente || esFacturacionMensual)
         ? []
-        : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl }))
+        : mediosPago.map((m, i) => ({ m, i })).filter(({ m }) => medioSeGuarda(m))
+      const medios = enviados.map(({ m: { metodo, monto, referencia, comprobanteUrl } }) => ({ metodo, monto, referencia, comprobanteUrl }))
       // Corrección de comisión solo si el servicio quedó con comision_aliado=0 (previo al fix VIP)
       const comisionParaGuardar = (esFacturacionMensual && !comisionFueDescontada && comisionGuardada <= 0 && comisionManual > 0)
         ? comisionManual : null
@@ -7764,7 +7782,8 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
       // Anclar medio_pago_id a cada medio: asocia comprobantes sin depender del índice
       if (Array.isArray(res.medios) && res.medios.length) {
         setMediosPago(prev => prev.map((m, i) => {
-          const match = res.medios.find(x => x.idx === i)
+          const pos   = enviados.findIndex(e => e.i === i)
+          const match = pos >= 0 ? res.medios.find(x => x.idx === pos) : null
           return match ? { ...m, medioPagoId: match.id } : m
         }))
       }
@@ -7808,7 +7827,7 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         hora_emision:    horaActual,
         valor_total:     desglose.valorRecibo,
         valor_cobrado:   valorCobrado,
-        medios_pago:     sinCobroAhora ? [] : mediosPago.map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
+        medios_pago:     sinCobroAhora ? [] : mediosPago.filter(medioSeGuarda).map(({ metodo, monto, referencia, comprobanteUrl }) => ({ metodo, monto, referencia, comprobanteUrl })),
         datos_form:      {
           ...form, pago_pendiente: pagoPendiente, pago_pendiente_motivo: pagoPendiente ? (ppMotivo || null) : null, pago_pendiente_detalle: pagoPendiente ? (ppDetalle.trim() || null) : null, facturacion_mensual: esFacturacionMensual,
           adicionales_no_cobrados: adicionalesNoCobrados,
@@ -7867,9 +7886,9 @@ function ReciboForm({ svcData, servicioSel, tecnico, reciboExistente = null, onV
         await db.from('servicios').update({
           valor_pagado: nuevoPagado,
           estado_pago:  nuevoEstado,
-          medios_pago:  mediosPago.map(m => m.metodo).join(', '),
+          medios_pago:  mediosPago.filter(medioSeGuarda).map(m => m.metodo).join(', '),
         }).eq('id', servicioSel.id)
-        const detallePagos = mediosPago.map(m => {
+        const detallePagos = mediosPago.filter(medioSeGuarda).map(m => {
           let txt = `${m.metodo}: ${fmt(parseFloat(m.monto)||0)}`
           if (m.referencia) txt += ` (Ref: ${m.referencia})`
           if (m.comprobanteUrl) txt += ` ✅comprobante`
