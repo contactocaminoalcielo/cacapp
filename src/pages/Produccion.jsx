@@ -1136,7 +1136,8 @@ export default function Produccion() {
   // producir ya, con la mascota todavía en el cubículo (migración 155).
   const [soloAnticipados, setSoloAnticipados] = useState(false)
   // Solo los Compets con restos cálcicos contratados (REPORTE ORBIT 2026-11-25).
-  // `restos` = filas de /produccion/restos-calcicos; null = aún sin cargar.
+  // `restos` = filas de /produccion/restos-calcicos; null = aún sin cargar,
+  // false = no se pudo leer (ver cargarRestosCalcicos).
   const [soloRestos,    setSoloRestos]    = useState(false)
   const [restos,        setRestos]        = useState(null)
   const [modalItem,     setModalItem]     = useState(null)
@@ -1332,9 +1333,11 @@ export default function Produccion() {
   const vistaConFiltros = vista === 'servicio' || vista === 'tabla'
 
   // Filtro de restos cálcicos: qué servicios entran y cuáles tienen tarjeta.
-  const idsRestos = new Set((restos || []).map(f => String(f.servicio_id)))
+  // `restos`: null = cargando, false = falló, arreglo = cargado. Solo se filtra
+  // con la lista en mano: sin ella se escondería todo el tablero.
+  const idsRestos = new Set((Array.isArray(restos) ? restos : []).map(f => String(f.servicio_id)))
   const idsEnTablero = new Set(recordatorios.filter(r => r.estado !== 'NA').map(r => String(r.servicio_id)))
-  const soloServicios = soloRestos ? idsRestos : null
+  const soloServicios = soloRestos && Array.isArray(restos) ? idsRestos : null
 
   // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
   const recOpciones = [...new Map(

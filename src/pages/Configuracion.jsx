@@ -2298,7 +2298,7 @@ const RANGOS = ['PETIT','FELINO','1-10KG','11-20KG','21-35KG','36-60KG']
 // Registro/Kanban (.lte peso_min_gr / .gte peso_max_gr). FELINO se busca por
 // nombre, no por peso (peso_max_gr null).
 // Los límites viven en lib/rangosPeso (cada banda cubre 1 kg por encima de su
-// nombre, migración 224): una fila nueva nace con los mismos que las existentes.
+// nombre, migración 226): una fila nueva nace con los mismos que las existentes.
 const LABEL_CF = 'text-[10px] font-bold uppercase tracking-wider text-gray-400 block mb-1'
 
 function TabPreciosPlanes() {

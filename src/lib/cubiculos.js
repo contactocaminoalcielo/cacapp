@@ -46,8 +46,9 @@ export function etiquetaCubiculo(cub) {
 
 // ─── Sugerencia de talla por peso ────────────────────────────────────────────
 // Solo SUGIERE (decisión de David 2026-07-16): resalta la talla probable pero
-// nunca bloquea. Los cortes siguen los rangos de precio ya existentes
-// (planes_precios: 1-10KG / 11-20KG / 21KG+).
+// nunca bloquea. Los cortes nacieron de los rangos de precio (1-10 / 11-20 /
+// 21+ kg) pero son de TAMAÑO FÍSICO: no siguen la cobertura de 1 kg del cobro
+// (migr. 226), que es una tolerancia de tarifa, no de espacio en el cubículo.
 export function sugerirTalla(pesoKg) {
   const peso = parseFloat(pesoKg)
   if (!peso || peso <= 0) return null

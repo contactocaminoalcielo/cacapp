@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 224 · Cada banda de peso cubre 1 kg por encima de su nombre
+-- 226 · Cada banda de peso cubre 1 kg por encima de su nombre
 -- REPORTE ORBIT 2026-11-25 (mejora, urgencia alta, «Recalcular peso»):
 --   «el de 1-10 kg tenga una cobertura hasta los 11 kg y de la misma manera con
 --    los demás rangos».
@@ -31,6 +31,11 @@
 --
 -- Idempotente: cada UPDATE solo toca filas que siguen con los límites viejos.
 -- Ensayo (este archivo trae COMMIT): ver ops_aplicar_migraciones_vps.
+--
+-- ⚠️ ORDEN: esta migración ANTES del frontend y del backend. Si el frontend sale
+--    primero, el portal de la vet cotiza 11,5 kg como 1-10 y al aceptar se cobra
+--    11-20; y una fila nueva creada en Configuración se solapa con las viejas
+--    (`.maybeSingle()` falla y ese peso queda sin precio).
 -- ─────────────────────────────────────────────────────────────────────────────
 
 BEGIN;
@@ -56,7 +61,7 @@ BEGIN
       OR (rango_nombre = '21-35KG' AND (peso_min_gr, peso_max_gr) IS DISTINCT FROM (22000, 36999))
       OR (rango_nombre = '36-60KG' AND (peso_min_gr, peso_max_gr) IS DISTINCT FROM (37000, 61999));
   IF n > 0 THEN
-    RAISE EXCEPTION '224: % filas de planes_precios con límites inesperados; revisar a mano', n;
+    RAISE EXCEPTION '226: % filas de planes_precios con límites inesperados; revisar a mano', n;
   END IF;
 END $$;
 

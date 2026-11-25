@@ -17,14 +17,16 @@ import { CheckCircle2, Camera, ImageOff, AlertCircle } from 'lucide-react'
 // secas lo escondería — justo la omisión que se quiere evitar. Por eso este
 // panel lista TODAS y marca cuáles no aparecen en el tablero.
 
+// Devuelve el arreglo, o `false` si no se pudo leer. NUNCA `[]` por un error:
+// una lista vacía diría «nadie compró restos» y el filtro escondería todas las
+// tarjetas justo cuando el backend está caído.
 export async function cargarRestosCalcicos() {
   try {
     const r = await orbitApi('/produccion/restos-calcicos')
     return r.cenizarios || []
   } catch (e) {
-    // Sin backend o sin la 205: el tablero sigue, el filtro queda vacío.
     console.warn('[produccion] filtro restos cálcicos:', e?.message || e)
-    return []
+    return false
   }
 }
 
@@ -52,6 +54,11 @@ export function PanelRestosCalcicos({ filas, idsEnTablero }) {
   if (filas === null) return (
     <div className="mb-4 px-4 py-3 rounded-xl border text-[12px] text-ink3" style={{ borderColor: AMBAR.border, background: AMBAR.bg }}>
       Cargando mascotas con restos cálcicos…
+    </div>
+  )
+  if (filas === false) return (
+    <div className="mb-4 px-4 py-3 rounded-xl border text-[12px] font-semibold" style={{ borderColor: '#FCA5A5', background: '#FEF2F2', color: '#991B1B' }}>
+      No se pudo cargar la lista de restos cálcicos. El tablero se muestra SIN filtrar: recarga en un momento.
     </div>
   )
   const fueraDelTablero = filas.filter(f => !idsEnTablero.has(String(f.servicio_id)))

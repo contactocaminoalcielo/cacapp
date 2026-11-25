@@ -24,7 +24,7 @@ RN016. Las observaciones sensibles del cliente deben ser visibles solo para role
 RN017. Toda mascota debe tener nombre.
 RN018. La especie debe registrarse cuando aplique: perro, gato u otra.
 RN019. El peso debe registrarse si afecta precio, logística o proceso.
-RN019a. (2026-11-25, migr. 224) Cada banda de la tarifa por peso cubre 1 kg por encima de su
+RN019a. (2026-11-25, migr. 226) Cada banda de la tarifa por peso cubre 1 kg por encima de su
 nombre: «1-10 kg» hasta 11,999 kg, «11-20 kg» hasta 21,999, «21-35 kg» hasta 36,999 y «36-60 kg»
 hasta 61,999. El agente cobra kilos adicionales desde 62,0 kg. PETIT (< 1 kg) y FELINO no cambian;
 el Desamparado sigue con su fórmula propia (46.000 hasta 10 kg).

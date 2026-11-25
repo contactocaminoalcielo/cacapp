@@ -757,7 +757,7 @@ async function consultarTarifas({ entrada = {} }) {
     return { ok: false, falta: ['peso_kg'], mensaje: 'Pregunta el peso aproximado en kilogramos.' }
   }
 
-  // La última banda («36-60 kg») cubre hasta 61,999 kg (migración 224: cada
+  // La última banda («36-60 kg») cubre hasta 61,999 kg (migración 226: cada
   // banda cubre 1 kg por encima de su nombre). Espejo de src/lib/rangosPeso.js.
   // La búsqueda se topa en 60 kg a propósito: cae dentro de la última banda con
   // los límites viejos y con los nuevos, así el orden de despliegue no importa.

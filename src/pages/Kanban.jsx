@@ -1009,7 +1009,10 @@ export default function Kanban() {
       // Lo que pidió la vet (enlace o agente). El monto se precarga según el día
       // de hoy y queda editable: en festivo son $20.000 y eso no se detecta solo.
       prioridad: s.prioridad === true,
-      recargo_prioridad: String(recargoPrioridadDesamparado()),
+      // El del día en que la vet ENVIÓ la solicitud: es el total que vio en su
+      // enlace. Con el de hoy, una solicitud del domingo aceptada el lunes
+      // mostraba 20.000 y se cobraba 16.000 (y al revés con la del sábado).
+      recargo_prioridad: String(recargoPrioridadDesamparado(s.created_at ? new Date(s.created_at) : new Date())),
     })
 
     calcularPrecioPara(planId, s.mascota_peso_kg, s.especie_id).then(precio => {

@@ -7,7 +7,7 @@
  * no consultan esos límites (los portales /solicitud y /solicitud-aliado, que
  * solo leen el precio por nombre de rango; el respaldo del plan Ángel; las filas
  * nuevas que crea Configuración › Precios). Si se cambia una, se cambia la otra
- * — la migración 224 lo dice en su encabezado.
+ * — la migración 226 lo dice en su encabezado.
  *
  * ── Cobertura de 1 kg (REPORTE ORBIT 2026-11-25, «Recalcular peso») ─────────
  * Cada banda cubre hasta 1 kg por encima de su nombre: «1-10 kg» cubre hasta
