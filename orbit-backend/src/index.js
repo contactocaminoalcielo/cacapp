@@ -14,6 +14,7 @@ import { jobContactosImagenes } from './jobs/imagenes.js'
 import { enviarSolicitud, cancelarSolicitud, datosPortal, recibirImagenesPortal } from './imagenes.js'
 import { jobSeguimientoImagenes } from './jobs/seguimiento-imagenes.js'
 import { jobCadenaContactoImagenes } from './cadena-contacto-imagenes.js'
+import { jobCierreSinFotos } from './cierre-sin-fotos.js'
 import { jobEleccionPlanta } from './jobs/plantas.js'
 import { jobMitadCompostaje } from './jobs/mitad-compostaje.js'
 import { datosPortalVisita, guardarSolicitudVisita } from './visitas.js'
@@ -1348,6 +1349,18 @@ app.post('/jobs/cadena-contacto-imagenes', requireJob, async (req, res) => {
     res.json(await jobCadenaContactoImagenes({ dryRun: req.query.dry === '1' }))
   } catch (e) {
     log('[cadena-imagenes/job] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Ecogrupal y Básico sin fotos (migr. 227): a los 15 días del 3er aviso manda
+// los digitales sin memorial y cierra el servicio. ?dry=1 → lista los casos
+// que tomaría (y si alguno quedaría omitido), sin enviar ni escribir.
+app.post('/jobs/cierre-sin-fotos', requireJob, async (req, res) => {
+  try {
+    res.json(await jobCierreSinFotos({ dryRun: req.query.dry === '1' }))
+  } catch (e) {
+    log('[cierre-sin-fotos/job] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })

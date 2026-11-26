@@ -63,6 +63,24 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'cierre_sin_fotos',
+    nombre: 'Sin fotos: digitales sin memorial y cierre',
+    descripcion: 'Ecogrupal y Básico: 15 días después del 3er aviso sin fotos, la familia recibe los digitales con «(no recibimos la foto)» en el lugar del memorial, el Memorial sale de Diseño y el servicio pasa a ENTREGADO. En el Básico el Memopet queda pendiente. Un servicio con un adicional que necesita foto no se cierra solo: queda en «por revisar» con alerta.',
+    quien: 'A la familia',
+    cron: '11:30, lunes a viernes (sin festivos)',
+    interruptor: { modulo: 'CIERRE_SIN_FOTOS', clave: 'activo' },
+    // Al encender, `arranque_desde` = hoy: no se va contra los atrasados.
+    arranqueAlEncender: true,
+    plantillaCfg: { modulo: 'DIGITALES', clave: 'plantilla_memorial' },
+    sql: {
+      tabla: 'public.cierre_sin_fotos',
+      fecha: 'enviado_en',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      pendiente: "estado IN ('OMITIDO', 'ENVIANDO')",
+    },
+  },
+  {
     clave: 'aviso_vet',
     nombre: 'Aviso de recogida a la veterinaria',
     descripcion: 'Cuando el técnico inicia ruta y pone su hora, la clínica recibe sola el aviso por la línea de veterinarias.',

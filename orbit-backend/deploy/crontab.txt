@@ -45,6 +45,12 @@
 # Idempotente: UNIQUE (solicitud, canal, destino) impide repetir un paso.
 5-55/10 7-20 * * * root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/cadena-contacto-imagenes >> /var/log/orbit-backend-cron.log 2>&1
 
+# Cierre sin fotos (migr. 227) — 11:30 L-V (el job tambien se salta festivos).
+# Ecogrupal y Basico: 15 dias calendario despues del 3er aviso sin fotos manda
+# los digitales sin memorial y cierra el servicio. A las 11:30 y no a las 11:00
+# para no salir pegado a las condolencias. Tope 20 por corrida (~5 s c/u).
+30 11 * * 1-5 root curl -s --max-time 300 -X POST -H "x-job-token: $(grep '^JOB_TOKEN=' /opt/orbit-backend/.env | cut -d= -f2-)" http://127.0.0.1:8787/jobs/cierre-sin-fotos >> /var/log/orbit-backend-cron.log 2>&1
+
 # Aviso de tiempos al ingresar al cuarto frio (migr. 214) — cada 10 minutos de
 # dia, todos los dias: le cuenta a la familia los tiempos del certificado, las
 # fotos y los recordatorios apenas la mascota entra a la nevera. Lo que entra de

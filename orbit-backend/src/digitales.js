@@ -818,7 +818,7 @@ async function marcarDigitalesEntregados(client, servicioId, tiposEnviados, recI
  * Devuelve `{ error, status }` cuando el servicio no se puede enviar, o el
  * paquete listo para `enviarPlantillaGenerica`.
  */
-export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnvioPrevio = false }) {
+export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnvioPrevio = false, sinFoto = null }) {
   if (!uuidOrNull(servicioId)) return { status: 422, error: 'Servicio inválido' }
 
   // 1) Lecturas y validaciones (sin transacción: el envío es una llamada de red)
@@ -894,14 +894,26 @@ export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnv
     piezas.filter(p => p.estado === 'PUBLICADO' && p.url_publica)
       .map(p => [p.tipo, limpiarUrlInstagram(p.url_publica)]))
 
-  const faltantes = tipos.filter(t => !urls[t])
+  // Cierre sin fotos (migr. 227): la familia nunca mandó la foto y el memorial
+  // no se va a hacer. Va con `sinFoto` en lugar del enlace y NO se marca
+  // ENTREGADO (no se entregó nada). Solo si de verdad no hay memorial publicado.
+  const textoSinFoto = typeof sinFoto === 'string' ? sinFoto.replace(/\s+/g, ' ').trim() : ''
+  const sinFotoTipos = textoSinFoto && tipos.includes('MEMORIAL') && !urls.MEMORIAL ? ['MEMORIAL'] : []
+  if (sinFoto && !sinFotoTipos.length) {
+    return { status: 422, error: 'El memorial ya está publicado o el servicio no lo lleva: no aplica el envío sin foto.' }
+  }
+  const tiposEnvio = tipos.filter(t => !sinFotoTipos.includes(t))
+
+  const faltantes = tiposEnvio.filter(t => !urls[t])
   if (!tipos.length) return { status: 422, error: 'Este servicio no lleva piezas digitales.' }
   if (faltantes.length) return { status: 422, error: `Faltan piezas por publicar: ${faltantes.join(', ')}.` }
 
   // 3) Elegir plantilla según lo que lleva el plan; las declinadas van con texto
   // en vez de enlace (un parámetro vacío hace que Meta rechace el envío).
   const sinEnlace = textoDeclinado(cfg)
-  const param = (t) => urls[t] || (declinadas.includes(t) ? sinEnlace : null)
+  const param = (t) => urls[t]
+    || (declinadas.includes(t) ? sinEnlace : null)
+    || (sinFotoTipos.includes(t) ? textoSinFoto : null)
   let plantilla = null, bodyParams = []
   if (tiposPlan.length === 3) {
     plantilla = plantillaCfg(cfg.plantilla_completos)
@@ -919,25 +931,34 @@ export async function prepararEnvioAutomatico({ servicioId, telefono, ignorarEnv
     return { status: 422, error: 'Faltan enlaces para armar la plantilla — usa el envío manual.' }
   }
 
-  const enlaces = tipos.map(t => ({ tipo: t, url: urls[t] }))
+  const enlaces = tiposEnvio.map(t => ({ tipo: t, url: urls[t] }))
   // La evidencia debe ser lo que el cliente REALMENTE recibe: el cuerpo de la
   // plantilla aprobada (que trae los enlaces fijos), no el resumen que arma Orbit.
   const mensaje = plantilla.texto
     ? resolverTextoPlantilla(plantilla.texto, bodyParams)
-    : construirMensajeCliente(cfg, svc.mascota, enlaces,
-        declinadas.map(t => ({ tipo: t, texto: sinEnlace })))
+    : construirMensajeCliente(cfg, svc.mascota, enlaces, [
+        ...declinadas.map(t => ({ tipo: t, texto: sinEnlace })),
+        ...sinFotoTipos.map(t => ({ tipo: t, texto: textoSinFoto })),
+      ])
 
   return {
     ok: true, cfg, envioAuto, svc, destino,
-    plantilla, bodyParams, mensaje, enlaces, tipos, declinadas, tiposPlan,
+    // `tipos` = lo que se entrega de verdad (lo que se marca ENTREGADO).
+    plantilla, bodyParams, mensaje, enlaces, tipos: tiposEnvio, declinadas, tiposPlan, sinFotoTipos,
   }
 }
 
-export async function enviarAutomatico({ servicioId, personalId, telefono }) {
+/**
+ * `sinFoto` (texto) + `notaSinFoto`: lo usa SOLO el cierre sin fotos (migr. 227).
+ * El memorial sale con ese texto en vez del enlace y, si Meta acepta, su ítem
+ * pasa a NA con la nota — en la misma transacción que la evidencia del envío,
+ * para que el cierre sin ruta del Ecogrupal (trigger sobre los ítems) lo vea.
+ */
+export async function enviarAutomatico({ servicioId, personalId, telefono, sinFoto = null, notaSinFoto = null }) {
   const actor = uuidOrNull(personalId)
-  const prep = await prepararEnvioAutomatico({ servicioId, telefono })
+  const prep = await prepararEnvioAutomatico({ servicioId, telefono, sinFoto })
   if (!prep.ok) return { status: prep.status, body: { error: prep.error } }
-  const { envioAuto, svc, destino, plantilla, bodyParams, mensaje, enlaces, tipos } = prep
+  const { envioAuto, svc, destino, plantilla, bodyParams, mensaje, enlaces, tipos, sinFotoTipos, cfg } = prep
 
   // 4) Envío (red) → luego evidencia atómica, mismo patrón que reportes grupales
   let envioOk = null, envioErr = null
@@ -990,6 +1011,22 @@ export async function enviarAutomatico({ servicioId, personalId, telefono }) {
        envioAuto.transporte === 'META' ? 'WHATSAPP_META' : 'ZOLUTIUM']
     )
     if (exito) await marcarDigitalesEntregados(client, servicioId, tipos, plantilla.cubre)
+    if (exito && sinFotoTipos.length) {
+      const mapa = (cfg.recordatorios_tipo && typeof cfg.recordatorios_tipo === 'object') ? cfg.recordatorios_tipo : {}
+      const recIds = sinFotoTipos.map(t => mapa[t]).filter(Boolean)
+      if (recIds.length) {
+        await client.query(
+          `UPDATE public.servicio_recordatorios
+              SET estado = 'NA',
+                  notas = concat_ws(E'\n', NULLIF(notas, ''), $3::text)
+            WHERE servicio_id = $1
+              AND recordatorio_id = ANY($2::uuid[])
+              AND estado IN ('PENDIENTE', 'EN_PROCESO', 'LISTO')
+              AND COALESCE(origen, '') <> 'REMOVIDO'`,
+          [servicioId, recIds, notaSinFoto || 'Sin foto de la familia: se envió sin memorial.']
+        )
+      }
+    }
     await client.query('COMMIT')
     if (!exito) return { status: 502, body: { error: `El envío falló: ${envioErr}` } }
     return { status: 200, body: { ok: true, envio: env[0], enlaces, plantilla: plantilla.nombre } }
