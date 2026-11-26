@@ -65,7 +65,7 @@ export const FLUJOS = [
   {
     clave: 'cierre_sin_fotos',
     nombre: 'Sin fotos: digitales sin memorial y cierre',
-    descripcion: 'Ecogrupal y Básico: 15 días después del 3er aviso sin fotos, la familia recibe los digitales con «(no recibimos la foto)» en el lugar del memorial, el Memorial sale de Diseño y el servicio pasa a ENTREGADO. En el Básico el Memopet queda pendiente. Un servicio con un adicional que necesita foto no se cierra solo: queda en «por revisar» con alerta.',
+    descripcion: 'Ecogrupal y Básico: 15 días después del 3er aviso sin fotos, la familia recibe los digitales con «(no recibimos la foto)» en el lugar del memorial, el Memorial sale de Diseño y el servicio pasa a ENTREGADO. En el Básico el Memopet también se da por entregado (sin elaborar). Todo queda marcado como SIN RESPUESTA en la tarjeta del Kanban y en las notas. Un servicio con un adicional que necesita foto no se cierra solo: queda en «por revisar» con alerta.',
     quien: 'A la familia',
     cron: '11:30, lunes a viernes (sin festivos)',
     interruptor: { modulo: 'CIERRE_SIN_FOTOS', clave: 'activo' },

@@ -15,7 +15,8 @@
 //   3. Ecogrupal → lo cierra como ENTREGADO el trigger de siempre
 //      (`fn_cerrar_servicio_sin_ruta`, migr. 148/169) al ver el ítem en NA.
 //      Básico → lo cierra este job si todo lo demás está entregado; el Memopet
-//      del PLAN puede quedar pendiente (decisión David 26-nov). Si la cápsula,
+//      del PLAN pasa a ENTREGADO con nota SIN RESPUESTA (decisión David 26-nov,
+//      reemplaza «queda pendiente»). Si la cápsula,
 //      las huellas o el soporte siguen en proceso, se reintenta cada corrida
 //      hasta que salgan.
 //
@@ -180,7 +181,8 @@ async function omitir(c, motivo) {
  * Básico: ENTREGADO si todo lo que cuenta ya está entregado. No cuentan: lo NA,
  * lo REMOVIDO, los ítems que el cierre sin ruta ya ignora
  * (`CIERRE_SIN_RUTA.items_no_bloqueantes`, hoy «Día de amor y milagrino») y los
- * pendientes permitidos del PLAN (el Memopet). Una entrega con mensajero o en
+ * pendientes permitidos del PLAN (el Memopet, que se marca ENTREGADO con nota
+ * SIN RESPUESTA). Una entrega con mensajero o en
  * camino lo frena: esa la cierra quien la está haciendo.
  */
 export async function cerrarBasicoSinFotos(servicioId, cfg) {
@@ -219,8 +221,22 @@ export async function cerrarBasicoSinFotos(servicioId, cfg) {
         FOR UPDATE`, [servicioId])
     if (enRuta.length) { await client.query('ROLLBACK'); return { cerrado: false, motivo: 'tiene una entrega en ruta' } }
 
-    // La entrega PENDIENTE (el cascarón que nace con el servicio) NO se toca: si
-    // la foto llega tarde y se hace el Memopet, coordinación la publica como siempre.
+    // El Memopet del PLAN (pendientes permitidos) también se da por ENTREGADO
+    // (decisión David 26-nov), con la marca de SIN RESPUESTA en el ítem: no se
+    // elaboró porque la familia nunca mandó la foto. Solo los del plan: un
+    // adicional pagado nunca llega aquí (lo frena bloqueoPorOtraFoto).
+    await client.query(
+      `UPDATE public.servicio_recordatorios
+          SET estado = 'ENTREGADO',
+              notas = concat_ws(E'\n', NULLIF(notas, ''), $3::text)
+        WHERE servicio_id = $1
+          AND recordatorio_id::text = ANY($2::text[])
+          AND origen IN ('PLAN', 'VIP')
+          AND estado IN ('PENDIENTE', 'EN_PROCESO', 'LISTO')`,
+      [servicioId, cfg.permitidos.BASICO || [],
+       'SIN RESPUESTA: la familia no mandó la foto tras los 3 avisos y 15 días. Se da por entregado sin elaborar (cierre automático, migr. 227).'])
+
+    // La entrega PENDIENTE (el cascarón que nace con el servicio) NO se toca.
     await client.query(
       `UPDATE public.servicios
           SET estado = 'ENTREGADO',
@@ -254,7 +270,7 @@ async function revisarAbiertos(cfg, dryRun) {
         cerrado = c.cerrado
         motivo = c.motivo || null
         if (c.cerrado && !c.ya) {
-          await novedad(r.servicio_id, 'El servicio pasó a ENTREGADO. El Memopet queda pendiente en el tablero por si la familia manda la foto.')
+          await novedad(r.servicio_id, 'El servicio pasó a ENTREGADO por SIN RESPUESTA. El Memopet se dio por entregado sin elaborar (no llegó la foto).')
         }
       } catch (e) {
         // Un caso que falla no frena a los demás ni al envío del día.
@@ -321,7 +337,7 @@ export async function jobCierreSinFotos({ dryRun = false } = {}) {
         if (!await reservar(c)) continue
 
         const aviso = fechaBogota(c.ultimo_aviso)
-        const nota = `Sin foto de la familia: ${cfg.dias} días después del último aviso (${aviso}) se enviaron los digitales sin memorial. Cierre automático (migr. 227).`
+        const nota = `SIN RESPUESTA: la familia no mandó la foto. ${cfg.dias} días después del último aviso (${aviso}) se enviaron los digitales sin memorial. Cierre automático (migr. 227).`
         const r = await enviarAutomatico({
           servicioId: c.servicio_id, personalId: null, telefono: null,
           sinFoto: cfg.texto, notaSinFoto: nota,
@@ -342,7 +358,7 @@ export async function jobCierreSinFotos({ dryRun = false } = {}) {
             try {
               const k = await cerrarBasicoSinFotos(c.servicio_id, cfg)
               if (k.cerrado && !k.ya) {
-                await novedad(c.servicio_id, 'El servicio pasó a ENTREGADO. El Memopet queda pendiente en el tablero por si la familia manda la foto.')
+                await novedad(c.servicio_id, 'El servicio pasó a ENTREGADO por SIN RESPUESTA. El Memopet se dio por entregado sin elaborar (no llegó la foto).')
               }
             } catch (e) {
               log(TAG, 'cerrar básico ERROR (se reintenta mañana)', c.servicio_id, e.message)

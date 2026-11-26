@@ -31,7 +31,7 @@ import {
   User, MapPin, CreditCard, Pencil, Save, MessageSquare, Send,
   Camera, Download, Images, Truck, ArrowRightLeft, UserX,
   Copy, Check, Phone, Gift, Stethoscope, Paperclip, FileText,
-  ImageUp, ImagePlus, History, PawPrint, Zap, Star, CheckCircle2,
+  ImageUp, ImagePlus, History, PawPrint, Zap, Star, CheckCircle2, ImageOff,
 } from 'lucide-react'
 import RecibosServicio from '@/components/servicio/RecibosServicio'
 import BitacoraTecnico from '@/components/servicio/BitacoraTecnico'
@@ -1538,7 +1538,7 @@ export default function Kanban() {
       if (ids.length) {
         // El resumen conserva todos los estados/tipos, sin bajar cada copia de
         // un mismo recordatorio. Todas las lecturas paginadas tienen orden único.
-        const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows, pqrRows] = await Promise.all([
+        const [tels, items, cfRows, recogRows, recibosRows, recolectaCat, mediosRows, pqrRows, sinRespRows] = await Promise.all([
           dbTodo(() => db.from('servicios')
             // `registrado_por` viaja aquí y no en `v_kanban`: la vista no lo
             // expone y esta consulta ya recorre los mismos servicios, así que
@@ -1585,6 +1585,14 @@ export default function Kanban() {
           dbTodo(() => db.from('pqrs')
             .select('servicio_id, tipo, servicios!inner(fecha_ingreso)')
             .gte('servicios.fecha_ingreso', FECHA_CORTE).order('id'))
+            .catch(() => null),
+          // Cerrados por "sin respuesta" (migr. 227): la familia no mandó fotos
+          // tras los 3 avisos y 15 días; Orbit envió los digitales sin memorial y
+          // dio el servicio por ENTREGADO. La tarjeta lo tiene que decir: si no,
+          // parece una entrega normal. Si la consulta falla, no hay chip.
+          dbTodo(() => db.from('cierre_sin_fotos')
+            .select('servicio_id, enviado_en')
+            .eq('estado', 'ENVIADO').order('id'))
             .catch(() => null),
         ])
         const mapa = {}
@@ -1655,6 +1663,7 @@ export default function Kanban() {
         // PQR por servicio: cuántas y el tipo de la última, que es lo que pinta
         // el chip. Con `pqrRows` en null (consulta caída) el mapa queda vacío y
         // ninguna tarjeta miente diciendo que no hay PQR: simplemente no habla.
+        const sinRespuesta = new Map((sinRespRows || []).map(r => [r.servicio_id, r.enviado_en]))
         const pqrMap = {}
         ;(pqrRows || []).forEach(p => {
           const e = pqrMap[p.servicio_id] || (pqrMap[p.servicio_id] = { n: 0, tipo: null })
@@ -1686,6 +1695,7 @@ export default function Kanban() {
             registrado_por:  registradoPor[s.servicio_id] ?? null,
             pqr_n:           pqrMap[s.servicio_id]?.n ?? 0,
             pqr_tipo:        pqrMap[s.servicio_id]?.tipo ?? null,
+            sin_respuesta_en: sinRespuesta.get(s.servicio_id) || null,
             tiene_adicional: conAdicional.has(s.servicio_id),
             items_rec:       itemsPorSvc[s.servicio_id] || [],
             nevera_codigo:   s.servicio_id in neveraMap ? neveraMap[s.servicio_id] : undefined,
@@ -3958,6 +3968,14 @@ export default function Kanban() {
                                   title={`Esta mascota tiene ${s.pqr_n} PQR registrada${s.pqr_n > 1 ? 's' : ''}. Ábrela para leerlas.`}>
                                   <MessageSquare size={9} />
                                   {s.pqr_n > 1 ? `${s.pqr_n} PQR` : metaTipoPqr(s.pqr_tipo).label}
+                                </div>
+                              )}
+                              {s.sin_respuesta_en && (
+                                <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full mb-2 mr-1"
+                                  style={{ background: '#FEF3C7', color: '#92400E' }}
+                                  title={`Cerrado por SIN RESPUESTA: la familia no mandó las fotos tras los 3 avisos y 15 días. El ${new Date(s.sin_respuesta_en).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' })} se le enviaron los digitales sin memorial y los ítems con foto se dieron por entregados sin elaborar.`}>
+                                  <ImageOff size={9} />
+                                  Sin respuesta · sin fotos
                                 </div>
                               )}
                               {tecnicoNombre && (

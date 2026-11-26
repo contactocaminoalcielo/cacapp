@@ -20,8 +20,8 @@
 --   · Ecogrupal: se cierra solo como ENTREGADO por `fn_cerrar_servicio_sin_ruta`
 --     (migr. 148/169), que ya dispara con el cambio de los ítems.
 --   · Básico: el job lo pasa a ENTREGADO si todo lo demás está entregado. El
---     Memopet del PLAN queda PENDIENTE en el tablero (decisión David 26-nov): si
---     la foto llega después, se hace y se entrega aparte. Si la cápsula, las
+--     Memopet del PLAN también pasa a ENTREGADO con nota «SIN RESPUESTA»
+--     (decisión David 26-nov, la 1ª versión lo dejaba pendiente). Si la cápsula, las
 --     huellas o el soporte siguen en proceso, el servicio espera a que salgan.
 --
 -- Decisiones de David (26-nov):
