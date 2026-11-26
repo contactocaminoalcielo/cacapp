@@ -23,6 +23,7 @@ import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
 import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
 import CenizariosRestos from '@/components/produccion/CenizariosRestos'
 import { cargarRestosCalcicos, PanelRestosCalcicos } from '@/components/produccion/FiltroRestosCalcicos'
+import { cargarPlantasCompets, idsDeEspecie, PanelEspeciePlanta } from '@/components/produccion/FiltroEspeciePlanta'
 import { PagoTag, PanelPagoAdicional, ResumenSaldoServicio } from '@/components/produccion/PagoAdicional'
 import { cargarPagoServicios } from '@/lib/pagoAdicionales'
 
@@ -1140,6 +1141,11 @@ export default function Produccion() {
   // false = no se pudo leer (ver cargarRestosCalcicos).
   const [soloRestos,    setSoloRestos]    = useState(false)
   const [restos,        setRestos]        = useState(null)
+  // Especie de planta de los Compets (REPORTE ORBIT 2026-11-26). `filtroPlanta`
+  // = clave de la opción ('' = todas). `plantasCompets`: null = cargando,
+  // false = falló, objeto = cargado (ver cargarPlantasCompets).
+  const [filtroPlanta,   setFiltroPlanta]   = useState('')
+  const [plantasCompets, setPlantasCompets] = useState(null)
   const [modalItem,     setModalItem]     = useState(null)
   const [modalEntrega,  setModalEntrega]  = useState(null) // servicioId string
   const [logRows,       setLogRows]       = useState([])   // bitácora (solo admin)
@@ -1216,6 +1222,8 @@ export default function Produccion() {
       cargarCompras()
       // Restos cálcicos para el filtro: informativo, nunca lanza.
       cargarRestosCalcicos().then(setRestos)
+      // Especie de planta de los Compets para su filtro: tampoco lanza.
+      cargarPlantasCompets().then(setPlantasCompets)
       // Estado de la entrega de los servicios ya LISTO: si está publicada al pool,
       // si alguien la tomó y quién. Es el control de entregas del coordinador.
       cargarEntregas((recs || [])
@@ -1337,7 +1345,13 @@ export default function Produccion() {
   // con la lista en mano: sin ella se escondería todo el tablero.
   const idsRestos = new Set((Array.isArray(restos) ? restos : []).map(f => String(f.servicio_id)))
   const idsEnTablero = new Set(recordatorios.filter(r => r.estado !== 'NA').map(r => String(r.servicio_id)))
-  const soloServicios = soloRestos && Array.isArray(restos) ? idsRestos : null
+  const filtroRestosIds = soloRestos && Array.isArray(restos) ? idsRestos : null
+  // Especie de planta: igual, solo con la lista en mano. Con los dos filtros
+  // encendidos quedan las tarjetas que cumplen ambos.
+  const filtroPlantaIds = plantasCompets ? idsDeEspecie(plantasCompets, filtroPlanta) : null
+  const soloServicios = filtroRestosIds && filtroPlantaIds
+    ? new Set([...filtroRestosIds].filter(id => filtroPlantaIds.has(id)))
+    : (filtroRestosIds || filtroPlantaIds)
 
   // Tipos de recordatorio presentes en los ítems cargados (para el filtro)
   const recOpciones = [...new Map(
@@ -1456,6 +1470,17 @@ export default function Produccion() {
                   <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${soloRestos ? 'bg-white/25' : 'bg-[#FEF3C7] text-[#92400E]'}`}>{restos.length}</span>
                 )}
               </button>
+
+              {/* Especie de planta de los Compets (REPORTE ORBIT 2026-11-26):
+                  cuántas mascotas eligieron cada una y cuáles no han elegido. */}
+              <Select value={filtroPlanta} onChange={e => setFiltroPlanta(e.target.value)} className="w-52"
+                aria-label="Especie de planta"
+                title="Compets activos según la especie de planta que eligió la familia">
+                <option value="">Especie de planta: todas</option>
+                {plantasCompets && plantasCompets.opciones.map(o => (
+                  <option key={o.clave} value={o.clave}>{o.nombre} ({o.n})</option>
+                ))}
+              </Select>
             </>
           )}
 
@@ -1486,6 +1511,10 @@ export default function Produccion() {
 
         {vistaConFiltros && soloRestos && (
           <PanelRestosCalcicos filas={restos} idsEnTablero={idsEnTablero} />
+        )}
+        {vistaConFiltros && filtroPlanta && (
+          <PanelEspeciePlanta datos={plantasCompets} clave={filtroPlanta}
+            onElegir={setFiltroPlanta} idsEnTablero={idsEnTablero} />
         )}
 
         {/* Contenido según vista. Las compras sin servicio (migr. 168) van

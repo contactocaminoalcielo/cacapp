@@ -177,3 +177,20 @@ Storage API — Postgres bloquea el DELETE directo sobre `storage.objects`.
   (LUNA, WILLY, MAILO, OSIRIS, JOSHUA) cumplen el **15-sep-2026**, todas con
   WhatsApp válido. No hay backlog que pueda dispararse de golpe.
 
+## Filtro «Especie de planta» en Producción–Diseño (2026-11-26, REPORTE ORBIT)
+
+En `/produccion` (vistas Por servicio y Tabla), junto a «Restos cálcicos»: un
+desplegable **Especie de planta: todas · Pescadito (N) · Helecho (N) · Sin seleccionar (N)**.
+Código en `src/components/produccion/FiltroEspeciePlanta.jsx`.
+
+- Cuenta **todos los Compets activos** (plan `COMPOSTAJE_INDIVIDUAL`, servicio sin
+  ENTREGADO/CANCELADO, desde `FECHA_CORTE`), tengan o no fila en `planta_elecciones`.
+  Sin fila, sin especie o con la elección CANCELADA = «Sin seleccionar».
+- Las opciones salen del catálogo (`plantas` elegibles y activas) + cualquier nombre
+  guardado que ya no esté en él (snapshot `planta_nombre`).
+- Al elegir una opción filtra las tarjetas y abre un panel con TODAS esas mascotas,
+  marcando las que no tienen tarjeta (Compets sin recordatorios). Con «Restos
+  cálcicos» encendido quedan las que cumplen los dos.
+- Si la carga falla, el panel lo dice y el tablero queda SIN filtrar.
+- No cuenta las plantas EXTRA compradas (`planta_adicionales`).
+
