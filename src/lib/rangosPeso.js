@@ -12,9 +12,8 @@
  * ── Cobertura de 1 kg (REPORTE ORBIT 2026-11-25, «Recalcular peso») ─────────
  * Cada banda cubre hasta 1 kg por encima de su nombre: «1-10 kg» cubre hasta
  * los 11 kg, «11-20 kg» hasta los 21, «21-35 kg» hasta los 36 y «36-60 kg»
- * hasta los 61. Se lee con la misma regla de decimales de junio (un peso
- * pertenece a su banda hasta ALCANZAR el mínimo de la siguiente): 11,8 kg sigue
- * siendo «1-10 kg» y solo desde 12,0 kg pasa a «11-20 kg».
+ * hasta los 61 — hasta ese kilo EXACTO (David, 26-nov): 11,0 kg es «1-10 kg»
+ * y 11,1 kg ya es «11-20 kg».
  * Antes (regla del 12-jun-2026): 1-10 = 1000–10999 g, 11-20 = 11000–20999 g…
  *
  * PETIT (< 1 kg) y FELINO (tarifa plana desde 1 kg) no se tocan: no son bandas
@@ -23,10 +22,10 @@
 export const RANGO_GRAMOS = {
   'PETIT':   { peso_min_gr: 0,     peso_max_gr: 999 },
   'FELINO':  { peso_min_gr: 1000,  peso_max_gr: null },
-  '1-10KG':  { peso_min_gr: 1000,  peso_max_gr: 11999 },
-  '11-20KG': { peso_min_gr: 12000, peso_max_gr: 21999 },
-  '21-35KG': { peso_min_gr: 22000, peso_max_gr: 36999 },
-  '36-60KG': { peso_min_gr: 37000, peso_max_gr: 61999 },
+  '1-10KG':  { peso_min_gr: 1000,  peso_max_gr: 11000 },
+  '11-20KG': { peso_min_gr: 11001, peso_max_gr: 21000 },
+  '21-35KG': { peso_min_gr: 21001, peso_max_gr: 36000 },
+  '36-60KG': { peso_min_gr: 36001, peso_max_gr: 61000 },
 }
 
 const BANDAS_POR_PESO = ['1-10KG', '11-20KG', '21-35KG', '36-60KG']

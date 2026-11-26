@@ -64,7 +64,8 @@ function limpiarBorrador() {
 
 // ── Rango de peso ────────────────────────────────────────────────────────────
 // Las bandas viven en lib/rangosPeso (espejo de planes_precios): cada una cubre
-// 1 kg por encima de su nombre — 11,8 kg sigue siendo 1-10KG (migración 226).
+// hasta 1 kg por encima de su nombre — 11,0 kg es 1-10KG y 11,1 ya es 11-20KG
+// (migración 226).
 function getRango(pesoKg, especieId) {
   return rangoPorPeso(pesoKg, especieId === 2 || especieId === 3)  // Gato (2) o Conejo (3)
 }

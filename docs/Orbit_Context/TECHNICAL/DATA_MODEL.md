@@ -285,8 +285,8 @@ Ver [Tenjo_Salidas_Compostaje.md](../../Tenjo_Salidas_Compostaje.md).
   en consulta APARTE (`cargarRecordatoriosPago`, nunca lanza).
 
 ### Bandas de peso — `planes_precios.peso_min_gr / peso_max_gr` (migración 226)
-- Cada banda cubre 1 kg por encima de su nombre: `1-10KG` 1000–11999 · `11-20KG` 12000–21999 ·
-  `21-35KG` 22000–36999 · `36-60KG` 37000–61999. `PETIT` 0–999 y `FELINO` (techo NULL) sin cambio.
+- Cada banda cubre hasta 1 kg por encima de su nombre, kilo exacto: `1-10KG` 1000–11000 ·
+  `11-20KG` 11001–21000 · `21-35KG` 21001–36000 · `36-60KG` 36001–61000. `PETIT` 0–999 y `FELINO` (techo NULL) sin cambio.
 - Espejo en código: `src/lib/rangosPeso.js` (`RANGO_GRAMOS`, `rangoPorPeso`, `precioAngelRespaldo`)
   para los portales, Configuración y el respaldo de Ángel. Cambiar los dos juntos.
 
