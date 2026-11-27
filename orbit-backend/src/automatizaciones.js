@@ -98,6 +98,22 @@ export const FLUJOS = [
     },
   },
   {
+    clave: 'aviso_tecnico',
+    nombre: 'Aviso al técnico al asignarle un servicio',
+    descripcion: 'Cuando coordinación asigna (o cambia) el técnico de una recogida —al registrar, al convertir una solicitud o desde la ficha del Kanban—, el técnico recibe solo por la línea de veterinarias la mascota, el plan, el propietario, el contacto, la dirección, la hora, las indicaciones y cuánto cobrar. Si responde, el agente no le contesta: queda en la bandeja.',
+    quien: 'Al técnico',
+    cron: 'Al asignar el técnico',
+    interruptor: { modulo: 'AVISO_TECNICO_ASIGNACION', clave: 'activo' },
+    plantillaCfg: { modulo: 'AVISO_TECNICO_ASIGNACION', clave: 'plantilla' },
+    sql: {
+      tabla: 'public.avisos_tecnico',
+      fecha: 'created_at',
+      ok: "estado = 'ENVIADO'",
+      error: "estado = 'ERROR'",
+      pendiente: "estado = 'ENVIANDO'",
+    },
+  },
+  {
     clave: 'aviso_cliente',
     nombre: 'Aviso de la hora a la familia (wa.me)',
     descripcion: 'El mismo aviso, para lo que no cubre la línea de clínicas. NO es automático: lo manda el coordinador desde su celular y aquí queda el registro.',

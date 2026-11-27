@@ -15,6 +15,7 @@ import { ESTADO_COLOR, ESTADO_LABEL, FECHA_CORTE } from '@/lib/constants'
 import { etapaContacto, topeFotos } from '@/lib/imagenes'
 import { useAuth } from '@/contexts/AuthContext'
 import { crearNotificacion, obtenerNoLeidas, marcarLeida } from '@/lib/notificaciones'
+import { avisarTecnicoAsignado, resultadoAvisoTecnico } from '@/lib/avisoTecnico'
 import { quitarItemServicio, precioSugeridoItem, recategorizacionesPorServicio, calcularEstadoPago, trazaValor, insertarNovedadPago } from '@/lib/servicios'
 import RecatBadges from '@/components/RecatBadges'
 import HistorialValor from '@/components/servicio/HistorialValor'
@@ -481,6 +482,9 @@ export default function Kanban() {
   // ── Estado botones Contactar / Notificar técnico ──
   const [contactarLoadingId,  setContactarLoadingId]  = useState(null)
   const [notifTecLoadingId,   setNotifTecLoadingId]   = useState(null)
+  // Resultado del WhatsApp automático al técnico al reasignar desde la ficha
+  // (migr. 228): { servicioId, ok, texto }. Se pinta bajo el selector del técnico.
+  const [avisoTecRes,         setAvisoTecRes]         = useState(null)
 
   // ── Enviar enlace de solicitud al cliente (wa.me, desde el WA propio) ─────
   const [modalEnlace,     setModalEnlace]     = useState(false)
@@ -1259,8 +1263,17 @@ export default function Kanban() {
         estado: 'CONVERTIDO', servicio_id: servicioId,
       }).eq('id', selSolicitud.id)
 
+      // 6. WhatsApp automático al técnico (migr. 228). Nunca lanza: el servicio
+      // ya existe. Si sale bien no se interrumpe a nadie; si no, se dice.
+      let avisoConv = null
+      if (convForm.tecnico_id) {
+        const tecNom = [...tecnicos, ...mensajeros].find(p => p.id === convForm.tecnico_id)?.nombre
+        avisoConv = resultadoAvisoTecnico(await avisarTecnicoAsignado(servicioId, 'SOLICITUD'), tecNom)
+      }
+
       setSelSolicitud(null)
       await Promise.all([cargar(), cargarSolicitudes()])
+      if (avisoConv && !avisoConv.ok) await showAlert(avisoConv.texto, { title: 'Aviso al técnico' })
     } catch (err) {
       const parsed = parsearErrorDB(err)
       const raw = err?.message || err?.details || ''
@@ -1869,6 +1882,16 @@ export default function Kanban() {
             titulo:           'Nueva recogida asignada',
             mensaje:          `Se te asignó la recogida de ${mascotaNombre}. Revisa los detalles en tu app.`,
             servicio_id:      selected.servicio_id,
+          })
+          // 🩸 La notificación de arriba el técnico NO la ve: la app de campo no
+          // tiene campanita. Lo que de verdad le llega es este WhatsApp (migr. 228).
+          // Sin await: «Guardar» no se queda girando mientras responde Meta.
+          const tecNom = [...tecnicos, ...mensajeros].find(p => p.id === updates.tecnico_id)?.nombre
+          const svcAviso = selected.servicio_id
+          setAvisoTecRes(null)
+          avisarTecnicoAsignado(svcAviso, 'FICHA').then(r => {
+            const res = resultadoAvisoTecnico(r, tecNom)
+            setAvisoTecRes(res ? { servicioId: svcAviso, ...res } : null)
           })
         }
       }
@@ -4596,6 +4619,11 @@ export default function Kanban() {
                   </Select>
                   {editTecnicoId !== (selected.tecnico_id || '') && editTecnicoId && (
                     <p className="text-[10px] text-blue-600 font-medium">↳ Reasignación pendiente · guarda los cambios abajo</p>
+                  )}
+                  {avisoTecRes?.servicioId === selected.servicio_id && editTecnicoId === (selected.tecnico_id || '') && (
+                    <p className={`text-[10px] font-semibold ${avisoTecRes.ok ? 'text-green-700' : 'text-amber-700'}`}>
+                      {avisoTecRes.texto}
+                    </p>
                   )}
                 </div>
 

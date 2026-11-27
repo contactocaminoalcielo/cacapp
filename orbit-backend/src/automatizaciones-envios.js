@@ -28,6 +28,7 @@
 import { pool, log } from './db.js'
 import { forzarContacto } from './seguimiento-imagenes.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
+import { avisarTecnicoAsignado } from './aviso-tecnico.js'
 import { enviarAvisoPlanta } from './plantas.js'
 import { enviarAvisoMitad } from './mitad-compostaje.js'
 import { enviarEncuesta } from './encuesta-entrega.js'
@@ -118,6 +119,30 @@ const FUENTES = {
      WHERE r.tipo_lugar = 'CLINICA_ALIADA'
        AND (r.aviso_vet_enviado_en IS NOT NULL OR r.aviso_vet_error IS NOT NULL
             OR (s.estado = 'EN_RECOGIDA' AND r.hora_programada IS NOT NULL))`,
+
+  // Una fila por intento (migr. 228). `resuelto` = después hubo un envío bueno
+  // al MISMO técnico por el mismo servicio: ese ERROR viejo ya no se relanza.
+  aviso_tecnico: `
+    SELECT a.id, a.servicio_id,
+           COALESCE(a.enviado_en, a.created_at) AS fecha,
+           a.estado, a.error, NULL::int AS intentos,
+           m.nombre AS mascota,
+           TRIM(COALESCE(t.nombre, '') || ' ' || COALESCE(t.apellido, '')) AS destinatario,
+           COALESCE(a.destino, t.whatsapp) AS destino,
+           a.mensaje_id AS wamid, NULL::text AS acuse_propio,
+           (COALESCE(p.nombre, '—')
+             || CASE WHEN a.origen IS NOT NULL THEN ' · ' || a.origen ELSE '' END) AS detalle,
+           jsonb_build_object(
+             'updated_at', a.updated_at,
+             'resuelto', EXISTS (SELECT 1 FROM public.avisos_tecnico b
+                                  WHERE b.servicio_id = a.servicio_id
+                                    AND b.tecnico_id IS NOT DISTINCT FROM a.tecnico_id
+                                    AND b.estado = 'ENVIADO' AND b.created_at > a.created_at)) AS extra
+      FROM public.avisos_tecnico a
+      JOIN public.servicios s     ON s.id = a.servicio_id
+      LEFT JOIN public.mascotas m ON m.id_mascota = s.mascota_id
+      LEFT JOIN public.planes p   ON p.id = s.plan_id
+      LEFT JOIN public.personal t ON t.id = a.tecnico_id`,
 
   // Lo manda una persona por wa.me: no hay acuse ni error posibles, solo el registro.
   aviso_cliente: `
@@ -432,6 +457,10 @@ const MOTIVOS = {
   excluida:       'No se envía: la familia quedó excluida de la oferta.',
   error_envio:    'Meta rechazó el envío.',
   error_interno:  'Error interno al enviar.',
+  sin_servicio:   'El servicio ya no existe.',
+  sin_tecnico:    'El servicio ya no tiene técnico asignado.',
+  ya_recogido:    'La recogida ya se hizo: el aviso de asignación ya no aplica.',
+  tecnico_inactivo: 'El técnico asignado está inactivo en Personal.',
 }
 
 /**
@@ -492,6 +521,20 @@ const RELANZAR = {
     }
     const r = await forzarContacto({ solicitudId: solicitud_id, numero, personalId: personal.id })
     return r.body?.ok ? { ok: true } : { ok: false, status: r.status, error: r.body?.error }
+  },
+
+  // Se le avisa al técnico que tiene el servicio AHORA: si coordinación lo
+  // cambió desde el fallo, el relanzamiento le llega al nuevo.
+  async aviso_tecnico(f, personal) {
+    if (f.estado === 'ENVIANDO' || (f.estado === 'ENVIADO' && f.acuse === 'failed')) {
+      await destrabar(`UPDATE public.avisos_tecnico
+                          SET estado = 'ERROR', error = COALESCE(error, $2)
+                        WHERE id = $1 AND estado IN ('ENVIANDO','ENVIADO')`,
+                      [f.id, f.estado === 'ENVIANDO' ? 'Envío interrumpido (quedó en ENVIANDO)' : 'Meta reportó fallo de entrega'])
+    }
+    return desdeMotivo(await avisarTecnicoAsignado({
+      servicioId: f.servicio_id, origen: 'RELANZAR', actor: { id: personal.id, rol: personal.rol },
+    }))
   },
 
   async aviso_vet(f, personal) {

@@ -2191,7 +2191,40 @@ function esReintentable(error) {
  * ⚠️ En un acuse, `from_number` NO es quien escribió: es el `recipient_id` de
  * Meta, o sea la veterinaria a la que le enviamos. Por eso casa con `contacto`.
  */
+/**
+ * Nombre de la persona del equipo activo con ese WhatsApp, o null. Si la
+ * consulta falla, null: ante la duda el agente responde, como en el resto de
+ * `laLlevaUnHumano` (un silencio no tiene quien lo note).
+ */
+async function esNumeroDelPersonal(contacto) {
+  const dig = String(contacto || '').replace(/\D/g, '')
+  if (dig.length < 10) return null
+  try {
+    const { rows: [p] } = await pool.query(
+      `SELECT nombre FROM public.personal
+        WHERE activo = true AND whatsapp IS NOT NULL
+          AND length(regexp_replace(whatsapp, '\\D', '', 'g')) >= 10
+          AND right(regexp_replace(whatsapp, '\\D', '', 'g'), 10) = right($1, 10)
+        LIMIT 1`,
+      [dig]
+    )
+    return p ? (p.nombre || 'del equipo') : null
+  } catch (e) {
+    log(MOD, 'no se pudo revisar si el número es del personal —', e.message)
+    return null
+  }
+}
+
 async function laLlevaUnHumano(contacto, phoneNumberId = null) {
+  // Con el PERSONAL de Camino al Cielo el agente no habla (decisión David
+  // 2026-11-27, migr. 228). El aviso de asignación le llega al técnico por la
+  // línea de veterinarias; si responde «voy en camino» o pregunta algo, el
+  // agente le contestaría como a una clínica o a una familia. Lo atiende una
+  // persona desde la bandeja. Se compara por los últimos 10 dígitos: en
+  // Personal el número suele estar sin el 57.
+  const deEquipo = await esNumeroDelPersonal(contacto)
+  if (deEquipo) return `es un número del personal (${deEquipo}): lo atiende una persona`
+
   // El interruptor manual (migración 105) manda sobre todo lo demás: si alguien
   // dijo "de esta me encargo yo", no hay regla automática que valga.
   // El interruptor es de la CONVERSACIÓN, y una conversación es (línea, número):

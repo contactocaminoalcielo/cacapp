@@ -3,6 +3,7 @@ import { useConfirm } from '@/contexts/ConfirmContext'
 import { useAuth } from '@/contexts/AuthContext'
 import CasillaDatos from '@/components/CasillaDatos'
 import { registrarAutorizacion } from '@/lib/autorizaciones'
+import { avisarTecnicoAsignado, resultadoAvisoTecnico } from '@/lib/avisoTecnico'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import Topbar from '@/components/layout/Topbar'
@@ -173,6 +174,8 @@ export default function Registro() {
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState(null)
   const [success, setSuccess] = useState(false)
+  // Qué pasó con el WhatsApp automático al técnico (migr. 228): { ok, texto } o null.
+  const [avisoTec, setAvisoTec] = useState(null)
   const [iaOpen, setIaOpen]       = useState(false)
 
   // Constancia de que el titular autorizó. Aquí los datos los toma el equipo por
@@ -1094,9 +1097,20 @@ export default function Registro() {
         setError('El servicio quedó registrado, pero no se pudo guardar la constancia de autorización: ' + (e.message || ''))
       }
 
+      // WhatsApp automático al técnico con los datos y el cobro (migr. 228).
+      // Va al final, con la recogida ya actualizada: el backend lee todo de la
+      // base. Nunca lanza. Si no le llegó, la pantalla de éxito se queda más
+      // tiempo para que se alcance a leer y se le avise a mano.
+      let aviso = null
+      if (tecnicoSeleccionado?.id && svcData?.[0]?.id) {
+        aviso = resultadoAvisoTecnico(
+          await avisarTecnicoAsignado(svcData[0].id, 'REGISTRO'), tecnicoSeleccionado.nombre)
+      }
+      setAvisoTec(aviso)
+
       limpiarBorrador()
       setSuccess(true)
-      setTimeout(() => navigate('/kanban'), 2000)
+      setTimeout(() => navigate('/kanban'), aviso && !aviso.ok ? 7000 : 2000)
     } catch (e) {
       setError(e.message || 'Error al guardar el servicio')
     } finally {
@@ -1125,6 +1139,11 @@ export default function Registro() {
           {tecnicoSeleccionado && (
             <div className="text-[12px] text-gray-500">
               Técnico asignado: <span className="font-semibold text-gray-700">{tecnicoSeleccionado.nombre}</span>
+            </div>
+          )}
+          {avisoTec && (
+            <div className={`mt-2 text-[12px] font-semibold max-w-sm mx-auto ${avisoTec.ok ? 'text-green-700' : 'text-amber-700'}`}>
+              {avisoTec.texto}
             </div>
           )}
         </div>

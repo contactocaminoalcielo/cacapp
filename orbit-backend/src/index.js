@@ -46,6 +46,7 @@ import { datosPortalPlanta, guardarEleccionPlanta, enviarAvisoPlanta, responderR
 import { prepararEvidencias, listarEvidencias, guardarAjustes, imagenEvidencia, enviarEvidencia,
          marcarEnviadaManual, descartarEvidencia, puedeGestionarEvidencias } from './evidencia-inicio.js'
 import { avisarVetRecogida } from './recogidas-aviso.js'
+import { avisarTecnicoAsignado } from './aviso-tecnico.js'
 import { jobAfiliaciones } from './jobs/afiliaciones.js'
 import { enviarContratoEmail } from './afiliaciones-envio.js'
 import { leerContratoPdf } from './afiliaciones-ia.js'
@@ -2000,6 +2001,27 @@ app.post('/recogidas/aviso-vet', requireAuth, requireRol('TECNICO', 'COORDINADOR
     res.json(r)
   } catch (e) {
     log('[recogidas/aviso-vet] ERROR', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// WhatsApp automático al técnico al asignarle un servicio (migr. 228). Lo
+// llaman el registro, la conversión de una solicitud y la ficha del Kanban
+// DESPUÉS de guardar el técnico. Igual que el aviso a la vet, responde 200
+// aunque no se envíe nada: el técnico ya quedó asignado, y el detalle viaja en
+// `motivo` para que la pantalla diga si le llegó o hay que avisarle a mano.
+app.post('/servicios/:id/aviso-tecnico', requireAuth, requireRol('COORDINADOR', 'ADMIN'), async (req, res) => {
+  try {
+    const servicioId = String(req.params.id || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(servicioId)) return res.status(400).json({ error: 'servicio_id inválido' })
+    const r = await avisarTecnicoAsignado({
+      servicioId,
+      origen: req.body?.origen || null,
+      actor:  { id: req.personal.id, rol: req.personal.rol },
+    })
+    res.json(r)
+  } catch (e) {
+    log('[servicios/aviso-tecnico] ERROR', e.message)
     res.status(500).json({ error: e.message })
   }
 })
