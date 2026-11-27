@@ -20,7 +20,7 @@ import { petEmoji, parsearErrorDB, today, parseDate, fmt, esCompets, estimadoCom
 import { RefreshCw, User, Cpu, Lock, Zap, CheckCircle2, Clock, Package, AlertCircle, Truck, ArrowRight, Search, MessageCircle, ImageOff } from 'lucide-react'
 import ModalPreparaEntrega from '@/components/delivery/ModalPreparaEntrega'
 import FotosDelCliente from '@/components/imagenes/FotosDelCliente'
-import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR } from '@/components/produccion/ComprasEnProduccion'
+import { cargarItemsCompras, aItemsTablero, ModalItemCompra, MarcaCompra, COMPRA_COLOR, ADICIONAL_COLOR, colorCompra, esAdicional } from '@/components/produccion/ComprasEnProduccion'
 import CenizariosRestos from '@/components/produccion/CenizariosRestos'
 import { cargarRestosCalcicos, PanelRestosCalcicos } from '@/components/produccion/FiltroRestosCalcicos'
 import { cargarPlantasCompets, idsDeEspecie, PanelEspeciePlanta } from '@/components/produccion/FiltroEspeciePlanta'
@@ -82,12 +82,12 @@ function ItemPill({ item, personal, maquinas, fotos_ok, onClick }) {
   return (
     <button
       onClick={() => onClick(item)}
-      title={`${item.__compra ? `Compra CR-${item.__compra.numero} (sin servicio funerario) · ` : ''}${bloqueado ? 'Esperando fotos del cliente' : sinFoto ? 'Este ítem no tiene foto: ábrelo para cargarla' : 'Click para gestionar'}`}
+      title={`${item.__compra ? `Compra CR-${item.__compra.numero} (${esAdicional(item.__compra) ? 'recordatorio adicional' : 'sin servicio funerario'}) · ` : ''}${bloqueado ? 'Esperando fotos del cliente' : sinFoto ? 'Este ítem no tiene foto: ábrelo para cargarla' : 'Click para gestionar'}`}
       style={{
         background: bloqueado ? '#F9FAFB' : col.bg,
         color: bloqueado ? '#9CA3AF' : col.text,
         // Compra sin servicio: borde morado punteado, el estado sigue en el fondo.
-        border: item.__compra ? `1.5px dashed ${COMPRA_COLOR.fuerte}` : `1.5px solid ${bloqueado ? '#E5E7EB' : col.border}`,
+        border: item.__compra ? `1.5px dashed ${colorCompra(item.__compra).fuerte}` :`1.5px solid ${bloqueado ? '#E5E7EB' : col.border}`,
         borderRadius: '20px',
         padding: '5px 10px',
         fontSize: '11px',
@@ -460,7 +460,10 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         const listosCnt = items.filter(i => ['LISTO', 'ENTREGADO'].includes(i.estado)).length
         const pct = items.length > 0 ? Math.round((listosCnt / items.length) * 100) : 0
         const compra = items[0]?.__compra || null
-        const fotoDe = i => compra ? !!i.servicios?.fecha_imagenes_recibidas : fotos_ok
+        // Rosado = recordatorio ADICIONAL (venta posterior); morado = compra sin servicio.
+        const cc = colorCompra(compra)
+        const adicional = esAdicional(compra)
+        const fotoDe =i => compra ? !!i.servicios?.fecha_imagenes_recibidas : fotos_ok
         const bloqueados = items.filter(i =>
           i.recordatorios?.requiere_imagen && !i.recordatorios?.solo_nombre && !fotoDe(i) && i.estado === 'PENDIENTE'
         ).length
@@ -479,14 +482,22 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
         return (
           <div key={sId} className="bg-surface border rounded-2xl p-4 shadow-sm"
             style={compra
-              // Compra sin servicio funerario: tarjeta morada, inconfundible.
-              ? { borderColor: todoListo ? '#6EE7B7' : COMPRA_COLOR.borde, borderWidth: todoListo ? 2 : 1,
-                  borderLeft: `5px solid ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+              // Compra: morada (sin servicio) o rosada (recordatorio adicional), inconfundible.
+              ? { borderColor: todoListo ? '#6EE7B7' : cc.borde, borderWidth: todoListo || adicional ? 2 : 1,
+                  borderLeft: `5px solid ${cc.fuerte}`, background: cc.suave }
               : {
                   borderColor: todoListo ? '#6EE7B7' : (esVip ? VIP_ORO.borde : 'rgba(30,80,40,0.1)'),
                   borderWidth: todoListo || esVip ? 2 : 1,
                   background:  esVip ? VIP_ORO.bg : undefined,
                 }}>
+            {/* Cinta del recordatorio ADICIONAL (David, 27-nov): lo primero que se lee. */}
+            {adicional && (
+              <div className="-mx-4 -mt-4 mb-3 px-4 py-1.5 rounded-t-2xl text-[11px] font-extrabold tracking-wide text-white flex items-center gap-1.5"
+                style={{ background: cc.fuerte }}
+                title="La familia lo compró después del servicio (oferta posterior o venta por chat)">
+                🎁 RECORDATORIO ADICIONAL · CR-{compra.numero}
+              </div>
+            )}
             {/* Header */}
             <div className="flex items-start gap-2 mb-2.5">
               <span className="text-xl mt-0.5">{petEmoji(mascota?.especies?.nombre)}</span>
@@ -497,8 +508,8 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
                   {compra && <MarcaCompra compra={compra} chica />}
                 </div>
                 {compra ? (
-                  <div className="text-[11px] truncate" style={{ color: COMPRA_COLOR.texto }}>
-                    {compra.origen === 'OFERTA_POSTERIOR' ? 'COMPRA ADICIONAL' : 'Sin servicio funerario'} · {[compra.clientes?.nombre, compra.clientes?.apellido].filter(Boolean).join(' ')}
+                  <div className="text-[11px] truncate" style={{ color: cc.texto }}>
+                    {adicional ? 'Comprado después del servicio' : 'Sin servicio funerario'} ·{[compra.clientes?.nombre, compra.clientes?.apellido].filter(Boolean).join(' ')}
                     {compra.origen === 'CATALOGO_WEB' && ' · catálogo web'}
                   </div>
                 ) : (
@@ -642,17 +653,28 @@ function VistaPorServicio({ recordatorios, personal, maquinas, etapas = {}, entr
               ))}
             </div>
 
-            {/* Compra sin servicio: se abre (y se entrega) desde su detalle */}
+            {/* Compra: se abre (y se entrega) desde su detalle. La entrega se
+                puede programar aunque falte algo (el formulario lo advierte). */}
             {compra && onAbrirCompra && (
-              <button onClick={() => onAbrirCompra(compra.id, todoListo && puedeProgramar)}
-                className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-xl text-[12px] font-bold transition-all hover:opacity-90"
-                style={todoListo
-                  ? { background: COMPRA_COLOR.fuerte, color: '#fff' }
-                  : { background: '#fff', color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
-                {todoListo
-                  ? <><Truck size={13} /> {puedeProgramar ? 'Programar entrega' : 'Abrir la compra para entregar'}</>
-                  : <>Abrir la compra CR-{compra.numero} <ArrowRight size={12} /></>}
-              </button>
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => onAbrirCompra(compra.id, todoListo && puedeProgramar)}
+                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-[12px] font-bold transition-all hover:opacity-90"
+                  style={todoListo
+                    ? { background: cc.fuerte, color: '#fff' }
+                    : { background: '#fff', color: cc.texto, border: `1px solid ${cc.borde}` }}>
+                  {todoListo
+                    ? <><Truck size={13} /> {puedeProgramar ? 'Programar entrega' : 'Abrir la compra para entregar'}</>
+                    : <>Abrir la compra CR-{compra.numero} <ArrowRight size={12} /></>}
+                </button>
+                {!todoListo && puedeProgramar && (
+                  <button onClick={() => onAbrirCompra(compra.id, true)}
+                    title="Programar la entrega con un mensajero"
+                    className="px-3 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[12px] font-bold transition-all hover:opacity-90"
+                    style={{ background: '#fff', color: cc.texto, border: `1px solid ${cc.borde}` }}>
+                    <Truck size={13} /> Entrega
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Traza: cuándo quedó listo el servicio */}
@@ -719,7 +741,7 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                       <button key={item.id} onClick={() => onClickItem(item)}
                         className="w-full text-left p-2.5 rounded-xl transition-colors hover:bg-surface2"
                         style={item.__compra
-                          ? { border: `1px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+                          ? { border: `1px dashed ${colorCompra(item.__compra).fuerte}`, background: colorCompra(item.__compra).suave }
                           : { border: '1px solid rgba(30,80,40,0.08)' }}>
                         <div className="flex items-center gap-2">
                           <span className="text-base">{petEmoji(mascota?.especies?.nombre)}</span>
@@ -766,7 +788,7 @@ function VistaPorMaquina({ recordatorios, personal, maquinas, onClickItem }) {
                   <button key={item.id} onClick={() => onClickItem(item)}
                     className="w-full text-left p-2.5 rounded-xl transition-colors hover:bg-surface2"
                     style={item.__compra
-                      ? { border: `1px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }
+                      ? { border: `1px dashed ${colorCompra(item.__compra).fuerte}`, background: colorCompra(item.__compra).suave }
                       : { border: '1px solid rgba(30,80,40,0.08)' }}>
                     <div className="text-[12px] font-bold text-ink">{item.recordatorios?.nombre}{conCantidad(item)}</div>
                     <div className="text-[11px] text-ink3 flex items-center gap-1">{mascota?.nombre} <MarcaCompra compra={item.__compra} chica /></div>
@@ -890,13 +912,13 @@ function VistaTabla({ recordatorios, personal, maquinas, filtroEstado, filtroPer
               const bloqueado = reqImg && !fotosOk && r.estado === 'PENDIENTE'
               return (
                 <Tr key={r.id} onClick={() => onClickItem(r)}
-                  style={r.__compra ? { background: COMPRA_COLOR.suave, boxShadow: `inset 4px 0 0 ${COMPRA_COLOR.fuerte}` } : undefined}>
+                  style={r.__compra ? { background: colorCompra(r.__compra).suave, boxShadow: `inset 4px 0 0 ${colorCompra(r.__compra).fuerte}` } : undefined}>
                   <Td className="font-semibold whitespace-nowrap">
                     {petEmoji(mascota?.especies?.nombre)} {mascota?.nombre || 'Sin nombre'}
                   </Td>
                   <Td className="whitespace-nowrap">
                     {r.__compra
-                      ? <span className="inline-flex items-center gap-1.5"><MarcaCompra compra={r.__compra} /><span className="text-[11px]" style={{ color: COMPRA_COLOR.texto }}>sin servicio</span></span>
+                      ? <span className="inline-flex items-center gap-1.5"><MarcaCompra compra={r.__compra} /><span className="text-[11px]" style={{ color: colorCompra(r.__compra).texto }}>{esAdicional(r.__compra) ? 'después del servicio' : 'sin servicio'}</span></span>
                       : (r.servicios?.planes?.nombre || '—')}
                   </Td>
                   <Td className="whitespace-nowrap font-semibold">
@@ -1136,6 +1158,7 @@ export default function Produccion() {
   // Solo los compostajes que la familia pidió ANTICIPADOS: lo que hay que
   // producir ya, con la mascota todavía en el cubículo (migración 155).
   const [soloAnticipados, setSoloAnticipados] = useState(false)
+  const [soloCompras,     setSoloCompras]     = useState(false)
   // Solo los Compets con restos cálcicos contratados (REPORTE ORBIT 2026-11-25).
   // `restos` = filas de /produccion/restos-calcicos; null = aún sin cargar,
   // false = no se pudo leer (ver cargarRestosCalcicos).
@@ -1317,7 +1340,12 @@ export default function Produccion() {
 
   // Lo que pintan las vistas y cuentan las cifras: servicios + compras sin
   // servicio (en morado). Solo lectura: lo que escribe sigue separado.
-  const tablero = compras.length ? [...recordatorios, ...compras] : recordatorios
+  const tableroTodo = compras.length ? [...recordatorios, ...compras] : recordatorios
+  // «Solo compras» (David, 27-nov: «pon un filtro para solo ver recordatorios
+  // que compran»): deja las compras —adicionales 🎁 y sin servicio— en las
+  // vistas con filtros (el botón solo está ahí), contadores incluidos.
+  const tablero = soloCompras && (vista === 'servicio' || vista === 'tabla') ? compras : tableroTodo
+  const nCompras = new Set(compras.map(c => c.compra_id)).size
   const abrirCompra = (id, entrega = false) => navigate(`/compras-recordatorios?ver=${id}${entrega ? '&entrega=1' : ''}`)
 
   const stats = {
@@ -1442,6 +1470,21 @@ export default function Produccion() {
                 ))}
               </div>
 
+              {/* Solo lo que la gente COMPRÓ aparte del plan (compras CR). */}
+              <button
+                onClick={() => setSoloCompras(v => !v)}
+                title={soloCompras
+                  ? 'Mostrando solo las compras de recordatorios — clic para ver todo'
+                  : 'Mostrar solo los recordatorios comprados: adicionales 🎁 (después del servicio) y compras sin servicio'}
+                className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-bold border transition-all ${soloCompras ? 'text-white border-transparent shadow-sm' : 'text-ink2 bg-white hover:bg-surface2'}`}
+                style={soloCompras ? { background: ADICIONAL_COLOR.fuerte, borderColor: 'transparent' } : { borderColor: 'rgba(30,80,40,0.15)' }}>
+                🛒 Solo compras
+                {nCompras > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${soloCompras ? 'bg-white/25' : ''}`}
+                    style={soloCompras ? undefined : { background: ADICIONAL_COLOR.suave, color: ADICIONAL_COLOR.texto }}>{nCompras}</span>
+                )}
+              </button>
+
               {/* Solo los compostajes con recordatorios anticipados: lo único
                   que se produce mientras la mascota sigue en el cubículo. */}
               <button
@@ -1487,6 +1530,9 @@ export default function Produccion() {
           <div className="ml-auto flex items-center gap-3 text-[11px] text-ink3">
             <span className="inline-flex items-center gap-1" title="Compra de recordatorio – cliente sin servicio funerario">
               <span className="w-2.5 h-2.5 rounded-full" style={{ border: `1.5px dashed ${COMPRA_COLOR.fuerte}`, background: COMPRA_COLOR.suave }} /> Sin servicio (CR)
+            </span>
+            <span className="inline-flex items-center gap-1" title="Recordatorio adicional – la familia lo compró después del servicio">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ border: `1.5px dashed ${ADICIONAL_COLOR.fuerte}`, background: ADICIONAL_COLOR.suave }} /> Adicional 🎁
             </span>
             <span className="inline-flex items-center gap-1"><Zap size={10} style={{ color: '#059669' }} /> Sin fotos OK</span>
             <span className="inline-flex items-center gap-1"><Lock size={10} style={{ color: '#92400E' }} /> Bloqueado</span>
@@ -1565,6 +1611,7 @@ export default function Produccion() {
           onClose={() => setModalItem(null)}
           onSaved={() => { setModalItem(null); cargarCompras() }}
           onAbrirCompra={id => { setModalItem(null); abrirCompra(id, false) }}
+          onProgramarEntrega={esAdmin ? (id => { setModalItem(null); abrirCompra(id, true) }) : null}
         />
       )}
       {modalItem && !modalItem.__compra && (

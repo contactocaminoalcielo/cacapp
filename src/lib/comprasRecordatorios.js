@@ -143,6 +143,16 @@ export async function descargarCedula(compraId, itemId, fotoPath) {
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
+/** Certificado de entrega de la compra (CR-n), con el mismo diseño del servicio. */
+export async function descargarCertificadoCompra(compraId, numero) {
+  const blob = await orbitApiBlob(`/compras-recordatorios/${compraId}/certificado-entrega`)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `Certificado_Entrega_CR-${numero || compraId.slice(0, 6)}.pdf`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
+
 // ── Catálogos y búsqueda (PostgREST) ────────────────────────────────────────
 
 export async function cargarCatalogos() {

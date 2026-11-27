@@ -71,12 +71,13 @@ function numeroCertificado(svc) {
   return `CAC-${aa}${mm}-${String(svc?.id || '').slice(0, 6).toUpperCase()}`
 }
 
-export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, plantas, cobro = null }) {
+export function htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma, plantas, cobro = null, numero: numeroFijo = null }) {
   const mascota = svc?.mascotas || svc?.mascota || {}
   const cliente = mascota?.clientes || mascota?.cliente || {}
   const clienteNombre = `${cliente?.nombre || ''} ${cliente?.apellido || ''}`.trim()
   const mensajeroNombre = mensajero ? `${mensajero.nombre || ''} ${mensajero.apellido || ''}`.trim() : ''
-  const numero = numeroCertificado(svc)
+  // Una compra de recordatorios (CR-n) no es un servicio: trae su número propio.
+  const numero = numeroFijo || numeroCertificado(svc)
   const fechaEntrega = fechaLarga(entrega?.fecha_realizada) || fechaLarga(new Date().toISOString())
 
   // ── Ítems: lista compacta, sin cajas ─────────────────────────────────────
@@ -246,5 +247,50 @@ export async function certificadoEntregaPdf({ svc, entrega, mensajero, items, fi
   const pdf = await renderPdf({ html, formato: 'A4' })
   const mascota = (svc?.mascotas || svc?.mascota)?.nombre || 'servicio'
   const archivo = `Certificado_Entrega_${String(mascota).replace(/[^\w.-]+/g, '_')}_${numero}.pdf`
+  return { pdf, archivo }
+}
+
+/**
+ * Certificado de entrega de una COMPRA de recordatorios (CR-n), sea un
+ * recordatorio adicional de la venta posterior o una compra sin servicio
+ * (David, 27-nov: «que desde la ficha se pueda … descargar el certificado de
+ * entrega»). Recibe el detalle de la compra (`leerDetalle`) y lo viste con la
+ * forma que espera el certificado del servicio: mismo diseño, mismas reglas
+ * (no es un recibo; solo se muestra lo que falta por cobrar en la puerta).
+ */
+export async function certificadoEntregaCompraPdf(d) {
+  const e = d.entrega_ruta || null
+  const dec = d.entrega || {}          // lo que dejó el cliente del catálogo web
+  const cli = d.cliente || {}
+  const adicional = d.origen === 'OFERTA_POSTERIOR'
+  const svc = {
+    id: null,
+    planes: { nombre: adicional ? `Recordatorio adicional · compra CR-${d.numero}` : `Compra de recordatorios CR-${d.numero}` },
+    mascotas: {
+      nombre: d.mascota?.nombre,
+      especies: { nombre: d.mascota?.especie },
+      clientes: { nombre: cli.nombre, apellido: cli.apellido },
+    },
+  }
+  // Sin entrega con mensajero (la recogió la familia, o aún no sale) los datos
+  // de entrega son los que declaró la familia o los de su ficha.
+  const entrega = e || {
+    tipo_entrega: 'DOMICILIO',
+    direccion_entrega: dec.direccion || cli.direccion || null,
+    barrio: dec.barrio || cli.barrio || null,
+    ciudad: dec.ciudad || cli.ciudad || null,
+    contacto_nombre: dec.recibe || [cli.nombre, cli.apellido].filter(Boolean).join(' ') || null,
+    contacto_telefono: dec.telefono || cli.whatsapp || null,
+    indicaciones: dec.indicaciones || null,
+  }
+  const mensajero = e?.mensajero_nombre ? { nombre: e.mensajero_nombre, apellido: e.mensajero_apellido } : null
+  const items = (d.items || []).map(i => ({ nombre: i.nombre, cantidad: i.cantidad, estado: i.estado, categoria: i.categoria }))
+  const saldo = Math.max(0, (Number(d.total) || 0) - (Number(d.valor_pagado) || 0))
+  const cobro = { lineas: saldo > 0 ? [{ nombre: `Saldo de la compra CR-${d.numero}`, valor: saldo }] : [] }
+  const firmaImg = await resolverFirma(e?.foto_firma_url)
+  const numero = `CAC-CR-${d.numero}`
+  const { html } = htmlCertificadoEntrega({ svc, entrega, mensajero, items, firma: firmaImg, plantas: null, cobro, numero })
+  const pdf = await renderPdf({ html, formato: 'A4' })
+  const archivo = `Certificado_Entrega_${String(d.mascota?.nombre || 'compra').replace(/[^\w.-]+/g, '_')}_CR-${d.numero}.pdf`
   return { pdf, archivo }
 }

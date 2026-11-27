@@ -19,12 +19,33 @@
 import { pool } from '../src/db.js'
 import { LINEA_WA_ID } from '../src/linea-wa.js'
 import { crearPlantilla, listarPlantillas } from '../src/whatsapp-plantillas.js'
-import { CUERPO_PLANTILLA, BOTONES } from '../src/oferta-posterior.js'
+import { CUERPO_PLANTILLA, BOTONES, BOTONES_ENLACE } from '../src/oferta-posterior.js'
 
-const NOMBRE = 'oferta_posterior_servicio'
+// `--enlaces` (David, 27-nov: «desde el primer mensaje ya debería redireccionar
+// al link»): la plantilla NUEVA `oferta_posterior_enlaces`, con dos botones de
+// ENLACE (Meta no deja más de dos) que abren el portal directo y «No deseo
+// informacion» de respuesta rápida. Al aprobarse, `estado --enlaces` la deja
+// como LA plantilla de la oferta (`enlaces: true`) y la vieja deja de salir;
+// los botones de la vieja que ya recibieron las familias siguen funcionando.
+//   docker exec -w /app orbit-backend node scripts/crear-plantilla-oferta-posterior.mjs crear --enlaces
+//   docker exec -w /app orbit-backend node scripts/crear-plantilla-oferta-posterior.mjs estado --enlaces
+const args = process.argv.slice(2)
+const ENLACES = args.includes('--enlaces')
+const NOMBRE = ENLACES ? 'oferta_posterior_enlaces' : 'oferta_posterior_servicio'
 const IDIOMA = 'es_MX'
+const BASE = (process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')
+const EJEMPLO_CODIGO = '0123456789abcdef0123456789abcdef'
+const enlace = seccion => `${BASE}/api/portal/oferta-ir/${seccion}/{{1}}`
 
-const [accion = 'estado'] = process.argv.slice(2)
+const BOTONES_META = ENLACES
+  ? [
+      { type: 'URL', text: BOTONES_ENLACE[0], url: enlace('recuerdos'), example: [enlace('recuerdos').replace('{{1}}', EJEMPLO_CODIGO)] },
+      { type: 'URL', text: BOTONES_ENLACE[1], url: enlace('planes'),    example: [enlace('planes').replace('{{1}}', EJEMPLO_CODIGO)] },
+      { type: 'QUICK_REPLY', text: BOTONES_ENLACE[2] },
+    ]
+  : BOTONES.map(text => ({ type: 'QUICK_REPLY', text }))
+
+const [accion = 'estado'] = args.filter(a => !a.startsWith('--'))
 
 async function agenteDeFamilias() {
   const { rows } = await pool.query(
@@ -41,7 +62,7 @@ async function crear() {
     nombre: NOMBRE, idioma: IDIOMA, categoria: 'MARKETING', formato: 'POSITIONAL', agenteId: agente.id,
     componentes: [
       { type: 'BODY', text: CUERPO_PLANTILLA, example: { body_text: [['Luna']] } },
-      { type: 'BUTTONS', buttons: BOTONES.map(text => ({ type: 'QUICK_REPLY', text })) },
+      { type: 'BUTTONS', buttons: BOTONES_META },
     ],
   })
   console.log(JSON.stringify(r.body, null, 2))
@@ -63,7 +84,7 @@ async function estado() {
     `INSERT INTO public.config_operativa (modulo, clave, valor)
      VALUES ('OFERTA_POSTERIOR', 'plantilla', $1::jsonb)
      ON CONFLICT (modulo, clave) DO UPDATE SET valor = EXCLUDED.valor`,
-    [JSON.stringify({ nombre: NOMBRE, idioma: IDIOMA, categoria: p.category || 'MARKETING' })]
+    [JSON.stringify({ nombre: NOMBRE, idioma: IDIOMA, categoria: p.category || 'MARKETING', ...(ENLACES ? { enlaces: true } : {}) })]
   )
   const { rows: cfg } = await pool.query(
     `SELECT clave, valor FROM public.config_operativa

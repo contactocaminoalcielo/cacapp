@@ -155,6 +155,30 @@ y en la lista contaba como «abierta», sin producto. Desde el 27-nov:
   MISMA transacción la oportunidad pasa a `COMPRA_REGISTRADA` (`ligarCompraAVenta`) y, tras el
   COMMIT, Diseño recibe el aviso. Entra sola al tablero de Producción con la marca 🎁.
 
+## Botones de enlace, tablero y entrega (REPORTE 27-nov, 2ª parte)
+
+- **El primer mensaje abre el enlace.** Plantilla NUEVA `oferta_posterior_enlaces` (MARKETING):
+  mismo cuerpo, botones «Recuerdos y cedulas» y «Planes preexequiales» (ENLACE; Meta deja máximo
+  **dos**) + «No deseo informacion» (respuesta rápida, mismo texto de siempre → sigue dando de
+  baja por el webhook). El enlace no admite el `#` del portal: apunta a
+  `/api/portal/oferta-ir/<recuerdos|planes>/{{1}}` (`{{1}}` = código) y `destinoDeEnlace` redirige
+  a `/#/oferta/CODIGO/recuerdos` (inicio con recordatorios y cédulas) o `/planes`, anotando
+  `respuesta`/`respondido_en` si estaban vacíos (los robots de vista previa no cuentan).
+  Se crea con `crear-plantilla-oferta-posterior.mjs crear --enlaces`; al aprobarse,
+  `estado --enlaces` siembra `OFERTA_POSTERIOR.plantilla` con `enlaces: true` y desde ahí sale
+  esa. Los botones de la vieja que ya tienen las familias siguen funcionando. 🪤 El envío pasa el
+  código en `buttonParams` y `mandarPlantilla` lo repite en CADA botón de enlace con hueco (Meta
+  rechaza si falta en uno); por GHL no se puede (se lanza error).
+- **Tablero de Producción:** las compras de la oferta posterior van en **rosado** con la cinta
+  «🎁 RECORDATORIO ADICIONAL · CR-n» (las compras sin servicio siguen en morado). Botón
+  **«🛒 Solo compras»** en las vistas Por servicio y Tabla: deja solo las compras CR.
+- **Entrega desde la ficha:** el modal de la línea de compra en el tablero trae «Programar
+  entrega» (abre la compra con el formulario de entrega) y «Certificado de entrega»; la ficha de
+  la compra también lo trae. `GET /compras-recordatorios/:id/certificado-entrega` →
+  `certificadoEntregaCompraPdf`: el MISMO certificado del servicio (número `CAC-CR-n`), con la
+  entrega del mensajero si existe o, si no, lo que declaró la familia / su ficha, y el saldo de la
+  compra como «por cobrar en la entrega».
+
 ## Burbuja del menú
 
 El número junto a «Ventas posteriores» es **lo que espera una acción del equipo**. Lo calcula `contarPendientes()` en `orbit-backend/src/ventas-posteriores.js` y lo sirve `GET /ventas-posteriores-pendientes` (solo COORDINADOR/ADMIN); `BadgesContext` lo pide cada 60 s. No va en el RPC `orbit_contadores` porque estas tablas están cerradas al navegador.

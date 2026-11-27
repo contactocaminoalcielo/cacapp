@@ -181,6 +181,50 @@ e1 = await OP.enviarOferta({ id: (await oferta('G')).id })
 assert.equal(e1.enviado, true); ok('el reintento sale')
 assert.equal((await OP.enviarOferta({ id: (await oferta('G')).id })).motivo, 'ya_enviado'); ok('una ENVIADA no se vuelve a mandar')
 
+paso('Plantilla con ENLACES (27-nov: los botones abren el portal directo)')
+{
+  const PLANT_VIEJA = (await q(`SELECT valor FROM config_operativa WHERE modulo='OFERTA_POSTERIOR' AND clave='plantilla'`))[0].valor
+  await pg.query(`UPDATE config_operativa SET valor = '{"nombre":"oferta_posterior_enlaces","idioma":"es_MX","categoria":"MARKETING","enlaces":true}'
+                   WHERE modulo='OFERTA_POSTERIOR' AND clave='plantilla'`)
+  const G = await oferta('G')
+  await pg.query(`UPDATE ofertas_posteriores SET estado='PENDIENTE', respuesta=NULL, respondido_en=NULL WHERE id=$1`, [G.id])
+  const antes = globalThis.__plantillas.length
+  const r = await OP.enviarOferta({ id: G.id })
+  assert.equal(r.enviado, true)
+  const env = globalThis.__plantillas[antes]
+  assert.equal(env.plantillaNombre, 'oferta_posterior_enlaces')
+  assert.deepEqual(env.buttonParams, [G.codigo])
+  assert.match(env.mensaje, /\[botón: Recuerdos y cedulas\] \[botón: Planes preexequiales\] \[botón: No deseo informacion\]/)
+  ok('sale la plantilla con enlaces y el {{1}} de los botones es el código del portal')
+
+  const ir = await OP.destinoDeEnlace({ seccion: 'planes', codigo: G.codigo, userAgent: 'Mozilla/5.0 (Linux; Android 14)' })
+  assert.ok(ir.endsWith(`/#/oferta/${G.codigo}/planes`), ir)
+  let g = await oferta('G')
+  assert.equal(g.respuesta, 'PREEXEQUIALES'); assert.ok(g.respondido_en)
+  ok('«Planes preexequiales» redirige al portal en planes y anota que la familia lo abrió')
+  const ir2 = await OP.destinoDeEnlace({ seccion: 'recuerdos', codigo: G.codigo.toUpperCase(), userAgent: 'Mozilla/5.0' })
+  assert.ok(ir2.endsWith(`/#/oferta/${G.codigo}/recuerdos`), ir2)
+  assert.equal((await oferta('G')).respuesta, 'PREEXEQUIALES')
+  ok('«Recuerdos y cedulas» va a recuerdos y NO pisa la primera respuesta')
+
+  await pg.query(`UPDATE ofertas_posteriores SET respuesta=NULL, respondido_en=NULL WHERE id=$1`, [G.id])
+  await OP.destinoDeEnlace({ seccion: 'planes', codigo: G.codigo, userAgent: 'WhatsApp/2.23.20 A' })
+  g = await oferta('G')
+  assert.equal(g.respuesta, null); assert.equal(g.respondido_en, null)
+  ok('la vista previa de WhatsApp (robot) no cuenta como que la familia lo abrió')
+  const malo = await OP.destinoDeEnlace({ seccion: 'planes', codigo: "x' OR 1=1 --" })
+  assert.ok(!malo.includes('/oferta/'), malo)
+  ok('un código inválido lleva al inicio, sin tocar la base')
+
+  // «No deseo informacion» de la plantilla nueva es el mismo texto: lo atiende el webhook.
+  const { esBotonDeLaOferta, respuestaDeBoton } = await import(`${SRC}/oferta-posterior-reglas.js`)
+  assert.ok(esBotonDeLaOferta('No deseo informacion')); assert.equal(respuestaDeBoton('No deseo informacion'), 'NO_DESEA')
+  ok('«No deseo informacion» de la plantilla nueva sigue dando de baja')
+
+  await pg.query(`UPDATE config_operativa SET valor = $1 WHERE modulo='OFERTA_POSTERIOR' AND clave='plantilla'`, [JSON.stringify(PLANT_VIEJA)])
+  await pg.query(`UPDATE ofertas_posteriores SET respuesta=NULL, respondido_en=NULL WHERE id=$1`, [G.id])
+}
+
 paso('Condolencia reciente al enviar')
 {
   const [c] = await q(`INSERT INTO clientes (nombre, apellido, whatsapp) VALUES ('Lola','R','3001110020') RETURNING id_cliente`)

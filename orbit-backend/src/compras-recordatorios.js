@@ -19,6 +19,7 @@
 import { pool, log } from './db.js'
 import { autorizacionDelPayload, registrarAutorizacion, contextoPeticion } from './autorizaciones.js'
 import { ligarCompraAVenta, avisarEquipo } from './ventas-posteriores.js'
+import { certificadoEntregaCompraPdf } from './pdf-plantillas/certificado-entrega.js'
 import {
   HttpError, t, num, limpiarDatosCliente, normalizarItems, validarPago, ESTADOS_ITEM,
 } from './compras-recordatorios-reglas.js'
@@ -460,6 +461,28 @@ export async function detalleCompra(req, res) {
   } catch (e) {
     log(MOD, 'detalleCompra', e.message)
     res.status(500).json({ error: 'No se pudo leer la compra' })
+  }
+}
+
+/**
+ * GET /compras-recordatorios/:id/certificado-entrega — el PDF del certificado de
+ * entrega de la compra (David, 27-nov). Se puede sacar antes de entregar, como
+ * el del servicio: el mensajero lo lleva para la firma.
+ */
+export async function certificadoEntregaCompra(req, res) {
+  if (!esUuid(req.params.id)) return res.status(400).json({ error: 'Id inválido' })
+  try {
+    const d = await leerDetalle(pool, req.params.id)
+    if (!d) return res.status(404).json({ error: 'Compra no encontrada' })
+    if (d.anulada_en) return res.status(409).json({ error: 'La compra está anulada: no tiene certificado de entrega.' })
+    const { pdf, archivo } = await certificadoEntregaCompraPdf(d)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="${archivo}"`)
+    res.setHeader('X-Archivo', archivo)
+    res.send(pdf)
+  } catch (e) {
+    log(MOD, 'certificadoEntregaCompra', e.message)
+    res.status(500).json({ error: 'No se pudo generar el certificado: ' + e.message })
   }
 }
 

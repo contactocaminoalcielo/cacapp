@@ -17,11 +17,20 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { useConfirm } from '@/contexts/ConfirmContext'
 import { db, dbTodo } from '@/lib/supabase'
-import { actualizarItem, ESTADOS_ITEM, rotuloOrigen, esCedula } from '@/lib/comprasRecordatorios'
-import { ExternalLink } from 'lucide-react'
+import { actualizarItem, ESTADOS_ITEM, rotuloOrigen, esCedula, descargarCertificadoCompra } from '@/lib/comprasRecordatorios'
+import { ExternalLink, Truck, FileDown } from 'lucide-react'
 
 /** Color que distingue en el tablero lo que es una compra sin servicio. */
 export const COMPRA_COLOR = { borde: '#A78BFA', fuerte: '#7C3AED', suave: '#F5F3FF', texto: '#5B21B6' }
+/**
+ * RECORDATORIO ADICIONAL (venta posterior, migr. 210): rosado, para que Diseño
+ * lo distinga de un vistazo de la compra sin servicio (morado) y de los
+ * recordatorios del plan (David, 27-nov: «que la tarjeta tenga algo diferente
+ * a las otras para poder identificar que es de un recordatorio adicional»).
+ */
+export const ADICIONAL_COLOR = { borde: '#F9A8D4', fuerte: '#DB2777', suave: '#FDF2F8', texto: '#9D174D' }
+export const esAdicional = compra => compra?.origen === 'OFERTA_POSTERIOR'
+export const colorCompra = compra => (esAdicional(compra) ? ADICIONAL_COLOR : COMPRA_COLOR)
 
 /** Lo que el tablero necesita de cada línea, con su compra, mascota y cliente. */
 export async function cargarItemsCompras() {
@@ -71,7 +80,7 @@ export function aItemsTablero(items) {
           id: null,
           estado: listo ? 'LISTO' : null,
           mascotas: c?.mascotas,
-          planes: { nombre: `Compra CR-${c?.numero} · sin servicio funerario` },
+          planes: { nombre: esAdicional(c) ? `Recordatorio adicional · compra CR-${c?.numero}` : `Compra CR-${c?.numero} · sin servicio funerario` },
           // Lo único que la tarjeta lee de aquí es «¿hay fotos?»: por línea.
           fecha_imagenes_recibidas: !pideFotos(ci) || tieneFotos(ci) ? ci.created_at : null,
         },
@@ -86,24 +95,36 @@ export function MarcaCompra({ compra, chica = false }) {
   if (!compra) return null
   // Las de la oferta posterior (migr. 210) SÍ son de una familia con servicio:
   // se marcan aparte para que Diseño las reconozca como «COMPRA ADICIONAL».
-  const adicional = compra.origen === 'OFERTA_POSTERIOR'
+  const adicional = esAdicional(compra)
+  const col = colorCompra(compra)
   return (
-    <span title={adicional ? 'COMPRA ADICIONAL – oferta posterior al servicio' : 'Compra de recordatorio – cliente sin servicio funerario'}
+    <span title={adicional ? 'RECORDATORIO ADICIONAL – comprado después del servicio (venta posterior)' : 'Compra de recordatorio – cliente sin servicio funerario'}
       className={`inline-flex items-center gap-0.5 rounded-full font-bold whitespace-nowrap ${chica ? 'text-[9px] px-1.5 py-px' : 'text-[10px] px-2 py-0.5'}`}
-      style={{ background: COMPRA_COLOR.suave, color: COMPRA_COLOR.texto, border: `1px solid ${COMPRA_COLOR.borde}` }}>
-      {adicional ? '🎁' : '🛒'} CR-{compra.numero}
+      style={adicional
+        ? { background: col.fuerte, color: '#fff', border: `1px solid ${col.fuerte}` }
+        : { background: col.suave, color: col.texto, border: `1px solid ${col.borde}` }}>
+      {adicional ? '🎁 ADICIONAL' : '🛒'} CR-{compra.numero}
     </span>
   )
 }
 
-export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompra }) {
+export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompra, onProgramarEntrega }) {
   const { alert: showAlert } = useConfirm()
   const [estado, setEstado]     = useState(item.estado)
   const [asignado, setAsignado] = useState(item.asignado_a || '')
   const [notas, setNotas]       = useState(item.notas || '')
   const [saving, setSaving]     = useState(false)
+  const [certificando, setCertificando] = useState(false)
   const c = item.compras_recordatorios
   const cli = c?.clientes
+  const col = colorCompra(c)
+
+  async function certificado() {
+    setCertificando(true)
+    try { await descargarCertificadoCompra(item.compra_id, c?.numero) }
+    catch (e) { await showAlert(e.message, { title: 'No se pudo generar el certificado' }) }
+    finally { setCertificando(false) }
+  }
 
   async function guardar() {
     setSaving(true)
@@ -127,9 +148,22 @@ export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompr
         <Button onClick={guardar} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</Button>
       </>}>
       <div className="space-y-4">
-        <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: COMPRA_COLOR.suave, border: `1px solid ${COMPRA_COLOR.borde}`, color: COMPRA_COLOR.texto }}>
+        <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: col.suave, border: `1px solid ${col.borde}`, color: col.texto }}>
+          {esAdicional(c) && <div className="font-extrabold tracking-wide text-[11px] mb-0.5">🎁 RECORDATORIO ADICIONAL · comprado después del servicio</div>}
           <strong>Compra CR-{c?.numero}</strong> · {rotuloOrigen(c?.origen, esCedula(item.nombre))?.produccion || 'cliente sin servicio funerario'}
           {cli && <span className="text-gray-500"> · {[cli.nombre, cli.apellido].filter(Boolean).join(' ')}{cli.whatsapp ? ` (${cli.whatsapp})` : ''}</span>}
+        </div>
+        {/* Entrega desde la ficha (David, 27-nov): programarla abre la compra
+            con el formulario de entrega; el certificado sale aquí mismo. */}
+        <div className="flex flex-wrap gap-2">
+          {onProgramarEntrega && (
+            <Button size="sm" variant="secondary" onClick={() => onProgramarEntrega(item.compra_id)} disabled={saving}>
+              <Truck size={13} /> Programar entrega
+            </Button>
+          )}
+          <Button size="sm" variant="secondary" onClick={certificado} disabled={saving || certificando}>
+            <FileDown size={13} /> {certificando ? 'Generando…' : 'Certificado de entrega'}
+          </Button>
         </div>
         {/* Las fotos del catálogo web ya son URLs públicas; las de una compra
             interna son rutas privadas y se ven en el detalle de la compra. */}
@@ -174,7 +208,7 @@ export function ModalItemCompra({ item, personal, onClose, onSaved, onAbrirCompr
               </button>
             ))}
           </div>
-          <p className="text-[10px] text-gray-400 mt-1">La entrega se marca desde la compra, no desde aquí.</p>
+          <p className="text-[10px] text-gray-400 mt-1">La entrega la marca el mensajero al entregar (o coordinación desde la compra).</p>
         </div>
         <div>
           <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Asignado a</label>

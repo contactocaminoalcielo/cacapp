@@ -1556,11 +1556,16 @@ export async function mandarPlantilla({
   // `index` es la POSICIÓN del botón en la lista, no un contador de variables:
   // con un botón de respuesta rápida delante, mandar '0' apunta al botón que no
   // es y Meta rechaza el envío.
+  // Con DOS botones de enlace con hueco (la oferta posterior, 27-nov: «Recuerdos
+  // y cedulas» y «Planes preexequiales», los dos con {{1}} = código), los dos
+  // llevan los MISMOS valores: Meta exige parámetros para cada uno y, si falta
+  // el del segundo, rechaza el envío entero. Con uno solo, nada cambia.
   const botones = componente(plantilla, 'BUTTONS')?.buttons || []
-  const iUrl = botones.findIndex(b => b.type === 'URL' && huecosDe(b.url).length)
-  if (iUrl >= 0) {
+  const conHueco = botones.map((b, i) => (b.type === 'URL' && huecosDe(b.url).length ? i : -1)).filter(i => i >= 0)
+  if (conHueco.length) {
     const p = recoger('BUTTON')
-    if (p.length) componentes.push({ type: 'button', sub_type: 'url', index: String(iUrl), parameters: p })
+    if (p.length) conHueco.forEach(iUrl =>
+      componentes.push({ type: 'button', sub_type: 'url', index: String(iUrl), parameters: p }))
   }
 
   // ── Carrusel ──

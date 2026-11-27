@@ -28,7 +28,7 @@ import { jobOfertaPosterior } from './jobs/oferta-posterior.js'
 import { jobAvisoTiempos } from './aviso-tiempos.js'
 import {
   listarOfertas, excluirOferta, reincluirOferta,
-  listarExclusiones, crearExclusion, retirarExclusion,
+  listarExclusiones, crearExclusion, retirarExclusion, destinoDeEnlace,
 } from './oferta-posterior.js'
 import {
   verOferta, eventoOferta, borradorOferta, comprarOferta,
@@ -107,7 +107,7 @@ import {
   registrarMovimiento, revertirMovimiento, importarCatalogo,
 } from './inventario.js'
 import {
-  listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra,
+  listarCompras, detalleCompra, crearCompra, registrarPago, actualizarItem, anularCompra, certificadoEntregaCompra,
   programarEntrega, completarEntregaCompra,
 } from './compras-recordatorios.js'
 import { verCatalogo, abrirBorrador, crearCompraPublica } from './catalogo-publico.js'
@@ -238,6 +238,7 @@ const rolComprasL = requireRol('COORDINADOR', 'ADMIN', 'PRODUCTOR')
 
 app.get('/compras-recordatorios',                    requireAuth, rolComprasL, listarCompras)
 app.get('/compras-recordatorios/:id',                requireAuth, rolComprasL, detalleCompra)
+app.get('/compras-recordatorios/:id/certificado-entrega', requireAuth, rolComprasL, certificadoEntregaCompra)
 app.post('/compras-recordatorios',                   requireAuth, rolCompras,  crearCompra)
 app.post('/compras-recordatorios/:id/pagos',         requireAuth, rolCompras,  registrarPago)
 // POST y no PATCH: el CORS de arriba no anuncia métodos extra y en desarrollo
@@ -1554,6 +1555,19 @@ app.post('/portal/oferta/:codigo/afiliacion/pago', rutaPortalOferta('pago', req 
   reportarPagoAfiliacion({ codigo: req.params.codigo, payload: req.body || {} })))
 app.post('/portal/oferta/:codigo/baja', rutaPortalOferta('baja', req =>
   bajaOferta({ codigo: req.params.codigo })))
+// Botones de ENLACE de la plantilla (27-nov): Meta no acepta el «#» del portal
+// en el enlace del botón, así que el botón llega aquí y se redirige. Pase lo
+// que pase, la familia termina en el portal (nunca una página de error).
+app.get('/portal/oferta-ir/:seccion/:codigo', async (req, res) => {
+  let url
+  try {
+    url = await destinoDeEnlace({ seccion: req.params.seccion, codigo: req.params.codigo, userAgent: req.get('user-agent') })
+  } catch (e) {
+    log('[portal/oferta-ir] ERROR', e.message)
+  }
+  res.set('Cache-Control', 'no-store')
+  res.redirect(302, url || `${(process.env.APP_URL || 'https://orbit.orbitacac.com').replace(/\/+$/, '')}/`)
+})
 
 // ── Portal público /#/opinion/CODIGO: el comentario de Regular / Malo ──
 // El código es propio de la encuesta (no el del portal de fotos).

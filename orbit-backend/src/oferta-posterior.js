@@ -22,7 +22,9 @@
 //   2. REVISAR  — las reglas que cambian con el tiempo (una queja de ayer, un
 //      «no deseo información») se vuelven a mirar antes de cada corrida Y justo
 //      antes de cada envío: preparar hace 20 días no autoriza a enviar hoy.
-//   3. ENVIAR   — el job manda la plantilla con los cuatro botones.
+//   3. ENVIAR   — el job manda la plantilla: la vieja con cuatro botones de
+//      respuesta, o la de ENLACES (27-nov) con «Recuerdos y cedulas» y «Planes
+//      preexequiales», que abren el portal directo, + «No deseo informacion».
 //
 // 🪤 El agente de familias NO debe contestar los botones: el webhook llama a
 // `manejarRespuestaOferta` ANTES de despertarlo (igual que la encuesta).
@@ -31,7 +33,7 @@ import { enviarPlantillaGenerica } from './whatsapp.js'
 import { enviarSobre } from './whatsapp-cloud.js'
 import { LINEA_WA_ID, LINEA_WA_NUMERO } from './linea-wa.js'
 import { nombreMascota, normalizarFecha } from './condolencias.js'
-import { BOTONES, respuestaDeBoton, esBotonDeLaOferta, pct, ofertaVigente } from './oferta-posterior-reglas.js'
+import { BOTONES, BOTONES_ENLACE, respuestaDeBoton, esBotonDeLaOferta, pct, ofertaVigente } from './oferta-posterior-reglas.js'
 import {
   asegurarVenta, registrarEvento, esUuid,
 } from './ventas-posteriores.js'
@@ -47,7 +49,7 @@ export const CUERPO_PLANTILLA =
   + 'conservar sus recuerdos y también para acompañar a las demás mascoticas de tu familia. 🌿✨\n\n'
   + 'Si deseas conocerlas, puedes seleccionar alguna de las siguientes opciones:'
 
-export { BOTONES }
+export { BOTONES, BOTONES_ENLACE }
 
 export const CONFIG_DEFAULTS = {
   activo:                       false,
@@ -114,7 +116,7 @@ export function plantillaOferta(cfg) {
   const raw = cfg.plantilla
   const p = typeof raw === 'string' ? safeJson(raw) : raw
   if (!p || !p.nombre) return null
-  return { nombre: p.nombre, idioma: p.idioma || 'es_MX', categoria: p.categoria || 'MARKETING' }
+  return { nombre: p.nombre, idioma: p.idioma || 'es_MX', categoria: p.categoria || 'MARKETING', enlaces: !!p.enlaces }
 }
 
 export function construirEnlaceOferta(codigo, seccion = '') {
@@ -122,7 +124,40 @@ export function construirEnlaceOferta(codigo, seccion = '') {
   return `${base}/#/oferta/${codigo}${seccion ? `/${seccion}` : ''}`
 }
 
-const TEL10 = col => `right(regexp_replace(COALESCE(${col}, ''), '\\D', '', 'g'), 10)`
+// ─── Botones de ENLACE de la plantilla (David, 27-nov) ──────────────────────
+// «Desde el primer mensaje ya debería redireccionar al link»: la plantilla
+// `oferta_posterior_enlaces` lleva dos botones de enlace (Meta no deja más de
+// dos) y «No deseo informacion». El enlace del botón no puede llevar el «#» del
+// portal, así que apunta a /api/portal/oferta-ir/<seccion>/<código> y aquí se
+// redirige. De paso se anota que la familia lo abrió desde el WhatsApp.
+export const SECCIONES_ENLACE = {
+  recuerdos: { seccion: 'recuerdos', respuesta: 'RECORDATORIOS' },
+  planes:    { seccion: 'planes',    respuesta: 'PREEXEQUIALES' },
+}
+const CODIGO_OFERTA = /^[0-9a-f]{32}$/
+// Los que abren el enlace para armar la vista previa no son la familia.
+const ES_ROBOT = /facebookexternalhit|whatsapp|meta-externalagent|bot\b|crawler|preview/i
+
+/** La plantilla con enlaces lleva `enlaces: true` en `OFERTA_POSTERIOR.plantilla`. */
+export const plantillaConEnlaces = p => !!p?.enlaces
+
+export async function destinoDeEnlace({ seccion, codigo, userAgent = '' }) {
+  const s = SECCIONES_ENLACE[String(seccion || '').toLowerCase()]
+  const cod = String(codigo || '').toLowerCase()
+  if (!CODIGO_OFERTA.test(cod)) return construirEnlaceOferta('').replace(/\/#\/oferta\/$/, '/')
+  if (s && !ES_ROBOT.test(String(userAgent))) {
+    // Nunca se pisa una respuesta anterior (y menos un «No deseo»). Si la base
+    // falla, la familia igual llega al portal.
+    await pool.query(
+      `UPDATE public.ofertas_posteriores
+          SET respuesta = COALESCE(respuesta, $2), respondido_en = COALESCE(respondido_en, now()), updated_at = now()
+        WHERE codigo = $1 AND estado = 'ENVIADO'`, [cod, s.respuesta])
+      .catch(e => log(TAG, 'no se pudo anotar el enlace abierto', cod, e.message))
+  }
+  return construirEnlaceOferta(cod, s?.seccion || '')
+}
+
+const TEL10 = col =>`right(regexp_replace(COALESCE(${col}, ''), '\\D', '', 'g'), 10)`
 
 // ─── 1. Preparar ────────────────────────────────────────────────────────────
 // Un solo INSERT … SELECT, idempotente por UNIQUE(servicio_id).
@@ -283,7 +318,7 @@ export async function enviarOferta({ id, config = null, personalId = null }) {
   let env = null, registro = null
   try {
     const { rows: [d] } = await pool.query(
-      `SELECT s.estado, m.nombre AS mascota, c.whatsapp,
+      `SELECT s.estado, m.nombre AS mascota, c.whatsapp, o.codigo,
               TRIM(COALESCE(c.nombre,'') || ' ' || COALESCE(c.apellido,'')) AS propietario,
               ${MOTIVO_DINAMICO} AS motivo,
               -- Fechas como TEXTO: node-pg convierte un date a Date en la zona del
@@ -335,14 +370,18 @@ export async function enviarOferta({ id, config = null, personalId = null }) {
 
     const mascota = nombreMascota(d.mascota)
     const quien = esUuid(personalId) ? personalId : null
+    const conEnlaces = plantillaConEnlaces(plantilla)
+    if (conEnlaces && !CODIGO_OFERTA.test(String(d.codigo || ''))) throw new Error('La oferta no tiene código de portal')
     env = await enviarPlantillaGenerica({
       telefono:        destino,
       nombre:          d.propietario || '',
       plantillaNombre: plantilla.nombre,
       idioma:          plantilla.idioma,
       category:        plantilla.categoria,
-      mensaje:         `${CUERPO_PLANTILLA.replace('{{1}}', mascota)}\n${BOTONES.map(b => `[botón: ${b}]`).join(' ')}`,
+      mensaje:         `${CUERPO_PLANTILLA.replace('{{1}}', mascota)}\n${(conEnlaces ? BOTONES_ENLACE : BOTONES).map(b => `[botón: ${b}]`).join(' ')}`,
       bodyParams:      [mascota],
+      // Plantilla con enlaces: el {{1}} de los dos botones es el código del portal.
+      buttonParams:    conEnlaces ? [d.codigo] : [],
       fromNumberId:    LINEA_WA_ID,
       // NULL desde el job (como condolencias y encuesta): con un id puesto el
       // agente se calla 10 minutos en esa conversación.

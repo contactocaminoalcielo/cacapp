@@ -104,7 +104,7 @@ async function agenteIdDeLinea(phoneNumberId) {
 
 async function enviarPlantillaMetaDirecta({
   telefono, plantillaNombre, idioma = 'es_MX', bodyParams = [], headerParams = [],
-  cabecera = null, fromNumberId = LINEA_WA_ID, personalId = null,
+  buttonParams = [], cabecera = null, fromNumberId = LINEA_WA_ID, personalId = null,
 }) {
   const agenteId = await agenteIdDeLinea(fromNumberId)
   // Un encabezado de más de 60 caracteres resueltos hace que Meta rechace el
@@ -118,6 +118,8 @@ async function enviarPlantillaMetaDirecta({
     idioma,
     variables: bodyParams,
     variablesCabecera: headerSeguro,
+    // El hueco del botón de enlace (la oferta posterior: el código del portal).
+    variablesBoton: buttonParams.length ? buttonParams : null,
     cabecera,
     personalId,
     agenteId,
@@ -306,15 +308,18 @@ export async function enviarPlantillaConImagen({
 
 export async function enviarPlantillaGenerica({
   telefono, nombre = '', plantillaNombre, idioma = 'es_MX', category = 'UTILITY',
-  mensaje, bodyParams = [], headerParams = [], fromNumberId = LINEA_WA_ID,
+  mensaje, bodyParams = [], headerParams = [], buttonParams = [], fromNumberId = LINEA_WA_ID,
   personalId = null,
 }) {
   if (transporteWhatsAppOperativo() === 'META') {
     return enviarPlantillaMetaDirecta({
-      telefono, plantillaNombre, idioma, bodyParams, headerParams,
+      telefono, plantillaNombre, idioma, bodyParams, headerParams, buttonParams,
       fromNumberId, personalId,
     })
   }
+  // 🪤 Por GHL el botón de enlace NO viaja (`buttons: []` abajo): una plantilla
+  // con hueco en el botón saldría rechazada. Hoy prod va por META.
+  if (buttonParams.length) throw new Error('Esta plantilla lleva un enlace con variable y por GHL no se puede enviar: usa el transporte META.')
 
   const GHL_TOKEN    = process.env.GHL_TOKEN
   const GHL_LOCATION = process.env.GHL_LOCATION_ID

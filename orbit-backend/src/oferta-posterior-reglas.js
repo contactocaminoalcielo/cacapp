@@ -15,6 +15,16 @@ export const BOTONES = [
   'No deseo informacion',
 ]
 
+// Plantilla con ENLACES (`oferta_posterior_enlaces`, David 27-nov): los dos
+// primeros abren el portal directo (Meta deja máximo DOS botones de enlace) y
+// no llegan al webhook; solo «No deseo informacion» vuelve como respuesta, y es
+// el mismo texto de arriba, así que `esBotonDeLaOferta` lo sigue reconociendo.
+export const BOTONES_ENLACE = [
+  'Recuerdos y cedulas',
+  'Planes preexequiales',
+  'No deseo informacion',
+]
+
 const sinTildes = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 /**

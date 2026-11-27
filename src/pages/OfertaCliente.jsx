@@ -7,6 +7,9 @@
 //   /oferta/CODIGO/planes        → planes pre-exequiales para sus otras mascoticas
 //   /oferta/CODIGO/cedulas       → cédulas para mascotas
 //   /oferta/CODIGO               → las tres opciones a la vista
+//   /oferta/CODIGO/recuerdos     → recordatorios y cédulas a la vista (botón
+//                                  de enlace «Recuerdos y cedulas» de la
+//                                  plantilla con enlaces, 27-nov)
 //
 // «El propietario no debería tener que tomar una decisión únicamente leyendo
 // texto»: cada opción y cada producto va con su imagen.
@@ -112,6 +115,8 @@ export default function OfertaCliente({ codigo, seccion = '' }) {
       hay: oferta.cedulas?.length > 0,
     },
   ].filter(o => o.hay)
+    // Vino por «Recuerdos y cedulas»: los planes tienen su propio botón.
+    .filter(o => seccion !== 'recuerdos' || o.clave !== 'PREEXEQUIALES')
 
   return (
     <Marco>

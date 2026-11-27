@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BOTONES, respuestaDeBoton, esBotonDeLaOferta, pct, precioConDescuento, ofertaVigente,
+  BOTONES, BOTONES_ENLACE, respuestaDeBoton, esBotonDeLaOferta, pct, precioConDescuento, ofertaVigente,
   estadosDeCategoria, avanzaPorFamilia, puedePasarCoordinacion,
   enlaceQrPropietario, normalizarSolicitudPreexequial, ReglaError,
 } from '../orbit-backend/src/oferta-posterior-reglas.js'
@@ -14,6 +14,17 @@ test('los botones caben en el tope de Meta (25) y no traen emojis ni saltos', ()
     assert.ok(b.length <= 25, `«${b}» mide ${b.length}`)
     assert.ok(/^[\p{L}\p{N} ]+$/u.test(b), `«${b}» trae algo que Meta rechaza`)
   }
+})
+
+test('plantilla con enlaces: 2 enlaces + «No deseo», sin tildes ni emojis y en el tope', () => {
+  assert.equal(BOTONES_ENLACE.length, 3)
+  for (const b of BOTONES_ENLACE) {
+    assert.ok(b.length <= 25, `«${b}» mide ${b.length}`)
+    assert.ok(/^[A-Za-z0-9 ]+$/.test(b), `«${b}» trae algo que Meta rechaza`)
+  }
+  // El único que vuelve al webhook es «No deseo…», y debe seguir dando de baja.
+  assert.equal(esBotonDeLaOferta(BOTONES_ENLACE[2]), true)
+  assert.equal(respuestaDeBoton(BOTONES_ENLACE[2]), 'NO_DESEA')
 })
 
 test('cada botón de la plantilla resuelve a su respuesta', () => {

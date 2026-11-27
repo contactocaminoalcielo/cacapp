@@ -33,6 +33,7 @@ import {
   cargarCatalogos, buscarClientes, mascotasDeCliente, subirArchivoCompra, urlFirmada,
   METODOS_PAGO, ESTADOS_ITEM, ESTADO_ITEM_META, ESTADO_COMPRA, ESTADO_PAGO,
   esCedula, descargarCedula, programarEntrega, ESTADO_ENTREGA, esPedidoDelCliente, rotuloOrigen,
+  descargarCertificadoCompra,
 } from '@/lib/comprasRecordatorios'
 import { db } from '@/lib/supabase'
 import { crearNotificacion } from '@/lib/notificaciones'
@@ -1039,23 +1040,41 @@ function SeccionEntrega({ d, urls, saldo, activa, esCoordinador, ocupado, onProg
   const editable = !e || !['EN_CAMINO', 'ENTREGADA'].includes(e.estado)
   const enRuta = e && ['DISPONIBLE', 'ASIGNADA'].includes(e.estado)
   const meta = e ? (ESTADO_ENTREGA[e.estado] || { label: e.estado, variant: 'gray' }) : null
-  // Sin entrega y sin nada que hacer (anulada o ya entregada a mano): no se pinta.
-  if (!e && (!activa || todoEntregado)) return null
+  const { alert: showAlert } = useConfirm()
+  const [certificando, setCertificando] = useState(false)
+  // Anulada y sin entrega: no hay nada que mostrar. Entregada a mano sí: queda
+  // el certificado de entrega (David, 27-nov).
+  if (!e && !activa) return null
+
+  async function certificado() {
+    setCertificando(true)
+    try { await descargarCertificadoCompra(d.id, d.numero) }
+    catch (err) { await showAlert(err.message, { title: 'No se pudo generar el certificado' }) }
+    finally { setCertificando(false) }
+  }
 
   return (
     <div className="rounded-xl p-3 space-y-2 text-[12px]" style={{ background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
       <div className="flex items-center gap-2 flex-wrap">
         <Truck size={14} className="text-indigo-700" />
-        <span className="font-bold text-indigo-900">Entrega con mensajero</span>
-        {meta ? <Badge variant={meta.variant}>{meta.label}</Badge> : <Badge variant="gray">Sin programar</Badge>}
-        {esCoordinador && activa && editable && (
-          <div className="ml-auto flex gap-2">
-            {enRuta && <Button size="sm" variant="ghost" onClick={onRetirar} disabled={ocupado}>Sacar de la ruta</Button>}
-            <Button size="sm" onClick={onProgramar} disabled={ocupado}>
-              <Truck size={12} /> {e && e.estado !== 'PENDIENTE' && e.estado !== 'FALLIDA' ? 'Cambiar entrega' : 'Programar entrega'}
+        <span className="font-bold text-indigo-900">Entrega{e || !todoEntregado ? ' con mensajero' : ''}</span>
+        {meta ? <Badge variant={meta.variant}>{meta.label}</Badge>
+          : todoEntregado ? <Badge variant="green">Entregada</Badge> : <Badge variant="gray">Sin programar</Badge>}
+        <div className="ml-auto flex gap-2 flex-wrap">
+          {activa && (
+            <Button size="sm" variant="secondary" onClick={certificado} disabled={ocupado || certificando}>
+              <FileDown size={12} /> {certificando ? 'Generando…' : 'Certificado de entrega'}
             </Button>
-          </div>
-        )}
+          )}
+          {esCoordinador && activa && editable && !(todoEntregado && !e) && (
+            <>
+              {enRuta && <Button size="sm" variant="ghost" onClick={onRetirar} disabled={ocupado}>Sacar de la ruta</Button>}
+              <Button size="sm" onClick={onProgramar} disabled={ocupado}>
+                <Truck size={12} /> {e && e.estado !== 'PENDIENTE' && e.estado !== 'FALLIDA' ? 'Cambiar entrega' : 'Programar entrega'}
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {e && e.estado !== 'PENDIENTE' && (
@@ -1082,7 +1101,7 @@ function SeccionEntrega({ d, urls, saldo, activa, esCoordinador, ocupado, onProg
         </div>
       )}
 
-      {(!e || e.estado === 'PENDIENTE' || e.estado === 'FALLIDA') && activa && (
+      {(!e || e.estado === 'PENDIENTE' || e.estado === 'FALLIDA') && activa && !(todoEntregado && !e) && (
         <p className="text-gray-600">
           Programa la entrega y le aparece al mensajero en su app.
           {saldo > 0 && <> Si hay saldo (<strong>{fmt(saldo)}</strong>), el mensajero lo cobra al entregar y entra a su cuadre.</>}
