@@ -119,6 +119,15 @@ test('coordinación no genera contrato ni activa la afiliación sin pago validad
   assert.equal(puedePasarCoordinacion('CEDULAS', 'INTERESADO', 'INTERESADO').ok, false)
 })
 
+test('«Compra registrada» sin compra con productos no se puede marcar a mano (REPORTE ORBIT 27-nov)', () => {
+  for (const cat of ['RECORDATORIOS', 'CEDULAS']) {
+    assert.equal(puedePasarCoordinacion(cat, 'INTERESADO', 'COMPRA_REGISTRADA').ok, false, cat)
+    assert.equal(puedePasarCoordinacion(cat, 'FORMULARIO_INICIADO', 'COMPRA_REGISTRADA', { tieneCompra: true }).ok, true, cat)
+  }
+  // Cerrarla sin venta sigue permitido aunque no haya compra.
+  assert.equal(puedePasarCoordinacion('RECORDATORIOS', 'INTERESADO', 'CERRADA_SIN_VENTA').ok, true)
+})
+
 // ── QR de la cédula ─────────────────────────────────────────────────────────
 
 test('el QR abre WhatsApp con el dueño y un mensaje ya escrito', () => {

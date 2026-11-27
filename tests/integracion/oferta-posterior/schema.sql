@@ -26,8 +26,8 @@ CREATE TABLE compras_recordatorios (id uuid PRIMARY KEY DEFAULT gen_random_uuid(
   notas text, registrado_por uuid, anulada_en timestamptz, created_at timestamptz DEFAULT now(),
   origen text NOT NULL DEFAULT 'INTERNO', valor_envio numeric NOT NULL DEFAULT 0, entrega jsonb, pago_cliente jsonb,
   CONSTRAINT compras_rec_origen_check CHECK (origen IN ('INTERNO','CATALOGO_WEB')));
-CREATE TABLE compra_recordatorio_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), compra_id uuid, recordatorio_id uuid, nombre text, cantidad int, precio_unitario numeric, estado text DEFAULT 'PENDIENTE', datos_cliente jsonb, imagenes_urls text[], notas text);
-CREATE TABLE compra_recordatorio_eventos (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), compra_id uuid, tipo text, detalle jsonb, por uuid, created_at timestamptz DEFAULT now());
+CREATE TABLE compra_recordatorio_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), compra_id uuid, recordatorio_id uuid, nombre text, cantidad int, precio_unitario numeric, estado text DEFAULT 'PENDIENTE', datos_cliente jsonb, imagenes_urls text[], notas text, created_at timestamptz DEFAULT now());
+CREATE TABLE compra_recordatorio_eventos (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), compra_id uuid, item_id uuid, tipo text, detalle jsonb, por uuid, created_at timestamptz DEFAULT now());
 CREATE TABLE compra_web_borradores (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), created_at timestamptz DEFAULT now(), expira_en timestamptz DEFAULT now() + interval '3 hours', usado_en timestamptz, ip inet);
 CREATE TABLE autorizaciones_datos (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), origen text, medio text, politica_version text, finalidades text[], titular_nombre text, titular_documento text, titular_telefono text, titular_email text, servicio_id uuid, cliente_id uuid, solicitud_id uuid, aliado_id uuid, declarada_por uuid, ip inet, user_agent text, notas text,
   CONSTRAINT autorizaciones_datos_origen_check CHECK (origen = ANY (ARRAY['SOLICITUD_CLIENTE','CATALOGO_RECORDATORIOS'])));

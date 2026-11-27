@@ -1518,7 +1518,7 @@ app.get('/ventas-posteriores-pendientes', requireAuth, rolVentasPost, rutaVentas
 
 // Las oportunidades. Todo cambio va por POST (el CORS no anuncia PATCH).
 app.get('/ventas-posteriores', requireAuth, rolVentasPost, rutaVentasPost('listar', async req =>
-  ({ status: 200, body: { ok: true, ...(await listarVentas({ categoria: req.query.categoria, estado: req.query.estado, q: req.query.q })) } })))
+  ({ status: 200, body: { ok: true, ...(await listarVentas({ categoria: req.query.categoria, estado: req.query.estado, q: req.query.q, grupo: req.query.grupo })) } })))
 app.get('/ventas-posteriores/:id', requireAuth, rolVentasPost, rutaVentasPost('detalle', req =>
   detalleVenta({ id: req.params.id })))
 app.post('/ventas-posteriores/:id/estado', requireAuth, rolVentasPost, rutaVentasPost('estado', req =>

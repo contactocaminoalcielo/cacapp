@@ -12,7 +12,7 @@
 // Todo lo que escribe pasa por orbit-backend (lib/comprasRecordatorios.js);
 // aquí solo se leen catálogos y se buscan clientes y mascotas por PostgREST.
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import Topbar from '@/components/layout/Topbar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -77,7 +77,16 @@ export default function ComprasRecordatorios() {
   const [desde, setDesde]         = useState('')
   const [hasta, setHasta]         = useState('')
 
-  const [nueva, setNueva]         = useState(false)
+  // Desde /ventas-posteriores › «Registrar la compra»: la familia compró por
+  // chat o teléfono. El formulario abre con familia, mascotica y descuento puestos.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [venta, setVenta]         = useState(() => location.state?.ventaPosterior || null)
+  const [nueva, setNueva]         = useState(() => !!location.state?.ventaPosterior)
+  // Se consume una vez: recargar la página no vuelve a abrir el formulario.
+  useEffect(() => {
+    if (location.state?.ventaPosterior) navigate(location.pathname, { replace: true, state: null })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // `?ver=<id>` abre una compra directo (desde el tablero de Producción).
   const [params, setParams]       = useSearchParams()
   const [verId, setVerIdRaw]      = useState(params.get('ver') || null)
@@ -196,8 +205,9 @@ export default function ComprasRecordatorios() {
       {nueva && (
         <ModalNuevaCompra
           catalogos={catalogos}
-          onClose={() => setNueva(false)}
-          onCreada={d => { setNueva(false); cargar(); setVerId(d.id) }}
+          venta={venta}
+          onClose={() => { setNueva(false); setVenta(null) }}
+          onCreada={d => { setNueva(false); setVenta(null); cargar(); setVerId(d.id) }}
         />
       )}
       {verId && (
@@ -228,10 +238,24 @@ const MASCOTA_VACIA = {
   peso_kg: '', edad_anios: '', notas: '',
 }
 
-function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
+// Precio de la venta posterior: el público (o el base) con el descuento de la
+// oferta, bajado a la centena — la misma cuenta que el portal de la familia
+// (`precioConDescuento` del backend). Es una sugerencia: se puede cambiar.
+function precioOferta(rec, pct) {
+  const p = rec?.precio_publico
+  const base = Math.max(0, Math.round(Number(p === null || p === undefined || p === '' ? rec?.precio_base : p) || 0))
+  const d = Math.min(Math.max(Math.round(Number(pct) || 0), 0), 90)
+  if (!d) return base
+  const crudo = (base * (100 - d)) / 100
+  return crudo >= 100 ? Math.floor(crudo / 100) * 100 : Math.floor(crudo)
+}
+
+function ModalNuevaCompra({ catalogos, venta = null, onClose, onCreada }) {
   const { alert: showAlert } = useConfirm()
   const { recordatorios, especies } = catalogos
-  const [paso, setPaso]     = useState(0)
+  // Venta posterior: la familia ya está puesta; si es de recordatorios también
+  // la mascotica del servicio → arranca en los productos. Cédula → elige mascotica.
+  const [paso, setPaso]     = useState(() => !venta?.cliente ? 0 : venta.mascota ? 2 : 1)
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState(null)
 
@@ -239,14 +263,14 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
   const [busq, setBusq]                 = useState('')
   const [resultados, setResultados]     = useState([])
   const [buscando, setBuscando]         = useState(false)
-  const [cliente, setCliente]           = useState(null)
+  const [cliente, setCliente]           = useState(venta?.cliente || null)
   const [clienteNuevo, setClienteNuevo] = useState(false)
   const [formCliente, setFormCliente]   = useState(CLIENTE_VACIO)
   const debounceRef = useRef(null)
 
   // Paso 1 — mascota
   const [mascotas, setMascotas]         = useState([])
-  const [mascota, setMascota]           = useState(null)
+  const [mascota, setMascota]           = useState(venta?.mascota || null)
   const [mascotaNueva, setMascotaNueva] = useState(false)
   const [formMascota, setFormMascota]   = useState(MASCOTA_VACIA)
 
@@ -280,6 +304,21 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
     try { setMascotas(await mascotasDeCliente(c.id_cliente)) } catch { setMascotas([]) }
   }
 
+  // Venta posterior: cargar las mascoticas de la familia ya puesta y cambiar
+  // la de la oferta por su fila completa (especie, raza) para la tarjeta.
+  useEffect(() => {
+    if (!venta?.cliente?.id_cliente) return
+    mascotasDeCliente(venta.cliente.id_cliente).then(ms => {
+      setMascotas(ms || [])
+      if (venta.mascota) {
+        const m = (ms || []).find(x => x.id_mascota === venta.mascota.id_mascota)
+        if (m) setMascota(m)
+      }
+    }).catch(() => setMascotas([]))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const precioSugerido = rec => !rec ? '' : venta ? precioOferta(rec, venta.descuento_pct) : Number(rec.precio_base) || 0
+
   const total = useMemo(() => items.reduce((a, i) =>
     a + (parseInt(i.cantidad) || 0) * (Number(i.precio_unitario) || 0), 0), [items])
   const hayPrecioCero = items.some(i => i.recordatorio_id && !(Number(i.precio_unitario) > 0))
@@ -288,7 +327,7 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
     const rec = recordatorios.find(r => r.id === recId)
     setItems(p => [...p, {
       _k: crypto.randomUUID(), recordatorio_id: recId, cantidad: 1,
-      precio_unitario: rec ? Number(rec.precio_base) || 0 : '', datos_cliente: {}, notas: '',
+      precio_unitario: precioSugerido(rec), datos_cliente: {}, notas: '',
     }])
   }
   function cambiarLinea(k, patch) {
@@ -296,7 +335,7 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
   }
   function elegirRecordatorio(k, recId) {
     const rec = recordatorios.find(r => r.id === recId)
-    cambiarLinea(k, { recordatorio_id: recId, precio_unitario: rec ? Number(rec.precio_base) || 0 : '', datos_cliente: {} })
+    cambiarLinea(k, { recordatorio_id: recId, precio_unitario: precioSugerido(rec), datos_cliente: {} })
   }
 
   // Validación por paso: lo mismo que Registro, en pequeño.
@@ -361,6 +400,9 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
         pago: pagoOn ? { monto: Number(pagoMonto), metodo: pagoMetodo, referencia: pagoRef || null, comprobante_path } : null,
         notas: notas || null,
         autorizacion: { aceptada: true, politica_version: VERSION_POLITICA },
+        // Liga la compra a su oportunidad: la cierra como «Compra registrada»,
+        // la rotula COMPRA ADICIONAL en Producción y le avisa a Diseño.
+        ...(venta?.id ? { venta_posterior_id: venta.id } : {}),
       }
       const d = await crearCompra(body)
       onCreada(d)
@@ -372,7 +414,8 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
   const rec = k => recordatorios.find(r => r.id === k)
 
   return (
-    <Modal open onClose={onClose} title="Nueva compra de recordatorios" maxWidth="max-w-3xl"
+    <Modal open onClose={onClose} maxWidth="max-w-3xl"
+      title={venta ? `Registrar la compra · venta posterior (${venta.categoria === 'CEDULAS' ? 'cédula' : 'recordatorios'})` : 'Nueva compra de recordatorios'}
       footer={
         <>
           <Button variant="secondary" onClick={() => paso > 0 ? setPaso(p => p - 1) : onClose()} disabled={saving}>
@@ -398,6 +441,15 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
           </div>
         ))}
       </div>
+
+      {venta && (
+        <div className="mb-4 rounded-xl px-3 py-2 text-[12px]" style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', color: '#5B21B6' }}>
+          🎁 <strong>COMPRA ADICIONAL – {venta.categoria === 'CEDULAS' ? 'CÉDULA' : 'RECORDATORIO'}</strong> (venta posterior).
+          {venta.descuento_pct > 0 && <> El precio sugerido ya trae el <strong>{venta.descuento_pct}%</strong> de descuento de la oferta.</>}
+          {' '}Al registrarla entra al tablero de Producción y le avisa a Diseño.
+          {venta.categoria === 'CEDULAS' && <> La cédula es para una mascotica <strong>viva</strong> de la familia: elígela o regístrala.</>}
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 flex items-start gap-2 rounded-xl px-3 py-2 text-[12px] font-semibold"
@@ -584,7 +636,7 @@ function ModalNuevaCompra({ catalogos, onClose, onCreada }) {
                     <Select value={it.recordatorio_id} onChange={e => elegirRecordatorio(it._k, e.target.value)}>
                       <option value="">Elegir…</option>
                       {recordatorios.map(o => (
-                        <option key={o.id} value={o.id}>{o.nombre}{Number(o.precio_base) > 0 ? ` — ${fmt(o.precio_base)}` : ''}</option>
+                        <option key={o.id} value={o.id}>{o.nombre}{Number(precioSugerido(o)) > 0 ? ` — ${fmt(precioSugerido(o))}` : ''}</option>
                       ))}
                     </Select>
                   </div>
@@ -818,7 +870,8 @@ function ModalDetalle({ id, personal, esCoordinador, abrirEntrega = false, onClo
               {saldo > 0 && activa && <div className="text-[12px] font-semibold text-amber-700">Pendiente {fmt(saldo)}</div>}
               {Number(d.valor_envio) > 0 && <div className="text-[11px] text-gray-500">Incluye envío {fmt(d.valor_envio)}</div>}
               <div className="text-[11px] text-gray-400">
-                {esPedidoDelCliente(d.origen) ? rotuloOrigen(d.origen).quien : `Registró ${d.registrado_por_nombre || '—'}`}
+                {/* Una venta posterior cerrada por chat la registra el equipo: se dice quién. */}
+                {esPedidoDelCliente(d.origen) && !d.registrado_por_nombre ? rotuloOrigen(d.origen).quien : `Registró ${d.registrado_por_nombre || '—'}`}
               </div>
             </div>
           </div>
@@ -1183,6 +1236,9 @@ function textoEvento(ev) {
   const x = ev.detalle || {}
   switch (ev.tipo) {
     case 'CREADA':
+      if (x.venta_posterior) {
+        return `Compra adicional (venta posterior) registrada por el equipo · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.mascota_nueva ? ' · mascota nueva' : ''}`
+      }
       if (esPedidoDelCliente(x.origen)) {
         return `${rotuloOrigen(x.origen).evento} · ${x.items} línea${x.items !== 1 ? 's' : ''} · ${fmt(x.total)}${x.envio ? ` (envío ${fmt(x.envio)})` : ''}${x.descuento_pct ? ` · ${x.descuento_pct}% de descuento` : ''} · ${x.pago === 'COMPROBANTE' ? 'adjuntó comprobante' : 'paga después'}`
       }

@@ -18,7 +18,7 @@
 // pantalla, y (2) lo que hace coordinación en /ventas-posteriores.
 import { pool, log } from './db.js'
 import {
-  CATEGORIAS, estadosDeCategoria, avanzaPorFamilia, puedePasarCoordinacion,
+  CATEGORIAS, estadosDeCategoria, avanzaPorFamilia, puedePasarCoordinacion, pct,
 } from './oferta-posterior-reglas.js'
 
 const TAG = '[ventas-posteriores]'
@@ -124,18 +124,46 @@ const BASE_LISTA = `
            string_agg('CR-' || k.numero, ', ' ORDER BY k.numero) AS numeros
       FROM public.compras_recordatorios k
      WHERE k.venta_posterior_id = v.id AND k.anulada_en IS NULL
-  ) cr ON TRUE`
+  ) cr ON TRUE
+  -- QUÉ compró (REPORTE ORBIT 27-nov: «no sabemos qué recordatorio eligió»).
+  LEFT JOIN LATERAL (
+    SELECT string_agg(i.nombre || CASE WHEN i.cantidad > 1 THEN ' ×' || i.cantidad ELSE '' END,
+                      ', ' ORDER BY i.created_at) AS items
+      FROM public.compra_recordatorio_items i
+      JOIN public.compras_recordatorios k ON k.id = i.compra_id
+     WHERE k.venta_posterior_id = v.id AND k.anulada_en IS NULL
+  ) ci ON TRUE`
 
 const ESTADOS_FILTRO = [...new Set([...estadosDeCategoria('PREEXEQUIALES'), ...estadosDeCategoria('CEDULAS')])]
 
-export async function listarVentas({ categoria = null, estado = null, q = null } = {}) {
+// ─── ¿Compró o solo miró? (David, 27-nov) ───────────────────────────────────
+// Tocar un botón o abrir el enlace crea la oportunidad, pero NO es una venta.
+//   · COMPRA  — recordatorios/cédulas con una compra viva (con sus productos);
+//               pre-exequial con la solicitud ya enviada (eligió plan y mascoticas).
+//   · CERRADA — coordinación la cerró sin venta.
+//   · INTERES — lo demás: tocó el botón, abrió el portal o empezó el formulario.
+export const ESTADOS_PRE_COMPRA = [
+  'FORMULARIO_COMPLETO', 'PENDIENTE_PAGO', 'PAGO_REPORTADO', 'PAGO_VALIDADO',
+  'PENDIENTE_CONTRATO', 'CONTRATO_GENERADO', 'AFILIACION_ACTIVA',
+]
+export const GRUPOS = ['COMPRA', 'INTERES', 'CERRADA']
+// `$p` = el parámetro con ESTADOS_PRE_COMPRA; `cr.n` = compras vivas (BASE_LISTA).
+const sqlGrupo = p => `
+  CASE WHEN (v.categoria = 'PREEXEQUIALES' AND v.estado = ANY(${p}::text[]))
+         OR (v.categoria <> 'PREEXEQUIALES' AND cr.n > 0) THEN 'COMPRA'
+       WHEN v.estado = 'CERRADA_SIN_VENTA' THEN 'CERRADA'
+       ELSE 'INTERES' END`
+
+export async function listarVentas({ categoria = null, estado = null, q = null, grupo = null } = {}) {
   const cat = CATEGORIAS.includes(categoria) ? categoria : null
   const est = estado === 'ABIERTAS' || ESTADOS_FILTRO.includes(estado) ? estado : null
+  const gru = GRUPOS.includes(grupo) ? grupo : null
   const texto = String(q || '').trim().slice(0, 80) || null
   const digitos = texto ? texto.replace(/\D/g, '') : ''
 
   const { rows: ventas } = await pool.query(
-    `SELECT v.id, v.categoria, v.estado, v.valor_lista, v.descuento_pct, v.valor,
+    `SELECT ${sqlGrupo('$6')} AS grupo, ci.items AS compras_items,
+            v.id, v.categoria, v.estado, v.valor_lista, v.descuento_pct, v.valor,
             v.numero_contrato, v.afiliacion_id, v.pago_validado_en, v.motivo_cierre,
             v.created_at, v.updated_at,
             (v.pago_cliente IS NOT NULL) AS pago_reportado,
@@ -157,16 +185,56 @@ export async function listarVentas({ categoria = null, estado = null, q = null }
              OR c.nombre ILIKE '%' || $3 || '%'
              OR c.apellido ILIKE '%' || $3 || '%'
              OR ($4::text <> '' AND regexp_replace(COALESCE(c.whatsapp, ''), '\\D', '', 'g') LIKE '%' || $4 || '%'))
+        AND ($5::text IS NULL OR ${sqlGrupo('$6')} = $5)
       ORDER BY (v.estado IN ('PAGO_REPORTADO', 'FORMULARIO_COMPLETO', 'PENDIENTE_PAGO', 'PAGO_VALIDADO', 'PENDIENTE_CONTRATO')) DESC,
                v.updated_at DESC
       LIMIT 500`,
-    [cat, est, texto, digitos])
+    [cat, est, texto, digitos, gru, ESTADOS_PRE_COMPRA])
 
   // Los números del encabezado, sobre TODO (no sobre las 500 de la lista).
+  // `grupo` separa a quien COMPRÓ de quien solo miró (mismo CASE de la lista).
   const { rows: resumen } = await pool.query(
-    `SELECT categoria, estado, count(*)::int AS n
-       FROM public.ventas_posteriores GROUP BY 1, 2`)
+    `SELECT v.categoria, v.estado, ${sqlGrupo('$1')} AS grupo, count(*)::int AS n
+       FROM public.ventas_posteriores v
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS n FROM public.compras_recordatorios k
+          WHERE k.venta_posterior_id = v.id AND k.anulada_en IS NULL
+       ) cr ON TRUE
+      GROUP BY 1, 2, 3`, [ESTADOS_PRE_COMPRA])
   return { ventas, resumen }
+}
+
+/**
+ * Enlaza a su oportunidad una compra que coordinación registró a mano (la
+ * familia compró por chat o por teléfono, no en el portal). Va DENTRO de la
+ * transacción de `crearCompra`: si algo falla, no queda ni la compra ni el
+ * cambio de estado. Devuelve la venta bloqueada, para el aviso a Diseño.
+ */
+export async function ligarCompraAVenta(client, { ventaId, compra, total, items, personalId }) {
+  const { rows: [v] } = await client.query(
+    `SELECT v.*, o.servicio_id FROM public.ventas_posteriores v
+       JOIN public.ofertas_posteriores o ON o.id = v.oferta_id
+      WHERE v.id = $1 FOR UPDATE OF v`, [ventaId])
+  if (!v) return { error: 'No se encontró la oportunidad de la venta posterior.' }
+  if (v.categoria === 'PREEXEQUIALES') {
+    return { error: 'Un plan pre-exequial no se registra como compra de recordatorios: va por su solicitud y su contrato.' }
+  }
+  if (v.estado !== 'COMPRA_REGISTRADA') {
+    await client.query(
+      `UPDATE public.ventas_posteriores
+          SET estado = 'COMPRA_REGISTRADA', motivo_cierre = NULL, updated_at = now() WHERE id = $1`, [v.id])
+    await registrarEvento(client, {
+      ventaId: v.id, tipo: 'ESTADO', por: personalId,
+      detalle: { de: v.estado, a: 'COMPRA_REGISTRADA', total, compra: `CR-${compra.numero}`, items, origen: 'EQUIPO' },
+    })
+  } else {
+    // Segunda compra de la misma oportunidad: el estado no cambia, la bitácora sí.
+    await registrarEvento(client, {
+      ventaId: v.id, tipo: 'COMPRA', por: personalId,
+      detalle: { compra: `CR-${compra.numero}`, total, items, origen: 'EQUIPO' },
+    })
+  }
+  return { venta: v }
 }
 
 /**
@@ -200,7 +268,12 @@ export async function detalleVenta({ id }) {
   const { rows: [v] } = await pool.query(
     `SELECT v.*, o.servicio_id, o.codigo, o.fecha_envio, o.respuesta, o.fecha_fallecimiento::text,
             o.estado AS oferta_estado,
-            m.nombre AS mascota, p.nombre AS plan_servicio,
+            m.nombre AS mascota, m.id_mascota AS mascota_id, p.nombre AS plan_servicio,
+            -- El descuento de la oferta para esta categoría: el formulario de
+            -- «Registrar la compra» lo aplica al precio sugerido (se puede cambiar).
+            (SELECT k.valor FROM public.config_operativa k
+              WHERE k.modulo = 'OFERTA_POSTERIOR'
+                AND k.clave = 'descuento_' || lower(v.categoria)) AS descuento_cfg,
             c.id_cliente AS cliente_id, c.nombre AS cliente_nombre, c.apellido AS cliente_apellido,
             c.cedula_nit AS cliente_cedula, c.whatsapp AS cliente_whatsapp, c.email AS cliente_email,
             pv.nombre AS pago_validado_por_nombre
@@ -227,7 +300,13 @@ export async function detalleVenta({ id }) {
          FROM public.compras_recordatorios k
         WHERE k.venta_posterior_id = $1 ORDER BY k.created_at DESC`, [id]),
   ])
-  return { status: 200, body: { ok: true, venta: v, eventos, compras, estados: estadosDeCategoria(v.categoria) } }
+  const { descuento_cfg: dcfg, ...venta } = v
+  venta.descuento_sugerido = pct(dcfg, 0)
+  const vivas = compras.filter(k => !k.anulada_en).length
+  // Sin compra viva, «Compra registrada» no se ofrece: se llega registrando la compra.
+  const estados = estadosDeCategoria(v.categoria)
+    .filter(e => e !== 'COMPRA_REGISTRADA' || vivas > 0 || v.estado === 'COMPRA_REGISTRADA')
+  return { status: 200, body: { ok: true, venta, eventos, compras, estados } }
 }
 
 const ANTES_DE_VALIDAR = ['INTERESADO', 'FORMULARIO_INICIADO', 'FORMULARIO_COMPLETO', 'PENDIENTE_PAGO', 'PAGO_REPORTADO']
@@ -248,7 +327,11 @@ export async function cambiarEstadoVenta({ id, estado, nota, personalId }) {
 
     // Pasar a PAGO_VALIDADO por aquí ES validar el pago.
     const valida = estado === 'PAGO_VALIDADO'
-    const r = puedePasarCoordinacion(v.categoria, v.estado, estado, { pagoValidado: valida || !!v.pago_validado_en })
+    const { rows: [{ n: vivas }] } = await client.query(
+      `SELECT count(*)::int AS n FROM public.compras_recordatorios
+        WHERE venta_posterior_id = $1 AND anulada_en IS NULL`, [id])
+    const r = puedePasarCoordinacion(v.categoria, v.estado, estado,
+      { pagoValidado: valida || !!v.pago_validado_en, tieneCompra: vivas > 0 })
     if (!r.ok) { await client.query('ROLLBACK'); return { status: 409, body: { ok: false, error: r.error } } }
 
     // Devolverla a antes del pago validado quita la validación (se marcó por

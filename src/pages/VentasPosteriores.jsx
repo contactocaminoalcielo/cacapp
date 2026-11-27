@@ -48,10 +48,12 @@ const CATEGORIA = {
 
 const AZUL = { bg: '#EEF3FB', fg: '#3B6FBF' }, AMBAR = { bg: '#FFF8E6', fg: '#9A5500' }
 const VERDE = { bg: '#DCFCE7', fg: '#166534' }, GRIS = { bg: '#F3F4F6', fg: '#6B7280' }
+// INTERESADO y FORMULARIO_INICIADO van en GRIS y dicen «sin compra»: tocar el
+// botón o abrir el enlace NO es una venta (David, 27-nov). Se leían como ventas.
 export const ESTADO_VENTA = {
-  INTERESADO:          { label: 'Interesado',           ...AZUL },
-  FORMULARIO_INICIADO: { label: 'Formulario iniciado',  ...AZUL },
-  FORMULARIO_COMPLETO: { label: 'Formulario completo',  ...AZUL },
+  INTERESADO:          { label: 'Solo tocó el botón · sin compra',   ...GRIS },
+  FORMULARIO_INICIADO: { label: 'Abrió el formulario · sin compra', ...GRIS },
+  FORMULARIO_COMPLETO: { label: 'Solicitud enviada',    ...AZUL },
   PENDIENTE_PAGO:      { label: 'Pendiente de pago',    ...AMBAR },
   PAGO_REPORTADO:      { label: 'Pago reportado',       ...AMBAR },
   PAGO_VALIDADO:       { label: 'Pago validado',        ...VERDE },
@@ -77,12 +79,12 @@ function textoEvento(ev) {
   const est = x => ESTADO_VENTA[x]?.label || x
   switch (ev.tipo) {
     case 'CREADA': return d.origen === 'BOTON_WHATSAPP' ? 'Tocó el botón en WhatsApp' : 'Abrió la sección en el portal'
-    case 'ESTADO': return `${est(d.de)} → ${est(d.a)}${d.compra ? ` · ${d.compra}` : ''}${d.plan ? ` · ${d.plan}` : ''}${d.nota ? ` · «${d.nota}»` : ''}`
+    case 'ESTADO': return `${est(d.de)} → ${est(d.a)}${d.compra ? ` · ${d.compra}` : ''}${d.items ? ` · ${d.items}` : ''}${d.plan ? ` · ${d.plan}` : ''}${d.nota ? ` · «${d.nota}»` : ''}${d.origen === 'EQUIPO' ? ' · registrada por el equipo' : ''}`
     case 'PAGO_VALIDADO': return `Pago validado${d.nota ? ` · «${d.nota}»` : ''}`
     case 'PAGO_REPORTADO': return `La familia reemplazó el comprobante${d.metodo ? ` (${METODO[d.metodo] || d.metodo})` : ''}`
     case 'CONTRATO_GENERADO': return `Contrato ${d.numero_contrato || ''} creado en Pre-exequiales`
     case 'SOLICITUD_ACTUALIZADA': return `La familia corrigió su solicitud${d.plan ? ` · ${d.plan}` : ''}`
-    case 'COMPRA': return `Otra compra: ${d.compra || ''}${d.total ? ` · ${fmt(d.total)}` : ''}`
+    case 'COMPRA': return `Otra compra: ${d.compra || ''}${d.items ? ` · ${d.items}` : ''}${d.total ? ` · ${fmt(d.total)}` : ''}`
     case 'NOTA': return `Nota: «${d.nota || ''}»`
     default: return ev.tipo
   }
@@ -116,7 +118,10 @@ export default function VentasPosteriores() {
 function Oportunidades() {
   const [datos, setDatos]       = useState(null)
   const [categoria, setCategoria] = useState('')
-  const [estado, setEstado]     = useState('ABIERTAS')
+  // Lo primero que se ve es QUIÉN COMPRÓ. Quien solo tocó el botón o abrió el
+  // enlace va aparte («Solo interés»): no es una venta (David, 27-nov).
+  const [grupo, setGrupo]       = useState('COMPRA')
+  const [estado, setEstado]     = useState('')
   const [q, setQ]               = useState('')
   const [buscando, setBuscando] = useState('')     // lo que realmente se consulta (con espera)
   const [cargando, setCargando] = useState(true)
@@ -133,6 +138,7 @@ function Oportunidades() {
     try {
       const p = new URLSearchParams()
       if (categoria) p.set('categoria', categoria)
+      if (grupo) p.set('grupo', grupo)
       if (estado) p.set('estado', estado)
       if (buscando) p.set('q', buscando)
       const r = await orbitApi(`/ventas-posteriores${p.toString() ? `?${p}` : ''}`)
@@ -140,20 +146,22 @@ function Oportunidades() {
     } catch (e) {
       setError(e.message || 'No se pudo cargar')
     } finally { setCargando(false) }
-  }, [categoria, estado, buscando])
+  }, [categoria, grupo, estado, buscando])
 
   useEffect(() => { cargar() }, [cargar])
 
   const ventas = datos?.ventas || []
   const resumen = datos?.resumen || []
-  const FINALES = ['AFILIACION_ACTIVA', 'COMPRA_REGISTRADA', 'CERRADA_SIN_VENTA']
+  // `grupo` lo calcula el backend (COMPRA · INTERES · CERRADA), el mismo CASE de la lista.
+  const suma = filas => filas.reduce((a, r) => a + r.n, 0)
   const cuenta = cat => {
     const filas = resumen.filter(r => r.categoria === cat)
     return {
-      abiertas: filas.filter(r => !FINALES.includes(r.estado)).reduce((a, r) => a + r.n, 0),
-      ganadas: filas.filter(r => ['AFILIACION_ACTIVA', 'COMPRA_REGISTRADA'].includes(r.estado)).reduce((a, r) => a + r.n, 0),
+      compraron: suma(filas.filter(r => r.grupo === 'COMPRA')),
+      interes: suma(filas.filter(r => r.grupo === 'INTERES')),
     }
   }
+  const totalGrupo = g => suma(resumen.filter(r => r.grupo === g && (!categoria || r.categoria === categoria)))
   const porValidar = resumen.filter(r => r.estado === 'PAGO_REPORTADO').reduce((a, r) => a + r.n, 0)
 
   return (
@@ -169,8 +177,10 @@ function Oportunidades() {
               style={activa ? undefined : { borderColor: 'rgba(30,80,40,0.12)' }}>
               <div className="flex items-center gap-2 text-[13px] font-semibold"><c.Icono size={15} /> {c.label}</div>
               <div className="mt-1 flex items-baseline gap-3">
-                <span className="text-[22px] font-bold leading-none">{n.abiertas}</span>
-                <span className={`text-[11.5px] ${activa ? 'text-white/80' : 'text-gray-500'}`}>abiertas · {n.ganadas} ganadas</span>
+                <span className="text-[22px] font-bold leading-none">{n.compraron}</span>
+                <span className={`text-[11.5px] ${activa ? 'text-white/80' : 'text-gray-500'}`}>
+                  {clave === 'PREEXEQUIALES' ? `solicitud${n.compraron === 1 ? '' : 'es'}` : `compra${n.compraron === 1 ? '' : 's'}`} · {n.interes} solo interés
+                </span>
               </div>
               <div className={`text-[11px] mt-1 ${activa ? 'text-white/70' : 'text-gray-400'}`}>{c.area}</div>
             </button>
@@ -185,6 +195,26 @@ function Oportunidades() {
         </button>
       )}
 
+      {/* Compraron / solo interés / cerradas: lo primero es saber quién SÍ compró */}
+      <div role="tablist" aria-label="Qué hizo la familia" className="inline-flex rounded-lg border bg-white p-0.5" style={{ borderColor: 'rgba(30,80,40,0.12)' }}>
+        {[
+          ['COMPRA',  'Compraron'],
+          ['INTERES', 'Solo interés (sin compra)'],
+          ['CERRADA', 'Cerradas sin venta'],
+        ].map(([g, label]) => (
+          <button key={g} role="tab" aria-selected={grupo === g} onClick={() => { setGrupo(g); setEstado('') }}
+            className={`px-3 py-1.5 rounded-md text-[12.5px] font-semibold transition-colors ${grupo === g ? 'bg-primary-dark text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+            {label} <span className={grupo === g ? 'text-white/80' : 'text-gray-400'}>{totalGrupo(g)}</span>
+          </button>
+        ))}
+      </div>
+      {grupo === 'INTERES' && (
+        <p className="text-[12px] text-gray-500 -mt-2">
+          Familias que tocaron un botón de la oferta o abrieron el enlace, pero <strong>no han comprado</strong>. No le llegan a Diseño.
+          Si una compra por chat o por teléfono, ábrela y usa «Registrar la compra».
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[14rem] max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -192,8 +222,7 @@ function Oportunidades() {
         </div>
         <select aria-label="Estado" value={estado} onChange={e => setEstado(e.target.value)}
           className="text-[13px] border border-gray-200 rounded-lg px-3 py-2.5 bg-white font-medium text-gray-900">
-          <option value="ABIERTAS">Abiertas</option>
-          <option value="">Todas</option>
+          <option value="">Todos los estados</option>
           {Object.entries(ESTADO_VENTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
         <button className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
@@ -210,9 +239,9 @@ function Oportunidades() {
 
       {datos && ventas.length === 0 && (
         <div className="rounded-xl border bg-white p-8 text-center text-[13px] text-gray-500" style={{ borderColor: 'rgba(30,80,40,0.1)' }}>
-          {resumen.length === 0
-            ? 'Todavía no hay oportunidades. Aparecen aquí cuando una familia toca un botón de la oferta o abre el portal.'
-            : 'No hay oportunidades con estos filtros.'}
+          {grupo === 'COMPRA' && !estado && !buscando
+            ? 'Todavía ninguna familia ha comprado por la oferta. Las que solo tocaron el botón o abrieron el enlace están en «Solo interés».'
+            : 'No hay nada con estos filtros.'}
         </div>
       )}
 
@@ -232,6 +261,15 @@ function Oportunidades() {
                   <div className="text-[12px] text-gray-600 mt-0.5">
                     Servicio de 🐾 {v.mascota}{v.whatsapp ? ` · ${v.whatsapp}` : ''}
                   </div>
+                  {/* QUÉ compró: lo primero que tiene que ver Diseño */}
+                  {v.compras > 0 && (
+                    <div className="text-[12.5px] font-semibold text-gray-900 mt-1">
+                      {v.categoria === 'CEDULAS' ? '🪪' : '🛒'} {v.compras_items || 'Compra sin líneas'}
+                    </div>
+                  )}
+                  {v.grupo === 'INTERES' && (
+                    <div className="text-[11.5px] text-gray-400 mt-1">Sin compra todavía</div>
+                  )}
                   <div className="text-[11px] text-gray-500 mt-1 flex flex-wrap gap-x-3">
                     {v.categoria === 'PREEXEQUIALES' && v.plan && (
                       <span>Plan {nombrePlan(v.plan)} · {v.n_mascotas} mascotica{v.n_mascotas === 1 ? '' : 's'} · {fmt(Number(v.valor) * v.n_mascotas)}</span>
@@ -302,6 +340,26 @@ function DetalleVenta({ id, onClose, onCambio }) {
     setNota('')
   }
 
+  // La familia compró por chat o por teléfono: se registra la compra en
+  // Compras de recordatorios con todo puesto (familia, mascotica, descuento).
+  // Al guardarla queda ligada a esta oportunidad y entra sola a Producción.
+  function registrarCompra() {
+    navigate('/compras-recordatorios', {
+      state: {
+        ventaPosterior: {
+          id: v.id, categoria: v.categoria,
+          cliente: v.cliente_id ? {
+            id_cliente: v.cliente_id, nombre: v.cliente_nombre, apellido: v.cliente_apellido,
+            cedula_nit: v.cliente_cedula, whatsapp: v.cliente_whatsapp,
+          } : null,
+          // Recordatorios: de la mascotica del servicio. Cédula: de una viva (se elige).
+          mascota: v.categoria === 'RECORDATORIOS' && v.mascota_id ? { id_mascota: v.mascota_id, nombre: v.mascota } : null,
+          descuento_pct: Number(v.descuento_sugerido) || 0,
+        },
+      },
+    })
+  }
+
   function crearAfiliacion() {
     // Coordinación crea el contrato en /presequiales, con los datos de la
     // solicitud ya puestos. Al guardarlo, esa pantalla enlaza el contrato aquí.
@@ -355,7 +413,8 @@ function DetalleVenta({ id, onClose, onCambio }) {
               </div>
               {d.compras.length === 0 && (
                 <p className="text-[12.5px] text-gray-500">
-                  Mostró interés pero todavía no ha hecho el pedido. Puedes escribirle para acompañarla o reenviarle el enlace de su portal (abajo).
+                  <strong className="text-gray-700">Todavía no ha comprado</strong>: solo tocó el botón o abrió el enlace. Puedes escribirle o reenviarle el enlace de su portal (abajo).
+                  Si compra por chat o por teléfono, regístrala aquí: así le llega a Diseño con el producto y los datos.
                 </p>
               )}
               {d.compras.map(c => (
@@ -370,9 +429,14 @@ function DetalleVenta({ id, onClose, onCambio }) {
               ))}
               {d.compras.length > 0 && (
                 <p className="text-[11.5px] text-gray-500">
-                  El pago, la producción y la entrega se llevan en <button className="underline text-[#1A5CD8]" onClick={() => navigate('/compras-recordatorios')}>Compras de recordatorios</button>.
+                  Ya está en el tablero de Producción como «COMPRA ADICIONAL». El pago, la producción y la entrega se llevan en <button className="underline text-[#1A5CD8]" onClick={() => navigate('/compras-recordatorios')}>Compras de recordatorios</button>.
                 </p>
               )}
+              <div>
+                <Button size="sm" variant={d.compras.length ? 'secondary' : 'gold'} onClick={registrarCompra}>
+                  {d.compras.length ? 'Registrar otra compra' : 'Registrar la compra'}
+                </Button>
+              </div>
             </section>
           )}
 

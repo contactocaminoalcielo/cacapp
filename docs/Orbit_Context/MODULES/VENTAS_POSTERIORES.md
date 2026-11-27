@@ -6,7 +6,7 @@
 **Migración:** `migrations/210_oferta_posterior_ventas.sql`
 **Backend:** `orbit-backend/src/oferta-posterior.js` (automatización) · `oferta-portal.js` (portal) ·
 `ventas-posteriores.js` (oportunidades) · `oferta-posterior-reglas.js` (reglas puras, con pruebas)
-**Origen:** REPORTE ORBIT 2026-11-17 · **Estado:** código completo y probado en local; **sin desplegar**.
+**Origen:** REPORTE ORBIT 2026-11-17 (y 27-nov: compró vs. solo interés) · **Estado:** en producción desde el 18-nov.
 
 ## Qué es
 
@@ -132,6 +132,28 @@ Configuración: `config_operativa`, módulo `OFERTA_POSTERIOR` (20 claves). Se e
 | Precio de cada plan | Configuración › Afiliaciones |
 | Valor del envío y datos de pago | Los del catálogo público (los datos de pago se pueden pisar aquí) |
 
+
+## Compró o solo miró (REPORTE ORBIT 27-nov)
+
+Tocar un botón o abrir el enlace crea la oportunidad, pero **no es una venta**. Antes se
+presentaba como tal: Diseño recibía «🔔 NUEVA OPORTUNIDAD» (33 avisos en 8 días, ninguna compra)
+y en la lista contaba como «abierta», sin producto. Desde el 27-nov:
+
+- **Interés no avisa a nadie.** Ni el botón de WhatsApp ni abrir el portal mandan notificación.
+  Los avisos que quedan son de hechos: compra (🛒/🪪 COMPRA ADICIONAL, a Diseño), solicitud de
+  plan y pago reportado (a coordinación).
+- **La lista se parte en tres** (lo calcula el backend, `grupo` en `listarVentas`):
+  **Compraron** (recordatorios/cédulas con compra viva; pre-exequial con la solicitud enviada) ·
+  **Solo interés** · **Cerradas sin venta**. Se abre en «Compraron» y cada fila dice QUÉ compró
+  (`compras_items`: «Huella 3D ×2»).
+- **«Compra registrada» exige una compra con productos.** Ya no se puede marcar a mano con una
+  nota (`puedePasarCoordinacion` → 409).
+- **Venta cerrada por chat o teléfono**: en el detalle, «Registrar la compra» abre el formulario
+  de Compras de recordatorios con la familia, la mascotica del servicio (o elegir una viva, si es
+  cédula) y el precio con el descuento de la oferta ya puestos. `POST /compras-recordatorios` con
+  `venta_posterior_id`: la compra nace `origen = 'OFERTA_POSTERIOR'` con `registrado_por`, en la
+  MISMA transacción la oportunidad pasa a `COMPRA_REGISTRADA` (`ligarCompraAVenta`) y, tras el
+  COMMIT, Diseño recibe el aviso. Entra sola al tablero de Producción con la marca 🎁.
 
 ## Burbuja del menú
 

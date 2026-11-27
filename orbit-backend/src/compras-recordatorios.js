@@ -18,6 +18,7 @@
 //   · Nada se borra. Anular = fecha + motivo + quién. Los pagos se quedan.
 import { pool, log } from './db.js'
 import { autorizacionDelPayload, registrarAutorizacion, contextoPeticion } from './autorizaciones.js'
+import { ligarCompraAVenta, avisarEquipo } from './ventas-posteriores.js'
 import {
   HttpError, t, num, limpiarDatosCliente, normalizarItems, validarPago, ESTADOS_ITEM,
 } from './compras-recordatorios-reglas.js'
@@ -560,6 +561,10 @@ export async function crearCompra(req, res) {
   const body = req.body || {}
   const por  = req.personal.id
   const id   = esUuid(body.id) ? body.id : null
+  // Venta posterior cerrada por chat o teléfono (REPORTE ORBIT 27-nov): la
+  // compra se rotula «COMPRA ADICIONAL» en Producción y cierra su oportunidad.
+  const ventaId = esUuid(body.venta_posterior_id) ? body.venta_posterior_id : null
+  let aviso = null
 
   // La autorización de datos es obligatoria (Ley 1581/2012): sin ella no nos
   // quedamos con los datos. Se exige aunque el cliente ya exista — es la
@@ -597,10 +602,11 @@ export async function crearCompra(req, res) {
 
     const { rows: [compra] } = await client.query(
       `INSERT INTO public.compras_recordatorios
-         (id, cliente_id, mascota_id, total, notas, registrado_por)
-       VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6)
+         (id, cliente_id, mascota_id, total, notas, registrado_por, origen, venta_posterior_id)
+       VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, numero`,
-      [id, cliente.id_cliente, mascota.id_mascota, total, t(body.notas, 2000), por]
+      [id, cliente.id_cliente, mascota.id_mascota, total, t(body.notas, 2000), por,
+       ventaId ? 'OFERTA_POSTERIOR' : 'INTERNO', ventaId]
     )
 
     for (const it of items) {
@@ -636,10 +642,23 @@ export async function crearCompra(req, res) {
       notas: `Compra de recordatorios CR-${compra.numero}`,
     })
 
+    if (ventaId) {
+      const resumen = items.map(i => i.nombre + (i.cantidad > 1 ? ` ×${i.cantidad}` : '')).join(', ')
+      const lig = await ligarCompraAVenta(client, { ventaId, compra, total, items: resumen, personalId: por })
+      if (lig.error) throw new HttpError(409, lig.error)
+      const cedula = lig.venta.categoria === 'CEDULAS'
+      aviso = {
+        categoria: lig.venta.categoria, servicioId: lig.venta.servicio_id, ventaId,
+        titulo: cedula ? `🪪 COMPRA ADICIONAL – CÉDULA · CR-${compra.numero}` : `🛒 COMPRA ADICIONAL – RECORDATORIO · CR-${compra.numero}`,
+        mensaje: `${resumen} · ${cedula ? 'para' : 'de'} ${mascota.nombre} · registrada por el equipo (venta posterior)`,
+      }
+    }
+
     await evento(client, {
       compraId: compra.id, tipo: 'CREADA', por,
       detalle: { total, items: items.length, cliente_nuevo: clienteNuevo,
-                 mascota_nueva: !esUuid(body.mascota?.id_mascota), pago: pago?.monto || 0 },
+                 mascota_nueva: !esUuid(body.mascota?.id_mascota), pago: pago?.monto || 0,
+                 ...(ventaId ? { venta_posterior: true } : {}) },
     })
     if (pago) {
       await evento(client, { compraId: compra.id, tipo: 'PAGO', por,
@@ -647,7 +666,9 @@ export async function crearCompra(req, res) {
     }
 
     await client.query('COMMIT')
-    log(MOD, `compra CR-${compra.numero} creada`, { total, items: items.length, pago: pago?.monto || 0 })
+    log(MOD, `compra CR-${compra.numero} creada`, { total, items: items.length, pago: pago?.monto || 0, venta_posterior: !!ventaId })
+    // Después del COMMIT y best-effort: avisar nunca deshace la compra.
+    if (aviso) await avisarEquipo(aviso)
     const d = await leerDetalle(pool, compra.id)
     res.status(201).json(d)
   } catch (e) {

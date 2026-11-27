@@ -33,7 +33,7 @@ import { LINEA_WA_ID, LINEA_WA_NUMERO } from './linea-wa.js'
 import { nombreMascota, normalizarFecha } from './condolencias.js'
 import { BOTONES, respuestaDeBoton, esBotonDeLaOferta, pct, ofertaVigente } from './oferta-posterior-reglas.js'
 import {
-  asegurarVenta, registrarEvento, avisarEquipo, textoOportunidad, NOMBRE_CATEGORIA, esUuid,
+  asegurarVenta, registrarEvento, esUuid,
 } from './ventas-posteriores.js'
 
 const MOD = 'OFERTA_POSTERIOR'
@@ -494,15 +494,15 @@ export async function manejarRespuestaOferta({ phoneNumberId, contacto, tipo, bo
     return true
   }
 
-  // Interés: queda como venta (una por categoría) y avisa al área que le toca.
-  let creada = false, ventaId = null
+  // Interés: queda como oportunidad (una por categoría), sin aviso al equipo.
+  let creada = false
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     const a = await asegurarVenta(client, { ofertaId: o.id, categoria: respuesta, origen: 'BOTON_WHATSAPP' })
-    creada = a.creada; ventaId = a.venta.id
+    creada = a.creada
     // Tocó el botón otra vez tras un cierre sin venta: es una acción real de
-    // la familia, así que la oportunidad se reabre (y se avisa al equipo). No
+    // la familia, así que la oportunidad se reabre. No
     // va por `moverPorFamilia`: esa regla no reabre por solo mirar el portal.
     if (!creada && a.venta.estado === 'CERRADA_SIN_VENTA') {
       await client.query(
@@ -524,13 +524,10 @@ export async function manejarRespuestaOferta({ phoneNumberId, contacto, tipo, bo
   } finally { client.release() }
   log(TAG, 'interés', o.id, respuesta, creada ? '(nueva)' : '(repetido)')
 
-  if (creada) {
-    await avisarEquipo({
-      categoria: respuesta, servicioId: o.servicio_id, ventaId,
-      titulo: `🔔 NUEVA OPORTUNIDAD — ${NOMBRE_CATEGORIA[respuesta]}`,
-      mensaje: textoOportunidad({ propietario: o.propietario, mascota: o.mascota, categoria: respuesta, telefono: o.whatsapp }),
-    })
-  }
+  // 🔕 Tocar un botón NO avisa al equipo (David, 27-nov): es interés, no una
+  // compra. El aviso «NUEVA OPORTUNIDAD» le llegaba a Diseño como si fuera una
+  // venta, sin producto ni datos. Diseño se entera cuando hay una COMPRA real
+  // (portal o «Registrar la compra» en /ventas-posteriores).
 
   const vigente = ofertaVigente({ fechaEnvio: o.fecha_envio, creadaEn: o.created_at, diasVigencia: r.vigencia })
   const guia = RESPUESTA[respuesta]

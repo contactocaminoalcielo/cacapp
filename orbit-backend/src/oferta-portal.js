@@ -32,7 +32,7 @@ import {
   CATEGORIAS, precioConDescuento, ofertaVigente, normalizarSolicitudPreexequial, ReglaError,
 } from './oferta-posterior-reglas.js'
 import {
-  asegurarVenta, moverPorFamilia, registrarEvento, avisarEquipo, textoOportunidad, NOMBRE_CATEGORIA,
+  asegurarVenta, moverPorFamilia, registrarEvento, avisarEquipo,
 } from './ventas-posteriores.js'
 
 const TAG = '[oferta-portal]'
@@ -272,42 +272,29 @@ async function verOfertaCon(client, codigo) {
 
 // ── POST /portal/oferta/:codigo/evento ──────────────────────────────────────
 // La familia abrió una sección (INTERESADO) o empezó su formulario
-// (FORMULARIO_INICIADO). Crea la oportunidad si no existía y avisa al equipo.
+// (FORMULARIO_INICIADO). Crea la oportunidad si no existía.
+// 🔕 NO avisa al equipo (David, 27-nov): abrir el enlace NO es comprar. El aviso
+// «NUEVA OPORTUNIDAD» le llegaba a Diseño como si fuera una venta, sin producto
+// (33 avisos falsos en 8 días). Diseño solo se entera de una COMPRA real.
 export async function eventoOferta({ codigo, payload = {} }) {
   const categoria = String(payload.categoria || '').toUpperCase()
   if (!CATEGORIAS.includes(categoria)) return { status: 400, body: { ok: false, error: 'Categoría inválida' } }
   const paso = payload.paso === 'FORMULARIO_INICIADO' ? 'FORMULARIO_INICIADO' : 'INTERESADO'
 
   const client = await pool.connect()
-  let o, creada = false, ventaId = null
   try {
     await client.query('BEGIN')
-    o = await cargarOferta(client, codigo, { bloquear: true })
+    const o = await cargarOferta(client, codigo, { bloquear: true })
     if (!o) { await client.query('ROLLBACK'); return NO_DISPONIBLE }
     const r = reglas(await cargarConfigOferta(client))
     if (!vigente(o, r)) { await client.query('ROLLBACK'); return VENCIDA }
     const a = await asegurarVenta(client, { ofertaId: o.id, categoria, origen: 'PORTAL' })
-    creada = a.creada; ventaId = a.venta.id
-    const movida = await moverPorFamilia(client, a.venta, paso, { origen: 'PORTAL' })
-    // Estaba cerrada sin venta y la familia empezó el formulario: se reabrió.
-    // El equipo tiene que enterarse igual que de una oportunidad nueva.
-    if (a.venta.estado === 'CERRADA_SIN_VENTA' && movida.estado !== 'CERRADA_SIN_VENTA') creada = true
+    await moverPorFamilia(client, a.venta, paso, { origen: 'PORTAL' })
     await client.query('COMMIT')
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally { client.release() }
-
-  if (creada) {
-    await avisarEquipo({
-      categoria, servicioId: o.servicio_id, ventaId,
-      titulo: `🔔 NUEVA OPORTUNIDAD — ${NOMBRE_CATEGORIA[categoria]}`,
-      mensaje: textoOportunidad({
-        propietario: `${o.cliente_nombre || ''} ${o.cliente_apellido || ''}`.trim(),
-        mascota: o.mascota, categoria, telefono: o.whatsapp,
-      }),
-    })
-  }
   return { status: 200, body: { ok: true } }
 }
 

@@ -148,7 +148,7 @@ export async function descargarCedula(compraId, itemId, fotoPath) {
 export async function cargarCatalogos() {
   const [{ data: recordatorios, error: e1 }, { data: especies }, { data: personal }] = await Promise.all([
     db.from('recordatorios')
-      .select('id, nombre, categoria, precio_base, requiere_imagen, solo_nombre, max_fotos, campos_texto, activo')
+      .select('id, nombre, categoria, precio_base, precio_publico, requiere_imagen, solo_nombre, max_fotos, campos_texto, activo')
       .eq('activo', true).order('nombre'),
     db.from('especies').select('id, nombre').order('nombre'),
     db.from('personal').select('id, nombre, apellido').eq('activo', true).order('nombre'),

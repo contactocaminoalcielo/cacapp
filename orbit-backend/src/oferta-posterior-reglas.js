@@ -127,9 +127,14 @@ export function avanzaPorFamilia(categoria, actual, nuevo) {
  * categoría, con una excepción dura del reporte: NO hay contrato ni afiliación
  * activa sin pago validado.
  */
-export function puedePasarCoordinacion(categoria, actual, nuevo, { pagoValidado = false } = {}) {
+export function puedePasarCoordinacion(categoria, actual, nuevo, { pagoValidado = false, tieneCompra = false } = {}) {
   if (!estadosDeCategoria(categoria).includes(nuevo)) return { ok: false, error: 'Ese estado no aplica a esta venta.' }
   if (nuevo === actual) return { ok: false, error: 'La venta ya está en ese estado.' }
+  // «Compra registrada» SIN compra era una venta sin producto: Diseño no sabía
+  // qué hacer (REPORTE ORBIT 27-nov). Solo se llega con la compra y sus líneas.
+  if (nuevo === 'COMPRA_REGISTRADA' && !tieneCompra) {
+    return { ok: false, error: 'Para marcarla como comprada, registra la compra con sus productos (botón «Registrar la compra»): así le llega a Diseño con los datos.' }
+  }
   if (categoria === 'PREEXEQUIALES'
       && ['PENDIENTE_CONTRATO', 'CONTRATO_GENERADO', 'AFILIACION_ACTIVA'].includes(nuevo)
       && !pagoValidado) {

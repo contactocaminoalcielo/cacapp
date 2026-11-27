@@ -212,12 +212,23 @@ assert.equal(sobre.payload.interactive.action.parameters.url, `https://orbit.orb
 assert.ok(sobre.payload.interactive.action.parameters.display_text.length <= 20)
 assert.match(sobre.payload.interactive.body.text, /30% de descuento/)
 ok('«Recordatorios adicionales» → venta INTERESADO + enlace del portal con el 30 %')
+// David, 27-nov: tocar un botón es INTERÉS, no una compra. Antes avisaba a
+// Diseño «NUEVA OPORTUNIDAD» y lo leían como una venta sin producto.
 let notis = await q(`SELECT p.nombre FROM notificaciones n JOIN personal p ON p.id=n.para_personal_id WHERE n.tipo='VENTA_POSTERIOR' ORDER BY 1`)
-assert.deepEqual(notis.map(x => x.nombre), ['Coordi', 'Produ']); ok('avisa a coordinación y producción (no al técnico)')
+assert.deepEqual(notis.map(x => x.nombre), []); ok('tocar un botón NO avisa a nadie: es interés, no una compra')
 await OP.manejarRespuestaOferta({ contacto: '573001110008', tipo: 'button', boton: 'Recordatorios adicionales' })
 assert.equal((await q(`SELECT count(*)::int n FROM ventas_posteriores WHERE oferta_id=$1`, [H.id]))[0].n, 1)
-assert.equal((await q(`SELECT count(*)::int n FROM notificaciones`))[0].n, 2)
-ok('tocar el mismo botón dos veces no duplica la venta ni el aviso')
+assert.equal((await q(`SELECT count(*)::int n FROM notificaciones`))[0].n, 0)
+ok('tocar el mismo botón dos veces no duplica la venta')
+{
+  // (el uuid de COORD, que se declara más abajo)
+  const [vi] = await q(`SELECT id FROM ventas_posteriores WHERE oferta_id=$1 AND categoria='RECORDATORIOS'`, [H.id])
+  assert.equal((await VP.cambiarEstadoVenta({ id: vi.id, estado: 'COMPRA_REGISTRADA', personalId: '00000000-0000-4000-8000-000000000001' })).status, 409)
+  const lista = await VP.listarVentas({ grupo: 'INTERES' })
+  assert.ok(lista.ventas.some(x => x.id === vi.id && x.grupo === 'INTERES'))
+  assert.ok(!(await VP.listarVentas({ grupo: 'COMPRA' })).ventas.some(x => x.id === vi.id))
+  ok('sin compra con productos no se marca «Compra registrada», y la lista la deja en «Solo interés»')
+}
 // M3 de la revisión: botones PARECIDOS de otra plantilla, o por otra línea, no son de la oferta.
 for (const ajeno of ['No deseo recibir llamadas', 'Cédula de mascota', 'Plan preexequial Oro']) {
   assert.equal(await OP.manejarRespuestaOferta({ contacto: '573001110008', tipo: 'button', boton: ajeno }), false, ajeno)
@@ -228,7 +239,7 @@ assert.equal((await q(`SELECT count(*)::int n FROM ventas_posteriores WHERE ofer
 ok('un «No deseo…» o una «cédula» de OTRA plantilla, o por la línea de veterinarias, no se toca: ni baja ni venta')
 await OP.manejarRespuestaOferta({ contacto: '573001110008', tipo: 'button', boton: 'Planes preexequiales' })
 notis = await q(`SELECT p.nombre FROM notificaciones n JOIN personal p ON p.id=n.para_personal_id WHERE n.datos->>'categoria'='PREEXEQUIALES'`)
-assert.deepEqual(notis.map(x => x.nombre), ['Coordi']); ok('pre-exequiales avisa SOLO a coordinación')
+assert.deepEqual(notis.map(x => x.nombre), []); ok('el botón de pre-exequiales tampoco avisa (el aviso llega con la solicitud)')
 // Baja
 assert.equal(await OP.manejarRespuestaOferta({ contacto: '573001110001', tipo: 'button', boton: 'No deseo informacion' }), true)
 assert.equal((await q(`SELECT count(*)::int n FROM oferta_exclusiones WHERE cliente_id=$1 AND origen='FAMILIA' AND retirado_en IS NULL`, [S.A.cliente]))[0].n, 1)
@@ -460,6 +471,48 @@ ok('no se duplica la marca; número inválido → 400')
 assert.equal((await PORTAL.bajaOferta({ codigo: H.codigo })).status, 200)
 assert.equal((await q(`SELECT count(*)::int n FROM oferta_exclusiones WHERE cliente_id=$1 AND retirado_en IS NULL`, [S.H.cliente]))[0].n, 1)
 ok('baja desde el portal')
+
+paso('Coordinación: «Registrar la compra» de una familia que compró por chat (REPORTE ORBIT 27-nov)')
+{
+  const CR = await import(`${SRC}/compras-recordatorios.js`)
+  const oA = await oferta('A')
+  const [vA] = await q(`INSERT INTO ventas_posteriores (oferta_id, categoria) VALUES ($1,'RECORDATORIOS') RETURNING id`, [oA.id])
+  await pg.query(`DELETE FROM notificaciones`)
+  const llamar = async body => {
+    const res = { c: 0, b: null, status(c) { this.c = c; return this }, json(b) { this.b = b; return this } }
+    await CR.crearCompra({ body, personal: { id: COORD }, headers: {}, ip: '127.0.0.1', socket: {} }, res)
+    return res
+  }
+  const cuerpo = {
+    id: '22222222-2222-4222-8222-222222222222',
+    cliente: { id_cliente: S.A.cliente }, mascota: { id_mascota: S.A.mascota },
+    items: [{ recordatorio_id: 'aaaaaaaa-0000-4000-8000-000000000002', cantidad: 2, precio_unitario: 70000 }],
+    autorizacion: { aceptada: true, politica_version: '1.1' }, venta_posterior_id: vA.id,
+  }
+  const r = await llamar(cuerpo)
+  // 201 en prod. Aquí puede ser 500: DESPUÉS del COMMIT, `leerDetalle` (el mismo
+  // del detalle de cualquier compra) lee ~15 columnas y 2 tablas que este
+  // schema.sql mínimo no tiene. Lo que importa se comprueba en la base, abajo.
+  assert.ok([201, 500].includes(r.c), `crearCompra respondió ${r.c} ${JSON.stringify(r.b)}`)
+  const [cA] = await q(`SELECT * FROM compras_recordatorios WHERE id = $1`, [cuerpo.id])
+  assert.equal(cA.origen, 'OFERTA_POSTERIOR'); assert.equal(cA.venta_posterior_id, vA.id); assert.equal(cA.registrado_por, COORD)
+  const [vA2] = await q(`SELECT estado FROM ventas_posteriores WHERE id = $1`, [vA.id])
+  assert.equal(vA2.estado, 'COMPRA_REGISTRADA')
+  const ev = await q(`SELECT detalle FROM venta_posterior_eventos WHERE venta_id = $1 AND tipo = 'ESTADO'`, [vA.id])
+  assert.ok(ev.some(e => e.detalle.a === 'COMPRA_REGISTRADA' && /Huella 3D ×2/.test(e.detalle.items) && e.detalle.origen === 'EQUIPO'))
+  const avisos = await q(`SELECT p.nombre, n.titulo FROM notificaciones n JOIN personal p ON p.id = n.para_personal_id`)
+  assert.ok(avisos.some(a => a.nombre === 'Produ' && /COMPRA ADICIONAL – RECORDATORIO/.test(a.titulo)), JSON.stringify(avisos))
+  const lista = await VP.listarVentas({ grupo: 'COMPRA' })
+  const fila = lista.ventas.find(x => x.id === vA.id)
+  assert.ok(fila && fila.compras_items === 'Huella 3D ×2', JSON.stringify(fila))
+  ok('la compra queda OFERTA_POSTERIOR + ligada, la oportunidad pasa a «Compra registrada», Diseño recibe el aviso y la lista dice qué compró')
+  // Un plan pre-exequial no se registra como compra de recordatorios.
+  const [pA] = await q(`INSERT INTO ventas_posteriores (oferta_id, categoria) VALUES ($1,'PREEXEQUIALES') RETURNING id`, [oA.id])
+  const r2 = await llamar({ ...cuerpo, id: '33333333-3333-4333-8333-333333333333', venta_posterior_id: pA.id })
+  assert.equal(r2.c, 409)
+  assert.equal((await q(`SELECT count(*)::int n FROM compras_recordatorios WHERE id = '33333333-3333-4333-8333-333333333333'`))[0].n, 0)
+  ok('ligarla a un pre-exequial → 409 y no queda compra a medias')
+}
 
 paso('Vigencia')
 await pg.query(`UPDATE ofertas_posteriores SET fecha_envio = now() - interval '45 days' WHERE id=$1`, [H.id])
